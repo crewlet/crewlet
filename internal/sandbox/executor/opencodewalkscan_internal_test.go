@@ -664,7 +664,7 @@ func personReadOf(t *testing.T, c carrier, doc []byte, r personRead) string {
 // past a value bound of a kibibyte: a brief opening with a heading past it and
 // within it, blank texts past it, a kind written last, a call's input as an
 // object and as a string past it, answers whose parts, joined or each, run past
-// it, blank parts past it, a failure's words past it, states written in order
+// it, a failure's words and an answer joined past it, blank parts past it, a failure's words past it, states written in order
 // and out of it, a key written twice, each member a result is read by written
 // twice around a value past it and another member written twice beside one, a
 // tool's name past it, an image's mime past it, and credentials across the
@@ -716,6 +716,18 @@ func personVariants() []string {
 		step(tool(`{"status":"error","error":{"message":` + q(strings.Repeat("m", 600)) + `},"content":[` +
 			part(strings.Repeat("y", 600)) + `]}`)),
 		step(tool(`{"status":"error","error":{"type":"x","message":` + q(w) + `},"error":{"message":"two"}}`)),
+		step(tool(`{"status":"error","error":{"message":` + q(strings.Repeat("a", 300)) + `},"content":[` +
+			part(strings.Repeat("b", 300)) + `,` + part(strings.Repeat("c", 300)) + `,` +
+			part(strings.Repeat("d", 300)) + `]}`)),
+		step(tool(`{"status":"error","error":{"type":` + q(strings.Repeat("t", 600)) + `},"content":[` +
+			part(strings.Repeat("y", 600)) + `]}`)),
+		step(tool(`{"status":"error","content":[` + part(strings.Repeat("y", 600)) + `],"error":{"message":` +
+			q(strings.Repeat("m", 600)) + `}}`)),
+		step(tool(`{"error":{"message":` + q(strings.Repeat("m", 600)) + `},"content":[` +
+			part(strings.Repeat("y", 600)) + `],"status":"error"}`)),
+		step(tool(`{"status":"error","error":{"message":` + q(strings.Repeat("m", 600)) + `},"content":[` +
+			part(strings.Repeat("y", 600)) + `,{"text":"z","type":"text"}]}`)),
+		step(tool(`{"status":"error","content":[` + part("ok") + `],"error":{"message":"boom"}}`)),
 		step(tool(`{"status":"completed","status":"completed","content":[` + part(w) + `]}`)),
 		step(tool(`{"status":"completed","content":[` + part(w) + `],"status":"completed"}`)),
 		step(tool(`{"status":"error","error":{"message":` + q(w) + `,"message":"x"}}`)),

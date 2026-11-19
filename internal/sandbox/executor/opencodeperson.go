@@ -715,13 +715,15 @@ func (c *jsonCompactor) Write(p []byte) (int, error) {
 // where the state names its form before its words run past the bound, as
 // OpenCode writes one: `status` before `error` and `content`, each written
 // once, the failure before the answer, the failure's `type` and `message` once
-// each, and each answer part's `type` before its `text`, its members once
-// each. Within the bound a result is composed held, whatever the order (R5).
+// each, and each answer part's `type` before its `text`, its `type`, `text`
+// and `mime` once each. Its text is the failure's words and the answer's parts
+// joined: within the bound it is composed held, whatever the order; past it,
+// a text of its own or joined, it streams in order or is said (R5).
 
 // callResult is a call's result as its state is read: the failure's words and
-// the answer's parts, held to the bound and joined as [openCodeFailure] and
-// [openCodeAnswer] join them, and past it streamed where the state is written
-// in order, else said in its place (R5).
+// the answer's parts, held while joined they are within the bound, as
+// [openCodeFailure] and [openCodeAnswer] join them, and past it streamed where
+// the state is written in order, else said in its place (R5).
 type callResult struct {
 	b       *transcriptBuilder
 	ordinal int
@@ -780,11 +782,11 @@ func (c *callResult) due() bool {
 
 // said is the failure's words as held ([openCodeFailure]): its message, or its
 // type where it says nothing more.
-func (c *callResult) said() string {
+func (c *callResult) said() []byte {
 	if c.messageLen > 0 {
-		return string(c.message)
+		return c.message
 	}
-	return string(c.kind)
+	return c.kind
 }
 
 // saysFailure reports whether the failure says anything: a message, or a type.
@@ -883,7 +885,7 @@ func (c *callResult) open() {
 		c.stream = c.b.streamed(TranscriptEntry{Kind: EntryToolResult})
 	}
 	if c.status == openCodeCallFailed && !c.messagePast && c.saysFailure() {
-		c.element([]byte(c.said()))
+		c.element(c.said())
 	}
 	if c.kept > 0 {
 		c.element(c.answer)
@@ -989,8 +991,21 @@ func (c *callResult) writePart(p []byte) {
 	}
 }
 
+// joined is how long the result's text held so far runs with line joined
+// after it: the failure's words, where the call failed, then the answer's
+// parts, each a line after the one before it.
+func (c *callResult) joined(line string) int {
+	n, sep := len(c.answer), min(c.kept, 1)
+	if c.status == openCodeCallFailed && c.saysFailure() {
+		n, sep = n+len(c.said())+sep, 1
+	}
+	return n + sep + len(line)
+}
+
 // partEnd joins the part just read, as [openCodeAnswer] does: a text part's
-// words unless blank, a file as the words it reads in, nothing else.
+// words unless blank, a file as the words it reads in, nothing else. Once the
+// joined text would run past the bound it streams: written in order, the
+// failure is read before the answer, so it is known here.
 func (c *callResult) partEnd() {
 	var line string
 	switch {
@@ -1001,13 +1016,12 @@ func (c *callResult) partEnd() {
 	default:
 		line = string(c.part)
 	}
-	sep := min(c.kept, 1)
 	switch {
 	case c.lost:
 	case c.stream != nil:
 		c.element([]byte(line))
-	case len(c.answer)+sep+len(line) <= c.b.valueMax:
-		if sep > 0 {
+	case c.joined(line) <= c.b.valueMax:
+		if c.kept > 0 {
 			c.answer = append(c.answer, '\n')
 		}
 		c.answer = append(c.answer, line...)
@@ -1025,13 +1039,17 @@ func (c *callResult) partEnd() {
 
 // entry is the call's result once its state is read, and whether it settled:
 // its answer, or its failure's words and then its answer; and an [EntryUnread]
-// where its text ran past the bound in a state not written in order (R5).
+// where its text ran past the bound in a state not written in order (R5),
+// which, out of order, can be known only once its failure is read.
 func (c *callResult) entry() (pendingEntry, bool) {
 	if !c.due() {
 		return pendingEntry{}, false
 	}
 	e := TranscriptEntry{Kind: EntryToolResult, Failed: c.status == openCodeCallFailed}
 	failure := e.Failed && c.saysFailure()
+	if c.stream == nil && failure && c.kept > 0 && len(c.said())+1+len(c.answer) > c.b.valueMax {
+		c.spilled = true
+	}
 	switch {
 	case !c.shaped:
 		return c.b.held(e, "", c.ordinal), true
@@ -1048,19 +1066,17 @@ func (c *callResult) entry() (pendingEntry, bool) {
 		}
 		return p, true
 	}
-	text := string(c.answer)
-	if failure {
-		text = c.said()
-		if c.kept > 0 {
-			text += "\n" + string(c.answer)
-		}
+	if !failure {
+		return c.b.held(e, string(c.answer), c.ordinal), true
 	}
-	if len(text) <= c.b.valueMax {
-		return c.b.held(e, text, c.ordinal), true
+	var text strings.Builder
+	text.Grow(len(c.said()) + 1 + len(c.answer))
+	text.Write(c.said())
+	if c.kept > 0 {
+		text.WriteByte('\n')
+		text.Write(c.answer)
 	}
-	s := c.b.streamed(e)
-	writeRunes(s, text)
-	return s.end(c.ordinal), true
+	return c.b.held(e, text.String(), c.ordinal), true
 }
 
 // end ends the state: nothing more is written to its result.

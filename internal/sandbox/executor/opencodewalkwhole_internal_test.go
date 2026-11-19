@@ -920,9 +920,10 @@ func (b *transcriptBuilder) openCodeTool(item openCodeContent, state json.RawMes
 
 // resultPast reports whether a settled call's result is said in its place
 // (R5): a text of it ran past valueMax (a failure's message or type, an
-// answer's part, or its parts joined, in any occurrence of each) in a state
-// not written in order ([stateInOrder]); or its failure says only its type,
-// past valueMax.
+// answer's part, or its parts joined, in any occurrence of each, or the
+// result's text, the failure's words and the answer joined) in a state not
+// written in order ([stateInOrder]); or its failure says only its type, past
+// valueMax.
 func resultPast(s openCodeState, state json.RawMessage, valueMax int) bool {
 	failure := map[string]json.RawMessage{}
 	_ = eachKeyInPlace(s.Error, func(name []byte, value json.RawMessage) error {
@@ -936,7 +937,7 @@ func resultPast(s openCodeState, state json.RawMessage, valueMax int) bool {
 	if stateInOrder(state) {
 		return false
 	}
-	past := false
+	past := s.Status == openCodeCallFailed && len(openCodeFailure(s, valueMax)) > valueMax
 	_ = eachKeyInPlace(state, func(name []byte, value json.RawMessage) error {
 		switch string(name) {
 		case "error":

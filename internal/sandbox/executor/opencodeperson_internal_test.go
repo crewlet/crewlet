@@ -118,13 +118,15 @@ func TestAReadEndsAtItsLinesBound(t *testing.T) {
 }
 
 // A CALL'S RESULT WRITTEN OUT OF ORDER PAST THE BOUND IS SAID: a failed call
-// whose answer runs past the value bound before its failure is written, or a
-// call whose status is written after its answer, is an [EntryUnread] in place
-// of its result, since a stream is written its text in the order it is shown;
-// written in order, the failure's words open the result and the answer follows.
+// whose answer runs past the value bound before its failure is written, or
+// only joined with the failure written after it, or a call whose status is
+// written after its answer, is an [EntryUnread] in place of its result, since a
+// stream is written its text in the order it is shown; written in order, the
+// failure's words open the result and the answer follows.
 //
-// Mutation: stream the answer whatever the order, and the result shows the
-// answer without the failure that opens it.
+// Mutation: stream the answer whatever the order, or hold the joined text out
+// of order, and the result shows the answer without the failure that opens it,
+// or a text past the bound held.
 func TestAFailedCallWrittenOutOfOrderPastTheBoundIsSaid(t *testing.T) {
 	t.Parallel()
 	answer := strings.Repeat("the build failed here\n", 100)
@@ -139,6 +141,8 @@ func TestAFailedCallWrittenOutOfOrderPastTheBoundIsSaid(t *testing.T) {
 		"in order":                      {state(`{"status":"error","error":{"message":"boom"},"content":` + part + `}`), false},
 		"the answer before its failure": {state(`{"status":"error","content":` + part + `,"error":{"message":"boom"}}`), true},
 		"the status after the answer":   {state(`{"content":` + part + `,"status":"completed"}`), true},
+		"joined past it, the answer first": {state(`{"status":"error","content":[{"type":"text","text":"` +
+			strings.Repeat("y", 600) + `"}],"error":{"message":"` + strings.Repeat("m", 600) + `"}}`), true},
 	} {
 		page, err := readPerson(t, tc.doc, 1<<10, TranscriptFilter{}, nil)
 		if err != nil || len(page.Entries) != 2 {
