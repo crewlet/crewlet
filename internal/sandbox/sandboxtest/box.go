@@ -387,6 +387,10 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) 
 		open func() (io.ReadCloser, error)
 	}{
 		{"OpenFile", 0, func() (io.ReadCloser, error) { return box.OpenFile(t.Context(), path) }},
+		{"OpenTail", 1 << 19, func() (io.ReadCloser, error) {
+			r, _, err := box.OpenTail(t.Context(), path, 1<<19)
+			return r, err
+		}},
 		{"OpenRange", 100, func() (io.ReadCloser, error) {
 			r, _, err := box.OpenRange(t.Context(), path, 100, 1<<19)
 			return r, err

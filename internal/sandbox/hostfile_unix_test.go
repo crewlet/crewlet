@@ -92,6 +92,7 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 						}
 						return err
 					},
+					"OpenTail":  func() error { return readThrough(box.OpenTail(ctx, path, 64)) },
 					"OpenRange": func() error { return readThrough(box.OpenRange(ctx, path, 0, 64)) },
 				}
 				for read, fn := range reads {

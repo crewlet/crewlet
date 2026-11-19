@@ -143,6 +143,10 @@ func TestALocalBoxReachesItsFilesOnlyBeneathItsHome(t *testing.T) {
 				}
 				for op, open := range map[string]func() (io.ReadCloser, error){
 					"OpenFile": func() (io.ReadCloser, error) { return box.OpenFile(ctx, in("beside")) },
+					"OpenTail": func() (io.ReadCloser, error) {
+						r, _, err := box.OpenTail(ctx, in("beside"), 64)
+						return r, err
+					},
 					"OpenRange": func() (io.ReadCloser, error) {
 						r, _, err := box.OpenRange(ctx, in("beside"), 0, 64)
 						return r, err
@@ -430,6 +434,7 @@ func TestALocalBoxRefusesWhatIsNotADirectoryOnTheWayAtOnce(t *testing.T) {
 						}
 						return err
 					},
+					"OpenTail":  func() error { return readThrough(box.OpenTail(ctx, path, 64)) },
 					"OpenRange": func() error { return readThrough(box.OpenRange(ctx, path, 0, 64)) },
 				}
 				for read, fn := range reads {

@@ -185,8 +185,13 @@ func TestALocalBoxAnswersAFileItCannotReadAsAnError(t *testing.T) {
 			if err == nil {
 				t.Error("OpenFile read to its end without an error; want the read's failure")
 			}
-			if err := readThrough(box.OpenRange(ctx, unreadable, 0, 64)); err == nil {
-				t.Error("OpenRange read to its end without an error; want the read's failure")
+			for name, err := range map[string]error{
+				"OpenTail":  readThrough(box.OpenTail(ctx, unreadable, 64)),
+				"OpenRange": readThrough(box.OpenRange(ctx, unreadable, 0, 64)),
+			} {
+				if err == nil {
+					t.Errorf("%s read to its end without an error; want the read's failure", name)
+				}
 			}
 
 			marker := box.Home() + "/.crewlet/done"
