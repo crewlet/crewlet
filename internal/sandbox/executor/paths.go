@@ -109,6 +109,118 @@
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget.
 //
+// # An OpenCode session's calls are read by what they were
+//
+// OpenCode names no call to the engine, so the reading that tells a relaunch
+// which of its round's calls a cut-off kept OpenCode session holds
+// (opencodeholdings.go) reads them by CLASS ([sandbox.CallClass]): the tool,
+// the arguments' key (internal/tools/toolargs' Key, the log's own rule on
+// both sides), whether it failed, and the output's text key. A class is held
+// only where every call of it the pool holds has a part of its own after the
+// run's start and the newest compaction, handed to the model verbatim, and no
+// call the log cannot state may be of it. Which of two identical calls a part
+// is is never decided: a class is held whole or told whole.
+//
+// ONE WALK, TWO VISITORS. The person reader's export walk
+// ([walkOpenCodeExport]) reads the document one value at a time through a
+// jsontext decoder behind [heldValue], every value in place in the decoder's
+// buffer, and hands each to a visitor ([openCodeVisitor]): a person's
+// transcript, or the reading. Each message is decoded once
+// ([decodeOpenCodeMessage]), each item once ([decodeOpenCodeItem]), each by
+// [eachKeyInPlace], which keeps every member as the sub-slice it is and
+// records the key facts ([openCodeKeys]): the names met, one met twice, one
+// outside the decode's set. The person reader reads none of them, and its
+// pages are pinned byte for byte to the walk before it read in place
+// (TestLiftingTheExportWalkChangesNoPersonsTranscript).
+//
+// WHAT IS READ, as the measured releases write it, the reading ending at
+// anything else: `info` once, an object, its id the session's; `messages`
+// once; every message an object of one of the eleven kinds; the run's start
+// ([sandbox.RunStart]) found once, the start message itself none of the run's;
+// at a compaction of any status ([openCodeRestart]) every part fact dropped;
+// an assistant step's names within its set and none twice, no `metadata`, its
+// `time` names within `created`, `streamed`, `completed` and `firstToken`
+// (2.3.0's), once each, `completed` a number a double reads above zero, as
+// JSON.parse does (a settled step, the only kind the export holds), the rest
+// read for nothing; each item an object of type text,
+// reasoning or tool, the list whole.
+//
+// A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool
+// by, `executed` absent or false, its names within OpenCode's six and its
+// `time`'s within `created`, `ran` and `completed`, each once; its `state`,
+// read in one pass whatever its key order ([openCodePartState]), exactly
+// `status`, `input`, `content`, `metadata` for a completed call, with
+// `metadata` exactly `{"truncated": false}` and one text item, or exactly
+// `status`, `input`, `error` for a failed one, `error` a `tool.execution` and
+// its message; its input an object of at most
+// [sandbox.MaxSubmissionArgsBytes]. Anything else passes the part, which only
+// lowers its class's parts, and so can only tell a call.
+//
+// THE OUTCOME: the text (a failure's message) is decoded only where its span
+// could hold a candidate class's size, a third to six times it
+// ([textMayBe]), and once. A whole output is matched every byte; a cut one by
+// its size and all the opening the log kept, never where the text holds the
+// scrub's marker, since the scrub may have rewritten what the log did not
+// keep. A completed part's empty or blank text never counts (an empty answer
+// reaches the model as words of OpenCode's own), and a failure counts only
+// where its message is the log's output exactly (OpenCode trims it, and an
+// empty or blank one reads as words of its own). A part two classes match
+// counts for neither.
+//
+// THE POOL is every call of the ask but those a person's approval held, asked
+// or not, a call held at the save point included: a save of a job's own
+// running session holds calls the run made, so leaving one out could let one
+// call's part hold another identical call. A call whose class cannot be stated
+// (arguments cut, withheld, unread, or "" with no digest; an opening that does
+// not read back), one in flight, and one the log dropped are WILDCARDS of their
+// tool, apart by digest only where every call of the class carries one; a held
+// call is one of its tool, failure and held answer; a count of dropped calls
+// with no name is one of every class, or of every failed one where it counts
+// failures only ([openCodeCallPool.wild]). A held class's calls in admission
+// order meet its parts in steps never going back, else no reading: a step's
+// calls run at once, and the next step's only after they joined
+// ([openCodeInOrder]). The verdict is a pure function of the walk's facts and
+// the ask ([openCodeVerdict]).
+//
+// WHY IT NEVER HOLDS FALSELY: every counted part lies after the run's start,
+// so the run made it, and every call the run made is in the pool, in flight,
+// dropped, or a wildcard; no other server joins to `crewlet_`, since the
+// run's script refuses one that would ([openCodeShadowCheck]); and each call
+// leaves at most one part. So a held class's parts are its own calls' parts,
+// content-equal to the log's, but for a refusal in OpenCode's own words equal
+// to a logged output, which is the text-equality standard ADR-0073 states.
+// That holds of the export OpenCode wrote; ADR-0073 lists what a box editing
+// it can make of a reading, among them two messages given one id, of which the
+// import keeps one, since no message's id is read but the start's.
+//
+// THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), a value at
+// [maxLineBytes] (a message past it is no reading, every call told), the ask at
+// [sandbox.MaxBridgeCalls], its unlisted calls at the log's own bounds. What
+// it keeps: whether `info` matched, the start, the step, and per class at most
+// Calls+1 step numbers; never a message, an item or a text past its visit.
+// MEASURED (BenchmarkAnOpenCodeReadingAtItsBounds, two cores, GOGC=10): a
+// message at the bound holding one answer the reading decodes holds 97 MiB
+// live in 0.3 s, a person's read of it 97 MiB, the two at once (two readings
+// never running at once) 161 to 193 MiB; a step of minimal items at the bound
+// 96 MiB in 1.9 s; 255 MiB of ordinary steps 2 MiB in 7.9 s. Each read is
+// within the about 133 MiB a transcript slot is held to, as a Claude Code
+// thread's line is (above), the reading's in the seats' slot
+// ([SeatTranscriptReadsAtOnce]), and the two at once within the two slots'
+// 266 MiB. What one read holds is the walk's buffer, which grows by doubling
+// to about twice the message it holds, and one decoded text: no member of a
+// message is copied out of it, and an answer of one part is its text, never
+// built again ([toolAnswer]).
+//
+// TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
+// count reads ([openCodeCountReleases]); then drive the engine's own bridge
+// and render with that release, writer and box alike: outcomes on both of its
+// model routes (empty, blank, padded and failed outputs), arguments (numbers,
+// escapes, a key twice, a closed schema), parallel and identical calls,
+// truncation at its limits, an end and a kill mid-call, Code Mode, a child
+// session, a compaction mid-job and the key sets of every part it writes; and
+// check every part these rules count, on the export as the take keeps it,
+// reaches the continuation's first request exactly as the log has the call.
+//
 // # A collection's read of a thread: a base, then one slot
 //
 // A pass over a session's main thread ([walkThread]) — a collection's read of
