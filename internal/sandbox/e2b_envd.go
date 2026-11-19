@@ -304,13 +304,13 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 // ending without an `end` event is not an error: envd closes it when a box is
 // paused or reclaimed mid-command, which the completion model handles, so
 // raising would fail a run on an ordinary pause. What the stream did say is
-// kept apart, and the caller decides the command's status.
+// kept apart, and the caller decides the command's status. Its output is
+// kept as every box keeps a command's ([capture]).
 func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessResult, error) {
 	var (
-		out    e2bProcessResult
-		stdout strings.Builder
-		stderr strings.Builder
-		header = make([]byte, connectEnvelope)
+		out            e2bProcessResult
+		stdout, stderr capture
+		header         = make([]byte, connectEnvelope)
 	)
 	out.ExitCode = -1
 	for {
@@ -364,8 +364,8 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 			out.Ended = true
 			out.ExitCode = end.ExitCode
 			if end.ExitCode >= 0 {
-				if end.Error != "" && stderr.Len() == 0 {
-					stderr.WriteString(end.Error)
+				if end.Error != "" && stderr.empty() {
+					stderr.Write([]byte(end.Error))
 				}
 				continue
 			}

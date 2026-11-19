@@ -34,8 +34,10 @@ type hostCommand struct {
 }
 
 // captureLimit bounds one control command's output in memory, for the
-// pathological case (a pull progress bar, an entrypoint flooding stderr). A
-// launched job's output never comes through here: it goes to files in the box.
+// pathological case (a pull progress bar, an entrypoint flooding stderr), on
+// every cell: a direct and a container box's commands ([runHost]) and an E2B
+// box's ([foldStream]). A launched job's output never comes through here: it
+// goes to files in the box.
 const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
@@ -54,6 +56,9 @@ func (c *capture) Write(p []byte) (int, error) {
 	c.dropped += len(p) - take
 	return len(p), nil
 }
+
+// empty reports whether nothing was written to c.
+func (c *capture) empty() bool { return len(c.buf) == 0 && c.dropped == 0 }
 
 func (c *capture) String() string {
 	if c.dropped == 0 {
