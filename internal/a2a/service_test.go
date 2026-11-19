@@ -586,13 +586,13 @@ func TestEveryAuditRecordNamesThePublishingTurn(t *testing.T) {
 			closed.TurnID, closed.WorkKey)
 	}
 	// AND WHO CLOSED IT. ClosedBy was declared and never written, so
-	// Summary's participant branch was dead and every close in this engine's
+	// PhraseFor's participant branch was dead and every close in this engine's
 	// history read as "system" — the wording reserved for the sweep.
 	if closed.ClosedBy != "bob" {
 		t.Errorf("closed_by = %q, want the participant who closed it", closed.ClosedBy)
 	}
-	if got := closed.Summary(); strings.HasPrefix(got, "system ") {
-		t.Errorf("Summary() = %q, want the participant rather than the sweep", got)
+	if got := closed.PhraseFor("").Text; strings.HasPrefix(got, "system ") {
+		t.Errorf("PhraseFor() = %q, want the participant rather than the sweep", got)
 	}
 }
 
@@ -741,8 +741,8 @@ func TestTheSweepAnnouncesEveryChannelItCloses(t *testing.T) {
 			t.Errorf("a swept close names turn %q / work %q, want neither",
 				closed.TurnID, closed.WorkKey)
 		}
-		if got := closed.Summary(); !strings.HasPrefix(got, "system ") {
-			t.Errorf("Summary() = %q, want the sweep's own wording", got)
+		if got := closed.PhraseFor("").Text; !strings.HasPrefix(got, "system ") {
+			t.Errorf("PhraseFor() = %q, want the sweep's own wording", got)
 		}
 	}
 }
