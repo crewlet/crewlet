@@ -1,6 +1,15 @@
 package jsonscan
 
-import "io"
+import (
+	"errors"
+	"io"
+)
+
+// errTeeEnded is what the scan's own steps answer where they end a teed value whose writer failed, so the
+// call they serve answers that writer's [*TeeError] in its place and goes on ([Scanner.stop]). Never a
+// call's answer, it is in no reader's error, so a reader's error ends the scan even where its chain holds a
+// TeeError, another scanner's.
+var errTeeEnded = errors.New("jsonscan: a teed value whose writer failed has ended")
 
 // Tee writes the current value's bytes as written to w, from its first byte (a string's opening quote
 // included) to its last, as the scan passes them: whether the caller reads the value's tokens (Next, Read)
@@ -51,6 +60,14 @@ func (s *Scanner) teeWrite(b []byte) {
 func (s *Scanner) endTee() {
 	s.teeWrite(s.buf[s.teeFrom:s.pos])
 	s.tw = nil
+}
+
+// teeEnded answers errTeeEnded where a teed value has ended and its writer's failure is not yet answered.
+func (s *Scanner) teeEnded() error {
+	if s.tw != nil || s.teeErr == nil {
+		return nil
+	}
+	return errTeeEnded
 }
 
 // takeTee answers, once, the error of the writer of a teed value that has ended; nil while the tee writes,

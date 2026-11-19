@@ -315,7 +315,7 @@ func (s *Scanner) close(k Kind) (Kind, error) {
 	s.afterValue()
 	if s.tw != nil && s.depth == s.teeDepth {
 		s.endTee()
-		if err := s.takeTee(); err != nil {
+		if err := s.teeEnded(); err != nil {
 			return "", err
 		}
 	}
@@ -567,20 +567,17 @@ func (s *Scanner) hold(chunk []byte) {
 	s.held = append(s.held, chunk...)
 }
 
-// stop makes err, which a call answers as it ends the scan, the scan's answer to every call after it (a
-// fault is already; a reader's error becomes it here), and answers err. A tee's error ends no scan.
+// stop answers err, what a call met as it ended: [errTeeEnded] as the teed value's writer's [*TeeError],
+// which ends no scan; else err, which becomes the scan's answer to every call after it (a fault is already;
+// a reader's error becomes it here), whatever its chain holds.
 func (s *Scanner) stop(err error) error {
-	if err != nil && s.err == nil && !isTee(err) {
+	if errors.Is(err, errTeeEnded) {
+		return s.takeTee()
+	}
+	if err != nil && s.err == nil {
 		s.err = err
 	}
 	return err
-}
-
-// isTee reports whether err is a tee's writer's, answered once and ending nothing. Asked only of an error,
-// since its target escapes.
-func isTee(err error) bool {
-	var tee *TeeError
-	return errors.As(err, &tee)
 }
 
 // fault ends the scan with e.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"slices"
@@ -443,11 +444,13 @@ func (misread) Read([]byte) (int, error) { return -1, nil }
 // cut connection is never read as a text the grammar refused, nor as a text cut short. It is met where the
 // scan needs the bytes it stood in the way of, after every byte handed over before it is scanned, so a
 // grammar fault those bytes settle is the answer, and one they leave unsettled (a refused 0xEF, which with
-// the next two bytes is a byte order mark) is not; it ends the scan as a fault does; and a reader that
-// answers nothing forever, or a count no buffer holds, is an error of its own rather than a hang or a panic.
+// the next two bytes is a byte order mark) is not; it ends the scan as a fault does, every call answering it,
+// whatever its chain holds (a *TeeError of another scan's among it); and a reader that answers nothing
+// forever, or a count no buffer holds, is an error of its own rather than a hang or a panic.
 //
 // Mutation: answer the reader's error as soon as it is read, before the bytes it came with, drop its
-// wrapping, or read a refused byte's character from part of it, and this fails naming the case.
+// wrapping, read a refused byte's character from part of it, or tell a tee's own error by a *TeeError in an
+// error's chain, and this fails naming the case.
 func TestAReaderErrorPassesThrough(t *testing.T) {
 	t.Parallel()
 	broken := &readerFault{what: "the archive is broken"}
@@ -455,9 +458,20 @@ func TestAReaderErrorPassesThrough(t *testing.T) {
 		t.Helper()
 		s := jsonscan.NewSized(r, jsonscan.MinBufferSize)
 		err := readToEnd(t, s)
-		if err != nil {
-			if _, again := s.Next(); !errors.Is(again, err) {
-				t.Fatalf("after %v, Next answers %v", err, again)
+		if err == nil {
+			return nil
+		}
+		_, next := s.Next()
+		_, read := s.Read(make([]byte, 8))
+		_, _, captured := s.Capture(8)
+		for _, call := range []struct {
+			name string
+			err  error
+		}{
+			{"Next", next}, {"Read", read}, {"Skip", s.Skip()}, {"Capture", captured}, {"Tee", s.Tee(io.Discard)},
+		} {
+			if !errors.Is(call.err, err) {
+				t.Fatalf("after %v, %s answers %v", err, call.name, call.err)
 			}
 		}
 		return err
@@ -476,6 +490,8 @@ func TestAReaderErrorPassesThrough(t *testing.T) {
 		{"after a refused 0xEF that could begin a byte order mark", &handing{text: "\xef", err: broken}},
 		{"after a refused byte that begins a character the error cuts",
 			io.MultiReader(strings.NewReader("[1,\xe2\x82"), iotest.ErrReader(broken))},
+		{"holding a tee's error, another scan's", io.MultiReader(strings.NewReader("[true "),
+			iotest.ErrReader(fmt.Errorf("upstream: %w", &jsonscan.TeeError{Offset: 1, Err: broken})))},
 	} {
 		err := readThrough(t, c.r)
 		var fault *readerFault

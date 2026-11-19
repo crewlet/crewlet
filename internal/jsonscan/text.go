@@ -90,7 +90,7 @@ func (s *Scanner) passText() error {
 	if err != nil {
 		return err
 	}
-	return s.takeTee()
+	return s.teeEnded()
 }
 
 // closeText ends the current token's text: after a Name its colon comes, after a String or a Number
