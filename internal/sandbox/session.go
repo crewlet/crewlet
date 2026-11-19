@@ -3775,12 +3775,13 @@ func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
 //
 // THE RUN'S ENDING CALLS IT for every turn that has a row
 // ([Coordinator.publishEnd]), after the turn's captures settle; a frame whose
-// turn has no row left reaches it through [Coordinator.EndTurn].
+// turn has no row left reaches it through [Coordinator.EndTurn]. Its failure
+// is fit as the log keeps it ([executorkeep.Excerpt]).
 func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 	if !c.keepsSessions() {
 		return nil
 	}
-	end.Ending.Failure = redact.Secrets(end.Ending.Failure)
+	end.Ending.Failure = executorkeep.Excerpt(end.Ending.Failure, executorkeep.FailureMaxBytes)
 	minted, err := c.keep.MintedAt(ctx, end.TurnID, end.WorkKey, end.WorkSince)
 	if err != nil {
 		return fmt.Errorf("sandbox: the operations of turn %s could not be minted to record its end: %w",
