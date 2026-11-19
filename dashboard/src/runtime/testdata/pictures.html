@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Before and after</title>
+    <!-- The runtime from its source, where the artifact origin places the built one first. -->
+    <script type="module" src="/src/runtime/runtime.ts"></script>
+    <style>
+      body {
+        margin: 24px;
+        font: 16px system-ui;
+      }
+      img {
+        width: 160px;
+      }
+      /* The page's own rules for buttons and pictures, which must not reach the viewer. */
+      button,
+      figure {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Before and after</h1>
+    <p>Select a picture to open it full size.</p>
+    <a id="before" href="before.png"><img alt="Before the fix" src="before.png" /></a>
+    <a id="after" href="after.png"><img alt="After the fix" src="after.png" /></a>
+    <p><a id="report" href="report.pdf">The full report</a></p>
+    <p><a id="self" href="pictures.html#top">This page</a></p>
+  </body>
+</html>

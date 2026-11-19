@@ -400,6 +400,31 @@ viewer the destination and opens it in a new tab with no opener if they
 confirm. It resolves `true` when the viewer opened it and `false` when they
 did not. Only `https:` and `http:` URLs are accepted.
 
+### Links to the page's own files
+
+A frame holds only the artifact's pages. A link (`<a href>`, an image map's
+`<area>`, an SVG `<a>`) to any other file of the artifact, such as a picture,
+an SVG, a video, a PDF or an asset, opens in the runtime's **file viewer** over
+the page, and the frame stays where it is. Nothing to call or declare:
+
+- **Pictures, video and sound are shown** as large as the frame fits them.
+  Each is named by the link's picture's `alt` text, else the link's
+  `aria-label`, `title` or words, which the viewer reads out and captions it
+  with. Video and sound play with the browser's own controls.
+- **Any other file is named, not shown.** A PDF, a font or a data file cannot
+  be drawn inside the page, so the file viewer says so beside its name, and a
+  file the version does not hold is said to be missing.
+- **The page's other linked files are a step away**, in the page's order, by
+  the Previous and Next buttons or the arrow keys.
+- **Escape, the Close button or a click on the dark around the file closes
+  it**, and focus returns to the link. While it is open the page behind is
+  inert and hears none of its keys or clicks.
+
+A link to a page of the version (`.html`, `.htm`) is followed by the frame as
+before, and a link to another site still needs `openLink`. A click with a
+modifier key is left to the browser, and a page that handles a link's click
+itself (`event.preventDefault()`) keeps it.
+
 ### Printing a board
 
 ```ts
