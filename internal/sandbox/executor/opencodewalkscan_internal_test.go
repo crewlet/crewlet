@@ -758,11 +758,12 @@ func personVariants() []string {
 // answers ([transcriptBuilder.openCodeExportWhole]), which holds each message
 // whole and applies R1 to R6 and the lines bound where it decides them: from
 // the start and later, at a person's bounds and a seat's, under filters, at the
-// line's value bound and below, and with every redaction refused.
+// line's value bound and below, with every redaction refused, and past the
+// lines bound in a step's items, an answer's parts and a non-message.
 //
 // Mutation: split a brief past the bound, drop a blank part past it, re-read a
 // string input past it as JSON, stream a result whose state is out of order,
-// or show a refused redaction, and a case goes red.
+// show a refused redaction, or drop a lines bound, and a case goes red.
 func TestAPersonsReadReadsAnExportAsItsDecodeWalkDid(t *testing.T) {
 	t.Parallel()
 	person, seat := TranscriptReadBounds(), SeatTranscriptBounds()
@@ -796,4 +797,22 @@ func TestAPersonsReadReadsAnExportAsItsDecodeWalkDid(t *testing.T) {
 			every)
 	}
 	check("every variant", `{"messages":[`+strings.Join(variants, ",")+`]}`, every)
+	// Past the lines bound inside a step's items and an answer's parts, and,
+	// after a brief and a step framing the bound exactly or one short of it, at
+	// an element that is no message.
+	empties := func(n int) string { return strings.Repeat(`{},`, n-1) + `{}` }
+	brief := `{"type":"user","text":"the brief"}`
+	edge := func(items int) string {
+		return `{"messages":[` + brief + `,{"type":"assistant","content":[` + empties(items-1) +
+			`,{"type":"text","text":"x"}]},0,` + brief + `]}`
+	}
+	for _, doc := range []string{
+		`{"messages":[` + brief + `,{"type":"assistant","content":[{"type":"text","text":"before"},` +
+			empties(transcriptLinesMax) + `,{"type":"text","text":"after"}]},` + brief + `]}`,
+		`{"messages":[` + brief + `,{"type":"assistant","content":[{"type":"tool","name":"bash","state":` +
+			`{"status":"completed","content":[` + empties(transcriptLinesMax) + `]}}]},` + brief + `]}`,
+		edge(transcriptLinesMax - 2), edge(transcriptLinesMax - 3),
+	} {
+		check("past the lines bound", doc, []personRead{{bounds: person, valueMax: 1 << 10}})
+	}
 }
