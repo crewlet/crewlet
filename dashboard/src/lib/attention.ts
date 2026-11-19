@@ -658,7 +658,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       detail: f.fix.sentence,
       ...(fix
         ? { path: fix.path, ...(fix.query ? { query: fix.query } : {}), action: fix.action }
-        : { path: ["settings", "advisor"], action: "Open the advisor" }),
+        : { path: ["advisor"], action: "Open the advisor" }),
       clears: fix?.clears ?? "Clears once the setup no longer raises it.",
       spread: n.nodes?.length ?? 0,
       ...(n.alarm ? { alarm: n.alarm } : {}),
@@ -675,7 +675,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "list-checks",
       title: unreadTitle(setupUnread),
       detail: unreadSentences(setupUnread).join(" "),
-      path: ["settings", "advisor"],
+      path: ["advisor"],
       action: "Open the advisor",
       clears: "Clears once the advisor reads every source again.",
     });

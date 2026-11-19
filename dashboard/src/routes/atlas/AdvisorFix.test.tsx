@@ -82,7 +82,7 @@ afterEach(() => {
 
 function mount(f: AdvisorFinding, answers: Record<string, unknown> = {}) {
   return mountAtlas(
-    "#/settings/advisor",
+    "#/advisor",
     <AdvisorAtlasFix finding={f} onClose={() => {}} />,
     grownCompany(),
     { answers: { viewer: ADA, ...answers } },
@@ -191,7 +191,7 @@ describe("an atlas finding's fix", () => {
 
   test("holds every control for a reader the engine would not serve", async () => {
     mountAtlas(
-      "#/settings/advisor",
+      "#/advisor",
       <AdvisorAtlasFix finding={finding({})} onClose={() => {}} />,
       grownCompany(),
       { answers: { viewer: { ...ADA, acts: [] } } },
@@ -205,7 +205,7 @@ describe("an atlas finding's fix", () => {
   test("holds every control for a reader who is not signed in", async () => {
     const viewer = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
     mountAtlas(
-      "#/settings/advisor",
+      "#/advisor",
       <AdvisorAtlasFix finding={finding({})} onClose={() => {}} />,
       grownCompany(),
       { answers: { viewer } },

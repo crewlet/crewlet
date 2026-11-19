@@ -929,7 +929,7 @@ test("a finding that blocks the company is a condition a person decides", () => 
   const row = queue.find((a) => a.subject === "setup");
   expect(row?.title).toBe("Datadog refused the credential.");
   expect(row?.detail).toBe("Replace the credential.");
-  expect(row?.path).toEqual(["settings", "advisor"]);
+  expect(row?.path).toEqual(["advisor"]);
   expect(conditionsToDecide(queue)).toContainEqual(row);
 });
 
@@ -1023,7 +1023,7 @@ test("an advisor that could not read everything says so, once", () => {
   expect(runs?.detail).toMatch(
     /a sandbox that ran out of memory or runs that ended on their round cap may be missing/,
   );
-  expect(rows[0]?.path).toEqual(["settings", "advisor"]);
+  expect(rows[0]?.path).toEqual(["advisor"]);
 });
 
 // A CONVERSATION THE ENGINE HOLDS REACHES THE ADMINISTRATORS: one row a hold,

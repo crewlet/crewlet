@@ -206,7 +206,7 @@ gives the terminal steps for it, folded, which
 [Giving the company a model](#giving-the-company-a-model) explains. On a company
 another system [manages](../concepts/configuration.md#managed-configuration),
 it says the model is added there instead. **Open the advisor** opens
-[Settings › Advisor](advisor.md) and its go-live check: what would
+the [Advisor](advisor.md) and its go-live check: what would
 block the company or cost it, each with a fix you preview before it is made.
 
 ### Giving the company a model

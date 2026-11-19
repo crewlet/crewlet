@@ -298,6 +298,13 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       return [root(row, false)];
     case "me":
       return sectionPage(where.section);
+    case "advisor":
+      return sectionPage(`advisor-${where.section}`);
+    case "advisor-finding":
+      // A FINDING'S TITLE is its page's to publish; until then, "Finding".
+      return inside("advisor-findings", { label: labels[where.id] || "Finding" });
+    case "advisor-report":
+      return inside("advisor-reports", { label: labels[where.id] || "Report" });
     case "worklet-projects":
       // WORKLET'S LANDING: All projects' first lens, where a link back to
       // Worklet would lead to the page it is on.
@@ -552,7 +559,6 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "sign-in":
     case "storage":
     case "diagnostics":
-    case "advisor":
     case "delegated-decisions":
       return sectionPage(where.screen);
     case "code-settings":

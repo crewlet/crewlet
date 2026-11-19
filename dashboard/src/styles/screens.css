@@ -10695,6 +10695,90 @@ a.live-row:hover {
   padding: var(--spacing-6) var(--ask-page-pad-x);
 }
 
+/* The Advisor's page (routes/advisor): its head, when the checks last ran,
+   Run now and the model, on one wrapping row. */
+.advisor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.advisor-head__run {
+  flex: 1;
+  min-width: 12rem;
+  margin: 0;
+}
+
+/* A finding's fix and its menu, side by side at a row's end. */
+.advisor-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.advisor-finding__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The facts a re-check read now: each label beside its number. */
+.advisor-facts {
+  display: grid;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-facts__label {
+  color: var(--color-text-secondary);
+}
+
+.advisor-facts__value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reports and closed findings, one row each. */
+.advisor-reports,
+.advisor-history {
+  display: grid;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-history__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-2);
+}
+
+/* A week's measures against the week before. */
+.advisor-report__metrics {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 40rem;
+}
+
+.advisor-report__metrics caption {
+  text-align: start;
+  padding-bottom: var(--spacing-1);
+}
+
+.advisor-report__metrics th,
+.advisor-report__metrics td {
+  padding: var(--spacing-1) var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
+  text-align: start;
+  font-variant-numeric: tabular-nums;
+}
+
 /* A helper's model in its page's head (components/HelperModel.tsx): the
    picker, and what its last change came to beside it. */
 .helper-model {

@@ -1,0 +1,116 @@
+/**
+ * The Advisor page's words for the engine's values: severities, where a
+ * finding stands and why it closed, and a fact's number in its unit. One
+ * table each, so a finding reads the same in the list, its page, the Apply
+ * dialog and a report.
+ *
+ * A CLASS IS NEVER NAMED HERE. The engine writes every finding's title, why
+ * and fix sentence, so a class it adds is drawn the day it ships, with no
+ * list in the client to fall behind it.
+ */
+
+import type { AttentionTone } from "@crewlethq/ui";
+import { fmtCount, plural } from "~/lib/format.ts";
+import type {
+  AdvisorCloseReason,
+  AdvisorFact,
+  AdvisorFactUnit,
+  AdvisorFinding,
+  AdvisorSeverity,
+} from "./types.ts";
+
+/** Each severity, most costly first, as the list heads it and the tone it is drawn in. */
+export const SEVERITIES: readonly {
+  severity: AdvisorSeverity;
+  label: string;
+  tone: AttentionTone;
+}[] = [
+  { severity: "blocks", label: "Blocks", tone: "danger" },
+  { severity: "costs", label: "Costs", tone: "warning" },
+  { severity: "note", label: "Worth knowing", tone: "info" },
+];
+
+/** A severity's tone. */
+export function toneOf(severity: AdvisorSeverity): AttentionTone {
+  return SEVERITIES.find((s) => s.severity === severity)?.tone ?? "info";
+}
+
+/** A severity's word. */
+export function severityWord(severity: AdvisorSeverity): string {
+  return SEVERITIES.find((s) => s.severity === severity)?.label ?? severity;
+}
+
+/** Why a finding closed, as its row and its page say it. */
+export const CLOSE_REASONS: Readonly<Record<AdvisorCloseReason, string>> = {
+  condition_cleared: "The condition cleared",
+  fixed_by_this: "Fixed by the change applied here",
+  fixed_elsewhere: "Fixed by another change",
+  subject_gone: "What it was about is gone",
+  fix_unbuildable: "Its change can no longer be made",
+  not_confirmed: "Expired: not seen again for 7 days",
+  dismissed_wont_fix: "Dismissed: won't fix",
+  dismissed_wrong: "Dismissed as wrong",
+  dismissed_known: "Dismissed: already known",
+};
+
+/** Where a finding stands, in one word. */
+export const STATE_WORDS: Readonly<Record<AdvisorFinding["state"], string>> = {
+  open: "Open",
+  applied: "Applied",
+  resolved: "Resolved",
+  retired: "No longer applies",
+  expired: "Expired",
+  dismissed: "Dismissed",
+};
+
+/** A number in its unit, as a reader compares two of them. */
+export function factValue(value: number | string, unit: AdvisorFactUnit): string {
+  if (typeof value === "string") return value;
+  switch (unit) {
+    case "hours":
+      return `${round(value)} h`;
+    case "minutes":
+      return `${round(value)} min`;
+    case "percent":
+      return `${round(value)}%`;
+    case "tokens":
+      return `${fmtCount(value)} tokens`;
+    case "items":
+      return plural(value, "item");
+    case "turns":
+      return plural(value, "turn");
+    case "count":
+      return fmtCount(value);
+  }
+}
+
+/** One decimal at most, and none that is zero. */
+const round = (n: number) => String(Math.round(n * 10) / 10);
+
+/** A fact's number. */
+export function factWords(fact: AdvisorFact): string {
+  return factValue(fact.value, fact.unit);
+}
+
+/** What a finding is measured to cost a week, where its class can say: the row's quiet figure. */
+export function impactWords(finding: AdvisorFinding): string | null {
+  const parts: string[] = [];
+  const hours = finding.impact?.hours_per_week;
+  const tokens = finding.impact?.tokens_per_week;
+  if (hours !== null && hours !== undefined) parts.push(`${round(hours)} h a week`);
+  if (tokens !== null && tokens !== undefined) parts.push(`${fmtCount(tokens)} tokens a week`);
+  return parts.length === 0 ? null : parts.join(" and ");
+}
+
+/** The open findings ranked: the most costly severity first, then the largest measured cost, then the newest. */
+export function ranked(findings: readonly AdvisorFinding[]): AdvisorFinding[] {
+  const order = (s: AdvisorSeverity) => SEVERITIES.findIndex((x) => x.severity === s);
+  const weight = (f: AdvisorFinding) =>
+    (f.impact?.hours_per_week ?? 0) * 1_000_000 + (f.impact?.tokens_per_week ?? 0);
+  return [...findings].sort(
+    (a, b) =>
+      order(a.severity) - order(b.severity) ||
+      weight(b) - weight(a) ||
+      Date.parse(b.opened_at) - Date.parse(a.opened_at),
+  );
+}

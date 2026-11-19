@@ -338,6 +338,10 @@ export type SignInScreen =
   | { screen: "invite"; link: string }
   | { screen: "reset"; link: string };
 
+/** The Advisor page's tabs: what is open now, the weekly reports, and what closed. */
+export const ADVISOR_SECTIONS = ["findings", "reports", "history"] as const;
+export type AdvisorSection = (typeof ADVISOR_SECTIONS)[number];
+
 /** Every screen the frame draws, with what its path names. */
 export type FramedScreen =
   | { screen: "home" }
@@ -346,6 +350,12 @@ export type FramedScreen =
   | { screen: "me"; section: MeSection }
   /** Ask Crewlet's page, on one of the reader's conversations by id, or on the one this tab was on. */
   | { screen: "ask"; conversation?: string }
+  /** The Advisor's page, on one of its tabs. */
+  | { screen: "advisor"; section: AdvisorSection }
+  /** One finding, by its episode's id. */
+  | { screen: "advisor-finding"; id: string }
+  /** One weekly report, by its id. */
+  | { screen: "advisor-report"; id: string }
   | { screen: "worklet-projects" }
   | { screen: "worklet-tasks" }
   | { screen: "worklet-views"; id?: string }
@@ -429,7 +439,6 @@ export type FramedScreen =
   | { screen: "storage" }
   | { screen: "code-settings" }
   | { screen: "diagnostics" }
-  | { screen: "advisor" }
   | { screen: "account" };
 
 /** Every screen the dashboard draws. */
@@ -506,6 +515,20 @@ export function resolve(path: string[]): Route {
       if (rest.length === 1 && id && ID_SHAPE.test(id))
         return screen({ screen: "ask", conversation: id });
       return missing("ask", under("Ask Crewlet"), "A conversation is named by its id");
+    }
+    case "advisor": {
+      const [first, second] = rest;
+      if (first === undefined) return screen({ screen: "advisor", section: "findings" });
+      if (rest.length === 1 && (first === "reports" || first === "history")) {
+        return screen({ screen: "advisor", section: first });
+      }
+      if (rest.length === 2 && first === "findings" && second && ID_SHAPE.test(second)) {
+        return screen({ screen: "advisor-finding", id: second });
+      }
+      if (rest.length === 2 && first === "reports" && second && ID_SHAPE.test(second)) {
+        return screen({ screen: "advisor-report", id: second });
+      }
+      return missing("advisor", under("Advisor"));
     }
     case "me": {
       if (rest.length === 0) return screen({ screen: "me", section: "queue" });
@@ -922,7 +945,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     storage: { screen: "storage" },
     gitlet: { screen: "code-settings" },
     diagnostics: { screen: "diagnostics" },
-    advisor: { screen: "advisor" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
   if (plain) return tail.length ? none() : screen(plain);
