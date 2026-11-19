@@ -19,14 +19,13 @@ import (
 
 // BenchmarkAnOpenCodeReadingAtItsBounds measures an OpenCode holdings
 // reading's time and memory at its bounds, which set internal/sandbox's
-// holdingsReadWait and [SeatTranscriptReadsAtOnce], beside a person's read of
-// the same export through the same walk: the largest export a release's own
-// runs kept, 256 MiB of ordinary steps, one message at the walk's bound
-// holding one answer the reading decodes, one of minimal items, and 200
-// classes over 4,096 parts. `_pair` cases run the reading and a person's read
-// at once. Run one case at a time, reading
-// GODEBUG=gctrace=1 between its stderr lines: held at most is the largest
-// live heap at GOGC=10.
+// holdingsReadWait and [HoldingsReadsAtOnce]: the largest export a release's
+// own runs kept, 255 MiB of ordinary steps and of idle messages, one message
+// holding one answer the reading digests at 32 and at 64 MiB, one of minimal
+// items at 64 MiB, and 200 classes over 4,096 parts. `_pair` runs the reading
+// and a person's read of the export at once, `_person` the person's alone.
+// Run one case at a time, reading GODEBUG=gctrace=1 between its stderr lines:
+// held at most is the largest live heap at GOGC=10.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAnOpenCodeReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
@@ -37,9 +36,11 @@ func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
 	}{
 		{"measured", benchMeasured, true, false},
 		{"ordinary", benchOrdinary, true, false},
-		{"answer_at_bound", benchAnswerAtBound, true, false},
-		{"answer_at_bound_person", benchAnswerAtBound, false, true},
-		{"answer_at_bound_pair", benchAnswerAtBound, true, true},
+		{"idle", benchIdle, true, false},
+		{"answer_32", benchAnswer(32 << 20), true, false},
+		{"answer_64", benchAnswer(64 << 20), true, false},
+		{"answer_64_person", benchAnswer(64 << 20), false, true},
+		{"answer_64_pair", benchAnswer(64 << 20), true, true},
 		{"minimal_items", benchMinimalItems, true, false},
 		{"classes", benchClasses, true, false},
 	} {
@@ -155,23 +156,35 @@ func benchOrdinary(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	return calls
 }
 
-// benchAnswerAtBound is one step just under the walk's bound holding one
-// answer the reading decodes, as large as the step leaves room for.
-func benchAnswerAtBound(b *testing.B, w io.Writer) []sandbox.LoggedCall {
+// benchIdle is about 255 MiB of idle messages, a step of one call after them.
+func benchIdle(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	b.Helper()
-	const slack = 64 << 10
-	frame := ohStep(ohDone("echo", `{"t":1}`, ""))
-	text := strings.Repeat("line of the log the tool printed, plain words. ", (maxLineBytes-slack-len(frame))/47)
-	_, _ = io.WriteString(w, benchHead+","+ohStep(ohDone("echo", `{"t":1}`, text))+benchTail)
-	return []sandbox.LoggedCall{ohCut(ohCall(1, "echo", `{"t":1}`, text))}
+	_, _ = io.WriteString(w, benchHead)
+	for n := 0; n < 255<<20; n += len(ocIdle) + 1 {
+		_, _ = io.WriteString(w, ","+ocIdle)
+	}
+	_, _ = io.WriteString(w, ","+ohStep(ohDone("echo", `{"t":1}`, "done"))+benchTail)
+	return []sandbox.LoggedCall{ohCall(1, "echo", `{"t":1}`, "done")}
 }
 
-// benchMinimalItems is one step just under the walk's bound of minimal items.
+// benchAnswer is one step of size bytes holding one answer the reading
+// digests, as large as the step leaves room for.
+func benchAnswer(size int) func(*testing.B, io.Writer) []sandbox.LoggedCall {
+	return func(b *testing.B, w io.Writer) []sandbox.LoggedCall {
+		b.Helper()
+		frame := ohStep(ohDone("echo", `{"t":1}`, ""))
+		text := strings.Repeat("line of the log the tool printed, plain words. ", (size-len(frame))/47)
+		_, _ = io.WriteString(w, benchHead+","+ohStep(ohDone("echo", `{"t":1}`, text))+benchTail)
+		return []sandbox.LoggedCall{ohCut(ohCall(1, "echo", `{"t":1}`, text))}
+	}
+}
+
+// benchMinimalItems is one step of 64 MiB of minimal items.
 func benchMinimalItems(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	b.Helper()
 	const item = `{"type":"reasoning","text":""},`
 	_, _ = io.WriteString(w, benchHead+","+ohStepOpen)
-	for n := 0; n < maxLineBytes-(256<<10); n += len(item) {
+	for n := 0; n < 64<<20; n += len(item) {
 		_, _ = io.WriteString(w, item)
 	}
 	_, _ = io.WriteString(w, ohDone("echo", `{"t":1}`, "done")+ohStepClose+benchTail)

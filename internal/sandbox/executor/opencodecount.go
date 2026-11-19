@@ -275,7 +275,7 @@ var meterAsks = exportAsksOf(map[exportFrame]map[int]exportMeans{
 	frameState:      {stateContent: meansFrame, stateError: meansFrame},
 	frameAnswerPart: {partType: meansWord, partMime: meansWord},
 	frameFile:       {fileType: meansWord, fileMime: meansWord},
-})
+}, false)
 
 // exportMeter is the meter as the export walk's visitor: each message's small
 // values by their exact names, captured at [exportValueMaxBytes] and decoded
@@ -307,6 +307,8 @@ type exportMeter struct {
 }
 
 func (*exportMeter) asks() *exportAsks { return meterAsks }
+
+func (*exportMeter) digest() *textDigest { return nil }
 
 // open starts what a frame's members fold into.
 func (e *exportMeter) open(f exportFrame) error {

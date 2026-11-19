@@ -108,7 +108,7 @@ func ohCut(c sandbox.LoggedCall) sandbox.LoggedCall {
 func ohRead(t *testing.T, doc string, start sandbox.RunStart, calls ...sandbox.LoggedCall) (sandbox.SessionHoldings,
 	error) {
 	t.Helper()
-	return readOpenCodeHoldings(t.Context(), strings.NewReader(doc), maxLineBytes, ohSession, start,
+	return readOpenCodeHoldings(t.Context(), strings.NewReader(doc), ohSession, start,
 		sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"})
 }
 
@@ -855,45 +855,102 @@ func TestAPartMatchingTwoClassesCountsForNeither(t *testing.T) {
 	}
 }
 
-// A TEXT THAT CANNOT BE ITS CLASS'S SIZE IS NEVER DECODED: a part whose text
-// spans more than six times every candidate's size is passed with no copy of
-// it made, at least half the text less than a read that decodes it; one
-// escaped six bytes a character is read.
+// A TEXT IS MATCHED BY ITS DECODED SIZE: a part whose text is escaped six
+// bytes a character, the most an escape spans, is its class's text and held;
+// one a character longer is another size and told.
 //
-// Not parallel: it reads the process's allocation count.
-//
-// Mutation: drop the pre-check, or bound it at one times the size, and a
-// case goes red.
-func TestATextThatCannotBeItsClassesSizeIsNeverDecoded(t *testing.T) {
-	big := strings.Repeat("y", 4<<20)
-	doc := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, big)))
-	passed := ohAllocated(t, doc, ohCall(1, "echo", `{"t":1}`, "small"))
-	decoded := ohAllocated(t, doc, ohCut(ohCall(1, "echo", `{"t":1}`, big+"!")))
-	if passed+uint64(len(big))/2 > decoded {
-		t.Errorf("a text no candidate can be allocated %d bytes, one decoded %d; want half the text less",
-			passed, decoded)
-	}
-	escaped := strings.Repeat(`\u0079`, 4<<10)
+// Mutation: compare a text's span as written with its class's size, and the
+// first case goes red; drop the size from the match, and the second.
+func TestATextIsMatchedByItsDecodedSize(t *testing.T) {
+	t.Parallel()
 	near := ohCut(ohCall(1, "echo", `{"t":1}`, strings.Repeat("y", 4<<10)))
-	doc = ohDoc(ohUser, ohStep(strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", escaped, 1)))
-	h, err := ohRead(t, doc, ohBegan, near)
-	if got := ohHeld(t, h, err, near); !slices.Equal(got, []int{1}) {
-		t.Errorf("a text escaped six bytes a character: held %v; want it read", got)
+	for characters, held := range map[int]bool{4 << 10: true, 4<<10 + 1: false} {
+		escaped := strings.Repeat(`\u0079`, characters)
+		doc := ohDoc(ohUser, ohStep(strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", escaped, 1)))
+		h, err := ohRead(t, doc, ohBegan, near)
+		if got := ohHeld(t, h, err, near); (got != nil) != held {
+			t.Errorf("%d characters escaped six bytes each: held %v; want held %t", characters, got, held)
+		}
 	}
 }
 
-// ohAllocated is what reading doc for calls allocated, in bytes, read once
-// first so what the process builds once (the tool-name bound's profiles) is
-// none of it.
-func ohAllocated(t *testing.T, doc string, calls ...sandbox.LoggedCall) uint64 {
+// A VALUE PAST ITS CAPTURE IS THERE TO A READING, of its kind, equal to no
+// word: an `executed` past the bound passes its part, as one that is not
+// false does, and an absent one counts; a message's or an item's `type` string
+// past the word's buffer is a shape this build does not read, and an absent
+// one no export.
+//
+// Mutation: read a value past its capture or its word as absent, and a case
+// goes red.
+func TestAPastValueIsPresentToAHoldingsReading(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	part := ohDone("echo", `{"t":1}`, "done")
+	long := strings.Repeat("x", exportValueMaxBytes+1)
+	for name, tc := range map[string]struct {
+		part string
+		held bool
+	}{
+		"executed past the bound": {strings.Replace(part, `"executed":false`, `"executed":"`+long+`"`, 1), false},
+		"executed absent":         {strings.Replace(part, `"executed":false,`, ``, 1), true},
+	} {
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(tc.part)), ohBegan, c)
+		if got := ohHeld(t, h, err, c); (got != nil) != tc.held {
+			t.Errorf("%s: held %v; want held %t", name, got, tc.held)
+		}
+	}
+	step := ohStep(part)
+	for name, tc := range map[string]struct {
+		doc  string
+		want *holdingsError
+	}{
+		"a message's type past the buffer": {ohDoc(ohUser, strings.Replace(step, `"type":"assistant"`,
+			`"type":"`+long+`"`, 1)), errOpenCodeShape},
+		"a message's type absent": {ohDoc(ohUser, strings.Replace(step, `"type":"assistant",`, ``, 1)),
+			errOpenCodeMalformed},
+		"an item's type past the buffer": {ohDoc(ohUser, ohStep(strings.Replace(part, `"type":"tool"`,
+			`"type":"`+long+`"`, 1))), errOpenCodeShape},
+		"an item's type absent": {ohDoc(ohUser, ohStep(strings.Replace(part, `"type":"tool",`, ``, 1))),
+			errOpenCodeMalformed},
+	} {
+		_, err := ohRead(t, tc.doc, ohBegan, c)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v; want %v", name, err, tc.want)
+		}
+	}
+}
+
+// AN EMPTY FAILURE NEVER HOLDS AN EMPTY OUTPUT: a failed part whose message is
+// empty is OpenCode's own words to its model, never the call's, so a failed
+// call the log has with an empty output is told; a failure written exactly is
+// held.
+//
+// Mutation: match a text of a class of size zero, and this goes red.
+func TestAnEmptyFailureNeverHoldsAnEmptyOutput(t *testing.T) {
+	t.Parallel()
+	for output, held := range map[string]bool{"": false, "boom": true} {
+		c := ohCall(1, "echo", `{"t":1}`, output)
+		c.Failed = true
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohFailed("echo", `{"t":1}`, output))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); (got != nil) != held {
+			t.Errorf("a failure of %q: held %v; want held %t", output, got, held)
+		}
+	}
+}
+
+// ohAllocated is what reading the export doc opens for calls allocated, in
+// bytes, a small export of its shape read once first so what the process
+// builds once (the tool-name bound's profiles) is none of it.
+func ohAllocated(t *testing.T, doc func() io.Reader, calls ...sandbox.LoggedCall) uint64 {
 	t.Helper()
-	if _, err := ohRead(t, doc, ohBegan, calls...); err != nil {
+	ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"}
+	if _, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))), ohBegan, calls...); err != nil {
 		t.Fatalf("no reading: %v", err)
 	}
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	h, err := ohRead(t, doc, ohBegan, calls...)
+	h, err := readOpenCodeHoldings(t.Context(), doc(), ohSession, ohBegan, ask)
 	runtime.ReadMemStats(&after)
 	if err != nil || !h.Read {
 		t.Fatalf("no reading: %v", err)
@@ -903,13 +960,13 @@ func ohAllocated(t *testing.T, doc string, calls ...sandbox.LoggedCall) uint64 {
 
 // A STATE IS READ ONCE WHATEVER ITS KEY ORDER: a part whose `content` comes
 // before its `status` and `input` counts as the one written status first, and
-// its 4 MiB answer is decoded once and copied never: the read allocates at
-// most half the text more than one decode beyond a part it never reads.
+// its 4 MiB answer is never held: the read allocates no more than a part of
+// another server's alike in size, within a capture's bound.
 //
 // Not parallel: it reads the process's allocation count.
 //
-// Mutation: copy the content's span, or skip the pre-check where the content
-// comes first, and a case goes red.
+// Mutation: hold the answer to digest it, or decide the part where its
+// content is read, and a case goes red.
 func TestAStateIsReadOnceWhateverItsKeyOrder(t *testing.T) {
 	text := strings.Repeat("z", 4<<20)
 	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
@@ -924,12 +981,11 @@ func TestAStateIsReadOnceWhateverItsKeyOrder(t *testing.T) {
 	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
 		t.Fatalf("content first: held %v; want it counted", got)
 	}
-	// Beside a part of another server's alike in size, whose state is never
-	// read, the answer read costs its one decode.
 	other := strings.Replace(doc, `"crewlet_echo"`, `"notcrew_echo"`, 1)
-	read, none := ohAllocated(t, doc, c), ohAllocated(t, other, c)
-	if read > none+uint64(len(text))*3/2 {
-		t.Errorf("the answer read allocated %d bytes, a part never read %d; want one decode more", read, none)
+	read := ohAllocated(t, func() io.Reader { return strings.NewReader(doc) }, c)
+	none := ohAllocated(t, func() io.Reader { return strings.NewReader(other) }, c)
+	if read > none+exportValueMaxBytes {
+		t.Errorf("the answer read allocated %d bytes, a part never counted %d; want it never held", read, none)
 	}
 }
 
@@ -1076,10 +1132,9 @@ func TestAMessageOfAKindThisBuildDoesNotReadLeavesTheSessionUnread(t *testing.T)
 	ohNone(t, h, err)
 }
 
-// AN OPENCODE READING IS HELD TO ITS BOUNDS: plain past a lowered meter, a
-// message past a lowered value bound, another value after the document,
-// `info` naming another session, and a body failing after the document are
-// no reading.
+// AN OPENCODE READING IS HELD TO ITS BOUNDS: plain past a lowered meter,
+// another value after the document, `info` naming another session, and a body
+// failing after the document are no reading.
 //
 // Mutation: drop a bound, the trailing check or the drain, and a case goes
 // red.
@@ -1088,22 +1143,21 @@ func TestAnOpenCodeReadingIsHeldToItsBounds(t *testing.T) {
 	c := ohCall(1, "echo", `{"t":1}`, "done")
 	doc := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done")))
 	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
-	read := func(plain io.Reader, line int, session string) error {
-		h, err := readOpenCodeHoldings(t.Context(), plain, line, session, ohBegan, ask)
+	read := func(plain io.Reader, session string) error {
+		h, err := readOpenCodeHoldings(t.Context(), plain, session, ohBegan, ask)
 		if err == nil && !h.Read {
 			t.Fatal("a reading of nothing with no error")
 		}
 		return err
 	}
-	if err := read(strings.NewReader(doc), maxLineBytes, ohSession); err != nil {
+	if err := read(strings.NewReader(doc), ohSession); err != nil {
 		t.Fatalf("the export within every bound: %v", err)
 	}
 	for name, err := range map[string]error{
-		"plain past its meter":         read(boundedPlain(strings.NewReader(doc), int64(len(doc)-1)), maxLineBytes, ohSession),
-		"a message past its bound":     read(strings.NewReader(doc), 256, ohSession),
-		"a value after the document":   read(strings.NewReader(doc+` {}`), maxLineBytes, ohSession),
-		"another session's":            read(strings.NewReader(doc), maxLineBytes, "ses_other"),
-		"a body failing after the end": read(io.MultiReader(strings.NewReader(doc), ohFailing{}), maxLineBytes, ohSession),
+		"plain past its meter":         read(boundedPlain(strings.NewReader(doc), int64(len(doc)-1)), ohSession),
+		"a value after the document":   read(strings.NewReader(doc+` {}`), ohSession),
+		"another session's":            read(strings.NewReader(doc), "ses_other"),
+		"a body failing after the end": read(io.MultiReader(strings.NewReader(doc), ohFailing{}), ohSession),
 	} {
 		if err == nil {
 			t.Errorf("%s: read; want no reading", name)
@@ -1126,7 +1180,7 @@ func (ohFailing) Read([]byte) (int, error) { return 0, errors.New("the store's s
 // CONTEXT ENDS: a caller gone after a step's first part, or after the first
 // message, is no reading.
 //
-// Mutation: check the context per message alone, and the first case goes
+// Mutation: ask the context per message alone, and the first case goes
 // red.
 func TestAnOpenCodeReadingStopsBetweenMessagesWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
@@ -1136,13 +1190,13 @@ func TestAnOpenCodeReadingStopsBetweenMessagesWhenItsContextEnds(t *testing.T) {
 		doc  string
 		asks int
 	}{
-		// The walk asks before each message, the visitor at each message and
-		// before each part: the fourth ask is the second part's.
-		"after a part":    {ohDoc(ohStep(part, part)), 4},
-		"after a message": {ohDoc(ohUser, ohStep(part)), 3},
+		// The walk asks before each message and each item: the third ask is
+		// the second part's, the second the second message's.
+		"after a part":    {ohDoc(ohStep(part, part)), 3},
+		"after a message": {ohDoc(ohUser, ohStep(part)), 2},
 	} {
 		ctx := &ohCountdown{Context: t.Context(), left: tc.asks - 1}
-		_, err := readOpenCodeHoldings(ctx, strings.NewReader(tc.doc), maxLineBytes, ohSession, ohBegan,
+		_, err := readOpenCodeHoldings(ctx, strings.NewReader(tc.doc), ohSession, ohBegan,
 			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("%s: %v; want the caller's end", name, err)
@@ -1166,9 +1220,9 @@ func (c *ohCountdown) Err() error {
 }
 
 // THE READER TAKES NO SLOT OF ITS OWN: a reading under ReadHoldings, which
-// holds the seats' one slot, completes; a reader taking the slot again would
-// wait on itself until its caller left, which this case's liveness bound
-// reports as its own failure.
+// holds the readings' one slot, completes; a reader taking the slot again
+// would wait on itself until its caller left, which this case's liveness
+// bound reports as its own failure.
 //
 // Not parallel: the slots are the process's own.
 //
@@ -1190,9 +1244,9 @@ func TestTheReaderTakesNoSlotOfItsOwn(t *testing.T) {
 	}()
 	select {
 	case r := <-done:
-		if r.err != nil || !r.got.Read || SeatTranscriptReadsHeld() != 0 {
-			t.Errorf("a reading = %+v, %v, seats' slot held after %d; want it read and the slot given back", r.got,
-				r.err, SeatTranscriptReadsHeld())
+		if r.err != nil || !r.got.Read || HoldingsReadsHeld() != 0 {
+			t.Errorf("a reading = %+v, %v, readings' slot held after %d; want it read and the slot given back",
+				r.got, r.err, HoldingsReadsHeld())
 		}
 	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("a reading of one small step waited a minute: the reader waits on a slot its caller holds")
@@ -1215,7 +1269,7 @@ func TestAReadingsCauseQuotesNothingOfTheExport(t *testing.T) {
 		"on a long fault": io.MultiReader(strings.NewReader(`{"info":`),
 			ohFault{errors.New(secret)}),
 	} {
-		_, err := readOpenCodeHoldings(t.Context(), plain, maxLineBytes, ohSession, ohBegan, ask)
+		_, err := readOpenCodeHoldings(t.Context(), plain, ohSession, ohBegan, ask)
 		if err == nil {
 			t.Fatalf("%s: read", name)
 		}
@@ -1231,45 +1285,54 @@ type ohFault struct{ err error }
 
 func (f ohFault) Read([]byte) (int, error) { return 0, f.err }
 
-// A READING HOLDS ONE MESSAGE AT A TIME: a message at 8 MiB of one text part,
-// and one of minimal items, each allocates at most what the benchmark
-// measured a reading of it to allocate (the walk's buffer grown by doubling
-// to the message, and one decoded text) and half the message more, so one
-// more copy of either fails.
+// A READING HOLDS NO MESSAGE: a 64 MiB message of one text part, past the 32
+// MiB the decode walk held a message to, is read and its call held, and a 64
+// MiB message of minimal items is read and its one part counted, each
+// allocating within [ohReadingAllocates] whatever the message's length.
 //
 // Not parallel: it reads the process's allocation count.
 //
-// Mutation: decode the content into a copy, or read items through item(), and
-// a case goes red.
-func TestAReadingHoldsOneMessageAtATime(t *testing.T) {
-	const message = 8 << 20
+// Mutation: hold a digested text whole, or capture an item's text, and a case
+// goes red.
+func TestAReadingHoldsNoMessage(t *testing.T) {
+	const message = 64 << 20
 	text := strings.Repeat("v", message-512)
-	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
-	minimal := strings.TrimSuffix(strings.Repeat(`{"type":"reasoning","text":"r"},`, (message-512)/32), ",")
+	cut := ohCut(ohCall(1, "echo", `{"t":1}`, text))
+	head, tail, _ := strings.Cut(ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "PLACE"))), "PLACE")
+	const item = `{"type":"reasoning","text":"r"},`
+	itemsHead, itemsTail, _ := strings.Cut(ohDoc(ohUser, ohStep("PLACE")), "PLACE")
+	itemsTail = ohDone("echo", `{"t":1}`, "done") + itemsTail
 	for name, tc := range map[string]struct {
-		doc      string
-		measured uint64
+		doc  func() io.Reader
+		call sandbox.LoggedCall
 	}{
-		"one text part": {ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohMeasuredText},
-		"minimal items": {ohDoc(ohUser, ohStep(minimal)), ohMeasuredMinimal},
+		"one text part": {func() io.Reader {
+			return io.MultiReader(strings.NewReader(head), strings.NewReader(text), strings.NewReader(tail))
+		}, cut},
+		"minimal items": {func() io.Reader {
+			items := &repeating{lines: []byte(item), left: int64(message / len(item) * len(item))}
+			return io.MultiReader(strings.NewReader(itemsHead), items, strings.NewReader(itemsTail))
+		}, ohCall(1, "echo", `{"t":1}`, "done")},
 	} {
-		allocated := ohAllocated(t, tc.doc, c)
+		h, err := readOpenCodeHoldings(t.Context(), tc.doc(), ohSession, ohBegan,
+			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{tc.call}, Resumer: "2.2.7"})
+		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
+			t.Errorf("%s: held %v; want its call", name, got)
+		}
+		allocated := ohAllocated(t, tc.doc, tc.call)
 		t.Logf("%s: allocated %d bytes", name, allocated)
-		if allocated > tc.measured+message/2 {
-			t.Errorf("%s: allocated %d bytes; want at most %d", name, allocated, tc.measured+message/2)
+		if allocated > ohReadingAllocates {
+			t.Errorf("%s: allocated %d bytes; want at most %d", name, allocated, ohReadingAllocates)
 		}
 	}
 }
 
-// What a reading of [TestAReadingHoldsOneMessageAtATime]'s messages allocated
-// on the build host (Go 1.27.2) under the race detector, as the suite runs:
-// 24.0 MiB for the text part, the walk's buffer doubling to the 8 MiB message
-// and its one decode; 120.0 MiB for the minimal items (114.0 without the
-// detector), about 480 bytes of decoder state an item, none of it live.
-const (
-	ohMeasuredText    = 25 << 20
-	ohMeasuredMinimal = 121 << 20
-)
+// ohReadingAllocates is the most a reading of [TestAReadingHoldsNoMessage]'s
+// messages allocates: the scanner's buffers, a capture's, the digest's 32 KiB
+// piece, the reading's maps and its verdict, 124 KiB of the text part and 107
+// KiB of the items measured under the race detector on the build host (Go
+// 1.27.2), twice that; a 64 MiB message held once is 256 times it.
+const ohReadingAllocates = 256 << 10
 
 // ohManifest is what a release's fixtures say of each case: the session, the
 // run's start, the round's logged calls, and the calls the reading holds.

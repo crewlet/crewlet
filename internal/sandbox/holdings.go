@@ -408,8 +408,8 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // THIRTY SECONDS, so a reading at its bounds is one: the slowest measured, a
 // subagent's lines of blocks of an empty kind to the plaintext's and the
 // lines' bounds, reads in 21.4 to 22.6 s on two dedicated cores
-// (BenchmarkAReadingAtItsBounds), about 25 s behind a burst of 32 ordinary ones
-// in the seats' one slot; an OpenCode export at its bound in 7.9 s on two cores
+// (BenchmarkAReadingAtItsBounds), in a slot of its own no seat's read queues
+// in; an OpenCode export's slowest, 255 MiB of idle messages, in 3.8 s
 // (BenchmarkAnOpenCodeReadingAtItsBounds). With the keep's
 // ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
 // a reader's overrun step ([HoldingsReader]), an unread member's discard and

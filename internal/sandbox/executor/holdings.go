@@ -15,12 +15,10 @@ import (
 // are each harness's own shape, so reading them is too ([holdingsReader];
 // Claude Code's is claudeholdings.go's); a harness without one reads none.
 //
-// NO SLOT POOL OF ITS OWN: a reading can hold what a transcript read can, about
-// a hundred mebibytes ([TranscriptReadsAtOnce]), and a pool beside the
-// process's two would double the worst case. It takes the seats' one slot
-// ([SeatTranscriptReadsAtOnce]), never the one kept for a person's read, inside
-// its caller's wait; a reading that waits past it is no reading, which tells
-// the session every call after its save point: never wrong.
+// A POOL OF ITS OWN, ONE SLOT ([HoldingsReadsAtOnce]), outside the seats'
+// slot and the process's two transcript reads, taken inside its caller's
+// wait; a reading that waits past it is no reading, which tells the session
+// every call after its save point: never wrong.
 
 // holdingsReader is a harness's reading of its own sessions for which of a
 // round's calls they hold ([Runner.ReadHoldings]).
@@ -50,10 +48,10 @@ type holdingsReader interface {
 // holds of the calls ask marks asked ([sandbox.HoldingsReader]), or says why it
 // reads none. In order, opening nothing before the last: the harness's
 // reading; ask and archive held to it; the writer held to its floor
-// ([readsRelease]); the seats' slot and one of the process's; then archive
-// opened once, through open, closed before the slots go back, and read within
-// a kept session's scrub bounds ([boundsFor]). A refusal before the slots holds
-// none and opens no store connection.
+// ([readsRelease]); the readings' slot ([HoldingsReadsAtOnce]); then archive
+// opened once, through open, closed before the slot goes back, and read
+// within a kept session's scrub bounds ([boundsFor]). A refusal before the
+// slot holds none and opens no store connection.
 //
 // Whether this runner restores archive is not asked again: the caller asked
 // [Runner.Restores] first, through [sandbox.ContinuityOf].
@@ -73,7 +71,7 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 			"a reading reads: its records are read as %s %s and later write them, the oldest they were "+
 			"measured on", r.harness.Name(), archive.Version, r.harness.Name(), floor)
 	}
-	release, err := takeSlots(ctx, ReadBySeat)
+	release, err := takeSlot(ctx, holdingsReads)
 	if err != nil {
 		return sandbox.SessionHoldings{}, err
 	}
@@ -94,6 +92,22 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 }
 
 var _ sandbox.HoldingsReader = (*Runner)(nil)
+
+// HoldingsReadsAtOnce is the most readings ([Runner.ReadHoldings]) this
+// process runs at once: a pool apart from the transcript reads'.
+//
+// ONE: a reading is a relaunch's of a cut-off kept capture, rare, and holds
+// at its worst 43 MiB (Claude Code's model of a thread at both its bounds;
+// OpenCode's at most 2 MiB), so one adds that to the two transcript reads'
+// 134 MiB each (measured of a Claude Code line at its 32 MiB bound): 311 MiB.
+// A second waits behind the first (the slowest 21.4 to 22.6 s) inside its
+// caller's wait, or is no reading, which tells. No seat's read queues ahead
+// of a reading (internal/sandbox's holdingsReadWait).
+const HoldingsReadsAtOnce = 1
+
+// holdingsReads holds a slot for each reading this process runs, at most
+// [HoldingsReadsAtOnce].
+var holdingsReads = make(chan struct{}, HoldingsReadsAtOnce)
 
 // readsRelease reports whether release, the writer a session's row records,
 // is one a reading reads: valid ([sandbox.ValidRelease]), every number readable

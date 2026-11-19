@@ -2210,15 +2210,16 @@ of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read can hold a line of the
 harness's record at its 32 MiB bound, as much again while the buffer gathering
-it grows, and the copy decoding it makes, on the order of 100 MiB (97 MiB
-measured for an OpenCode export at its 32 MiB message, whether a person reads
-it or a relaunch reads it for the calls it holds), and a node answers every
-dashboard tab open on it and every REST caller, each with a read of its own. A
-relaunch's reading takes the seats' one slot of the two, so two never run at
-once, and the most a reading and a person's read hold together, of the same
-OpenCode export, measured 193 MiB. So each node decodes at most two transcripts at once
-(`TranscriptReadsAtOnce`), about 200 MiB at their worst, whichever socket or
-route asks. A read past them waits for a slot before the session's object is
+it grows, and the copy decoding it makes: 134 MiB measured for a Claude Code
+line at that bound (97 MiB for an OpenCode export's message at it), and a node
+answers every dashboard tab open on it and every REST caller, each with a read
+of its own. So each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), about 268 MiB at their worst, whichever socket or
+route asks. A relaunch's reading of a kept session for the calls it holds is
+none of them: one runs at a time, in a slot of its own
+(`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode session's at most
+2 MiB, however long one of its messages runs), so the two reads and a reading
+hold at most 311 MiB. A read past them waits for a slot before the session's object is
 opened — an opened object would hold its store's connection while it waited —
 for as long as its caller waits, holding no decoder meanwhile, and a slot frees
 within one bounded read; a caller that leaves first is answered nothing, and

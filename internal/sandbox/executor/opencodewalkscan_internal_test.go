@@ -5,11 +5,14 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -309,5 +312,233 @@ func benchExportMeter(b *testing.B) {
 				})
 			}
 		})
+	}
+}
+
+// holdingsReadOf is what the reading's own walk read of doc, for ask from
+// start ([readOpenCodeHoldingsWhole], no value bound), and what the export
+// walk read of it, whole and in pieces of seventeen bytes: the holdings and
+// the reading's words.
+func holdingsReadOf(t *testing.T, doc, session string, start sandbox.RunStart, ask sandbox.HoldingsAsk) (oracle,
+	whole, pieces string) {
+	t.Helper()
+	read := func(h sandbox.SessionHoldings, err error) string {
+		said := "<nil>"
+		if own, ok := errors.AsType[*holdingsError](err); ok {
+			said = own.why
+		} else if err != nil {
+			said = err.Error()
+		}
+		return fmt.Sprintf("%+v %s", h, said)
+	}
+	oracle = read(readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(doc), math.MaxInt, session, start, ask))
+	whole = read(readOpenCodeHoldings(t.Context(), strings.NewReader(doc), session, start, ask))
+	pieces = read(readOpenCodeHoldings(t.Context(), &exportPieces{r: strings.NewReader(doc), n: 17}, session, start,
+		ask))
+	return oracle, whole, pieces
+}
+
+// holdingsVariants are steps and messages written every way a reading reads
+// apart: a counted part of each outcome and every way OpenCode could hand it
+// otherwise, its members in every order and written twice, values past the
+// capture's bound, texts empty, blank, escaped, marked and no UTF-8, and
+// every message kind, time and content a step may hold.
+func holdingsVariants() []string {
+	long := strings.Repeat("p", exportValueMaxBytes+8)
+	done := ohDone("echo", `{"t":1}`, "done")
+	failed := ohFailed("echo", `{"t":1}`, "boom")
+	parts := []string{done, failed, ohFailed("echo", `{"t":3}`, ""), ohDone("echo", `{"t":4}`, " \n"),
+		ohDone("echo", `{"t":2}`, strings.Repeat("w", 9000)),
+		ohDone("echo", `{"t":2}`, strings.Repeat("w", 8000)+"[REDACTED:x]"+strings.Repeat("w", 976)),
+		strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", `\u0064one`, 1),
+		strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", "d\xffne", 1),
+		strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", `\ud800one`, 1),
+	}
+	for _, edit := range [][2]string{
+		{`"truncated":false`, `"truncated":true`}, {`"truncated":false`, `"truncated":false,"x":1`},
+		{`"truncated":false`, `"truncated":false,"truncated":false`}, {`,"metadata":{"truncated":false}`, ``},
+		{`"metadata":{"truncated":false}`, `"metadata":[]`}, {`{"type":"text","text":"done"}`, `{"type":"file","text":"done"}`},
+		{`{"type":"text","text":"done"}`, `{"type":"text","text":"done","mime":"text/plain"}`},
+		{`{"type":"text","text":"done"}`, `{"text":"done","type":"text"}`}, {`{"type":"text","text":"done"}`, `7`},
+		{`{"type":"text","text":"done"}`, `{"type":"text","text":7}`}, {`[{"type":"text","text":"done"}]`, `[]`},
+		{`[{"type":"text","text":"done"}]`, `{"type":"text","text":"done"}`},
+		{`{"type":"text","text":"done"}`, `{"type":"text","text":"done"},{"type":"text","text":""}`},
+		{`"executed":false`, `"executed":true`}, {`"executed":false`, `"executed":"` + long + `"`},
+		{`"executed":false,`, ``}, {`"executed":false`, `"executed":false,"executed":false`},
+		{`"crewlet_echo"`, `"execute"`}, {`"crewlet_echo"`, `"crewlet_` + long + `"`}, {`"crewlet_echo"`, `7`},
+		{`"crewlet_echo"`, `"crewlet_\u0065cho"`}, {`"status":"completed"`, `"status":"running"`},
+		{`"status":"completed"`, `"status":"` + long + `"`}, {`"input":{"t":1}`, `"input":"{\"t\":1}"`},
+		{`"input":{"t":1}`, `"input":{"t":1,"p":"` + long + `"}`}, {`"input":{"t":1}`, `"input":{"t":1.0}`},
+		{`"time":{"created":1,"ran":2,"completed":3}`, `"time":{"created":1,"queued":2}`},
+		{`"time":{"created":1,"ran":2,"completed":3}`, `"time":7`}, {`,"time":{"created":1,"ran":2,"completed":3}`, ``},
+		{`"time":{"created":1,"ran":2,"completed":3}`, `"time":{"created":1,"created":1}`},
+		{`"state":{`, `"state":{"status":"error"},"state":{`}, {`"type":"tool"`, `"type":"tool","native":{}`},
+		{`"type":"tool"`, `"type":"tool","text":"x"`}, {`"type":"tool"`, `"type":"tool","later":1`},
+		{`"type":"tool",`, ``}, {`"type":"tool"`, `"type":"` + long + `"`}, {`"type":"tool"`, `"type":7`},
+		{`"type":"tool",`, ``},
+	} {
+		parts = append(parts, strings.Replace(done, edit[0], edit[1], 1))
+	}
+	for _, edit := range [][2]string{
+		{`"tool.execution"`, `"aborted"`}, {`"error":{`, `"content":[],"error":{`},
+		{`"error":{`, `"metadata":{"truncated":false},"error":{`}, {`"message":"boom"`, `"message":"boom","x":1`},
+		{`"message":"boom"`, `"message":7`}, {`"type":"tool.execution",`, ``}, {`"error":{`, `"error":[{`},
+	} {
+		parts = append(parts, strings.Replace(failed, edit[0], edit[1], 1))
+	}
+	// THE STATE'S AND THE ITEM'S MEMBERS IN ANOTHER ORDER: content first, status
+	// last, time before state, type last.
+	content := `"content":[{"type":"text","text":"done"}],`
+	parts = append(parts,
+		strings.Replace(strings.Replace(done, content, ``, 1), `"state":{`, `"state":{`+content, 1),
+		strings.Replace(strings.Replace(done, `"status":"completed",`, ``, 1), `"truncated":false}`,
+			`"truncated":false},"status":"completed"`, 1),
+		strings.Replace(strings.Replace(done, `{"type":"tool",`, `{`, 1), `"completed":3}}`,
+			`"completed":3},"type":"tool"}`, 1))
+	var steps []string
+	for _, p := range parts {
+		steps = append(steps, ohStep(p))
+	}
+	step := ohStep(done)
+	for _, edit := range [][2]string{
+		{`"type":"assistant",`, ``}, {`"type":"assistant"`, `"type":"` + long + `"`}, {`"type":"assistant"`, `"type":7`},
+		{`"type":"assistant"`, `"type":"assistant","type":"assistant"`}, {`"cost":0`, `"cost":0,"files":[]`},
+		{`"cost":0`, `"cost":0,"files":[],"files":[]`}, {`"cost":0`, `"cost":0,"metadata":{}`},
+		{`"cost":0`, `"cost":0,"later":1`}, {`"completed":4`, `"completed":null`}, {`"completed":4`, `"completed":0`},
+		{`"completed":4`, `"completed":"4"`}, {`,"completed":4`, ``}, {`"completed":4`, `"completed":1e-400`},
+		{`"completed":4`, `"completed":4,"firstToken":5`}, {`"streamed":3`, `"lastToken":3`},
+		{`"streamed":3`, `"streamed":3,"streamed":3`}, {`"time":{`, `"time":7,"x":{`},
+		{`"content":[`, `"content":[],"content":[`}, {`"content":[`, `"content":[7,`},
+		{`"content":[`, `"content":[{"type":"image"},`}, {`"content":[`, `"content":[{"type":7},`},
+		{`"content":[`, `"content":[{"text":"x"},`}, {`"content":[`, `"content":[{"type":"reasoning","text":"r"},`},
+	} {
+		steps = append(steps, strings.Replace(step, edit[0], edit[1], 1))
+	}
+	// A STEP'S TYPE AFTER ITS CONTENT, as a box may write it.
+	steps = append(steps, strings.Replace(strings.Replace(step, `"type":"assistant",`, ``, 1), `"cost":0}`,
+		`"cost":0,"type":"assistant"}`, 1),
+		strings.Replace(ohStep(), `"content":[]`, `"content":{}`, 1), strings.Replace(ohStep(), `"content":[],`, ``, 1),
+		strings.Replace(ohStep(), `"content":[]`, `"content":null`, 1),
+		`{"id":"msg_c","type":"compaction","status":"completed","time":{"created":5}}`,
+		`{"id":"msg_c","type":"compaction","status":"running","time":{"created":5}}`, ocIdle, `{"type":"later-kind"}`,
+		`{"type":"user","id":"msg_user","text":"again"}`, `"words"`, `{}`)
+	return steps
+}
+
+// holdingsCalls are the asks a variant is read for: each outcome the variants
+// write, cut and whole, alone and together.
+func holdingsCalls() [][]sandbox.LoggedCall {
+	failed := func(c sandbox.LoggedCall) sandbox.LoggedCall {
+		c.Failed = true
+		return c
+	}
+	done, boom := ohCall(1, "echo", `{"t":1}`, "done"), failed(ohCall(2, "echo", `{"t":1}`, "boom"))
+	cut := ohCut(ohCall(3, "echo", `{"t":2}`, strings.Repeat("w", 9000)))
+	empty, blank := failed(ohCall(4, "echo", `{"t":3}`, "")), ohCall(5, "echo", `{"t":4}`, " \n")
+	return [][]sandbox.LoggedCall{{done}, {done, boom, cut, empty, blank}, {cut}, {empty}}
+}
+
+// A HOLDINGS READING READS AN EXPORT AS ITS OWN WALK DID: over every export of
+// the corpus and documents of every holdings variant, read for each ask from
+// the session's start and from a message's, the reading on the export walk,
+// whole and in pieces of seventeen bytes, answers the holdings and the words
+// the decode walk's reading answered ([readOpenCodeHoldingsWhole]), but for
+// the answers the export walk moves, each its own case below.
+//
+// Mutation: read a capture past its bound as absent, decide a part before its
+// state is read, count a part of a message whose kind comes last, or drop
+// the digest's span rule, and a case goes red.
+func TestAHoldingsReadingReadsAnExportAsItsWalkDid(t *testing.T) {
+	t.Parallel()
+	asks := holdingsCalls()
+	starts := []sandbox.RunStart{ohBegan, {After: "msg_user"}}
+	check := func(name, doc, session string, start sandbox.RunStart, calls []sandbox.LoggedCall) {
+		oracle, whole, pieces := holdingsReadOf(t, doc, session, start,
+			sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"})
+		if whole != oracle || pieces != oracle {
+			t.Errorf("%s %.200q:\nwalk   %.400s\npieces %.400s\nwant   %.400s", name, doc, whole, pieces, oracle)
+		}
+	}
+	for _, d := range exportCorpus(t) {
+		check(d.name, d.doc, ohSession, ohBegan, asks[1])
+	}
+	for _, release := range openCodeHoldingsReleases {
+		for name, f := range ohFixtures(t, release) {
+			zr, err := gzip.NewReader(bytes.NewReader(f.archive))
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := io.ReadAll(zr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(release+" "+name, string(doc), f.session, sandbox.RunStart{Began: f.began}, f.calls)
+		}
+	}
+	r := rand.New(rand.NewPCG(1170, 7))
+	variants := holdingsVariants()
+	docs := []string{}
+	for _, v := range variants {
+		docs = append(docs, ohDoc(ohUser, v))
+	}
+	for range 400 {
+		messages := []string{ohUser}
+		for range 1 + r.IntN(4) {
+			messages = append(messages, variants[r.IntN(len(variants))])
+		}
+		doc := ohDoc(messages...)
+		switch r.IntN(10) {
+		case 0:
+			doc = doc[:r.IntN(len(doc))]
+		case 1:
+			doc += ` {}`
+		case 2:
+			doc = strings.Replace(doc, `"info":{`, `"info":{"id":"ses_other","id":`+ohQuote(ohSession)+`,"x":`, 1)
+		case 3:
+			doc = strings.Replace(doc, `"messages":[`, `"after":1,"messages":[`, 1) + "\n\t "
+		}
+		docs = append(docs, doc)
+	}
+	for _, doc := range docs {
+		for _, start := range starts {
+			for _, calls := range asks {
+				check("variant", doc, ohSession, start, calls)
+			}
+		}
+	}
+}
+
+// THE EXPORT WALK MOVES TWO OF A READING'S ANSWERS, toward telling a call and
+// toward reading one: a step's `completed` written as a number literal past
+// the capture's bound is no reading, where the decode walk parsed it; and a
+// message past the decode walk's value bound (here lowered to 4 KiB) is read,
+// where that walk read none.
+//
+// Mutation: parse a `completed` past its capture, or bound a message, and a
+// case goes red.
+func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	literal := `"completed":4.` + strings.Repeat("0", exportValueMaxBytes)
+	past := ohDoc(ohUser, strings.Replace(ohStep(ohDone("echo", `{"t":1}`, "done")), `"completed":4`, literal, 1))
+	if h, err := readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(past), math.MaxInt, ohSession, ohBegan,
+		ask); !slices.Equal(ohHeld(t, h, err, c), []int{1}) {
+		t.Fatal("the decode walk holds no call of a step whose completed is past the bound; the case moves nothing")
+	}
+	if h, err := readOpenCodeHoldings(t.Context(), strings.NewReader(past), ohSession, ohBegan, ask); err == nil ||
+		h.Read {
+		t.Errorf("a completed past the capture's bound: a reading = %+v; want none", h)
+	}
+	long := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, strings.Repeat("l", 8<<10))))
+	long8 := ohCall(1, "echo", `{"t":1}`, strings.Repeat("l", 8<<10))
+	ask = sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{long8}, Resumer: "2.2.7"}
+	if _, err := readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(long), 4<<10, ohSession, ohBegan,
+		ask); err == nil {
+		t.Fatal("the decode walk read a message past its bound; the case moves nothing")
+	}
+	h, err := readOpenCodeHoldings(t.Context(), strings.NewReader(long), ohSession, ohBegan, ask)
+	if got := ohHeld(t, h, err, long8); !slices.Equal(got, []int{1}) {
+		t.Errorf("a message past the decode walk's bound: held %v; want its call", got)
 	}
 }

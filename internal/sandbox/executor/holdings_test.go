@@ -117,20 +117,22 @@ func (b *rhBody) Close() error {
 	return nil
 }
 
-// A READING TAKES THE SEATS' SLOT, INSIDE THE PROCESS'S TWO, as a seat's read
-// does, never a pool of its own. Opening nothing, a reading waits while a
-// seat's read holds the seats' slot and, its caller gone, ends with its
-// caller's error; while persons' reads hold both process slots, one holding the
-// seats' slot waits and gives it back as its caller leaves. Given a process
-// slot and the seats', it reads and closes its archive holding both.
+// A READING TAKES A SLOT OF ITS OWN, OUTSIDE THE TRANSCRIPT READS': while a
+// seat's read holds the seats' slot and persons' reads hold both of the
+// process's, a reading reads, and as it closes its archive it holds the
+// readings' one slot and none of theirs; while another reading holds that
+// slot, a reading waits, opening nothing, and leaves with its caller's error.
 //
 // Not parallel: the slots are the process's own (transcript_test.go).
 //
-// Mutation: take the process's slots alone, and the first reading opens its
-// archive beside the seat's read; or give the slots back before the archive is
-// closed, and its Close sees them free.
-func TestAReadingTakesTheSeatsSlotInsideTheProcesssTwo(t *testing.T) {
-	if executor.TranscriptReadsHeld() != 0 || executor.SeatTranscriptReadsHeld() != 0 {
+// Mutation: take the seats' slot as a seat's read does, and the first reading
+// waits on the seat's read past this case's bound; take no slot, and the
+// second reading opens its archive beside the first.
+func TestAReadingTakesASlotOfItsOwnOutsideTheTranscriptReads(t *testing.T) {
+	held := func() [3]int {
+		return [3]int{executor.HoldingsReadsHeld(), executor.SeatTranscriptReadsHeld(), executor.TranscriptReadsHeld()}
+	}
+	if held() != [3]int{} {
 		t.Fatal("slots are held before the case reads anything")
 	}
 	runner := executor.NewClaudeCode()
@@ -147,78 +149,72 @@ func TestAReadingTakesTheSeatsSlotInsideTheProcesssTwo(t *testing.T) {
 		<-seatDone
 	})
 	awaited(t, seatOpened, "a seat's read given free slots opens its archive")
+	person := holdSlot(t, raw)
+	var atClose [3]int
+	body := &rhBody{Reader: bytes.NewReader(archive), closed: func() { atClose = held() }}
+	readDone := make(chan struct{})
+	var readErr error
+	go func() {
+		defer close(readDone)
+		var got sandbox.SessionHoldings
+		got, readErr = runner.ReadHoldings(t.Context(), rhSession("2.1.310"),
+			func(context.Context) (io.ReadCloser, error) { return body, nil }, rhAsk(call))
+		if readErr == nil && !got.Read {
+			readErr = errors.New("no reading and no error")
+		}
+	}()
+	awaited(t, readDone, "a reading beside a seat's read and two persons' reads")
+	if readErr != nil {
+		t.Fatalf("a reading beside the transcript reads: %v", readErr)
+	}
+	if atClose != [3]int{1, 1, 2} {
+		t.Errorf("as its archive closed, the readings', the seats' and the process's slots held %v; want the "+
+			"reading's own one beside the seat's read's and both of the process's", atClose)
+	}
+	letSeat()
+	<-seatDone
+	person.let()
+	<-person.done
+	if seatErr != nil || person.err != nil {
+		t.Fatalf("the transcript reads: %v, %v", seatErr, person.err)
+	}
+
+	firstOpened, firstGate := make(chan struct{}), make(chan struct{})
+	letFirst := sync.OnceFunc(func() { close(firstGate) })
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = runner.ReadHoldings(t.Context(), rhSession("2.1.310"), func(context.Context) (io.ReadCloser, error) {
+			close(firstOpened)
+			<-firstGate
+			return io.NopCloser(bytes.NewReader(archive)), nil
+		}, rhAsk(call))
+	}()
+	t.Cleanup(func() {
+		letFirst()
+		<-firstDone
+	})
+	awaited(t, firstOpened, "a reading given a free slot opens its archive")
 	ctx, leave := context.WithCancel(t.Context())
 	defer leave()
 	waiting := &countedWait{Context: ctx, nth: 1, asked: make(chan struct{})}
 	opened, done, err := rhRead(waiting, runner, archive, call)
-	awaited(t, waiting.asked, "a reading waits for the seats' slot")
+	awaited(t, waiting.asked, "a reading waits for the readings' slot another holds")
 	leave()
-	awaited(t, done, "a reading waiting for the seats' slot ends once its caller leaves")
+	awaited(t, done, "a reading waiting for the readings' slot ends once its caller leaves")
 	select {
 	case <-opened:
-		t.Error("a reading opened its archive while a seat's read held the seats' slot")
+		t.Error("a reading opened its archive while another held the readings' slot")
 	default:
 	}
 	if !errors.Is(*err, context.Canceled) {
-		t.Errorf("the reading ended %v, want its caller's own error", *err)
+		t.Errorf("the waiting reading ended %v, want its caller's own error", *err)
 	}
-	letSeat()
-	awaited(t, seatDone, "the seat's read ends once its archive opens")
-	if seatErr != nil {
-		t.Fatalf("the seat's read: %v", seatErr)
-	}
-
-	persons := make([]func(), 0, executor.TranscriptReadsAtOnce)
-	for range executor.TranscriptReadsAtOnce {
-		h := holdSlot(t, raw)
-		persons = append(persons, func() {
-			h.let()
-			<-h.done
-		})
-	}
-	ctx, leave = context.WithCancel(t.Context())
-	defer leave()
-	waiting = &countedWait{Context: ctx, nth: 2, asked: make(chan struct{})}
-	opened, done, err = rhRead(waiting, runner, archive, call)
-	awaited(t, waiting.asked, "a reading holding the seats' slot waits for one of the process's")
-	if executor.SeatTranscriptReadsHeld() != 1 {
-		t.Errorf("a reading waiting for one of the process's slots holds %d of the seats'",
-			executor.SeatTranscriptReadsHeld())
-	}
-	leave()
-	awaited(t, done, "a reading waiting for one of the process's slots ends once its caller leaves")
-	select {
-	case <-opened:
-		t.Error("a reading opened its archive while persons' reads held both of the process's slots")
-	default:
-	}
-	if !errors.Is(*err, context.Canceled) || executor.SeatTranscriptReadsHeld() != 0 {
-		t.Errorf("a reading that left while it waited ended %v holding %d of the seats' slots, want its "+
-			"caller's own error and none", *err, executor.SeatTranscriptReadsHeld())
-	}
-	for _, let := range persons {
-		let()
-	}
-
-	person := holdSlot(t, raw)
-	var atClose [2]int
-	body := &rhBody{Reader: bytes.NewReader(archive), closed: func() {
-		atClose = [2]int{executor.SeatTranscriptReadsHeld(), executor.TranscriptReadsHeld()}
-	}}
-	got, readErr := runner.ReadHoldings(t.Context(), rhSession("2.1.310"),
-		func(context.Context) (io.ReadCloser, error) { return body, nil }, rhAsk(call))
-	if readErr != nil || !got.Read {
-		t.Fatalf("a reading given its slots = %+v, %v; want it read", got, readErr)
-	}
-	if atClose != [2]int{1, 2} {
-		t.Errorf("as its archive was closed the reading held %d of the seats' slots and the process held %d, "+
-			"want one of the seats' and both of the process's", atClose[0], atClose[1])
-	}
-	person.let()
-	<-person.done
-	if executor.SeatTranscriptReadsHeld() != 0 || executor.TranscriptReadsHeld() != 0 {
-		t.Errorf("once every read ended, %d of the seats' slots and %d of the process's are held, want none",
-			executor.SeatTranscriptReadsHeld(), executor.TranscriptReadsHeld())
+	letFirst()
+	<-firstDone
+	if held() != [3]int{} {
+		t.Errorf("once every read ended, the readings', the seats' and the process's slots held %v, want none",
+			held())
 	}
 }
 

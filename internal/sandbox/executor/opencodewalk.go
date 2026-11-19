@@ -1,12 +1,20 @@
 package executor
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"hash"
 	"io"
 	"maps"
+	"slices"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // THE ONE OPENCODE EXPORT WALK ([scanExport]) reads an export on the scanner
@@ -15,7 +23,8 @@ import (
 // ([exportVisitor]) by the means the visitor asks for it ([exportMeans]),
 // fixed per visitor. A value past its word or its capture is there, of its
 // kind, and past. The package doc's "What OpenCode counts a session at before
-// its next request" has the walk and its visitors.
+// its next request" has the walk and the meter, and "An OpenCode session's
+// calls are read by what they were" the holdings reading.
 
 // exportFrame is a container of an export the walk reads: the document, a
 // list, or an object whose members a visitor asks for by name.
@@ -24,27 +33,44 @@ type exportFrame uint8
 // The frames of an export as OpenCode 2 writes it.
 const (
 	frameDocument   exportFrame = iota // the export
+	frameInfo                          // the document's `info`
 	frameMessages                      // a `messages` list
 	frameMessage                       // a message
+	frameStepTime                      // a message's `time`
 	frameContent                       // a message's `content` list
 	frameItem                          // an item of a step's content
+	framePartTime                      // an item's `time`
 	frameState                         // a tool item's `state`
 	frameAnswer                        // a state's `content` list
 	frameAnswerPart                    // a part of an answer
+	frameMetadata                      // a state's `metadata`
 	frameFailure                       // a state's `error`
 	frameFiles                         // a message's `files` list
 	frameFile                          // a file of `files`
 	exportFrames
 )
 
-// The names of the document, of an answer's part and of a file, each its
-// index in its frame's set ([exportFrameNames]). A message's, an item's and a
-// state's are the decode walk's ([msgID], [itemType], [stateStatus]).
+// The names of the document, of `info`, of an answer's part, of a
+// metadata, of a failure and of a file, each its index in its frame's set
+// ([exportFrameNames]). A message's, an item's, a state's and their times'
+// are the decode walk's ([msgID], [itemType], [stateStatus],
+// [openCodeStepNames]).
 const (
 	docMessages = 0
+	docInfo     = 1
+
+	infoID = 0
+
+	stepCompleted = 2
 
 	partType = 0
 	partMime = 1
+	partText = 2
+
+	metaTruncated = 0
+
+	failureType    = 0
+	failureMessage = 1
 
 	fileType = 0
 	fileMime = 1
@@ -61,16 +87,20 @@ const exportMembersMax = msgFiles + 1
 // exportFrameNames is each object frame's set of names, by index; a list
 // frame has none.
 var exportFrameNames = [exportFrames]map[string]int{
-	frameDocument: openCodeNames("messages"),
+	frameDocument: openCodeNames("messages", "info"),
+	frameInfo:     openCodeNames("id"),
 	frameMessage: func() map[string]int {
 		names := maps.Clone(openCodeMessageNames)
 		names["files"] = msgFiles
 		return names
 	}(),
+	frameStepTime:   openCodeStepNames,
 	frameItem:       openCodeItemNames,
+	framePartTime:   openCodePartTimes,
 	frameState:      openCodeStateNames,
-	frameAnswerPart: openCodeNames("type", "mime"),
-	frameFailure:    openCodeNames(),
+	frameAnswerPart: openCodeNames("type", "mime", "text"),
+	frameMetadata:   openCodeNames("truncated"),
+	frameFailure:    openCodeNames("type", "message"),
 	frameFile:       openCodeNames("type", "mime"),
 }
 
@@ -78,14 +108,22 @@ var exportFrameNames = [exportFrames]map[string]int{
 // visitor asks to walk it ([meansFrame]); [exportFrames] where it is none.
 func exportChild(f exportFrame, i int) exportFrame {
 	switch {
+	case f == frameDocument && i == docInfo:
+		return frameInfo
+	case f == frameMessage && i == msgTime:
+		return frameStepTime
 	case f == frameMessage && i == msgContent:
 		return frameContent
 	case f == frameMessage && i == msgFiles:
 		return frameFiles
+	case f == frameItem && i == itemTime:
+		return framePartTime
 	case f == frameItem && i == itemState:
 		return frameState
 	case f == frameState && i == stateContent:
 		return frameAnswer
+	case f == frameState && i == stateMetadata:
+		return frameMetadata
 	case f == frameState && i == stateError:
 		return frameFailure
 	}
@@ -135,18 +173,26 @@ const (
 	// frame's kind, its members each by these means; else passes it, its kind
 	// and a container's span told.
 	meansFrame
+	// meansDigest reads a string's decoded text into the visitor's digest
+	// ([textDigest]), a piece at a time, holding none of it; a value of
+	// another kind is passed, its kind told.
+	meansDigest
 )
 
-// exportAsks is a visitor's means for each member of each frame, by its index;
-// a name no frame holds is passed.
-type exportAsks [exportFrames][exportMembersMax]exportMeans
+// exportAsks is a visitor's means for each member of each frame, by its index
+// (a name no frame holds is passed), and whether it reads the document to its
+// end, white space alone after it, or stops at its closing brace.
+type exportAsks struct {
+	means [exportFrames][exportMembersMax]exportMeans
+	toEnd bool
+}
 
 // exportAsksOf is the asks of means, pass where it names none.
-func exportAsksOf(means map[exportFrame]map[int]exportMeans) *exportAsks {
-	var asks exportAsks
+func exportAsksOf(means map[exportFrame]map[int]exportMeans, toEnd bool) *exportAsks {
+	asks := exportAsks{toEnd: toEnd}
 	for f, members := range means {
 		for i, m := range members {
-			asks[f][i] = m
+			asks.means[f][i] = m
 		}
 	}
 	return &asks
@@ -190,6 +236,9 @@ type exportVisitor interface {
 	element(f exportFrame, k jsonscan.Kind) error
 	// close is a frame but a `messages` list ended: its span and key facts.
 	close(f exportFrame, v exportValue) error
+	// digest is where a string the visitor reads by its digest is read into,
+	// nil for a visitor that reads none.
+	digest() *textDigest
 }
 
 // walkNameBytes is the most of a name the walk reads: one past the longest
@@ -198,9 +247,9 @@ type exportVisitor interface {
 const walkNameBytes = len("providerResultState") + 1
 
 // walkWordBytes is the most of a word the walk reads: one past the longest a
-// visitor compares (a file's `application/pdf`), so a longer one is none of
-// them.
-const walkWordBytes = len("application/pdf") + 1
+// visitor compares (a message's kind `location-switched`), so a longer one is
+// none of them.
+const walkWordBytes = len(openCodeLocationSwitched) + 1
 
 // exportWalk is one walk of an export: its scanner, its visitor and the
 // buffers a name and a word are read into.
@@ -215,9 +264,10 @@ type exportWalk struct {
 
 // scanExport walks plain, an OpenCode export document, once, handing v what
 // it asks of each member ([exportVisitor]), and returns at the document's
-// closing brace, reading nothing after it. ctx is asked before each message
-// and each item of a step's content. An error where plain is no export, does
-// not read to its end, or v ended the walk.
+// closing brace, or where v asks for it, once white space alone has followed
+// it to plain's end. ctx is asked before each message and each item of a
+// step's content. An error where plain is no export, does not read to its
+// end, or v ended the walk.
 func scanExport(ctx context.Context, plain io.Reader, v exportVisitor) error {
 	w := &exportWalk{ctx: ctx, sc: jsonscan.New(plain), v: v, asks: v.asks()}
 	if err := expectKind(w.sc, jsonscan.ObjectStart); err != nil {
@@ -228,7 +278,14 @@ func scanExport(ctx context.Context, plain io.Reader, v exportVisitor) error {
 		switch {
 		case err != nil:
 			return err
+		case k == jsonscan.ObjectEnd && !w.asks.toEnd:
+			return nil
 		case k == jsonscan.ObjectEnd:
+			// THE SCANNER READS ONE VALUE: anything but white space after it is
+			// refused, and its end answers io.EOF.
+			if _, err = w.sc.Next(); !errors.Is(err, io.EOF) {
+				return cmp.Or(err, errors.New("another value follows the document"))
+			}
 			return nil
 		}
 		i, err := w.nameOf(frameDocument)
@@ -260,7 +317,7 @@ func (w *exportWalk) member(f exportFrame, i int) error {
 	}
 	means := meansPass
 	if i >= 0 {
-		means = w.asks[f][i]
+		means = w.asks.means[f][i]
 	}
 	v := exportValue{kind: k}
 	switch means {
@@ -279,6 +336,12 @@ func (w *exportWalk) member(f exportFrame, i int) error {
 		v.past, v.span = !whole, w.spanFrom(start, k)
 	case meansFrame:
 		v, err = w.frame(exportChild(f, i), k)
+	case meansDigest:
+		if k != jsonscan.String {
+			err = w.sc.Skip()
+			break
+		}
+		err = w.digest(w.v.digest())
 	}
 	if err != nil {
 		return err
@@ -410,4 +473,115 @@ func (w *exportWalk) spanFrom(start int64, k jsonscan.Kind) int64 {
 		return 0
 	}
 	return w.sc.Offset() + 1 - start
+}
+
+// textDigestBytes is the piece a digested string is read in: a run the
+// scanner copies in one step and SHA-256 hashes in one call.
+const textDigestBytes = 32 << 10
+
+// textDigest is what the digest means reads of a string ([meansDigest]),
+// which passes through it a piece at a time and is never held: its decoded
+// text's length, its SHA-256, the sum of each opening the visitor names,
+// whether it holds [redact.Marker], and whether it is blank (white space
+// alone, as strings.TrimSpace reads it).
+type textDigest struct {
+	h hash.Hash
+	// openings are the opening lengths a sum is kept at, ascending, and sums
+	// each one's, where the text reached it; next is the next to reach.
+	openings []int
+	sums     [][32]byte
+	next     int
+	// n is the text's length so far, whole its sum once it ended.
+	n     int
+	whole [32]byte
+	// marker and blank are what the text read so far holds; tail is its last
+	// bytes short of a marker's length, and edge where a piece's edge is read.
+	marker, blank bool
+	tail, edge    []byte
+	buf           []byte
+}
+
+// newTextDigest is a digest keeping the sums of openings.
+func newTextDigest(openings []int) *textDigest {
+	openings = slices.Compact(slices.Sorted(slices.Values(openings)))
+	return &textDigest{h: sha256.New(), openings: openings, sums: make([][32]byte, len(openings)),
+		tail: make([]byte, 0, len(redact.Marker)-1), edge: make([]byte, 0, 2*len(redact.Marker)),
+		buf: make([]byte, textDigestBytes)}
+}
+
+// reset starts a text.
+func (d *textDigest) reset() {
+	d.h.Reset()
+	d.n, d.next, d.marker, d.blank, d.tail = 0, 0, false, true, d.tail[:0]
+	d.sum(nil)
+}
+
+// write reads the next piece of the text, whole characters.
+func (d *textDigest) write(p []byte) {
+	d.blank = d.blank && blank(p)
+	if !d.marker {
+		// A MARKER ACROSS TWO PIECES is read off the edge between them: the
+		// last bytes of the text so far and the first of the piece.
+		d.edge = append(append(d.edge[:0], d.tail...), p[:min(len(p), len(redact.Marker)-1)]...)
+		d.marker = bytes.Contains(d.edge, []byte(redact.Marker)) || bytes.Contains(p, []byte(redact.Marker))
+		keep := len(redact.Marker) - 1
+		if len(p) >= keep {
+			d.tail = append(d.tail[:0], p[len(p)-keep:]...)
+		} else {
+			d.tail = append(d.tail[:0], d.edge[max(0, len(d.edge)-keep):]...)
+		}
+	}
+	d.sum(p)
+}
+
+// sum hashes p, keeping the sum at each opening it reaches.
+func (d *textDigest) sum(p []byte) {
+	for d.next < len(d.openings) && d.n+len(p) >= d.openings[d.next] {
+		cut := d.openings[d.next] - d.n
+		d.h.Write(p[:cut])
+		d.n, p = d.n+cut, p[cut:]
+		d.h.Sum(d.sums[d.next][:0])
+		d.next++
+	}
+	d.h.Write(p)
+	d.n += len(p)
+}
+
+// end ends the text.
+func (d *textDigest) end() { d.h.Sum(d.whole[:0]) }
+
+// blank reports whether p, whole characters, is white space alone, as
+// strings.TrimSpace reads it.
+func blank(p []byte) bool {
+	for len(p) > 0 {
+		if c := p[0]; c < utf8.RuneSelf {
+			if c != ' ' && (c < '\t' || c > '\r') {
+				return false
+			}
+			p = p[1:]
+			continue
+		}
+		r, size := utf8.DecodeRune(p)
+		if !unicode.IsSpace(r) {
+			return false
+		}
+		p = p[size:]
+	}
+	return true
+}
+
+// digest reads the current string into d, a piece at a time.
+func (w *exportWalk) digest(d *textDigest) error {
+	d.reset()
+	for {
+		n, err := w.sc.Read(d.buf)
+		d.write(d.buf[:n])
+		switch {
+		case errors.Is(err, io.EOF):
+			d.end()
+			return nil
+		case err != nil:
+			return err
+		}
+	}
 }
