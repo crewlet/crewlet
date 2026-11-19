@@ -38,7 +38,7 @@ type Opening struct {
 	Actor       Actor    `json:"actor"`
 	Area        string   `json:"area"`
 	Severity    Severity `json:"severity"`
-	SubjectKind string `json:"subject_kind"`
+	SubjectKind string   `json:"subject_kind"`
 	// SubjectID is the subject's id within its kind, empty for a subject
 	// that is the only one of its kind (the company, its atlas).
 	SubjectID string `json:"subject_id"`
