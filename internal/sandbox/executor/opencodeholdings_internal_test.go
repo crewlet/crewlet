@@ -460,10 +460,11 @@ func TestAHeldCallIsWildOnlyForTheAnswerItWasGiven(t *testing.T) {
 
 // AN UNNAMED COUNT OF FAILURES IS WILD ONLY FOR FAILURES: a count every call of
 // which failed tells a failed class and leaves a succeeded one held; a count
-// whose outcomes are mixed tells both.
+// whose outcomes are mixed tells both, and so does an unnamed call in flight
+// beside a count of failures, in either order.
 //
-// Mutation: ignore OnlyFailed, or read a count of no failure as one of
-// failures, and a case goes red.
+// Mutation: ignore OnlyFailed, read a count of no failure as one of failures,
+// or let the last unnamed entry decide, and a case goes red.
 func TestAnUnnamedCountOfFailuresIsWildOnlyForFailures(t *testing.T) {
 	t.Parallel()
 	failed := ohCall(1, "post", `{"t":1}`, "refused")
@@ -475,6 +476,21 @@ func TestAnUnnamedCountOfFailuresIsWildOnlyForFailures(t *testing.T) {
 	}
 	if got := ohVerdict(t, parts, []sandbox.CallIdentity{{}}, failed, done); got != nil {
 		t.Errorf("a count of mixed outcomes: held %v; want none", got)
+	}
+	for name, unlisted := range map[string][]sandbox.CallIdentity{
+		"in flight first": {{InFlight: true}, {OnlyFailed: true}},
+		"dropped first":   {{OnlyFailed: true}, {InFlight: true}},
+	} {
+		ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{failed, done}, Resumer: "2.2.7", Unlisted: unlisted}
+		if err := (OpenCode{}).checkHoldings(ohArchive("2.2.7"), ask); err != nil {
+			t.Fatalf("%s: the ask is refused: %v", name, err)
+		}
+		if got := ohVerdict(t, parts, unlisted, failed, done); got != nil {
+			t.Errorf("an unnamed call in flight beside a count of failures, %s: held %v; want none", name, got)
+		}
+	}
+}
+
 	}
 }
 

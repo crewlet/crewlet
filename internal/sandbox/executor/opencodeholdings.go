@@ -806,8 +806,8 @@ type openCodeCallPool struct {
 	digestless map[sandbox.CallClass]bool
 	// named are the wildcards known by tool and digest ("" where none); held
 	// the calls a person's approval held, by tool, failure and answer; and
-	// unnamed whether a count of dropped calls names no tool, onlyFailed
-	// whether every call it counts failed.
+	// unnamed whether a call or count unlisted names no tool, onlyFailed
+	// whether every call they count failed, never so for one in flight.
 	named               []sandbox.CallIdentity
 	held                []heldWildcard
 	unnamed, onlyFailed bool
@@ -827,7 +827,7 @@ type heldWildcard struct {
 // dropped call a wildcard.
 func openCodePool(ask sandbox.HoldingsAsk) openCodeCallPool {
 	pool := openCodeCallPool{calls: map[sandbox.CallClass]int{}, digests: map[sandbox.CallClass]map[string]bool{},
-		digestless: map[sandbox.CallClass]bool{}}
+		digestless: map[sandbox.CallClass]bool{}, onlyFailed: true}
 	for _, c := range ask.Calls {
 		if c.Held {
 			text, stated := sandbox.TextKeyOf(c.Output, c.OutputBytes)
@@ -851,7 +851,7 @@ func openCodePool(ask sandbox.HoldingsAsk) openCodeCallPool {
 	}
 	for _, id := range ask.Unlisted {
 		if id.Name == "" {
-			pool.unnamed, pool.onlyFailed = true, !id.InFlight && id.OnlyFailed
+			pool.unnamed, pool.onlyFailed = true, pool.onlyFailed && !id.InFlight && id.OnlyFailed
 			continue
 		}
 		pool.named = append(pool.named, id)
