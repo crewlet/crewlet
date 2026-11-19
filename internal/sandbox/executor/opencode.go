@@ -1552,12 +1552,12 @@ type openCodeEvents struct {
 }
 
 // Entries implements [Decoder].
-func (d *openCodeEvents) Entries() []string {
+func (d *openCodeEvents) Entries(end bool) []string {
 	d.following = true
 	d.answers = nil
 	d.named = nil
 	d.plain.Reset()
-	return d.transcript.take()
+	return d.transcript.take(end)
 }
 
 func (d *openCodeEvents) Line(line []byte) {

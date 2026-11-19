@@ -149,7 +149,7 @@ const READ_ONLY = "The fields, checklists and description are read-only here.";
  *
  * `undefined` rather than an empty element, so an ordinary task draws no row.
  */
-export function itemFlags(detail: WorkItemDetail) {
+export function itemFlags(detail: WorkItemDetail, chrome: RowChrome = {}) {
   const item = detail.task;
   const blocked = readsBlocked({ ...item, blocked: detail.blocked });
   // WHY IT IS NOT MOVING (ADR-0162), less what the page says another way: the
@@ -166,7 +166,13 @@ export function itemFlags(detail: WorkItemDetail) {
           Blocked
         </Tag>
       )}
-      <FlowTag flow={detail.flow} skip={FLAG_FLOW_SKIP} />
+      <FlowTag
+        flow={detail.flow}
+        skip={FLAG_FLOW_SKIP}
+        assignee={item.assignee}
+        chrome={chrome}
+        stuckHours={chrome.stuckHours}
+      />
       {item.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
   );
@@ -259,6 +265,7 @@ function useItemChrome(
       types: project?.types,
       statuses: project?.statuses,
       tags: project?.tags,
+      ...(project ? { stuckHours: project.stuck_after_hours } : {}),
     };
   }, [index, authors, project]);
 }
@@ -590,7 +597,7 @@ export function WorkItem({ id }: { id: string }) {
                     </div>
                   ) : (
                     <>
-                      {itemFlags(state.data)}
+                      {itemFlags(state.data, chrome)}
                       {item.removed && (
                         <RemovedNote tomb={item.removed} now={now} seatName={chrome.seatName} />
                       )}
@@ -700,7 +707,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 icon={typeIcon(item.type)}
                 identifier={item.key}
                 title={item.title}
-                status={itemFlags(state.data)}
+                status={itemFlags(state.data, chrome)}
                 actions={
                   <Menu
                     label={`More for ${item.key}`}

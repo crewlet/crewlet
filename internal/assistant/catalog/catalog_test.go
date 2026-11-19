@@ -369,3 +369,27 @@ func TestEveryAssistantToolNamesEveryFaultAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestAStepSaysItsScopeOnce: a step names what its call was about once, so a
+// tool whose label already says its scope is not told it again after a
+// comma ("Searching the web for “x”, “x”"). Mutation: append the scope to
+// every label again.
+func TestAStepSaysItsScopeOnce(t *testing.T) {
+	t.Parallel()
+	search := catalog.SearchWebTool()
+	args := map[string]any{"query": "Crewlet release notes"}
+	if got := search.StepLabel(args, cards.Options{}); got != "Searching the web for “Crewlet release notes”" {
+		t.Errorf("a web search's step reads %q", got)
+	}
+	for _, tool := range append(catalog.Tools(), catalog.FetchWebPageTool(), search) {
+		if tool.Scope == nil {
+			continue
+		}
+		a := assistanttest.ExampleArgs(t, tool.Parameters)
+		scope := tool.ScopeOf(catalog.Args(a), cards.Options{})
+		if label := tool.StepLabel(a, cards.Options{}); scope != "" &&
+			strings.Count(label, scope) > 1 {
+			t.Errorf("%s's step says its scope twice: %q", tool.Name, label)
+		}
+	}
+}

@@ -38,27 +38,29 @@ type routeDoc struct {
 	strong bool
 }
 
-// The reference's shapes of a route.
+// The reference's shapes of a route, each compiled at first use, not at init:
+// Gitlet's push hook is this binary, and pays every package's init
+// (cmd/crewlet's hookinit_test.go).
 var (
-	tableRow = regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
-		"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
-	// Compiled at first use, not at init: Gitlet's push hook is this
-	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	tableRow = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
+			"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
+	})
 	headingRoute = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile("^(#{2,4})\\s.*?`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS) " +
 			"(/[^`]*)`")
 	})
-	// Compiled at first use, not at init: Gitlet's push hook is this
-	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	headingLine = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^(#{1,6})\s`)
 	})
-	wildcard = regexp.MustCompile(`\{[^}]*\}`)
+	wildcard = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\{[^}]*\}`) })
 	// mention is a route named in backticks anywhere in a line, with the
 	// methods that share its path ahead of it (`PUT`, `DELETE /path`).
-	mention = regexp.MustCompile("((?:`(?:GET|HEAD|POST|PUT|PATCH|DELETE)`,\\s*)*)" +
-		"`(GET|HEAD|POST|PUT|PATCH|DELETE) (/[^`\\s]*)`")
-	method = regexp.MustCompile("GET|HEAD|POST|PUT|PATCH|DELETE")
+	mention = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile("((?:`(?:GET|HEAD|POST|PUT|PATCH|DELETE)`,\\s*)*)" +
+			"`(GET|HEAD|POST|PUT|PATCH|DELETE) (/[^`\\s]*)`")
+	})
+	method = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile("GET|HEAD|POST|PUT|PATCH|DELETE") })
 )
 
 // docKey is a route's pattern with every wildcard's name erased and any query
@@ -67,7 +69,7 @@ var (
 // and a wildcard's name is the mux's.
 func docKey(pattern string) string {
 	pattern, _, _ = strings.Cut(pattern, "?")
-	return wildcard.ReplaceAllStringFunc(pattern, func(w string) string {
+	return wildcard().ReplaceAllStringFunc(pattern, func(w string) string {
 		if strings.HasSuffix(w, "...}") {
 			return "{...}"
 		}
@@ -100,7 +102,7 @@ func indexReference(md string) map[string]routeDoc {
 		if fenced {
 			continue
 		}
-		if m := tableRow.FindStringSubmatch(line); m != nil {
+		if m := tableRow().FindStringSubmatch(line); m != nil {
 			note(docKey(m[1]+" "+m[2]), strings.TrimSpace(m[3]), true)
 			continue
 		}
@@ -115,8 +117,8 @@ func indexReference(md string) map[string]routeDoc {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		for _, at := range mention.FindAllStringSubmatchIndex(line, -1) {
-			m := mention.FindStringSubmatch(line[at[0]:at[1]])
+		for _, at := range mention().FindAllStringSubmatchIndex(line, -1) {
+			m := mention().FindStringSubmatch(line[at[0]:at[1]])
 			path := m[3]
 			if cut := strings.IndexAny(path, "[?"); cut >= 0 {
 				path = path[:cut]
@@ -126,7 +128,7 @@ func indexReference(md string) map[string]routeDoc {
 			// does.
 			lead := strings.TrimLeft(trimmed, "|-* ")
 			strong := strings.HasPrefix(lead, strings.TrimSpace(line[at[0]:at[1]]))
-			for _, verb := range append(method.FindAllString(m[1], -1), m[2]) {
+			for _, verb := range append(method().FindAllString(m[1], -1), m[2]) {
 				note(docKey(verb+" "+path), strings.Trim(trimmed, "|- "), strong)
 			}
 		}
@@ -454,8 +456,11 @@ func cut(s string, limit int, more string) string {
 }
 
 // queryRow is a row of the reference's question table: the question, the
-// parameters it takes, and the route it answers.
-var queryRow = regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+// parameters it takes, and the route it answers. Compiled at first use, as
+// the route's shapes are.
+var queryRow = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+})
 
 // queryIndex is every read route's query parameters as the reference's
 // question table documents them, by [docKey].
@@ -468,7 +473,7 @@ var queryIndex = sync.OnceValue(func() map[string][]string {
 func indexQuery(md string) map[string][]string {
 	out := map[string][]string{}
 	for _, line := range strings.Split(md, "\n") {
-		m := queryRow.FindStringSubmatch(line)
+		m := queryRow().FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}

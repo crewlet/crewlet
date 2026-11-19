@@ -54,6 +54,8 @@ units:
             llm_judge: big
 assistant:
   model: big
+advisor:
+  model: big
 `
 
 // EVERY FIELD THAT NAMES AN ENTRY IS A REFERENCE TO IT, at the path it is
@@ -88,6 +90,7 @@ func TestProviderReferencesCoverEveryWrittenShape(t *testing.T) {
 		{"flat", config.JobAuxiliary, "units[0].children[0].roles[1].llm_auxiliary", []string{"big"}},
 		{"flat", config.JobJudge, "units[0].children[0].roles[1].llm_judge", []string{"big"}},
 		{"", config.JobAssistant, "assistant.model", []string{"big"}},
+		{"", config.JobAdvisor, "advisor.model", []string{"big"}},
 	}
 	var got []ref
 	for _, r := range cfg.ProviderReferences("big") {

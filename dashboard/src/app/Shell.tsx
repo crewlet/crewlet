@@ -118,6 +118,7 @@ import { useAskReading } from "./assistant/place.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
+  queueDraft,
   queueQuestion,
   type AssistantFocus,
 } from "./assistant/control.ts";
@@ -805,6 +806,12 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
         if (assistantUnavailable !== null) return;
         queueQuestion(question);
         if (!assistantOpen && !askHere) showAssistant(true, "composer");
+      },
+      draft: (question: string) => {
+        if (assistantUnavailable !== null) return;
+        queueDraft(question);
+        if (!assistantOpen && !askHere) showAssistant(true, "composer");
+        else document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
       },
       // --- end assistant page actions (WP12) ---
     }),

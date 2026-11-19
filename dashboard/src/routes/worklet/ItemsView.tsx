@@ -686,6 +686,7 @@ export function ItemsView({
     ...seatResolvers(index),
     types: catalogue.data?.types,
     statuses: detail?.statuses,
+    ...(detail ? { stuckHours: detail.stuck_after_hours } : {}),
   };
   // WHO THE FILTER MENU CAN OFFER, held still across renders. The menu builds
   // its field list behind a memo keyed on this, and a fresh array literal in

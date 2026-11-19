@@ -4114,6 +4114,7 @@ var ACTIONS = {
 			"target_date",
 			"default_assignee",
 			"archived",
+			"stuck_after_hours",
 			"fields",
 			"tags_add",
 			"tags_rename",

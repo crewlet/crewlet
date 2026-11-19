@@ -738,6 +738,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
     return words[String(s[3])] ?? STEP_LABELS[stepOf(p, key)];
   }
   if (s[0] === "assistant") return "Ask Crewlet";
+  if (s[0] === "advisor") return "Advisor";
   return STEP_LABELS[stepOf(p, key)];
 }
 
@@ -749,7 +750,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
 export function messageOf(p: Pick<ConfigProblem, "path" | "message">): string {
   let message = p.message.trim();
   if (p.path && message.startsWith(`${p.path}: `)) message = message.slice(p.path.length + 2);
-  else message = message.replace(/^(providers|roles|units|assistant)\.[^\s:]*: /, "");
+  else message = message.replace(/^(providers|roles|units|assistant|advisor)\.[^\s:]*: /, "");
   return message.charAt(0).toUpperCase() + message.slice(1);
 }
 

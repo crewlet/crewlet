@@ -42,11 +42,12 @@ const textWholeBytes = 64 << 10
 var errRedaction = errors.New("executor: the session's text could not be redacted")
 
 // textScrub is the scrub of one text that arrives in pieces: by value
-// ([valueStream]), then by shape (redact.Stream), onto a writer. What it writes,
-// put together, is redact.Secrets of [scrubber.apply] of the whole text.
+// ([valueStream]), then by shape (redact.Stream, or a reading's stage before
+// it, [pieceSink]), onto a writer. What it writes, put together, is
+// redact.Secrets of [scrubber.apply] of the whole text.
 type textScrub struct {
 	values *valueStream
-	shape  *redact.Stream
+	piece  pieceSink
 	out    *textOut
 }
 
@@ -71,11 +72,25 @@ func (o *textOut) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// text is s's scrub of a text a piece at a time, writing onto w.
-func (s scrubber) text(w io.Writer) *textScrub {
+// text is s's scrub of a text a piece at a time, writing onto w: one its unit
+// holds whole, at offset 0 ([scrubber.textAt]).
+func (s scrubber) text(w io.Writer) *textScrub { return s.textAt(w, 0) }
+
+// textAt is s's scrub of a text that begins at offset in its unit
+// ([piecePos]), staged where s's reading stages it.
+func (s scrubber) textAt(w io.Writer, offset int64) *textScrub {
 	out := &textOut{w: w}
-	shape := redact.NewStream(out)
-	return &textScrub{values: s.stream(shape), shape: shape, out: out}
+	var piece pieceSink
+	switch {
+	case s.first != nil:
+		piece = s.first.open(out, offset)
+	case s.second != nil:
+		piece = s.second.open(out, offset)
+	}
+	if piece == nil {
+		piece = redact.NewStream(out)
+	}
+	return &textScrub{values: s.stream(piece), piece: piece, out: out}
 }
 
 // Write scrubs the next piece of the text. Its errors are Close's: the
@@ -92,20 +107,22 @@ func (t *textScrub) Write(p []byte) (int, error) {
 // error, as it came ([textOut]).
 func (t *textScrub) Close() error {
 	if err := t.values.Close(); err != nil {
-		return err
+		return redactionRefusal(err, t.out.err)
 	}
-	return redactionRefusal(t.shape.Close(), t.out.err)
+	return redactionRefusal(t.piece.Close(), t.out.err)
 }
 
 // redactionRefusal is what a text's scrub answers for err, what its redaction's
 // stream answered at its close, wrote the first error its writer gave:
-// nothing for nothing, the writer's own error as it came, and anything else
-// the redaction's own refusal, [errRedaction] wrapping it.
+// nothing for nothing, the writer's own error as it came, a stage's own
+// ([errMemoDiverged], [errPieceChanged]) as it came, and anything else the
+// redaction's own refusal, [errRedaction] wrapping it.
 func redactionRefusal(err, wrote error) error {
 	switch {
 	case err == nil:
 		return nil
-	case wrote != nil && errors.Is(err, wrote):
+	case wrote != nil && errors.Is(err, wrote),
+		errors.Is(err, errMemoDiverged) || errors.Is(err, errPieceChanged):
 		return err
 	}
 	return fmt.Errorf("%w: %w", errRedaction, err)
@@ -742,6 +759,7 @@ func (j *jsonRewrite) number() error {
 // in one call, and a longer one through the streams, its first piece and every
 // one after it.
 func (j *jsonRewrite) text(key *keyReading, capMax int) error {
+	at := j.sc.Offset()
 	if err := j.str.begin(j.out, capMax); err != nil {
 		return err
 	}
@@ -765,7 +783,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			break
 		}
 	}
-	t := j.scrub.text(&j.str)
+	t := j.scrub.textAt(&j.str, at)
 	total, held := 0, false
 	defer func() {
 		if held {

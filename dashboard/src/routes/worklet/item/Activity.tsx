@@ -586,7 +586,13 @@ function FeedEntry({
  * engine's record, which never touched the item's own history.
  */
 function FlowRow({ entry, chrome, now }: { entry: WorkFlowEntry; chrome: RowChrome; now: number }) {
-  const { what, why } = flowEntryWords(entry, now, chrome.seatName);
+  const zone = useCompanyZone();
+  const { what, why } = flowEntryWords(entry, now, {
+    zone,
+    seatName: chrome.seatName,
+    seatKind: chrome.seatKind,
+    stuckHours: chrome.stuckHours,
+  });
   return (
     <li className="task-entry" data-kind="flow">
       <span className="task-entry-mark" aria-hidden="true">
@@ -1060,15 +1066,13 @@ function LiveRow({
           decorative
         />
       </span>
-      <a
-        className="task-live"
-        data-entry
-        href={turn ? watchHref(turn) : href(["live"])}
-        aria-label={`${name} is on turn ${ordinal} of ${item.key}. Watch live.`}
-      >
+      {/* NAMED BY WHAT IT SHOWS, in the order it shows it (WCAG 2.5.3): the
+          spaces between the parts are the name's, and a flex row lays them
+          out as nothing. */}
+      <a className="task-live" data-entry href={turn ? watchHref(turn) : href(["live"])}>
         <span className="task-live-dot" aria-hidden="true" />
-        <b>{`${name} is on turn ${ordinal}`}</b>
-        <span className="truncate">{[doing, age && `for ${age}`].filter(Boolean).join(" · ")}</span>
+        <b>{`${name} is on turn ${ordinal}`}</b>{" "}
+        <span className="truncate">{[doing, age && `for ${age}`].filter(Boolean).join(" · ")}</span>{" "}
         <span className="spacer" />
         <span className="task-live-go">
           Watch live <ArrowRightGlyph size="xs" />

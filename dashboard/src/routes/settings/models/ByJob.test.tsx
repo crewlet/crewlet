@@ -13,7 +13,7 @@
  * each column head is named once (QA Minor 20).
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -33,6 +33,23 @@ import { ByJob } from "./ByJob.tsx";
 import type { ModelsData } from "./data.ts";
 import { WIZARD_STEPS } from "./parts.tsx";
 import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
+
+// A HELPER'S MODEL IS WRITTEN IN ONE STEP, by the configuration transport:
+// held here so the line can be read before and after the write.
+const writes = vi.hoisted(() => ({ patches: [] as unknown[] }));
+vi.mock("~/protocol/configWrite.ts", async (actual) => ({
+  ...(await actual<typeof import("~/protocol/configWrite.ts")>()),
+  getConfig: async () => ({
+    kind: "document",
+    document: { assistant: { model: "guarded" } },
+    etag: '"r1"',
+  }),
+  dryRunPatch: async () => ({ kind: "valid", baseRevisionId: "r1", warnings: [], derived: null }),
+  savePatch: async (patch: unknown) => {
+    writes.patches.push(patch);
+    return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
+  },
+}));
 
 /** The categories with a deadline, and one without: the fast note's two sides. */
 const TIMED = CATEGORY_ORDER.find((c) => FAST_NOTE[c])!;
@@ -224,20 +241,45 @@ test("every pick opens the picked model's wizard at Use it for, with only the se
 
 // ANY MODEL A HELPER CAN RUN ON, as the engine says of each: an ordinary entry
 // qualifies as it is, and one whose harness keeps a tool that cannot be turned
-// off is not offered.
-test("Ask Crewlet's picker offers every model a helper can run on, and opens its wizard for it", () => {
+// off is listed disabled beside the engine's reason. CHOOSING ONE WRITES
+// `assistant.model` IN ONE STEP, as the helpers' own pickers do: it never
+// opens the model wizard, which has nothing more to ask of a company-wide helper.
+test("Ask Crewlet's picker writes its one model in a step, never the wizard", async () => {
+  writes.patches = [];
   const onFlow = mount(company());
-  const trigger = screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" });
+  const trigger = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
   expect(trigger.textContent).toContain("guarded");
-  const offered = optionsOf(trigger).map((o) => (o.textContent ?? "").split(/\s|claude/)[0]);
-  expect(offered).toEqual(["default", "haiku", "sonnet", "guarded"]);
-  fireEvent.mouseDown(
-    screen.getAllByRole("option").find((o) => o.textContent?.startsWith("haiku"))!,
-  );
-  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
-    step: "assign",
-    add: [{ job: "assistant" }],
+  const options = optionsOf(trigger);
+  const codex = options.find((o) => o.textContent?.startsWith("codex-review"))!;
+  expect(codex.getAttribute("aria-disabled")).toBe("true");
+  expect(codex.textContent).toContain("cannot turn off");
+  await act(async () => {
+    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
   });
+  expect(onFlow).not.toHaveBeenCalled();
+  expect(await screen.findByText(/Ask Crewlet now runs on haiku/)).toBeDefined();
+  expect(writes.patches).toEqual([{ assistant: { model: "haiku" } }]);
+});
+
+// THE ADVISOR IS A USE LIKE ASK CREWLET: a line of its own on By job, its
+// model chosen the same way, and drawn when it has none, since its checks
+// run without one.
+test("the Advisor has a line of its own, chosen in a step like Ask Crewlet's", async () => {
+  writes.patches = [];
+  const onFlow = mount({ ...company(), advisor: { key: null } });
+  const trigger = screen.getByRole("combobox", { name: "Advisor's model" });
+  expect(trigger.textContent).toContain("None");
+  const options = optionsOf(trigger);
+  await act(async () => {
+    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+  });
+  expect(onFlow).not.toHaveBeenCalled();
+  expect(await screen.findByText(/Advisor now runs on default/)).toBeDefined();
+  expect(writes.patches).toEqual([{ advisor: { model: "default" } }]);
+  cleanup();
+  mount({ ...company({ admin: false }), advisor: { key: "haiku" } });
+  expect(screen.getAllByText("haiku").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("combobox", { name: "Advisor's model" })).toBeNull();
 });
 
 // ONE MODEL, NO CHAIN: the line names no fallback, and is drawn when Ask
@@ -248,12 +290,13 @@ test("Ask Crewlet's line names its one model, and is drawn with none", () => {
   cleanup();
   const off = company();
   mount({ ...off, doc: modelsDoc({ guarded: {} }), assistant: { key: null } });
-  expect(screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" }).textContent).toContain(
-    "Not set",
+  expect(screen.getByRole("combobox", { name: "Ask Crewlet's model" }).textContent).toContain(
+    "None",
   );
   cleanup();
   mount({ ...company({ admin: false }), assistant: { key: null } });
-  expect(screen.getByText("Not set")).toBeDefined();
+  // ASK CREWLET'S LINE AND THE ADVISOR'S each say they have no model.
+  expect(screen.getAllByText("Not set")).toHaveLength(2);
 });
 
 test("a member reads every value, in the picker's type, with no picker", () => {

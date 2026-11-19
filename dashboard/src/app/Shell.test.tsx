@@ -1400,7 +1400,15 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   };
   const { store, socket } = answering({
     work_projects: { projects: [eng], complete: true },
-    work_project: { ...eng, statuses: [], types: [], fields: [], complete: true },
+    work_project: {
+      ...eng,
+      statuses: [],
+      types: [],
+      fields: [],
+      stuck_after_hours: 8,
+      stuck_after_hours_set: false,
+      complete: true,
+    },
     work_items: { items: [], groups: [], complete: true },
     work_activity: { records: [], complete: true },
   });

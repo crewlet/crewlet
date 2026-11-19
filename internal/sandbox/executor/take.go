@@ -44,14 +44,14 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
-// to its scrub's and its meter's end. 26: a take at its base holds at most
-// 13 MiB, its scrub's 10 (BenchmarkATakeAtItsBase) and its meter's 3
+// to its scrub's and its meter's end. 29: a take at its base holds at most
+// 11.56 MiB, its scrub's 8.22 (BenchmarkATakeAtItsBase) and its meter's 3.34
 // (BenchmarkAMeterAtItsBase) at once, the most of nine runs each, one a
-// process, on a dedicated two-core slot; 26 times over is 338 MiB, within the
-// base tier's 341 MiB (64 reads at 5.3 MiB, the package doc's "A collection's
-// read of a thread"): so the takes at their base hold no more than every read
-// of the tier does.
-const SessionTakesAtOnce = 26
+// process, on a dedicated two-core slot, read in bytes; 29 times over is 335
+// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
+// package doc's "A collection's read of a thread"): so the takes at their base
+// hold no more than every read of the tier does.
+const SessionTakesAtOnce = 29
 
 // sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
 var sessionTakes = make(chan struct{}, SessionTakesAtOnce)
@@ -174,7 +174,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	large := new(passBudget)
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
-	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large)
+	remembered := &memoUse{memo: r.memo, scope: take.Scope}
+	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large).remembering(remembered)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
@@ -211,6 +212,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		scrubErr := scrubContained(ctx, func() error {
 			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
 		})
+		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
 		// take to its end and asks what it measured waits on nothing but the
@@ -233,6 +235,18 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// logMemoUse logs what a take's scrub did with the process's memo, where it
+// met a text of a chunk or more: the figures its bounds are tuned by
+// ([scrubMemoEntries]).
+func logMemoUse(ctx context.Context, use *memoUse) {
+	if use.memo == nil || use.n.hits+use.n.misses == 0 {
+		return
+	}
+	entries, evicted := use.memo.size()
+	log.InfoContext(ctx, "executor_session_scrub_memo", "hits", use.n.hits, "misses", use.n.misses,
+		"diverged", use.n.diverged, "checked", use.n.checked, "entries", entries, "evicted", evicted)
 }
 
 // scrubContained runs scrub, the take's scrub of a box's archive, a panic in it

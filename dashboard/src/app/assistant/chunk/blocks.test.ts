@@ -287,13 +287,16 @@ describe("the thinking indicator says what is happening now", () => {
     started_at: "2026-10-24T09:41:00Z",
   });
 
-  test("Thinking while nothing of the answer is written", () => {
-    expect(thinkingOf({ ...base, phase: "sending" })).toEqual({ status: "Thinking" });
-    expect(thinkingOf(base)).toEqual({ status: "Thinking" });
+  // FORTY SECONDS AFTER THE QUESTION, as the indicator reads its clock.
+  const at = Date.parse(base.askedAt) + 40_000;
+
+  test("Thinking, with the time since the question, while nothing of the answer is written", () => {
+    expect(thinkingOf({ ...base, phase: "sending" }, at)).toEqual({ status: "Thinking, 40s" });
+    expect(thinkingOf(base, at)).toEqual({ status: "Thinking, 40s" });
     // An empty message a silent round's cards hang from is not words.
-    expect(thinkingOf({ ...base, phase: "working", replies: [{ id: "m", text: "  " }] })).toEqual({
-      status: "Thinking",
-    });
+    expect(
+      thinkingOf({ ...base, phase: "working", replies: [{ id: "m", text: "  " }] }, at),
+    ).toEqual({ status: "Thinking, 40s" });
   });
 
   test("the running step's own sentence while a tool runs", () => {
@@ -302,24 +305,25 @@ describe("the thinking indicator says what is happening now", () => {
       phase: "working" as const,
       steps: [step("done", "Listing the agents"), step("running", "Reading Worklet")],
     };
-    expect(thinkingOf(working)).toEqual({ status: "Reading Worklet" });
+    expect(thinkingOf(working, at)).toEqual({ status: "Reading Worklet" });
   });
 
-  // THE MARK STANDS ALONE AFTER THE WORDS, in place of a caret. Mutation:
-  // keep saying Thinking under a streaming answer and the line repeats what
-  // the reader is watching happen.
-  test("no words of its own while the answer's words arrive", () => {
+  // A LONG ANSWER STILL SAYS IT IS BEING WRITTEN, and for how long. Mutation:
+  // leave the mark alone under the words and a reader cannot tell a slow
+  // answer from one that stopped.
+  test("Answering, with the time since the question, while the answer's words arrive", () => {
     const streaming = {
       ...base,
       phase: "working" as const,
       steps: [step("done", "Listing the agents")],
       replies: [{ id: "m", text: "Both of your agents" }],
     };
-    expect(thinkingOf(streaming)).toEqual({ status: undefined });
+    expect(thinkingOf(streaming, at)).toEqual({ status: "Answering, 40s" });
+    expect(thinkingOf(streaming, at + 65_000)).toEqual({ status: "Answering, 1m 45s" });
   });
 
   test("Stopping once a stop is on its way", () => {
-    expect(thinkingOf({ ...base, phase: "working", stopping: true })).toEqual({
+    expect(thinkingOf({ ...base, phase: "working", stopping: true }, at)).toEqual({
       status: "Stopping",
     });
   });
@@ -338,7 +342,7 @@ describe("the thinking indicator says what is happening now", () => {
       "expired",
       "budget_exhausted",
     ] as const) {
-      expect(thinkingOf({ ...base, phase }), phase).toBeNull();
+      expect(thinkingOf({ ...base, phase }, at), phase).toBeNull();
     }
   });
 });

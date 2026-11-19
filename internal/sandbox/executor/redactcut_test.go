@@ -61,7 +61,7 @@ func TestACredentialIsRedactedBeforeATranscriptLineIsCut(t *testing.T) {
 				dec := site.events()
 				dec.Line([]byte(site.line(value)))
 				// As a reader sees it: after the downstream pass.
-				got := redact.Secrets(strings.Join(dec.Entries(), "\n"))
+				got := redact.Secrets(strings.Join(dec.Entries(true), "\n"))
 				if got == "" {
 					t.Fatalf("%s: the decoder showed nothing for the line", site.name)
 				}

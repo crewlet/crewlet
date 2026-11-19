@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // SelectArgument is the read argument naming the fields of an answer the model
@@ -30,8 +31,10 @@ var selectArgument = &schema{kind: "array", maxItems: SelectMax,
 		"a field of its elements. Only those fields reach you, so a wide answer fits.",
 	items: &schema{kind: "string", maxLen: selectPathBytes}}
 
-// selectSegment is one segment of a select path: a field name, `*` or an index.
-var selectSegment = regexp.MustCompile(`^(\*|[A-Za-z0-9_\-]+)$`)
+// selectSegment is one segment of a select path: a field name, `*` or an
+// index. Compiled at first use, not at init: Gitlet's push hook is this binary,
+// and pays every package's init (cmd/crewlet's hookinit_test.go).
+var selectSegment = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(\*|[A-Za-z0-9_\-]+)$`) })
 
 // Selection is a read call's select paths, each split into its segments, or
 // nil when it names none. A path that is empty, too long or holds a segment
@@ -58,7 +61,7 @@ func Selection(args Args) ([][]string, error) {
 		}
 		segments := strings.Split(strings.TrimSpace(path), ".")
 		for _, s := range segments {
-			if !selectSegment.MatchString(s) {
+			if !selectSegment().MatchString(s) {
 				return nil, fmt.Errorf("select path %q holds the segment %q; a segment is a "+
 					"field name, * or an index", path, s)
 			}

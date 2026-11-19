@@ -15,8 +15,9 @@ cost the company time, tokens or waiting, and that the advisor's own rules (rule
 
 How each finding is checked before anyone sees it, so write it to pass:
 - Cite at least one record (an item key, a turn id or a change) that a tool answered, and at least one number,
-  with "from" naming the tool and the path into its answer, such as open_work.blockers[0].blocks. A record or a
-  number no tool answered drops the finding.
+  with "from" naming the tool and the path into its answer, such as open_work.blockers[0].blocks, and "label"
+  saying in a few plain words what it counts, such as "Items it blocks". A record or a number no tool answered,
+  or a number with no label, drops the finding.
 - Never repeat a rule finding: one about the same subject citing only its records is dropped.
 - Offer only a fix the engine builds: round_cap or token_budget for an agent seat, auxiliary_model with a
   providers.llm entry, open_item with an item key you cite, open_seat with an agent's handle, or none.
@@ -82,8 +83,10 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 								string(advisor.SubjectSeat), string(advisor.SubjectRepository)}},
 							"seat": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}},
 					"facts": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{
-						"type": "object", "additionalProperties": false, "required": []string{"key", "value", "from"},
+						"type": "object", "additionalProperties": false,
+						"required": []string{"key", "label", "value", "from"},
 						"properties": map[string]any{"key": map[string]any{"type": "string"},
+							"label": map[string]any{"type": "string", "maxLength": advisor.MaxAnalystFactLabel},
 							"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}}}},
 					"records": map[string]any{"type": "array", "minItems": 1, "maxItems": advisor.MaxAnalystRecords,
 						"items": map[string]any{"type": "object", "additionalProperties": false,

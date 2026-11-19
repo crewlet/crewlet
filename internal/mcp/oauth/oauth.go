@@ -263,7 +263,7 @@ func AuthorizeURL(ep *mcp.OAuthEndpoints, client Client, redirect, state, challe
 	}
 	if !strings.EqualFold(u.Scheme, "https") && !mcp.SameOrigin(ep.Authorization, ep.Server) {
 		return "", fmt.Errorf("the authorization endpoint %s is not an https address",
-			redact.URL(textcut.Bytes(ep.Authorization, maxVendorWords)))
+			textcut.Bytes(redact.URL(ep.Authorization), maxVendorWords))
 	}
 	q := u.Query()
 	q.Set("response_type", "code")
@@ -624,11 +624,13 @@ func withheld(s string, sent []string) string {
 }
 
 // vendorWords is a string an authorization server sent, as anything here
-// holds it: one line, cut to [maxVendorWords], every credential-shaped run
-// withheld.
+// holds it: one line, every credential-shaped run withheld, cut to
+// [maxVendorWords]. Redacted whole first and cut after, reading one byte past
+// the bound ([redact.Prefix]), so what is kept is the opening of the whole
+// redaction.
 func vendorWords(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	return redact.Secrets(textcut.Bytes(s, maxVendorWords))
+	opening, _ := redact.Prefix(strings.Join(strings.Fields(s), " "), maxVendorWords+1)
+	return textcut.Bytes(opening, maxVendorWords)
 }
 
 // unwrap is a client's error without the url.Error around it, whose sentence

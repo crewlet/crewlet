@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -57,9 +57,12 @@ var holdBytes = sync.OnceValue(func() int {
 // never blind.
 const earlyWindows = 64
 
-// pieceBytes is the most a stage hands the next at once, and the most of a
-// write a stream hands its stages at once: what a stage holds past its window
-// waiting to step is at most this.
+// pieceBytes is the most of a write a stream hands its stages at once, and the
+// most a stage puts into the next one's input before that one takes it
+// ([ruleStage.flush]), and a marker past it: so what a stage holds past its
+// window waiting to step is at most this and a marker. The password's stage,
+// the last, writes a value's escaped breaks as they stand, up to a window a
+// step, but to the end, which holds none of it ([endSink]).
 const pieceBytes = 32 << 10
 
 // The keys' stage's geometry: an armour's block is read up to keyAhead past
@@ -121,9 +124,12 @@ type Stream struct {
 	// which is redacted whole; p the stages once it is longer.
 	head []byte
 	p    *pipeline
-	// observe is handed to the keys' stage the stream makes, where a test
-	// sets one ([keyObserver]).
+	end  *endSink
+	// observe is handed to the keys' stage the stream makes, and poison
+	// to every stage's input ([feed]), where a test sets them
+	// ([keyObserver]).
 	observe *keyObserver
+	poison  bool
 	// hold is how far the keys' stage lets the text run past a window
 	// before it decides it ([holdBytes]).
 	hold int
@@ -152,6 +158,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, s.err
 	case s.p != nil:
 		s.p.feed(p)
+		s.endErr()
 		s.stopOnMiss()
 		return len(p), s.err
 	}
@@ -161,11 +168,16 @@ func (s *Stream) Write(p []byte) (int, error) {
 	n := min(len(p), wholeBytes+1-len(s.head))
 	s.head = append(s.head, p[:n]...)
 	if len(s.head) > wholeBytes {
-		s.p = newPipeline(s.emit, true, s.hold)
+		s.end = &endSink{w: s.w}
+		s.p = newPipeline(s.end, true, s.hold)
 		s.p.keys.observe = s.observe
+		for _, f := range s.p.feeds() {
+			f.poison = s.poison
+		}
 		s.p.feed(s.head)
 		s.head = nil
 		s.p.feed(p[n:])
+		s.endErr()
 		s.stopOnMiss()
 	}
 	return len(p), s.err
@@ -203,9 +215,17 @@ func (s *Stream) Close() error {
 		return s.err
 	}
 	s.p.close()
+	s.endErr()
 	s.stopOnMiss()
 	s.p = nil
 	return s.err
+}
+
+// endErr is the first error the stream's writer gave its stages' end.
+func (s *Stream) endErr() {
+	if s.err == nil && s.end != nil {
+		s.err = s.end.err
+	}
 }
 
 // emit writes text to the stream's writer.
@@ -236,12 +256,12 @@ type pipeline struct {
 // newPipeline is the stages, writing what they redact to out: the rules alone
 // where keys is false, for a text that holds no key's armour; the keys' stage
 // deciding a window once the text has run hold past it ([holdBytes]).
-func newPipeline(out func(string), keys bool, hold int) *pipeline {
+func newPipeline(out *endSink, keys bool, hold int) *pipeline {
 	table := rules()
 	// The rules over what the keys' stage writes, last first.
-	var next sink = outSink(out)
+	var next sink = out
 	for i := len(table) - 1; i >= 0; i-- {
-		next = &ruleStage{r: table[i], to: next}
+		next = newRuleStage(ruleStage{r: table[i], to: next})
 	}
 	p := &pipeline{rules: next}
 	if !keys {
@@ -252,32 +272,82 @@ func newPipeline(out func(string), keys bool, hold int) *pipeline {
 	// keys with the values they name ([claimed]).
 	var readers fanout
 	for _, r := range table {
-		if r.keyed == passwordRule {
+		if r.keyed == passwordRule() {
 			break
 		}
 		if r.value != nil {
 			src := &claimSource{}
 			p.sources = append(p.sources, src)
-			readers = append(readers, &ruleStage{r: r, mode: finds, raw: &rawMap{}, src: src})
+			readers = append(readers, newRuleStage(ruleStage{r: r, mode: finds, raw: &rawMap{}, src: src}))
 		}
 	}
 	src := &claimSource{}
 	p.sources = append(p.sources, src)
-	readers = append(readers, &ruleStage{r: table[len(table)-1], mode: reads, raw: &rawMap{}, src: src})
+	readers = append(readers, newRuleStage(ruleStage{r: table[len(table)-1], mode: reads, raw: &rawMap{}, src: src}))
 	var claims sink = readers
+	handed := new([]edit)
 	for i := len(table) - 2; i >= 0; i-- {
 		src := &claimSource{}
 		p.sources = append(p.sources, src)
-		stage := &ruleStage{r: table[i], to: claims, raw: &rawMap{}, src: src}
+		stage := newRuleStage(ruleStage{r: table[i], to: claims, raw: &rawMap{}, src: src, handed: handed})
 		claims = stage
 		p.claims = stage
 	}
 	p.keys = &keyStage{to: next, sources: p.sources, hold: hold}
+	p.keys.in.bound, p.keys.in.grow = keysBytes+hold, keysBytes
 	for _, src := range p.sources {
 		src.keys = p.keys
 	}
 	return p
 }
+
+// feeds is every stage's input in p.
+func (p *pipeline) feeds() []*feed {
+	var all []*feed
+	var walk func(s sink)
+	walk = func(s sink) {
+		switch st := s.(type) {
+		case *ruleStage:
+			all = append(all, &st.in)
+			walk(st.to)
+		case fanout:
+			for _, r := range st {
+				walk(r)
+			}
+		}
+	}
+	walk(p.rules)
+	if p.keys != nil {
+		all = append(all, &p.keys.in)
+		walk(p.claims)
+	}
+	return all
+}
+
+// newRuleStage is s with its input's bound set ([stageBytes]).
+func newRuleStage(s ruleStage) *ruleStage {
+	s.in.bound = stageBytes()
+	return &s
+}
+
+// stageBytes is the most a rule's stage holds of its input, what it has been
+// handed and what it is being handed: [stageReach] behind where it resumes,
+// less than [stageStep] past it, and a piece and a marker past that.
+var stageBytes = sync.OnceValue(func() int {
+	longest := len(keyMarker)
+	for _, m := range ruleMarkers() {
+		longest = max(longest, len(m))
+	}
+	return stageReach + stageStep + pieceBytes + longest
+})
+
+// keysBytes is what the keys' stage holds besides what it waits on: a piece,
+// four blocks' reach behind where it reads ([keyStage.opening] looks a block
+// before a block's start) and a step past it. Its buffer doubles up to this
+// and then jumps to this and the hold, so the jump holds this, about 484 KiB,
+// beside the new buffer for a moment, and a stream that never waits on its
+// claims never allocates the hold.
+const keysBytes = pieceBytes + 4*keyReach + stageAdvance + keyAhead
 
 // feed hands the stages b, the next of the text, a piece at a time
 // ([pieceBytes]): the pieces of the text as written, each ending at an offset
@@ -297,11 +367,11 @@ func (p *pipeline) feed(b []byte) {
 		if len(p.carry) < pieceBytes {
 			return
 		}
-		p.write(string(p.carry))
+		p.write(p.carry)
 		p.carry = p.carry[:0]
 	}
 	for len(b) >= pieceBytes && !p.missed() {
-		p.write(string(b[:pieceBytes]))
+		p.write(b[:pieceBytes])
 		b = b[pieceBytes:]
 	}
 	if p.missed() {
@@ -317,17 +387,19 @@ func (p *pipeline) feed(b []byte) {
 
 // write hands the stages the next piece of the text: the claims first, so the
 // keys' stage reads them as far as they are decided.
-func (p *pipeline) write(s string) {
+func (p *pipeline) write(b []byte) {
 	if p.keys == nil {
-		p.rules.take(s, nil)
+		p.rules.put(b)
+		p.rules.took(nil)
 		return
 	}
-	p.keys.arrived += len(s)
-	p.claims.take(s, nil)
+	p.keys.arrived += len(b)
+	p.claims.put(b)
+	p.claims.took(nil)
 	if p.missed() {
 		return
 	}
-	p.keys.take(s)
+	p.keys.take(b)
 }
 
 // missed reports whether the keys' stage found a miss ([Stream.stopOnMiss]):
@@ -339,7 +411,7 @@ func (p *pipeline) missed() bool {
 // close ends the text, handing the stages what it carried first.
 func (p *pipeline) close() {
 	if len(p.carry) > 0 {
-		p.write(string(p.carry))
+		p.write(p.carry)
 		p.carry = nil
 	}
 	if p.keys == nil {
@@ -357,11 +429,21 @@ func (p *pipeline) close() {
 }
 
 // sink is what a stage writes to: the next stage, or the end.
+//
+// A STAGE WRITES STRAIGHT INTO THE NEXT ONE'S INPUT: put copies a stretch in
+// past what the receiver has taken, and took makes all put since the last
+// took its input, with the edits in it, and steps it. So each byte is copied
+// once a stage, and what is put but not taken is in no window.
 type sink interface {
-	// take is the next stretch of the receiver's input, with the edits in it
+	// put, putString and putRepeat (n of c) write the next of the
+	// receiver's input, which it takes at the next took.
+	put(b []byte)
+	putString(s string)
+	putRepeat(c byte, n int)
+	// took is what was put since the last took, with the edits in it
 	// ([edit]), placed in the receiver's input; nil where nothing upstream
 	// tracks them.
-	take(s string, edits []edit)
+	took(edits []edit)
 	// closeEdit says where in the text as written the last edit handed ends,
 	// where it was handed with its end to come ([edit]).
 	closeEdit(rawEnd int)
@@ -369,19 +451,71 @@ type sink interface {
 	close()
 }
 
-// outSink is the end: what the last stage writes, written out.
-type outSink func(string)
+// endSink is the end: what the last stage writes, written straight to w,
+// and the first error w gave, after which it writes nothing. It keeps no
+// output: w keeps none of a view it is handed (io.Writer's contract), and a
+// string (a marker, a value's escaped break) is copied through scratch rather
+// than handed to io.WriteString, which copies it to the heap for a writer
+// that has no WriteString of its own.
+type endSink struct {
+	w       io.Writer
+	err     error
+	scratch [512]byte
+}
 
-func (o outSink) take(s string, _ []edit) { o(s) }
-func (o outSink) closeEdit(int)           {}
-func (o outSink) close()                  {}
+func (e *endSink) put(b []byte) {
+	if e.err == nil && len(b) > 0 {
+		_, e.err = e.w.Write(b)
+	}
+}
+
+func (e *endSink) putString(s string) {
+	for s != "" {
+		n := copy(e.scratch[:], s)
+		e.put(e.scratch[:n])
+		s = s[n:]
+	}
+}
+
+func (e *endSink) putRepeat(c byte, n int) {
+	for n > 0 {
+		k := min(n, len(e.scratch))
+		for i := range k {
+			e.scratch[i] = c
+		}
+		e.put(e.scratch[:k])
+		n -= k
+	}
+}
+
+func (e *endSink) took([]edit)   {}
+func (e *endSink) closeEdit(int) {}
+func (e *endSink) close()        {}
 
 // fanout hands its input to several readers.
 type fanout []sink
 
-func (f fanout) take(s string, edits []edit) {
+func (f fanout) put(b []byte) {
 	for _, r := range f {
-		r.take(s, edits)
+		r.put(b)
+	}
+}
+
+func (f fanout) putString(s string) {
+	for _, r := range f {
+		r.putString(s)
+	}
+}
+
+func (f fanout) putRepeat(c byte, n int) {
+	for _, r := range f {
+		r.putRepeat(c, n)
+	}
+}
+
+func (f fanout) took(edits []edit) {
+	for _, r := range f {
+		r.took(edits)
 	}
 }
 
@@ -397,60 +531,110 @@ func (f fanout) close() {
 	}
 }
 
-// feed is a stage's input: the stretches it has been handed from base on.
+// feed is a stage's input, in ONE buffer read in place: buf[off:] holds the
+// input from base to end, then what was put and is still to be taken
+// (staged). A window is a view of it, which lives only for the step that
+// reads it: a feed is written only by its one upstream, never during its own
+// step, and a step keeps only places and copies ([openRun]). The buffer is
+// allocated at its bound, exactly (the keys' stage's doubles first, up to
+// grow), and slides its input down when the tail lacks room, so it is
+// reallocated only for a text that runs past the bound, which a test fails.
+// poison, a test's, reallocates it at the first reserve after each take and
+// fills the old one with 0xFF, so a view kept past its step reads bytes no
+// text holds.
 type feed struct {
-	chunks []string
-	base   int
-	end    int
-	eof    bool
+	buf       []byte
+	off       int
+	base, end int
+	staged    int
+	eof       bool
+	bound     int
+	grow      int
+	poison    bool
+	// takes is how many stretches it has taken, largest the longest.
+	takes, largest int
 }
 
-// add hands the feed s.
-func (f *feed) add(s string) {
-	if s != "" {
-		f.chunks = append(f.chunks, s)
-		f.end += len(s)
+// reserve is room for the next n bytes put, past what it holds and what was
+// put already.
+func (f *feed) reserve(n int) []byte {
+	held := f.end - f.base + f.staged
+	fresh := f.poison && f.staged == 0
+	if f.off+held+n > len(f.buf) || fresh {
+		need, old := held+n, f.buf
+		if need > len(f.buf) || fresh {
+			c := max(f.bound, need)
+			if f.grow > 0 && need <= f.grow {
+				c = min(f.grow, max(need, 2*len(f.buf)))
+			}
+			f.buf = make([]byte, c)
+		}
+		copy(f.buf, old[f.off:f.off+held])
+		if fresh {
+			for i := range old {
+				old[i] = 0xFF
+			}
+		}
+		f.off = 0
+	}
+	i := f.off + held
+	f.staged += n
+	return f.buf[i : i+n : i+n]
+}
+
+func (f *feed) put(b []byte) { copy(f.reserve(len(b)), b) }
+
+func (f *feed) putString(s string) { copy(f.reserve(len(s)), s) }
+
+func (f *feed) putRepeat(c byte, n int) {
+	b := f.reserve(n)
+	for i := range b {
+		b[i] = c
 	}
 }
 
-// window is the input from lo to hi: a stretch where one holds it whole, and
-// the stretches joined where not, which the feed does not keep: it holds the
-// stretches it was handed, no larger than [pieceBytes] past a stream's first
-// ([feed.release]), and a window lives for the step that reads it.
-func (f *feed) window(lo, hi int) string {
+// took makes what was put the feed's input.
+func (f *feed) took() {
+	if f.staged > 0 {
+		f.end += f.staged
+		f.takes, f.largest = f.takes+1, max(f.largest, f.staged)
+		f.staged = 0
+	}
+}
+
+// add puts b and takes it.
+func (f *feed) add(b []byte) {
+	f.put(b)
+	f.took()
+}
+
+// window is the input from lo to hi, a view of the feed's buffer that lives
+// for the step that reads it.
+func (f *feed) window(lo, hi int) []byte {
 	f.release(lo)
 	if lo >= hi {
-		return ""
+		return nil
 	}
-	at := f.base
-	k := 0
-	for at+len(f.chunks[k]) <= lo {
-		at += len(f.chunks[k])
-		k++
-	}
-	if at+len(f.chunks[k]) >= hi {
-		return f.chunks[k][lo-at : hi-at]
-	}
-	var b strings.Builder
-	b.Grow(hi - lo)
-	for ; at < hi; k++ {
-		c := f.chunks[k]
-		b.WriteString(c[max(0, lo-at):min(len(c), hi-at)])
-		at += len(c)
-	}
-	return b.String()
+	i := f.off + lo - f.base
+	return f.buf[i : i+hi-lo : i+hi-lo]
 }
 
-// release lets go of every stretch that ends at or before lo.
+// release lets go of the input before lo.
 func (f *feed) release(lo int) {
-	drop := 0
-	for drop < len(f.chunks) && f.base+len(f.chunks[drop]) <= lo {
-		f.base += len(f.chunks[drop])
-		drop++
+	if lo <= f.base {
+		return
 	}
-	if drop > 0 {
-		f.chunks = slices.Delete(f.chunks, 0, drop)
+	n := min(lo, f.end) - f.base
+	f.off += n
+	f.base += n
+	if f.base == f.end && f.staged == 0 {
+		f.off = 0
 	}
+}
+
+// drop lets go of the buffer of a stage that is done.
+func (f *feed) drop() {
+	f.buf, f.off = nil, 0
 }
 
 // held is how many bytes the feed holds.
@@ -616,12 +800,15 @@ type ruleStage struct {
 	// as written, and what it claims there.
 	raw *rawMap
 	src *claimSource
-	// out is what a step writes, outPos where it stands in what the stage
-	// has written, outEdits the edits in it, and passed whether the last
-	// edit of the input, still open, has been written on.
-	out      strings.Builder
+	// outLen is how much a step has put since the next stage last took,
+	// outPos where it stands in what the stage has written, outEdits the
+	// edits in it, and passed whether the last edit of the input, still
+	// open, has been written on. handed is the room for outEdits every
+	// claims stage shares ([ruleStage.hand]).
+	outLen   int
 	outPos   int
 	outEdits []edit
+	handed   *[]edit
 	passed   bool
 }
 
@@ -650,9 +837,13 @@ type openRun struct {
 	claimed bool
 }
 
-// take hands the stage the next stretch of its input.
-func (s *ruleStage) take(text string, edits []edit) {
-	s.in.add(text)
+func (s *ruleStage) put(b []byte)            { s.in.put(b) }
+func (s *ruleStage) putString(str string)    { s.in.putString(str) }
+func (s *ruleStage) putRepeat(c byte, n int) { s.in.putRepeat(c, n) }
+
+// took hands the stage the next stretch of its input, put already.
+func (s *ruleStage) took(edits []edit) {
+	s.in.took()
 	if s.raw != nil {
 		s.raw.add(edits)
 	}
@@ -675,6 +866,9 @@ func (s *ruleStage) close() {
 	s.in.eof = true
 	for s.step() {
 	}
+	// Let go of its input before the next stage closes, so the stages'
+	// close holds one window at a time rather than every stage's.
+	s.in.drop()
 	if s.to != nil {
 		s.to.close()
 	}
@@ -809,7 +1003,7 @@ func (s *ruleStage) stepAtMarker(m edit) {
 // scanTo is [ruleStage.scan] for a window that ends at a marker whose `[` is
 // at edge: every decision that begins before edge is trusted, and the window
 // is written on through its end.
-func (s *ruleStage) scanTo(text string, lo, at, edge int) int {
+func (s *ruleStage) scanTo(text []byte, lo, at, edge int) int {
 	prior := make([][2]int, len(s.prior))
 	for i, v := range s.prior {
 		prior[i] = [2]int{v[0] - lo, v[1] - lo}
@@ -839,13 +1033,27 @@ func (s *ruleStage) scanTo(text string, lo, at, edge int) int {
 
 // flush writes on what the step wrote.
 func (s *ruleStage) flush() {
-	if s.mode != replaces || s.out.Len() == 0 && len(s.outEdits) == 0 {
+	if s.mode != replaces || s.outLen == 0 && len(s.outEdits) == 0 {
 		return
 	}
-	out, edits := s.out.String(), s.outEdits
-	s.out.Reset()
-	s.outEdits = nil
-	s.to.take(out, edits)
+	edits := s.outEdits
+	s.outLen, s.outEdits = 0, nil
+	s.to.took(edits)
+	if s.handed != nil && cap(edits) > cap(*s.handed) {
+		*s.handed = edits[:0]
+	}
+}
+
+// hand adds e to the edits the stage hands on with what it wrote, in the room
+// the claims stages share: ONE STAGE AT A TIME HOLDS ANY, since a stage steps
+// only within the one before it handing on, which the next copies before it
+// steps ([rawMap.add]), and each step hands on all it wrote ([ruleStage.flush]).
+// So the claims hold one stage's room, a piece's edits, rather than each its own.
+func (s *ruleStage) hand(e edit) {
+	if s.outEdits == nil {
+		s.outEdits = (*s.handed)[:0]
+	}
+	s.outEdits = append(s.outEdits, e)
 }
 
 // event is one decision of a stage's rule: where what decides it begins and
@@ -869,18 +1077,18 @@ func (s *ruleStage) seamsAt(lo int, ev event) [3]int {
 }
 
 // decide is the stage's rule's first decision at or after at.
-func (s *ruleStage) decide(text string, at int, prior [][2]int) (event, bool) {
+func (s *ruleStage) decide(text []byte, at int, prior [][2]int) (event, bool) {
 	if s.mode == finds {
-		start, end, found := s.r.find(text, at)
+		start, end, found := findIn(s.r, text, at)
 		return event{key: [2]int{start, end}, v: [2]int{end, end}}, found
 	}
-	key, v, seams, found := s.r.decideRead(text, at, prior)
+	key, v, seams, found := decideReadIn(s.r, text, at, prior)
 	return event{key: key, v: v, seams: seams}, found
 }
 
 // scan decides the window from at, limit being where the decisions it can
 // trust end, and is where the stage resumes.
-func (s *ruleStage) scan(text string, lo, at, limit int, eof bool) int {
+func (s *ruleStage) scan(text []byte, lo, at, limit int, eof bool) int {
 	prior := make([][2]int, len(s.prior))
 	for i, v := range s.prior {
 		prior[i] = [2]int{v[0] - lo, v[1] - lo}
@@ -960,7 +1168,7 @@ func priorWith(prior [][2]int, v [2]int) [][2]int {
 // bytes that begin none (invalid UTF-8) longer than a window went back to
 // where the window's input began, the window decided nothing, and the stage
 // held the rest of the text.
-func (s *ruleStage) commit(text string, lo, at, c int) int {
+func (s *ruleStage) commit(text []byte, lo, at, c int) int {
 	c = max(c, at)
 	s.pass(text, lo, at, c)
 	return c
@@ -968,7 +1176,7 @@ func (s *ruleStage) commit(text string, lo, at, c int) int {
 
 // trusted reports whether the window holds every read that decided ev, prior
 // being the values the rule replaced before it, placed in the window.
-func (s *ruleStage) trusted(text string, ev event, prior [][2]int) bool {
+func (s *ruleStage) trusted(text []byte, ev event, prior [][2]int) bool {
 	switch {
 	case s.mode == finds:
 		// Its pattern's match ends at what is no space, read in the
@@ -1003,7 +1211,7 @@ func (s *ruleStage) trusted(text string, ev event, prior [][2]int) bool {
 // apply writes the window's input from done up to what ev replaces, and that,
 // claims what it claims, and is where the input is written to and where the
 // rule looks next.
-func (s *ruleStage) apply(text string, lo, done int, ev event, prior *[][2]int) (int, int) {
+func (s *ruleStage) apply(text []byte, lo, done int, ev event, prior *[][2]int) (int, int) {
 	switch s.mode {
 	case finds:
 		s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.key[1])})
@@ -1021,7 +1229,7 @@ func (s *ruleStage) apply(text string, lo, done int, ev event, prior *[][2]int) 
 		return done, beyond(text, ev.key[0])
 	}
 	s.pass(text, lo, done, ev.v[0])
-	s.replace(lo+ev.v[0], lo+ev.v[1], func(b *strings.Builder) { s.r.write(b, text[ev.v[0]:ev.v[1]]) }, true)
+	s.replace(lo+ev.v[0], lo+ev.v[1], func(b io.StringWriter) { writeRule(s.r, b, text[ev.v[0]:ev.v[1]]) }, true)
 	if s.r.value != nil {
 		*prior = priorWith(*prior, ev.v)
 	}
@@ -1030,12 +1238,12 @@ func (s *ruleStage) apply(text string, lo, done int, ev event, prior *[][2]int) 
 
 // pass writes the window's input from a to b as it stands, with the edits in
 // it, handing the next stage a piece at a time ([pieceBytes]).
-func (s *ruleStage) pass(text string, lo, a, b int) {
+func (s *ruleStage) pass(text []byte, lo, a, b int) {
 	if s.mode != replaces {
 		return
 	}
 	for a < b {
-		c := min(b, a+pieceBytes-s.out.Len())
+		c := min(b, a+pieceBytes-s.outLen)
 		if c <= a {
 			s.flush()
 			continue
@@ -1044,11 +1252,12 @@ func (s *ruleStage) pass(text string, lo, a, b int) {
 			k, _ := slices.BinarySearchFunc(s.raw.edits, lo+a, func(e edit, i int) int { return e.at - i })
 			for ; k < len(s.raw.edits) && s.raw.edits[k].at < lo+c; k++ {
 				e := s.raw.edits[k]
-				s.outEdits = append(s.outEdits, edit{s.outPos + e.at - lo - a, s.outPos + e.end - lo - a, e.raw, e.rawEnd})
+				s.hand(edit{s.outPos + e.at - lo - a, s.outPos + e.end - lo - a, e.raw, e.rawEnd})
 				s.passed = e.rawEnd < 0
 			}
 		}
-		s.out.WriteString(text[a:c])
+		s.to.put(text[a:c])
+		s.outLen += c - a
 		s.outPos += c - a
 		a = c
 	}
@@ -1057,9 +1266,9 @@ func (s *ruleStage) pass(text string, lo, a, b int) {
 // replace writes what the rule makes of its input from start to end, written
 // by write, and claims it; closed is whether end is where it ends, rather than
 // where it is read to so far.
-func (s *ruleStage) replace(start, end int, write func(*strings.Builder), closed bool) {
-	n := s.out.Len()
-	write(&s.out)
+func (s *ruleStage) replace(start, end int, write func(io.StringWriter), closed bool) {
+	n := s.outLen
+	write(stageOut{s})
 	if s.raw == nil {
 		return
 	}
@@ -1069,12 +1278,22 @@ func (s *ruleStage) replace(start, end int, write func(*strings.Builder), closed
 	}
 	raw := s.raw.at(start)
 	s.src.token([2]int{raw, rawEnd})
-	written := s.out.Len() - n
-	s.outEdits = append(s.outEdits, edit{s.outPos, s.outPos + written, raw, rawEnd})
+	written := s.outLen - n
+	s.hand(edit{s.outPos, s.outPos + written, raw, rawEnd})
 	s.outPos += written
-	if s.out.Len() >= pieceBytes {
+	if s.outLen >= pieceBytes {
 		s.flush()
 	}
+}
+
+// stageOut writes what a rule makes of what it replaces on to the stage's
+// next one ([ruleStage.replace]).
+type stageOut struct{ s *ruleStage }
+
+func (o stageOut) WriteString(str string) (int, error) {
+	o.s.to.putString(str)
+	o.s.outLen += len(str)
+	return len(str), nil
 }
 
 // closeRun claims a run's end, end in the stage's input, where it was claimed
@@ -1096,7 +1315,7 @@ func (s *ruleStage) closeRun(end int) {
 // the window: writes the input up to it, what it replaces so far, and is where
 // the stage resumes, the end of what the window decides, and whether ev is a
 // run the stage can read on.
-func (s *ruleStage) open(text string, lo, at int, ev event, limit int) (int, bool) {
+func (s *ruleStage) open(text []byte, lo, at int, ev event, limit int) (int, bool) {
 	switch {
 	case s.mode == finds:
 		return 0, false
@@ -1137,9 +1356,9 @@ func (s *ruleStage) open(text string, lo, at int, ev event, limit int) (int, boo
 	default:
 		s.pass(text, lo, at, start)
 		if s.r.value != nil {
-			s.replace(lo+start, lo+limit, func(b *strings.Builder) { s.run.w.write(b, text[start:limit-held]) }, false)
+			s.replace(lo+start, lo+limit, func(b io.StringWriter) { writeStretch(&s.run.w, b, "", text[start:limit-held]) }, false)
 		} else {
-			s.replace(lo+start, lo+limit, func(b *strings.Builder) { b.WriteString(s.r.with) }, false)
+			s.replace(lo+start, lo+limit, func(b io.StringWriter) { _, _ = b.WriteString(s.r.with) }, false)
 		}
 	}
 	return limit, true
@@ -1148,7 +1367,7 @@ func (s *ruleStage) open(text string, lo, at int, ev event, limit int) (int, boo
 // carry reads on the stage's open run from at, and is where the stage
 // resumes: where the run ends, or the end of what the window decides while it
 // runs on.
-func (s *ruleStage) carry(text string, lo, at, limit int, eof bool) int {
+func (s *ruleStage) carry(text []byte, lo, at, limit int, eof bool) int {
 	switch {
 	case s.run.trail:
 		return s.carryTrail(text, lo, at, eof)
@@ -1161,7 +1380,7 @@ func (s *ruleStage) carry(text string, lo, at, limit int, eof bool) int {
 }
 
 // carryToken reads on a token's run ([tokenRun]).
-func (s *ruleStage) carryToken(text string, lo, at, limit int, eof bool) int {
+func (s *ruleStage) carryToken(text []byte, lo, at, limit int, eof bool) int {
 	t, held := s.r.run, s.run.held
 	i := at
 	for ; i < limit; i++ {
@@ -1194,7 +1413,7 @@ func (s *ruleStage) carryToken(text string, lo, at, limit int, eof bool) int {
 
 // carryValue reads on a value's run: an AWS secret's ([awsSecretByte]), or a
 // password's ([valueStop]).
-func (s *ruleStage) carryValue(text string, lo, at, limit int, eof bool) int {
+func (s *ruleStage) carryValue(text []byte, lo, at, limit int, eof bool) int {
 	i, stopped := at, false
 	if in := s.r.valueIn; in != nil {
 		for i < limit && in(text[i]) {
@@ -1238,9 +1457,9 @@ func (s *ruleStage) carryValue(text string, lo, at, limit int, eof bool) int {
 		s.writeValue(held, text[at:end])
 	}
 	if s.mode == replaces {
-		n := s.out.Len()
-		s.run.w.close(&s.out)
-		s.outPos += s.out.Len() - n
+		n := s.outLen
+		s.run.w.close(stageOut{s})
+		s.outPos += s.outLen - n
 	}
 	valueEnd := lo + end - literal
 	s.prior = append(s.prior, [2]int{s.run.start, valueEnd})
@@ -1259,14 +1478,13 @@ func (s *ruleStage) repeat(c byte, n int) {
 		return
 	}
 	for n > 0 {
-		k := min(n, pieceBytes-s.out.Len())
+		k := min(n, pieceBytes-s.outLen)
 		if k <= 0 {
 			s.flush()
 			continue
 		}
-		for range k {
-			s.out.WriteByte(c)
-		}
+		s.to.putRepeat(c, k)
+		s.outLen += k
 		s.outPos += k
 		n -= k
 	}
@@ -1274,19 +1492,19 @@ func (s *ruleStage) repeat(c byte, n int) {
 
 // writeValue writes the next stretch of a value: the backslashes held before
 // it, as few as decide its pieces, and rest.
-func (s *ruleStage) writeValue(held int, rest string) {
+func (s *ruleStage) writeValue(held int, rest []byte) {
 	if s.mode != replaces {
 		return
 	}
-	n := s.out.Len()
-	s.run.w.write(&s.out, strings.Repeat(`\`, min(held, 2))+rest)
-	s.outPos += s.out.Len() - n
+	n := s.outLen
+	writeStretch(&s.run.w, stageOut{s}, `\\`[:min(held, 2)], rest)
+	s.outPos += s.outLen - n
 }
 
 // carryTrail reads on a reader's key whose whitespace runs on
 // ([passwordTrail]), and claims it once it ends.
-func (s *ruleStage) carryTrail(text string, lo, at int, eof bool) int {
-	i := at + passwordTrailAt().FindStringIndex(text[at:])[1]
+func (s *ruleStage) carryTrail(text []byte, lo, at int, eof bool) int {
+	i := at + passwordTrailAt().FindIndex(text[at:])[1]
 	if !eof && (i == len(text) || text[i] == '\\' && i+1 == len(text)) {
 		return i
 	}
@@ -1299,8 +1517,8 @@ func (s *ruleStage) carryTrail(text string, lo, at int, eof bool) int {
 // pendingSeparator is where an AWS secret's key begins whose separator's
 // spaces run to the window's end, so that whether the key's pattern matches
 // there, and where, is still to be read, or -1.
-func (s *ruleStage) pendingSeparator(text string, at int) int {
-	loc := s.r.pending.FindStringIndex(text[at:])
+func (s *ruleStage) pendingSeparator(text []byte, at int) int {
+	loc := s.r.pending.FindIndex(text[at:])
 	if loc == nil {
 		return -1
 	}
@@ -1315,10 +1533,10 @@ func (s *ruleStage) pendingSeparator(text string, at int) int {
 // them, which its separator's spaces alone match. Where a quote or markup
 // stands between, the pattern matches only once an operator follows them, and
 // the stage claims nothing until it reads where they end.
-func (s *ruleStage) openSeparator(text string, lo, p, limit int) int {
-	space := p + len(strings.TrimRight(text[p:], " \t"))
-	head := text[p:space]
-	s.run = openRun{on: true, separator: true, start: lo + p, head: strings.Clone(head)}
+func (s *ruleStage) openSeparator(text []byte, lo, p, limit int) int {
+	space := p + len(bytes.TrimRight(text[p:], " \t"))
+	head := string(text[p:space])
+	s.run = openRun{on: true, separator: true, start: lo + p, head: head}
 	if loc := s.r.pattern.FindStringIndex(head + " "); loc != nil && loc[0] == 0 && loc[1] == len(head)+1 {
 		s.run.claimed = true
 		s.src.word([3]int{s.raw.at(lo + p), -1, -1})
@@ -1328,7 +1546,7 @@ func (s *ruleStage) openSeparator(text string, lo, p, limit int) int {
 
 // carrySeparator reads on an AWS secret's separator's spaces, and claims the
 // key and its separator once the pattern's match there is decided.
-func (s *ruleStage) carrySeparator(text string, lo, at, limit int, eof bool) int {
+func (s *ruleStage) carrySeparator(text []byte, lo, at, limit int, eof bool) int {
 	i := at
 	for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
 		i++
@@ -1347,7 +1565,7 @@ func (s *ruleStage) carrySeparator(text string, lo, at, limit int, eof bool) int
 		return i
 	}
 	head := s.run.head + " "
-	loc := s.r.pattern.FindStringIndex(head + tail)
+	loc := s.r.pattern.FindStringIndex(head + string(tail))
 	if loc == nil || loc[0] != 0 {
 		// Claimed only where the pattern matches whatever follows, which
 		// it then does.
@@ -1650,7 +1868,7 @@ func (k *keyStage) settle() {
 }
 
 // take hands the stage the next stretch of the text.
-func (k *keyStage) take(text string) {
+func (k *keyStage) take(text []byte) {
 	k.in.add(text)
 	k.settle()
 	for k.step() {
@@ -1662,6 +1880,7 @@ func (k *keyStage) close() {
 	k.in.eof = true
 	for k.step() {
 	}
+	k.in.drop()
 	if k.missed == nil {
 		k.to.close()
 	}
@@ -1702,7 +1921,7 @@ func (k *keyStage) step() bool {
 		writeTo = hi
 	}
 	text := k.in.window(lo, hi)
-	armour := strings.Contains(text[k.read-lo:min(len(text), readTo-lo+len(keyArmour)+64)], keyArmour)
+	armour := bytes.Contains(text[k.read-lo:min(len(text), readTo-lo+len(keyArmour)+64)], keyArmourBytes)
 	var c *claims
 	early := false
 	foot, starts := [2]int{len(text) + 1, -1}, [2]int{len(text) + 1, -1}
@@ -1711,7 +1930,11 @@ func (k *keyStage) step() bool {
 		if early && k.arrived-k.hold <= hi {
 			return false
 		}
-		c = k.claimsIn(text, lo)
+		// The keys' reading is the whole text's ([readKeys]), on a string:
+		// a copy of the window, made only where it reads an armour or
+		// writes a block.
+		str := string(text)
+		c = k.claimsIn(str, lo)
 		if early {
 			c.footprint, c.begins = &foot, &starts
 			if o := k.observe; o != nil && o.decided != nil {
@@ -1721,7 +1944,7 @@ func (k *keyStage) step() bool {
 		if !armour {
 			c.take(k.forwardIn(lo))
 		} else {
-			k.readArmours(text, lo, readTo, c, early)
+			k.readArmours(str, lo, readTo, c, early)
 			if k.missed != nil {
 				return false
 			}
@@ -1756,14 +1979,14 @@ func (k *keyStage) readArmours(text string, lo, readTo int, c *claims, early boo
 	}
 	from, to := k.read-lo, readTo-lo
 	carried := len(r.forward)
-	begins := keyBegin.FindAllStringIndex(text, -1)
+	begins := keyBegin().FindAllStringIndex(text, -1)
 	for _, b := range begins {
 		if from <= b[0] && b[0] < to {
 			r.begin(text, b, c)
 		}
 	}
 	c.take(r.forward)
-	spans := append(slices.Clone(r.forward[carried:]), r.ends(text, c, begins, keyEnd.FindAllStringIndex(text, -1), from, to)...)
+	spans := append(slices.Clone(r.forward[carried:]), r.ends(text, c, begins, keyEnd().FindAllStringIndex(text, -1), from, to)...)
 	for _, s := range c.shortOfNames(spans) {
 		if early && (s[1] <= s[0] || s[0]+lo < k.pos) {
 			k.miss(lo)
@@ -1864,7 +2087,7 @@ func (k *keyStage) final(writeTo int) (int, int) {
 // password key's line as the whole text's are ([claims.apartIn]), beside c,
 // the claims over the window, and every block read so far, and each piece
 // replaced by [keyMarker], a piece of the text at a time ([pieceBytes]).
-func (k *keyStage) write(text string, lo, writeTo int, c *claims) {
+func (k *keyStage) write(text []byte, lo, writeTo int, c *claims) {
 	writeTo, whole := k.final(writeTo)
 	var cut [][2]int
 	if whole > 0 {
@@ -1883,15 +2106,16 @@ func (k *keyStage) write(text string, lo, writeTo int, c *claims) {
 		}
 		k.wrote = k.pending[whole-1]
 	}
-	var b strings.Builder
-	piece := func(s string) {
-		for s != "" {
-			n := min(len(s), pieceBytes-b.Len())
-			b.WriteString(s[:n])
+	put := 0
+	piece := func(s []byte) {
+		for len(s) > 0 {
+			n := min(len(s), pieceBytes-put)
+			k.to.put(s[:n])
+			put += n
 			s = s[n:]
-			if b.Len() >= pieceBytes {
-				k.to.take(b.String(), nil)
-				b = strings.Builder{}
+			if put >= pieceBytes {
+				k.to.took(nil)
+				put = 0
 			}
 		}
 	}
@@ -1901,15 +2125,15 @@ func (k *keyStage) write(text string, lo, writeTo int, c *claims) {
 			o.wrote(s)
 		}
 		piece(text[at-lo : s[0]-lo])
-		piece(keyMarker)
+		piece(keyMarkerBytes)
 		at = s[1]
 	}
 	if writeTo > at {
 		piece(text[at-lo : writeTo-lo])
 		at = writeTo
 	}
-	if b.Len() > 0 {
-		k.to.take(b.String(), nil)
+	if put > 0 {
+		k.to.took(nil)
 	}
 	k.pending = slices.Delete(k.pending, 0, whole)
 	k.pos = max(k.pos, at)
@@ -1938,3 +2162,10 @@ func (k *keyStage) write(text string, lo, writeTo int, c *claims) {
 		k.forward = append(k.forward, last)
 	}
 }
+
+// keyArmourBytes and keyMarkerBytes are [keyArmour] and [keyMarker] as the
+// keys' stage reads and writes its window.
+var (
+	keyArmourBytes = []byte(keyArmour)
+	keyMarkerBytes = []byte(keyMarker)
+)

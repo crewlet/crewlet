@@ -415,6 +415,11 @@ type Runner struct {
 	// release's deadline to the one its rule gives exactly, not one moved by how
 	// long the case has run (internal/fixedwait).
 	now func() time.Time
+
+	// memo is what a take's scrub learned of texts it found unchanged
+	// ([scrubMemo]): the process's in every runner New builds, a field so a
+	// case reads its own.
+	memo *scrubMemo
 }
 
 var _ sandbox.Runner = (*Runner)(nil)
@@ -425,7 +430,8 @@ var _ sandbox.CallIdentifier = (*Runner)(nil)
 
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
-	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now}
+	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now,
+		memo: processScrubMemo}
 }
 
 // Name is the harness's config name.

@@ -255,7 +255,8 @@ export interface InboxRows {
  * NEEDS YOU IS NEWEST FIRST with the conditions after the decisions, the order
  * `decisionSubjects` hands the decisions in: a condition is the engine's own
  * reading of the company and stays until it clears, while a decision is
- * somebody waiting on an answer.
+ * somebody waiting on an answer. Between them, the unread notices that an item
+ * of the reader's is not moving (reason `flow`).
  *
  * WAITING ON OTHERS is what the engine says the reader may answer though it
  * is put to somebody else (`lib/decisions.ts`' `splitDecisions`): a group of
@@ -284,13 +285,17 @@ export function inboxRows(input: {
   };
   const { yours, others } = splitDecisions(subjects);
   const needs: InboxRow[] = yours.map(row);
+  // AN ITEM OF THEIRS NOBODY IS MOVING waits on them (ADR-0162): its notice
+  // is listed with what they decide, until they read it.
+  const unmoved = (n: InboxNotice) => n.source === "tracker" && n.extra.reason === "flow";
+  needs.push(...noticeRows(notices.filter((n) => !attached.has(n.record_id) && unmoved(n))));
   for (const item of conditions) {
     needs.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
   }
   return {
     needs,
     others: others.map(row),
-    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id))),
+    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id) && !unmoved(n))),
   };
 }
 
@@ -865,6 +870,11 @@ function findingCounts(counts: Readonly<Record<string, number>> | undefined): Fi
  */
 export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
   const said = plainText(notice.excerpt ?? "");
+  // A FLOW NOTICE NAMES THE ITEM'S SEAT, never its author (ADR-0162).
+  if (notice.kind === "flow") {
+    const names = nameOfIn(index);
+    return index.seats.reduce((text, seat) => nameAuthor(text, seat.handle, names), said);
+  }
   if (!ENGINE_SENTENCES.has(notice.kind)) return said;
   return nameAuthor(said, authorOf(notice), nameOfIn(index));
 }

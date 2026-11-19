@@ -79,6 +79,8 @@ export interface RowChrome {
   seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
   types?: WorkTypeDef[];
   statuses?: WorkStatusDef[];
+  /** The project's stuck window in hours, where every row is one project's. */
+  stuckHours?: number;
 }
 
 /**
@@ -358,21 +360,41 @@ export function AsksTag({ count }: { count?: number }) {
 
 /**
  * Why an item in progress is not moving, as the engine reads it (ADR-0162): its
- * state, and when that ends or how long it has held. `moving` draws nothing, and
- * `skip` leaves out a state the caller draws another way.
+ * state, and when that ends or how long it has held, on the company's clock.
+ * `moving` draws nothing, and `skip` leaves out a state the caller draws
+ * another way.
  */
 export function FlowTag({
   flow,
   size,
   skip,
+  assignee,
+  chrome,
+  stuckHours,
 }: {
   flow: WorkFlow | null | undefined;
   size?: "xs" | "sm";
   skip?: readonly WorkFlowState[];
+  /** The item's assignee, whom the hover's sentence names. */
+  assignee?: string | undefined;
+  chrome?: Pick<RowChrome, "seatName" | "seatKind">;
+  /** The project's stuck window, where the screen holds the project. */
+  stuckHours?: number | undefined;
 }) {
   const shown = badgedFlow(flow);
-  const label = useClock((now) => (shown ? flowBadgeText(shown, now) : ""));
-  const sentence = useClock((now) => (shown ? flowSentence(shown, now) : ""));
+  const zone = useCompanyZone();
+  const label = useClock((now) => (shown ? flowBadgeText(shown, now, zone) : ""));
+  const sentence = useClock((now) =>
+    shown
+      ? flowSentence(shown, now, {
+          zone,
+          assignee,
+          seatName: chrome?.seatName,
+          seatKind: chrome?.seatKind,
+          stuckHours,
+        })
+      : "",
+  );
   if (!shown || skip?.includes(shown.state)) return null;
   return (
     <Tag
@@ -511,10 +533,12 @@ function CardFoot({
   row,
   tagName,
   omit,
+  chrome,
 }: {
   row: WorkSummary;
   tagName?: (slug: string) => string;
   omit: ReadonlySet<CardFact>;
+  chrome: RowChrome;
 }) {
   const foot = useRef<HTMLDivElement>(null);
   const tags = omit.has("labels") ? NO_TAGS : (row.tags ?? NO_TAGS);
@@ -552,7 +576,14 @@ function CardFoot({
           Blocked
         </Tag>
       )}
-      <FlowTag flow={row.flow} size="xs" skip={CARD_FLOW_SKIP} />
+      <FlowTag
+        flow={row.flow}
+        size="xs"
+        skip={CARD_FLOW_SKIP}
+        assignee={row.assignee}
+        chrome={chrome}
+        stuckHours={chrome.stuckHours}
+      />
       {tags.map((slug, i) => (
         <Tag
           key={slug}
@@ -695,7 +726,9 @@ export function WorkCard({
         />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
-      {hasFootMarks(row, omit) && <CardFoot row={row} tagName={tagName} omit={omit} />}
+      {hasFootMarks(row, omit) && (
+        <CardFoot row={row} tagName={tagName} omit={omit} chrome={chrome} />
+      )}
       {live ? (
         <div className="work-card-live" data-tone="working">
           <i className="dot info" aria-hidden="true" />

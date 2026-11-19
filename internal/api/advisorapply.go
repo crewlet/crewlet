@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -112,7 +114,7 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	}
 	s := stored[0]
 	if s.State != advisor.StateOpen {
-		return AdvisorRecheck{}, fmt.Errorf("%w: a finding that is %s is not applied", advisordomain.ErrIllegalMove, s.State)
+		return AdvisorRecheck{}, notOpenOf(row)
 	}
 	out := AdvisorRecheck{Moved: []advisor.Moved{}, CheckedAt: now, ExpiresAt: now.Add(RecheckFor)}
 	outcome, step, f, err := rc.rederive(ctx, s, now)
@@ -213,7 +215,11 @@ func (rc rechecker) build(ctx context.Context, out *AdvisorRecheck, id string, r
 	dryRun := path + "?dry_run=true"
 	out.Send = &RecheckSend{Method: http.MethodPut, Path: path, Body: after,
 		Headers: map[string]string{"If-Match": tag, "X-Summary": ch.Summary}, DryRunPath: &dryRun}
-	out.Preview = &RecheckPreview{Rows: previewRows(entity, after, ch), Notes: []string{}}
+	rows, err := previewRows(entity, body)
+	if err != nil {
+		return err
+	}
+	out.Preview = &RecheckPreview{Rows: rows, Notes: []string{}}
 	out.Digest = advisor.ApplyDigest(id, revision, advisor.OptionDigest(f.Fix.Options[option]))
 	return nil
 }
@@ -230,53 +236,36 @@ func (rc rechecker) retire(ctx context.Context, out *AdvisorRecheck, s advisor.S
 	return nil
 }
 
-// previewRows is each field ch writes, as entity holds it and as after would.
-func previewRows(entity any, after map[string]any, ch advisor.Change) []PreviewRow {
-	before := map[string]any{}
-	if raw, err := json.Marshal(entity); err == nil {
-		_ = json.Unmarshal(raw, &before)
-	}
-	var rows []PreviewRow
-	add := func(field string, was, now any) {
-		rows = append(rows, PreviewRow{Field: field, Label: field, Before: rendered(was), After: rendered(now)})
-	}
-	for _, k := range sortedKeys(ch.Set) {
-		add(k, before[k], after[k])
-	}
-	for _, k := range sortedKeys(ch.Merge) {
-		nested, _ := ch.Merge[k].(map[string]any)
-		was, _ := before[k].(map[string]any)
-		now, _ := after[k].(map[string]any)
-		for _, n := range sortedKeys(nested) {
-			add(k+"."+n, was[n], now[n])
-		}
-	}
-	if rows == nil {
-		rows = []PreviewRow{}
-	}
-	return rows
-}
-
-// rendered is v as a row shows it, nil for a field the entity does not hold.
-func rendered(v any) *string {
-	if v == nil {
-		return nil
-	}
-	raw, err := json.Marshal(v)
+// previewRows is each field the change moves, as entity holds it and as
+// after (its JSON) would, labelled and valued in a person's words by the rule
+// every change a person approves is shown by ([catalog.ChangeRows]): written
+// here by their raw keys and JSON, the rows read as a code diff
+// ("health_tools: true").
+func previewRows(entity any, after []byte) ([]PreviewRow, error) {
+	before, err := json.Marshal(entity)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	s := string(raw)
-	return &s
-}
-
-func sortedKeys(m map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+	changes, err := catalog.ChangeRows(before, after)
+	if err != nil {
+		return nil, err
 	}
-	slices.Sort(out)
-	return out
+	rows := make([]PreviewRow, 0, len(changes))
+	for _, c := range changes {
+		row := PreviewRow{Field: c.Field, Label: c.Label}
+		switch c.Kind {
+		case wire.ChangeAdded:
+			row.After = &c.To
+		case wire.ChangeRemoved:
+			row.Before = &c.From
+		case wire.ChangeFact:
+			row.Before, row.After = &c.To, &c.To
+		default:
+			row.Before, row.After = &c.From, &c.To
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 // movedOr is a stale write as [errFindingMoved], any other error as it is.
@@ -286,6 +275,22 @@ func movedOr(err error) error {
 	}
 	return err
 }
+
+// errNotOpen is a finding no longer open when a person re-checks it or
+// reports its change sent: another window applied it, or it closed.
+var errNotOpen = errors.New("api: the finding is no longer open")
+
+// notOpenError is [errNotOpen] with what became of the finding, which the
+// person is told in words rather than as a refused move.
+type notOpenError struct{ row advisordomain.FindingRow }
+
+func (e notOpenError) Error() string {
+	return fmt.Sprintf("api: the finding is %s, no longer open", e.row.State)
+}
+
+func (notOpenError) Is(target error) bool { return target == errNotOpen }
+
+func notOpenOf(row advisordomain.FindingRow) error { return notOpenError{row: row} }
 
 // errRecheckAgain is a report of a send the finding no longer matches, or one
 // the configuration does not hold yet: the person re-checks again.
@@ -305,7 +310,10 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	}
 	s := stored[0]
 	f := s.Observation.Finding
-	if s.State != advisor.StateOpen || f.Fix.Kind != advisor.FixConfigChange {
+	switch {
+	case s.State != advisor.StateOpen:
+		return notOpenOf(row)
+	case f.Fix.Kind != advisor.FixConfigChange:
 		return errRecheckAgain
 	}
 	at := slices.IndexFunc(f.Fix.Options, func(o advisor.Option) bool {
@@ -419,6 +427,10 @@ func (a *App) serveAdvisorApplied(w http.ResponseWriter, r *http.Request) {
 
 // refuseApply says why a re-check or a report was not taken.
 func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
+	if notOpen, ok := errors.AsType[notOpenError](err); ok {
+		refuseNotOpen(w, notOpen.row)
+		return
+	}
 	switch {
 	case errors.Is(err, errRecheckAgain), errors.Is(err, errFindingMoved):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, httpjson.Detail{
@@ -433,4 +445,42 @@ func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		refuseDecision(w, r, err)
 	}
+}
+
+// refuseNotOpen says what became of a finding that is no longer open: applied,
+// with when and until when its effect is checked, or closed, with how.
+func refuseNotOpen(w http.ResponseWriter, row advisordomain.FindingRow) {
+	fields := httpjson.Detail{"state": string(row.State)}
+	if row.State == advisordomain.StateApplied {
+		fields["outcome"] = "applied"
+		fields["detail"] = "This change was applied already; the Advisor is checking whether it worked."
+		if !row.AppliedAt.IsZero() {
+			fields["applied_at"] = row.AppliedAt.UTC()
+		}
+		if !row.EffectDueAt.IsZero() {
+			fields["effect_due_at"] = row.EffectDueAt.UTC()
+		}
+	} else {
+		fields["outcome"], fields["detail"] = "closed", closedWords(row.State)
+		if !row.ClosedAt.IsZero() {
+			fields["closed_at"] = row.ClosedAt.UTC()
+		}
+	}
+	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, fields)
+}
+
+// closedWords says a closed finding's state to the person who pressed on it:
+// a switch, not a table, so the engine allocates nothing for it at init.
+func closedWords(state advisordomain.State) string {
+	switch state {
+	case advisordomain.StateResolved:
+		return "This finding is resolved already: what it found no longer holds."
+	case advisordomain.StateDismissed:
+		return "This finding was dismissed; reopen it to act on it."
+	case advisordomain.StateRetired:
+		return "This finding was retired: the Advisor no longer checks for it."
+	case advisordomain.StateExpired:
+		return "This finding expired: it was not seen again for long enough."
+	}
+	return "This finding is closed already."
 }

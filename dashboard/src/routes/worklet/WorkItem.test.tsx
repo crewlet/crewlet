@@ -449,6 +449,31 @@ test("an item's wait is labelled by the engine's flow, never by the browser's cl
   expect(screen.queryByText("Waits for")).toBeNull();
 });
 
+// A HOLD SAYS WHERE IT IS LIFTED, beside why it holds: the seat's own page
+// for a paused seat (its pause and Resume), the models for a model limit, and
+// a hand-off for an item nobody holds.
+test("a held item's flow row links where its hold is lifted", async () => {
+  const held = (cause: string, assignee: string) =>
+    detail({
+      task: task({ assignee }),
+      flow: { state: "held", cause, since: null, until: null, reason: "" },
+    });
+  rail(held("paused", "swe"));
+  await settle();
+  const seat = within(rowValue("Flow")).getByRole("link", { name: "Open swe" });
+  expect(seat.getAttribute("href")).toBe(href(["company", "org", "seats", "swe"]));
+  cleanup();
+  rail(held("limit", "swe"));
+  await settle();
+  expect(
+    within(rowValue("Flow")).getByRole("link", { name: "Open the models" }).getAttribute("href"),
+  ).toBe(href(["settings", "models"]));
+  cleanup();
+  rail(held("nobody", ""));
+  await settle();
+  expect(within(rowValue("Flow")).getByRole("button", { name: /^Assign/ })).toBeTruthy();
+});
+
 // AN ITEM IN PROGRESS SAYS WHY IT IS NOT MOVING above its title, with the
 // seat's reset where the engine knows it; the ordinary `moving` says nothing.
 test("an item held by its seat's model limit says so, and until when", () => {
@@ -1357,9 +1382,11 @@ test("the live row appears only where the engine reads the item working", async 
     },
   });
   await settle();
-  const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
-  expect(live.textContent).toContain("SWE is on turn 3");
-  expect(live.textContent).toContain("executing · round 7 of 25");
+  // NAMED BY WHAT IT SHOWS, in order (WCAG 2.5.3): no label that leaves out
+  // the words a voice-control reader would say.
+  const live = screen.getByRole("link", { name: /^SWE is on turn 3 executing · round 7 of 25/ });
+  expect(live.getAttribute("aria-label")).toBeNull();
+  expect(live.textContent).toContain("Watch live");
   // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
   // where a settled turn's "Trace" is the record, on the Timeline.
   expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"], { tab: "transcript" }));
@@ -1402,7 +1429,7 @@ test("the live row counts rounds from one and names the phase running", async ()
       answers: { work_item: WORKED },
     });
     await settle();
-    return screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+    return screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   };
   // The first round, in flight before any has come back.
   expect(await liveText({ phase: "execute", round_num: 0, rounds_used: 0 })).toContain(
@@ -1448,7 +1475,7 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
   act(() => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const live = screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  const live = screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   expect(live).toContain("for 30s");
   expect(live).not.toContain("0m");
 });
