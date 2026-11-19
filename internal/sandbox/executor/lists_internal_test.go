@@ -1,13 +1,12 @@
 package executor
 
 import (
-	"encoding/json"
+	"bytes"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The lists a harness's record holds, as the readers outside the thread layer
@@ -109,8 +108,8 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 		return func() { _ = listBuilder().claudeLine(t.Context(), raw) }
 	}
 	step := func(content string) func() {
-		raw := json.RawMessage(content)
-		return func() { _ = listBuilder().openCodeStep(t.Context(), raw, time.Time{}) }
+		raw := []byte(`{"messages":[{"type":"assistant","content":` + content + `}]}`)
+		return func() { _ = listBuilder().openCodeExport(t.Context(), bytes.NewReader(raw)) }
 	}
 	const (
 		reply  = `{"type":"assistant","message":{"role":"assistant","content":[`
@@ -191,7 +190,8 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 	}
 	step := func(content string) string {
 		b := listBuilder()
-		return entries(b, b.openCodeStep(t.Context(), json.RawMessage(content), time.Time{}))
+		return entries(b, b.openCodeExport(t.Context(),
+			strings.NewReader(`{"messages":[{"type":"assistant","content":`+content+`}]}`)))
 	}
 	reply := `{"type":"assistant","message":{"role":"assistant","content":` + blocks + `}}`
 	result := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result",` +

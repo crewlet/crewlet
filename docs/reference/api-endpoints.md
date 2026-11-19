@@ -11309,7 +11309,7 @@ OpenCode 2 gives it (its `type`). Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, an export past the messages, items and parts one read reads — said where it was, so a gap never reads as continuity |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
@@ -11353,7 +11353,7 @@ transcript does:
 |---|---|
 | absent | The transcript ends on this page; `next_cursor` is absent |
 | `entries`, `bytes` | The page holds all it may; `next_cursor` is the cursor the rest is read from |
-| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or a part of an export too large to hold left the rest unreadable. The entries shown are all that can be |
+| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or an export held more messages, items and parts than one read reads. The entries shown are all that can be |
 
 Every page is read again from the archive's start, so a page costs what the
 archive does rather than what is behind it. **The cursor names the object it

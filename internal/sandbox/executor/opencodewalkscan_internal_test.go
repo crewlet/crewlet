@@ -20,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -612,4 +613,159 @@ func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
 	if got := ohHeld(t, h, err, long8); !slices.Equal(got, []int{1}) {
 		t.Errorf("a message past the decode walk's bound: held %v; want its call", got)
 	}
+}
+
+// wholeOpenCode reads an OpenCode archive by the decode walk, the person's
+// oracle ([transcriptBuilder.openCodeExportWhole]).
+type wholeOpenCode struct{ OpenCode }
+
+func (wholeOpenCode) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
+	return b.openCodeExportWhole(ctx, archive)
+}
+
+// piecesOpenCode reads an OpenCode archive on the export walk, its inflated
+// bytes handed n a read.
+type piecesOpenCode struct {
+	OpenCode
+	n int
+}
+
+func (p piecesOpenCode) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
+	return b.openCodeExport(ctx, &exportPieces{r: archive, n: p.n})
+}
+
+// personRead is one way a person's read of an export is asked for.
+type personRead struct {
+	from     int
+	bounds   TranscriptBounds
+	filter   TranscriptFilter
+	valueMax int
+	refuse   bool
+}
+
+// personReadOf is what c reads of doc as r asks, as JSON: the page and the
+// error's words.
+func personReadOf(t *testing.T, c carrier, doc []byte, r personRead) string {
+	t.Helper()
+	b := newTranscriptBuilder(r.from, r.bounds, r.filter)
+	b.valueMax = r.valueMax
+	if r.refuse {
+		b.redactor = func(io.Writer) entryRedaction { return &refusingRedaction{} }
+	}
+	page, err := b.decode(t.Context(), c, bytes.NewReader(doc))
+	said, encodeErr := json.Marshal(page)
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	return fmt.Sprintf("%s %v", said, err)
+}
+
+// personVariants are messages written every way a person's read reads apart
+// past a value bound of a kibibyte: a brief opening with a heading past it and
+// within it, blank texts past it, a kind written last, a call's input as an
+// object and as a string past it, answers whose parts, joined or each, run past
+// it, blank parts past it, a failure's words past it, states written in order
+// and out of it, a key written twice, a tool's name past it, an image's mime
+// past it, and credentials across the bound.
+func personVariants() []string {
+	q := func(s string) string {
+		raw, err := json.Marshal(s)
+		if err != nil {
+			panic(err)
+		}
+		return string(raw)
+	}
+	w := strings.Repeat("words of the model, ", 100)
+	note := noteHeadOpen + "ada" + noteHeadClose + "\nTarget main.\n"
+	blank := strings.Repeat(" \n", 1000)
+	secret := redacttest.Shapes()[0].Sample
+	part := func(text string) string { return `{"type":"text","text":` + q(text) + `}` }
+	tool := func(state string) string {
+		return `{"type":"tool","name":"bash","time":{"created":1,"ran":2,"completed":3},"state":` + state + `}`
+	}
+	step := func(items ...string) string {
+		return `{"type":"assistant","time":{"created":5},"content":[` + strings.Join(items, ",") + `]}`
+	}
+	return []string{
+		`{"type":"user","text":` + q(note+w) + `,"time":{"created":1}}`,
+		`{"text":` + q(note+w) + `,"time":{"created":1},"type":"user"}`,
+		`{"type":"user","text":` + q(note+lateCallHead+"\nit failed") + `}`,
+		`{"type":"user","text":` + q(blank) + `}`,
+		`{"type":"user","text":` + q(strings.Repeat("x", 1010)+secret+w) + `}`,
+		`{"type":"compaction","summary":` + q(w) + `,"status":"completed"}`,
+		`{"summary":` + q(w) + `,"status":"completed","type":"compaction","time":{"created":9}}`,
+		step(part(w), part(blank), `{"text":`+q(w)+`,"type":"text"}`, `{"type":"reasoning","text":`+q(w)+`}`),
+		step(tool(`{"status":"completed","input":{"command":` + q(w) + `},"content":[` + part(w) + `,` + part(w) + `]}`)),
+		step(tool(`{"status":"completed","input":` + q(`{"a": 1, "b": "`+w+`"}`) + `,"content":[]}`)),
+		step(tool(`{"status":"completed","input":` + q(`{"a": 1}`) + `}`)),
+		step(tool(`{"status":"completed","input":null,"content":[` + part(blank) + `,` + part(" ") +
+			`,{"type":"file","mime":"image/png"},` + part("ok") + `]}`)),
+		step(tool(`{"status":"error","input":{},"error":{"type":"tool.execution","message":` + q(w) + `}}`)),
+		step(tool(`{"status":"error","error":{"type":"tool.execution","message":` + q(w) + `},"content":[` +
+			part(w) + `]}`)),
+		step(tool(`{"status":"error","content":[` + part(w) + `],"error":{"type":"tool.execution","message":"boom"}}`)),
+		step(tool(`{"content":[` + part(w) + `],"status":"completed"}`)),
+		step(tool(`{"status":"completed","content":[{"text":` + q(w) + `,"type":"text"}]}`)),
+		step(tool(`{"status":"error","error":{"type":` + q(w) + `,"message":""}}`)),
+		step(tool(`{"status":"error","error":{"type":` + q(w) + `,"message":"boom"}}`)),
+		step(tool(`{"status":"completed","content":[` + part(w) + `],"content":[` + part("again") + `]}`)),
+		step(tool(`{"status":"completed","content":[` + part(strings.Repeat("x", 600)) + `,` +
+			part(strings.Repeat("y", 600)) + `]}`)),
+		step(tool(`{"status":"error","error":{"message":` + q(strings.Repeat("m", 600)) + `},"content":[` +
+			part(strings.Repeat("y", 600)) + `]}`)),
+		step(tool(`{"status":"error","error":{"type":"x","message":` + q(w) + `},"error":{"message":"two"}}`)),
+		step(tool(`{"status":"running","content":[` + part(w) + `]}`)),
+		step(tool(`{"status":"completed","content":[{"type":"file","mime":` + q("image/"+w) + `}]}`)),
+		step(tool(`{"status":"completed","content":[` + part(strings.Repeat("y", 1020)+secret+" and more") + `]}`)),
+		`{"type":"assistant","content":[{"type":"tool","name":` + q(w) + `,"state":{"status":"completed",` +
+			`"content":[` + part("ok") + `]}}]}`,
+		`{"type":"assistant","content":[{"state":{"status":"completed","input":{"x":` + q(w) + `}},"type":"tool"}]}`,
+		step(tool(`{"status":"completed","input":"not JSON at all ` + w + `"}`)),
+	}
+}
+
+// A PERSON'S READ READS AN EXPORT AS ITS DECODE WALK DID: over the walk's
+// corpus and every person variant, the read on the export walk, whole and in
+// pieces of seventeen bytes, answers the page and the error the decode walk
+// answers ([transcriptBuilder.openCodeExportWhole]), which holds each message
+// whole and applies R1 to R6 and the lines bound where it decides them: from
+// the start and later, at a person's bounds and a seat's, under filters, at the
+// line's value bound and below, and with every redaction refused.
+//
+// Mutation: split a brief past the bound, drop a blank part past it, re-read a
+// string input past it as JSON, stream a result whose state is out of order,
+// or show a refused redaction, and a case goes red.
+func TestAPersonsReadReadsAnExportAsItsDecodeWalkDid(t *testing.T) {
+	t.Parallel()
+	person, seat := TranscriptReadBounds(), SeatTranscriptBounds()
+	calls := TranscriptFilter{Kinds: []EntryKind{EntryToolCall, EntryToolResult}}
+	terms := TranscriptFilter{Terms: []string{"words"}}
+	wide := []personRead{{bounds: person, valueMax: maxLineBytes}, {bounds: person, valueMax: 1 << 10},
+		{bounds: seat, valueMax: 1 << 10, from: 2, filter: calls}}
+	every := append(wide, personRead{bounds: person, valueMax: 1 << 10, filter: terms},
+		personRead{bounds: seat, valueMax: 512, filter: terms, from: 1},
+		personRead{bounds: person, valueMax: 1 << 10, refuse: true},
+		personRead{bounds: person, valueMax: 1 << 10, from: 1000},
+		personRead{bounds: person, valueMax: 1 << 10, filter: TranscriptFilter{Kinds: []EntryKind{EntryModel}}})
+	check := func(name string, doc string, reads []personRead) {
+		archive := gzipOf(t, doc)
+		for _, r := range reads {
+			want := personReadOf(t, wholeOpenCode{}, archive, r)
+			if got := personReadOf(t, OpenCode{}, archive, r); got != want {
+				t.Errorf("%s %.200q read %+v:\nwalk   %.600s\nwant   %.600s", name, doc, r, got, want)
+			}
+			if got := personReadOf(t, piecesOpenCode{n: 17}, archive, r); got != want {
+				t.Errorf("%s %.200q read %+v in pieces:\nwalk   %.600s\nwant   %.600s", name, doc, r, got, want)
+			}
+		}
+	}
+	for _, d := range exportCorpus(t) {
+		check(d.name, d.doc, wide)
+	}
+	variants := personVariants()
+	for _, v := range variants {
+		check("a variant", `{"info":{"id":"ses_x"},"messages":[`+ocUser("msg_u", "the brief", `[]`)+`,`+v+`]}`,
+			every)
+	}
+	check("every variant", `{"messages":[`+strings.Join(variants, ",")+`]}`, every)
 }

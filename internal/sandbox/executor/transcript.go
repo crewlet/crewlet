@@ -4,12 +4,10 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
-	"cmp"
 	"compress/flate"
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -79,8 +77,9 @@ const (
 	// EntryUnread is a part of the harness's record this read could not
 	// read — a line past the bound one may hold, one that is not a record, a
 	// record or a message of no shape this read knows, a transcript that is
-	// no plain file, a message of an export past its bound — said where it
-	// was.
+	// no plain file, a text whose redaction could not be read, a call's result
+	// written out of order past the value bound, an export past the records
+	// one read reads — said where it was.
 	EntryUnread EntryKind = "unread"
 )
 
@@ -93,18 +92,19 @@ var EntryKinds = []EntryKind{
 // Valid reports whether a kind off the wire is one this build writes.
 func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 
-// TranscriptVersion is the version of what this build counts as a
-// transcript's entries. An ordinal is an ordinal under one version, so a read
-// surface's cursor carries it, and a cursor of another (a build beside this one
-// in a rolling upgrade) is read again from the start rather than continued at
-// an ordinal that names another entry here.
+// TranscriptVersion is the version of what this build counts as a transcript's
+// entries. An ordinal holds under one version, so a read surface's cursor
+// carries it, and a cursor of another (a build beside this one in a rolling
+// upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
 // was not, one read as more entries or fewer, one no longer read. At 2 an
 // OpenCode export's messages are read as OpenCode 2's kinds; at 3 every key is
 // read exactly as written, as the harnesses' own JSON.parse reads it; at 4 a
-// late call the engine hands a running job is an entry of its own.
-const TranscriptVersion = 4
+// late call the engine hands a running job is an entry of its own; at 5 an
+// OpenCode message of any length is read, a value past the bound as one entry,
+// and a read ends at its lines bound.
+const TranscriptVersion = 5
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -154,8 +154,8 @@ const (
 
 	// CutRead is a read that stopped before the transcript's end where no
 	// later read can go further: the archive's bytes ran past the read
-	// budget, or a message of an export past the bound one may hold left
-	// what follows it unreadable. Its entries are all that can be shown.
+	// budget, or an export held more records than one read reads. Its
+	// entries are all that can be shown.
 	CutRead TranscriptCut = "read"
 )
 
@@ -213,8 +213,8 @@ type TranscriptBounds struct {
 	// EntryBytes bounds one entry's text.
 	EntryBytes int `json:"entry_bytes"`
 
-	// LineBytes bounds one line of a harness's record, or about one message
-	// of an export, read whole.
+	// LineBytes bounds one line of a harness's record read whole, and one
+	// value of an export held: a longer value is streamed.
 	LineBytes int `json:"line_bytes"`
 
 	// ReadBytes bounds the bytes one read takes as the archive inflates —
@@ -529,10 +529,6 @@ var (
 
 	// errReadBudget is the archive's bytes past the read budget.
 	errReadBudget = errors.New("executor: the transcript's read budget is spent")
-
-	// errValuePastBound is one value of an export past the bound one may
-	// hold.
-	errValuePastBound = errors.New("executor: a value of the export is past the bound one may hold")
 )
 
 // Carries reports whether this build reads a session archive harness wrote in
@@ -1280,13 +1276,13 @@ const (
 // openCodeMessage is one message of an OpenCode export: OpenCode 2's
 // `SessionMessage.Info`, a flat object whose `type` is its kind
 // ([openCodeKind]) and whose other fields are that kind's own. Decoded
-// loosely ([openCodeNext]): a retyped field reads as zero.
+// loosely: a retyped field reads as zero.
 //
-// ONE TYPE FOR EVERY READER OF AN EXPORT, a session's transcript
-// ([transcriptBuilder.openCodeMessage]) and the context a session carries
-// ([measuredPrompt]) alike, off an export or a page of its message list, so
-// no two readers disagree about a message's kind or failure. OpenCode 1.x's
-// `{"info": …, "parts": …}` is not this document.
+// THE CONTEXT A SESSION CARRIES reads it ([measuredPrompt]), off an export or
+// a page of its message list; a person's transcript reads the same kinds off
+// the one export walk ([openCodeReading]), so no two readers disagree about a
+// message's kind. OpenCode 1.x's `{"info": …, "parts": …}` is not this
+// document.
 type openCodeMessage struct {
 	// Type is the message's kind.
 	Type openCodeKind `json:"type"`
@@ -1333,36 +1329,6 @@ type openCodeTokens struct {
 	} `json:"cache"`
 }
 
-// openCodeContent is one item of an assistant step's content
-// (`SessionMessage.AssistantContent`), told apart by `type`: `text` the model
-// wrote, its `reasoning`, or a `tool` it called — the tool's Name, the call
-// as it stands, and when OpenCode recorded it, in milliseconds since the
-// epoch: when the model began it, when it ran, when it settled. Read an item
-// at a time ([eachOpenCodeItem]).
-type openCodeContent struct {
-	Type  string        `json:"type"`
-	Text  string        `json:"text"`
-	Name  string        `json:"name"`
-	State openCodeState `json:"state"`
-	Time  struct {
-		Created   int64 `json:"created"`
-		Ran       int64 `json:"ran"`
-		Completed int64 `json:"completed"`
-	} `json:"time"`
-}
-
-// openCodeState is a tool call as it stands (`SessionMessage.ToolState`), told
-// apart by `status`: `streaming` while the model writes its input, which is
-// then the text written so far; `running` once it is called; `completed`, its
-// answer the list in `content`; or `error`, its failure in `error` and what
-// it answered before it in `content`. Each raw, and read by what it holds.
-type openCodeState struct {
-	Status  string          `json:"status"`
-	Input   json.RawMessage `json:"input"`
-	Content json.RawMessage `json:"content"`
-	Error   json.RawMessage `json:"error"`
-}
-
 // openCodeKeys is what one decode of an object of an export saw of its keys
 // ([eachKeyInPlace]): which names of the decode's own set it met (seen, a bit
 // a name), whether it met a name outside that set (other), and whether it met
@@ -1372,17 +1338,6 @@ type openCodeState struct {
 type openCodeKeys struct {
 	seen         uint32
 	other, twice bool
-}
-
-// see notes name, one of names' or not, and is its index in names, -1 where
-// it is none of them.
-func (k *openCodeKeys) see(names map[string]int, name []byte) int {
-	i, ok := names[string(name)]
-	if !ok {
-		i = -1
-	}
-	k.note(i)
-	return i
 }
 
 // note notes a name by its index in the decode's set, -1 where it is none of
@@ -1442,239 +1397,11 @@ const (
 var openCodeItemNames = openCodeNames("type", "text", "name", "state", "time", "id", "executed", "native",
 	"providerState", "providerResultState")
 
-// openCodeItemWire is one item of a step's content as its one decode leaves
-// it ([decodeOpenCodeItem]): each key an [openCodeContent] holds, and the
-// call's `executed`, by its exact name and raw, a sub-slice of the content
-// read in place; the item's key facts; and fault, why an element is no item,
-// "" where it is one.
-type openCodeItemWire struct {
-	Type, Text, Name, State, Time, Executed json.RawMessage
-	keys                                    openCodeKeys
-	fault                                   string
-}
-
-// decodeOpenCodeItem is the item element holds, its members read in place, a
-// name written twice by its last value, as JSON.parse reads it.
-func decodeOpenCodeItem(element json.RawMessage) openCodeItemWire {
-	if !wireObject(element) {
-		return openCodeItemWire{fault: "an item of a step's content is no object"}
-	}
-	var w openCodeItemWire
-	_ = eachKeyInPlace(element, func(name []byte, value json.RawMessage) error {
-		switch w.keys.see(openCodeItemNames, name) {
-		case itemType:
-			w.Type = value
-		case itemText:
-			w.Text = value
-		case itemName:
-			w.Name = value
-		case itemState:
-			w.State = value
-		case itemTime:
-			w.Time = value
-		case itemExecuted:
-			w.Executed = value
-		}
-		return nil
-	})
-	return w
-}
-
-// item is the item w holds, DECODED LOOSELY, as the export's whole decode read
-// one: a key of another kind than its field's reads as that field's zero
-// value, a call's state or its times that are no object as none, and the rest
-// of the item as written.
-func (w openCodeItemWire) item() openCodeContent {
-	item := openCodeContent{Type: looseString(w.Type), Text: looseString(w.Text), Name: looseString(w.Name)}
-	if wireObject(w.State) {
-		var status json.RawMessage
-		_ = eachKeyInPlace(w.State, func(name []byte, value json.RawMessage) error {
-			switch string(name) {
-			case "status":
-				status = value
-			case "input":
-				item.State.Input = value
-			case "content":
-				item.State.Content = value
-			case "error":
-				item.State.Error = value
-			}
-			return nil
-		})
-		item.State.Status = looseString(status)
-	}
-	if wireObject(w.Time) {
-		_ = eachKeyInPlace(w.Time, func(name []byte, value json.RawMessage) error {
-			switch string(name) {
-			case "created":
-				item.Time.Created = looseInt(value)
-			case "ran":
-				item.Time.Ran = looseInt(value)
-			case "completed":
-				item.Time.Completed = looseInt(value)
-			}
-			return nil
-		})
-	}
-	return item
-}
-
-// openCodeListFault is why a step's content is no list, or stops part way:
-// its walk's own error ([eachOpenCodeItem]).
-type openCodeListFault struct{ err error }
-
-func (f *openCodeListFault) Error() string {
-	return "a step's content is not one list: " + f.err.Error()
-}
-
-func (f *openCodeListFault) Unwrap() error { return f.err }
-
-// eachOpenCodeItem hands each item of a step's content to each, in order, and
-// returns each's first error, reading no item after it; else, where the
-// content is no list or stops part way, an [*openCodeListFault]. An element
-// that is no object is handed as a wire whose fault says so.
-//
-// AN ITEM AT A TIME ([eachElement]), each decoded once, in place
-// ([decodeOpenCodeItem]): never the whole list first, which held 160 bytes per
-// element before any was read, and never a copy of an item's value.
-func eachOpenCodeItem(content json.RawMessage, each func(openCodeItemWire) error) error {
-	var stopped error
-	err := eachElement(content, func(element json.RawMessage, _ int) error {
-		stopped = each(decodeOpenCodeItem(element))
-		return stopped
-	})
-	switch {
-	case stopped != nil:
-		return stopped
-	case err != nil:
-		return &openCodeListFault{err: err}
-	}
-	return nil
-}
-
-// openCodeExport reads the export document a message at a time, passing its
-// other fields: `{"info": …, "messages": [{"type": "user", …}, …]}`.
-//
-// ONE MESSAGE IS HELD AT A TIME, to about [TranscriptBounds.LineBytes],
-// counted afresh before every step of the walk; a message past it is said and
-// ends the read, since a JSON decoder cannot find the next value without
-// reading the one it is in. A DOCUMENT THAT ENDS BEFORE IT CLOSES ENDS PART
-// WAY THROUGH: the decoder's syntax error at the input's end, which reads the
-// input to its end, is the document cut short, not "no export".
-func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reader) error {
-	held := &heldValue{r: archive, max: b.bounds.LineBytes}
-	dec := jsontext.NewDecoder(held, threadDecoding)
-	err := b.pastHeld(held, walkOpenCodeExport(ctx, dec, held, openCodePerson{b}))
-	var syntax *jsontext.SyntacticError
-	switch {
-	case !errors.As(err, &syntax):
-		return err
-	case held.ended && errors.Is(syntax.Err, io.ErrUnexpectedEOF):
-		return fmt.Errorf("%w: %w", io.ErrUnexpectedEOF, err)
-	}
-	return fmt.Errorf("%w: %w", errNotExport, err)
-}
-
-// openCodeVisitor is what the decode walk ([walkOpenCodeExport]) hands what it
-// reads to, as it reads it: a person's transcript ([openCodePerson]), its one
-// reader, a holdings reading being a visitor of the one export walk
-// ([scanExport]). Each value it is handed is a sub-slice of the walk's
-// buffer, valid only until it returns, and an error it answers ends the walk.
-type openCodeVisitor interface {
-	// topKey is a top-level key but `messages`, its value held to the bound.
-	topKey(name string, value json.RawMessage) error
-	// messageList is a `messages` key, before its list is walked.
-	messageList() error
-	// message is one message of a list, decoded once ([openCodeNext]).
-	message(ctx context.Context, w openCodeMessageWire) error
-	// notMessage is an element of a list that is no object.
-	notMessage() error
-}
-
-// walkOpenCodeExport walks the document dec reads through held, handing each
-// key, list and message to v as it reads it ([openCodeVisitor]): held is reset
-// before every key and message, and every `messages` list met is walked. It
-// returns at the document's `}`, reading nothing after it. EVERY VALUE IS READ
-// IN PLACE in dec's buffer, which holds one value at a time, never copied out.
-func walkOpenCodeExport(ctx context.Context, dec *jsontext.Decoder, held *heldValue, v openCodeVisitor) error {
-	if err := expectDelim(dec, '{'); err != nil {
-		return err
-	}
-	for held.reset(); dec.PeekKind() != '}'; held.reset() {
-		key, keyErr := dec.ReadToken()
-		if keyErr != nil {
-			return keyErr
-		}
-		held.reset()
-		if name := key.String(); name != "messages" {
-			value, passErr := dec.ReadValue()
-			if passErr != nil {
-				return passErr
-			}
-			if keyErr = v.topKey(name, value); keyErr != nil {
-				return keyErr
-			}
-			continue
-		}
-		if listErr := v.messageList(); listErr != nil {
-			return listErr
-		}
-		if openErr := expectDelim(dec, '['); openErr != nil {
-			return openErr
-		}
-		for held.reset(); dec.PeekKind() != ']'; held.reset() {
-			if messageErr := openCodeNext(ctx, dec, v); messageErr != nil {
-				return messageErr
-			}
-		}
-		if closeErr := expectDelim(dec, ']'); closeErr != nil {
-			return closeErr
-		}
-	}
-	return expectDelim(dec, '}')
-}
-
-// openCodeNext reads the next message of the list, in place, and hands it to
-// v decoded once ([decodeOpenCodeMessage]). A message that is no object is
-// handed as none; within one, a field whose type a release changed is
-// skipped rather than losing the message, as the stream's events are
-// ([decodeOpenCodeEvent]), and every key is read exactly as written.
-func openCodeNext(ctx context.Context, dec *jsontext.Decoder, v openCodeVisitor) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	raw, err := dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	if raw.Kind() != '{' {
-		return v.notMessage()
-	}
-	return v.message(ctx, decodeOpenCodeMessage(raw))
-}
-
-// openCodePerson is a person's transcript as the export walk's visitor: it
-// reads each message by its kind, says an element that is no message, and
-// passes every other key, as the import does.
-type openCodePerson struct{ b *transcriptBuilder }
-
-func (openCodePerson) topKey(string, json.RawMessage) error { return nil }
-
-func (openCodePerson) messageList() error { return nil }
-
-func (p openCodePerson) message(ctx context.Context, w openCodeMessageWire) error {
-	return p.b.openCodeMessage(ctx, w.message())
-}
-
-func (p openCodePerson) notMessage() error {
-	return p.b.unread("a message of the export is not a message, and was not read")
-}
-
-// The names a message of an export is decoded by ([openCodeMessageWire]),
-// each its index in [openCodeMessageNames]: those a person's transcript reads,
-// the message's id, and every other name of an assistant step's, which a
-// holdings reading holds a step to on the one export walk, whose message frame
-// is this set ([exportFrameNames]).
+// The names a message of an export is read by, each its index in
+// [openCodeMessageNames]: those a person's transcript reads, the message's id,
+// and every other name of an assistant step's, which a holdings reading holds a
+// step to on the one export walk, whose message frame is this set
+// ([exportFrameNames]).
 const (
 	msgID = iota
 	msgType
@@ -1701,191 +1428,6 @@ var openCodeMessageNames = openCodeNames("id", "type", "time", "text", "content"
 	"agent", "model", "snapshot", "finish", "rawFinish", "providerState", "native", "cost", "tokens", "error",
 	"retry", "metadata")
 
-// openCodeMessageWire is one message of an export as its one decode leaves it
-// ([decodeOpenCodeMessage]): each key a reader reads of it, by its exact name
-// and raw, a sub-slice of the message read in place, and its key facts.
-type openCodeMessageWire struct {
-	ID, Type, Time, Text, Content, Status, Summary json.RawMessage
-	keys                                           openCodeKeys
-}
-
-// decodeOpenCodeMessage is the message raw holds, read in place, a name
-// written twice by its last value, as JSON.parse reads it.
-func decodeOpenCodeMessage(raw json.RawMessage) openCodeMessageWire {
-	var w openCodeMessageWire
-	_ = eachKeyInPlace(raw, func(name []byte, value json.RawMessage) error {
-		switch w.keys.see(openCodeMessageNames, name) {
-		case msgID:
-			w.ID = value
-		case msgType:
-			w.Type = value
-		case msgTime:
-			w.Time = value
-		case msgText:
-			w.Text = value
-		case msgContent:
-			w.Content = value
-		case msgStatus:
-			w.Status = value
-		case msgSummary:
-			w.Summary = value
-		}
-		return nil
-	})
-	return w
-}
-
-// message is the message w holds, DECODED LOOSELY, as the export's whole
-// decode read one: a key of another kind than its field's reads as that
-// field's zero value, a time that is no object as none, and the rest of the
-// message as written. Its tokens, its error and when a step settled are left
-// as none: a person's transcript reads none of them, and the context a session
-// carries reads them off the export itself ([exportMeter]).
-func (w openCodeMessageWire) message() openCodeMessage {
-	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
-		Status: looseString(w.Status), Summary: looseString(w.Summary)}
-	if wireObject(w.Time) {
-		_ = eachKeyInPlace(w.Time, func(name []byte, value json.RawMessage) error {
-			if string(name) == "created" {
-				m.Time.Created = looseInt(value)
-			}
-			return nil
-		})
-	}
-	return m
-}
-
-// pastHeld is how a walk of an export ended: a part of it past the bound one
-// may hold is said, and ends the read where it was; every other end is
-// returned as it came.
-func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
-	if err == nil || !held.over {
-		return err
-	}
-	if unreadErr := b.unread(fmt.Sprintf("a part of the export past %s was not read, and "+
-		"nothing after it could be", humanSize(int64(b.bounds.LineBytes)))); unreadErr != nil {
-		return unreadErr
-	}
-	b.cut = CutRead
-	return errTranscriptPage
-}
-
-// openCodeMessage reads one message by its kind: a person's is the brief, a
-// note or a late call (the run's plugin admits both as one), by its text; an
-// assistant's step is the model's words and calls
-// ([transcriptBuilder.openCodeStep]); a completed compaction is its summary.
-//
-// EVERY OTHER KIND IS OPENCODE'S OWN and no entry, as Claude Code's own records
-// are none: synthetic notices (never searched for a note: one can carry what a
-// tool printed), system instruction updates, skill bodies, a person's shell
-// commands, idle, and switches of agent, model or location. A compaction
-// running or failed handed the model no summary. A KIND THIS READ DOES NOT KNOW
-// IS SAID ([EntryUnread]): it is from a release this read was not written for,
-// and its words may be what the model read.
-func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessage) error {
-	at := unixMillis(m.Time.Created)
-	switch m.Type {
-	case openCodeUser:
-		return b.prose(ctx, EntryBrief, at, m.Text)
-	case openCodeAssistant:
-		return b.openCodeStep(ctx, m.Content, at)
-	case openCodeCompaction:
-		if m.Status != openCodeCompleted {
-			return nil
-		}
-		return b.prose(ctx, EntrySummary, at, m.Summary)
-	case openCodeSynthetic, openCodeSystem, openCodeSkill, openCodeShell, openCodeIdle,
-		openCodeAgentSwitched, openCodeModelSwitched, openCodeLocationSwitched:
-		return nil
-	}
-	return b.unread("a message of the export of no kind this read knows was not read")
-}
-
-// openCodeStep reads an assistant step's content, an item at a time
-// ([eachOpenCodeItem]): its text as the model's words, and each tool it called
-// ([transcriptBuilder.openCodeTool]). Reasoning is the model's working and no
-// entry, as Claude Code's thinking is none, and so is an item of a type this
-// build does not know; content that is no list is said.
-func (b *transcriptBuilder) openCodeStep(ctx context.Context, content json.RawMessage, at time.Time) error {
-	content = bytes.TrimSpace(content)
-	switch {
-	case absent(content):
-		return nil
-	case content[0] != '[':
-		return b.unread("a message of the export whose content is not a list was not read")
-	}
-	err := eachOpenCodeItem(content, func(w openCodeItemWire) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		switch item := w.item(); item.Type {
-		case "text":
-			return b.prose(ctx, EntryModel, at, item.Text)
-		case "tool":
-			return b.openCodeTool(item, at)
-		}
-		return nil
-	})
-	// A LIST THAT STOPS PART WAY is read up to its fault: the items before it
-	// were read.
-	if _, fault := errors.AsType[*openCodeListFault](err); fault {
-		return nil
-	}
-	return err
-}
-
-// openCodeTool reads one tool the model called: the call, its input as JSON,
-// dated when it ran — or, one that never ran, when the model began it — and,
-// once it settled, what answered it, dated when it did: a completed call's
-// answer, or a failed one's failure, marked. A call OpenCode stopped while the
-// model was still writing it, or while it ran, has no result.
-func (b *transcriptBuilder) openCodeTool(item openCodeContent, at time.Time) error {
-	called := firstInstant(unixMillis(item.Time.Ran), firstInstant(unixMillis(item.Time.Created), at))
-	if err := b.add(TranscriptEntry{Kind: EntryToolCall, Tool: item.Name, At: called},
-		openCodeCallInput(item.State.Input)); err != nil {
-		return err
-	}
-	settled := firstInstant(unixMillis(item.Time.Completed), at)
-	switch item.State.Status {
-	case openCodeCompleted:
-		return b.add(TranscriptEntry{Kind: EntryToolResult, Tool: item.Name, At: settled},
-			openCodeAnswer(item.State.Content))
-	case openCodeCallFailed:
-		return b.add(TranscriptEntry{Kind: EntryToolResult, Tool: item.Name, At: settled, Failed: true},
-			openCodeFailure(item.State))
-	}
-	return nil
-}
-
-// openCodeCallInput is a call's input as one line of JSON: the object it was
-// called with, or, for a call whose input the model was still writing, the
-// text it had written — as JSON where it parses so far, and as written where
-// it does not.
-func openCodeCallInput(raw json.RawMessage) string {
-	var written string
-	if wireDecode(raw, &written) == nil {
-		return compactJSON(json.RawMessage(written))
-	}
-	return compactJSON(raw)
-}
-
-// openCodeAnswer is what a tool answered, the list `Tool.Content` is, read an
-// item at a time ([toolAnswer]): each text item's text, a line apart, as a
-// Claude Code tool's result reads ([claudeResultText]), and each file it
-// answered with as the words a file reads in ([openCodeFileText]). "" for an
-// answer that is no list.
-func openCodeAnswer(raw json.RawMessage) string {
-	return toolAnswer(raw, func(kind, text, mime string) (string, bool) {
-		switch kind {
-		case "text":
-			return text, strings.TrimSpace(text) != ""
-		case "file":
-			return openCodeFileText(mime), true
-		}
-		return "", false
-	})
-}
-
 // openCodeFileText is what a file a tool answered with reads as in text: an
 // image as a Claude Code tool's image reads ([claudeImagePlaceholder]), and
 // any other file as a file. Its bytes, inline or behind a URI, are no text.
@@ -1894,35 +1436,6 @@ func openCodeFileText(mime string) string {
 		return claudeImagePlaceholder
 	}
 	return "[a file]"
-}
-
-// openCodeFailure is what a failed call answered, as OpenCode hands it to the
-// model: the failure's message — the object `SessionError.Error`, its class
-// where it says nothing more — and then whatever the call answered before it
-// failed. The failure is decoded loosely, as the message around it is, and by
-// its keys exactly as written.
-func openCodeFailure(state openCodeState) string {
-	var kind, message json.RawMessage
-	if wireObject(state.Error) {
-		_ = eachKeyInPlace(state.Error, func(name []byte, value json.RawMessage) error {
-			switch string(name) {
-			case "type":
-				kind = value
-			case "message":
-				message = value
-			}
-			return nil
-		})
-	}
-	said := cmp.Or(looseString(message), looseString(kind))
-	answered := openCodeAnswer(state.Content)
-	switch {
-	case answered == "":
-		return said
-	case said == "":
-		return answered
-	}
-	return said + "\n" + answered
 }
 
 // unixMillis is an export's instant, or zero where it carries none, or none an
@@ -1940,38 +1453,6 @@ func firstInstant(at, otherwise time.Time) time.Time {
 		return otherwise
 	}
 	return at
-}
-
-// expectDelim reads the next token of dec, which must be want; where it is
-// not, the failure names what KIND of token was there, never the token — a
-// string of the export is the box's words, and its whole value.
-func expectDelim(dec *jsontext.Decoder, want jsontext.Kind) error {
-	tok, err := dec.ReadToken()
-	if err != nil {
-		return err
-	}
-	if got := tok.Kind(); got != want {
-		return fmt.Errorf("%w: it holds %s where %q belongs", errNotExport, tokenKind(got), string(rune(want)))
-	}
-	return nil
-}
-
-// tokenKind is what kind of JSON token kind is, in a few words: a delimiter by
-// itself, which is one of four characters, and any other token by its kind.
-func tokenKind(kind jsontext.Kind) string {
-	switch kind {
-	case '{', '}', '[', ']':
-		return fmt.Sprintf("%q", string(rune(kind)))
-	case '"':
-		return "a string"
-	case '0':
-		return "a number"
-	case 't', 'f':
-		return "a boolean"
-	case 'n':
-		return "null"
-	}
-	return "a value"
 }
 
 // ---- the readers a read goes through ------------------------------------ //
@@ -2016,37 +1497,5 @@ func (b *budgetReader) Read(p []byte) (int, error) {
 	}
 	n, err := b.r.Read(p)
 	b.left -= int64(n)
-	return n, err
-}
-
-// heldValue bounds what a JSON decoder pulls into its buffer between two
-// resets — one value of an export, about — so a message too large to hold is
-// refused as it is read rather than once the decoder has held all of it; and
-// says whether what it reads came to its end, which tells a document cut short
-// from one that holds something else ([transcriptBuilder.openCodeExport]).
-type heldValue struct {
-	r     io.Reader
-	max   int
-	n     int
-	over  bool
-	ended bool
-}
-
-// reset starts the count over, for the next value.
-func (h *heldValue) reset() { h.n = 0 }
-
-func (h *heldValue) Read(p []byte) (int, error) {
-	if h.n >= h.max {
-		h.over = true
-		return 0, errValuePastBound
-	}
-	if len(p) > h.max-h.n {
-		p = p[:h.max-h.n]
-	}
-	n, err := h.r.Read(p)
-	h.n += n
-	if errors.Is(err, io.EOF) {
-		h.ended = true
-	}
 	return n, err
 }

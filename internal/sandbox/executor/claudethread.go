@@ -643,7 +643,7 @@ var threadDecoding = jsonv2.JoinOptions(
 // decode of every small value the layer keeps as written, and of every value
 // the package's other readers of a harness's record read (a
 // run's event stream, [claudeEventWire]; its result, [claudeResultWire]; a
-// person's transcript, [claudeRecord] and [openCodeMessageWire]; what an
+// person's transcript, [claudeRecord]; what an
 // OpenCode session's steps measured, [openCodeMeasuredWire]). An object's
 // key fills the field it names exactly, a key written twice holds the last
 // value written, and a string's invalid UTF-8 or lone surrogate reads as
@@ -670,8 +670,8 @@ func wireDecode(raw []byte, v any) error {
 // iterations ([readUsage], a thread's reply's and a run's event stream's), off
 // the raw values the layer keeps; and the lists a run's event stream and a
 // person's transcript of a session decode (a message's blocks,
-// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
-// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]; a
+// [eachClaudeBlock]; a tool's answer, [toolAnswer]; a run's result's
+// errors, [claudeResult.errorsSaid]; a
 // page of an OpenCode session's message list, [openCodeEvents.page]).
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {

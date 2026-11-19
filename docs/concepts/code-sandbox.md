@@ -2154,8 +2154,8 @@ first page says it.
 its object is streamed out of the store and opened under its own associated
 data, and the archive is read by the runner that packs it, which alone knows
 its layout — Claude Code's transcript, one record a line, then each subagent's
-own from its sidecar; OpenCode's export, a message at a time, each read by the
-kind OpenCode 2 gives it. The entries are what the run was briefed, the notes a
+own from its sidecar; OpenCode's export, in one pass that holds no message,
+each read by the kind OpenCode 2 gives it. The entries are what the run was briefed, the notes a
 person sent it while it worked, the late calls the engine handed it while it
 worked (a call of the work that finished after the run that made it had stopped
 waiting for it), what its model wrote, every tool call and what

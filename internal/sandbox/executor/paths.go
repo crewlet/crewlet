@@ -170,15 +170,14 @@
 // call the log cannot state may be of it. Which of two identical calls a part
 // is is never decided: a class is held whole or told whole.
 //
-// ONE WALK, TWO VISITORS. The reading is a visitor of the one export walk
-// ([scanExport]), as the take's meter is, on the scanner, holding no value
-// whole: it asks each member by a means ([openCodeHoldingsWalk] lists them),
-// an answer's text and a failure's message by their digest ([textDigest]). A
-// VALUE PAST ITS CAPTURE OR ITS WORD IS THERE, of its kind, and equal to no
-// word: an `executed` past the bound passes its part, and a `type` past the
-// word is a shape not read. The decode walk it read by before
-// ([walkOpenCodeExport]), which a person's transcript still reads by, is its
-// oracle (TestAHoldingsReadingReadsAnExportAsItsWalkDid).
+// ONE WALK, THREE VISITORS. The reading is a visitor of the one export walk
+// ([scanExport]), as the take's meter and a person's transcript are, on the
+// scanner, holding no value whole: it asks each member by a means
+// ([openCodeHoldingsWalk] lists them), an answer's text and a failure's
+// message by their digest ([textDigest]). A VALUE PAST ITS CAPTURE OR ITS WORD
+// IS THERE, of its kind, and equal to no word: an `executed` past the bound
+// passes its part, and a `type` past the word is a shape not read. The decode
+// walk the reading and a person read by before is their oracle.
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
 // anything else: `info` once, an object, its id the session's; `messages`

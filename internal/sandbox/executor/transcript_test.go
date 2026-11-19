@@ -1143,13 +1143,12 @@ ln "$p/$s.jsonl" "$p/$s/subagents/agent-a1.jsonl"
 
 // A PART OF THE RECORD PAST THE BOUND IS SAID WHERE IT WAS. A line of Claude
 // Code's record past the bound one line may hold reads as an entry saying so,
-// in its place, and the lines after it are read; a message of an OpenCode
-// export past the same bound is said too, and ends the read there, cut —
-// nothing after a value too large to hold can be found.
+// in its place, and the lines after it are read. An OpenCode export holds no
+// such part: a value past the same bound is streamed, its entry the whole
+// value's, and the messages after it are read.
 //
-// Mutation: drop the line past the bound silently, or carry on past an
-// oversized message, and the gap reads as continuity or the read misreads what
-// follows.
+// Mutation: drop the line past the bound silently, or end an export's read at
+// a value past the bound, and the gap reads as continuity or the read stops.
 func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
 	t.Parallel()
 	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
@@ -1170,10 +1169,10 @@ func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
 		`{"type":"assistant","content":[{"type":"text","text":"`+strings.Repeat("y", 4<<10)+`"}]}`,
 		openCodeUser("after"))
 	open := readOpenCode(t, openCodeCaptureOf(t, export), small)
-	if len(open.Entries) != 2 || open.Entries[0].Text != "first" ||
-		open.Entries[1].Kind != executor.EntryUnread || open.Cut != executor.CutRead {
-		t.Errorf("the export read as %+v cut %q, want the first message, then the oversized one "+
-			"said, cut where it was", shownOf(open.Entries), open.Cut)
+	if len(open.Entries) != 3 || open.Entries[0].Text != "first" || open.Entries[1].Kind != executor.EntryModel ||
+		open.Entries[1].Text != strings.Repeat("y", 4<<10) || open.Entries[2].Text != "after" || open.Cut != "" {
+		t.Errorf("the export read as %+v cut %q, want the first message, the long one whole and the one "+
+			"after it", shownOf(open.Entries), open.Cut)
 	}
 }
 

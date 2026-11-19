@@ -166,6 +166,31 @@ func (b *transcriptBuilder) streamed(e TranscriptEntry) *streamedEntry {
 	return s
 }
 
+// streamedOpening is a streamedEntry of a text whose redaction's opening alone
+// is read ([streamedEntry.opening]): a name past the value bound.
+func (b *transcriptBuilder) streamedOpening() *streamedEntry {
+	out := newStreamedText(b.bounds.EntryBytes, nil)
+	s := &streamedEntry{b: b, out: out}
+	if b.redactor != nil {
+		s.r = b.redactor(out)
+	} else {
+		s.r = redact.NewStream(out)
+	}
+	return s
+}
+
+// opening is the text's redaction cut to bound, at most the entry's, once the
+// text has ended ([entryOpening]); the stream's refusal where it refused.
+func (s *streamedEntry) opening(bound int) (string, error) {
+	if s.refused == nil {
+		s.refused = s.r.Close()
+	}
+	if s.refused != nil {
+		return "", s.refused
+	}
+	return textcut.Within(string(s.out.head[:min(len(s.out.head), bound+1)]), bound), nil
+}
+
 // Write redacts p, the text's next bytes.
 func (s *streamedEntry) Write(p []byte) (int, error) {
 	if s.refused == nil {
