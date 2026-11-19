@@ -349,7 +349,7 @@ type TranscriptFilter struct {
 	// Terms keeps only entries whose whole text holds every one of them, as
 	// internal/textindex makes and matches terms (Terms, Reading.FindIn; a
 	// call's text through its JSON escapes, [readingOf]), in what the
-	// redaction shows of the entry's own words ([transcriptBuilder.add]), each
+	// redaction shows of the entry's own words ([transcriptBuilder.held]), each
 	// handed out as the window around the earliest ([windowAround]). None
 	// keeps every entry, each as its opening.
 	Terms []string
@@ -627,11 +627,12 @@ func readTranscript(ctx context.Context, harness string, format int,
 func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from int,
 	bounds TranscriptBounds, filter TranscriptFilter) (Transcript, error) {
 
+	return newTranscriptBuilder(from, bounds, filter).decode(ctx, c, archive)
+}
+
+// decode is one read of archive, which c's harness packed, into b.
+func (b *transcriptBuilder) decode(ctx context.Context, c carrier, archive io.Reader) (Transcript, error) {
 	src := &sourceReader{r: archive}
-	b := &transcriptBuilder{from: from, next: from, bounds: bounds, filter: filter,
-		entries: []TranscriptEntry{}, places: []EntryPlace{},
-		calls: map[string]string{}, inflated: budgetReader{left: bounds.ReadBytes},
-		handed: budgetReader{left: bounds.ReadBytes}}
 	err := b.read(ctx, c, src)
 	switch {
 	case err != nil && !errors.Is(err, errTranscriptPage) && ctx.Err() != nil:
@@ -649,7 +650,7 @@ func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from in
 	default:
 		return Transcript{}, malformed(err)
 	}
-	return Transcript{Entries: b.entries, Places: b.places, From: from, Next: b.next, Cut: b.cut}, nil
+	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
 }
 
 // transcriptBuilder is one read's page as it is built: every entry the
@@ -659,6 +660,13 @@ type transcriptBuilder struct {
 	from   int
 	bounds TranscriptBounds
 	filter TranscriptFilter
+
+	// valueMax is the most of one text an entry is shaped from held; a longer
+	// one is streamed ([transcriptBuilder.add]). redactor, where a test sets
+	// one, is what a streamed text is redacted through in place of a
+	// [redact.Stream].
+	valueMax int
+	redactor func(io.Writer) entryRedaction
 
 	// inflated is the archive's bytes as they inflate, and handed the bytes
 	// the members of a tar hand the reader: each held to the read budget.
@@ -685,6 +693,15 @@ type transcriptBuilder struct {
 	calls map[string]string
 }
 
+// newTranscriptBuilder is a read's builder from the entry from on, held to
+// bounds, narrowed by filter, and holding a text to the line's bound.
+func newTranscriptBuilder(from int, bounds TranscriptBounds, filter TranscriptFilter) *transcriptBuilder {
+	return &transcriptBuilder{from: from, next: from, bounds: bounds, valueMax: bounds.LineBytes, filter: filter,
+		entries: []TranscriptEntry{}, places: []EntryPlace{},
+		calls: map[string]string{}, inflated: budgetReader{left: bounds.ReadBytes},
+		handed: budgetReader{left: bounds.ReadBytes}}
+}
+
 // read inflates the archive and hands it to its harness's reader, the bytes it
 // inflates to held to the read budget.
 func (b *transcriptBuilder) read(ctx context.Context, c carrier, src io.Reader) error {
@@ -697,72 +714,6 @@ func (b *transcriptBuilder) read(ctx context.Context, c carrier, src io.Reader) 
 	}
 	b.inflated.r = zr
 	return c.transcript(ctx, b, &b.inflated)
-}
-
-// add counts one entry and keeps it on the page (raw is its recorded text)
-// where the filter keeps it, answering errTranscriptPage, the cut said, once
-// the page is full. An entry before the page is only counted: redaction, the
-// expensive part, is for what a reader is shown.
-//
-// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN: the whole redaction's own
-// words, never a marker's ([redact.OwnWords]), since on the recorded text a
-// term inside a credential confirmed a guess at it. MayHold on the recorded
-// text, costing no redaction and failing no hit, picks what is redacted. A hit
-// is decided before the page's bound, lest a stop say what the redaction took
-// out. [EntryUnread] is kept, never searched: its text is this package's
-// account of the gap.
-func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
-	ordinal := b.seen
-	b.seen++
-	if ordinal < b.from {
-		return nil
-	}
-	if !b.filter.keepsKind(e.Kind) {
-		b.next = ordinal + 1
-		return nil
-	}
-	matching := len(b.filter.Terms) > 0 && e.Kind != EntryUnread
-	var shown string
-	at := 0
-	if matching {
-		reading := readingOf(e.Kind)
-		if !reading.MayHold(raw, b.filter.Terms) {
-			b.next = ordinal + 1
-			return nil
-		}
-		shown = redact.Secrets(raw)
-		first, all := reading.FindIn(redact.OwnWords(shown), b.filter.Terms)
-		if !all {
-			b.next = ordinal + 1
-			return nil
-		}
-		at = first
-	}
-	if len(b.entries) == b.bounds.Entries {
-		b.cut = CutEntries
-		return errTranscriptPage
-	}
-	textFrom := 0
-	var whole int
-	if matching {
-		e.Text, textFrom, e.Cut = windowAround(shown, at, b.bounds.EntryBytes)
-		whole = len(shown)
-	} else {
-		e.Text, e.Cut, whole = entryOpening(raw, b.bounds.EntryBytes)
-	}
-	e = shape(e, whole)
-	// THE FIRST ENTRY OF A PAGE IS ALWAYS KEPT: one entry is bounded on its
-	// own, and a page that could not hold it would be a page no read gets
-	// past.
-	if len(b.entries) > 0 && b.bytes+len(e.Text) > b.bounds.Bytes {
-		b.cut = CutBytes
-		return errTranscriptPage
-	}
-	b.entries = append(b.entries, e)
-	b.places = append(b.places, EntryPlace{Ordinal: ordinal, TextFrom: textFrom})
-	b.bytes += len(e.Text)
-	b.next = ordinal + 1
-	return nil
 }
 
 // readingOf is how an entry of kind writes its words. A tool call's text is its

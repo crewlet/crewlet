@@ -38,8 +38,7 @@ const listSlack = 64
 // listBuilder is a transcript read's builder, as a read from the archive's
 // first entry starts one.
 func listBuilder() *transcriptBuilder {
-	return &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		places: []EntryPlace{}, calls: map[string]string{}}
+	return newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
 }
 
 // allocationsOf is what read allocates, heap objects and bytes, the fewest of

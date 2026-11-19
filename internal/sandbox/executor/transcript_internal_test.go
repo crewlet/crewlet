@@ -257,10 +257,8 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	t.Parallel()
 	opening := "## A note from ada, sent while this turn was running\nTarget main."
 	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
-	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}}
-	matched := &transcriptBuilder{bounds: SeatTranscriptBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}, filter: TranscriptFilter{Terms: []string{"target"}}}
+	b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
+	matched := newTranscriptBuilder(0, SeatTranscriptBounds(), TranscriptFilter{Terms: []string{"target"}})
 	for shaping, by := range map[string]*transcriptBuilder{"an opening": b, "a match's window": matched} {
 		if err := by.add(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
 			decoded[:len(opening)]); err != nil || len(by.entries) != 1 {
