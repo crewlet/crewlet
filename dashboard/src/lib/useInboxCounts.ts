@@ -40,7 +40,7 @@
  * and on a poll, which also catches a run that parked or was answered.
  */
 
-import { createContext, createElement, useContext, type ReactNode } from "react";
+import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useNeedsYouCount, type NeedsYouCount } from "./decisions.ts";
 import { useViewer } from "./viewer.ts";
@@ -62,7 +62,20 @@ const Reading = createContext<InboxCounts | null>(null);
  */
 export function InboxCountsProvider({ children }: { children: ReactNode }) {
   const viewer = useViewer();
-  const counts = useNeedsYouCount(viewer.owner !== "", NEEDS_POLL_MS, viewer.owner);
+  const owner = viewer.owner;
+  const decided = useNeedsYouCount(owner !== "", NEEDS_POLL_MS, owner);
+  // AN ITEM OF THEIRS NOBODY IS MOVING (ADR-0162) waits on them as an ask
+  // does, until they read its notice: Needs you lists it, so it counts here.
+  const flow = useQuery(
+    "work_inbox",
+    owner ? { handle: owner, unread: true, reasons: "flow", limit: INBOX_PAGE } : undefined,
+    { enabled: owner !== "", pollMs: NEEDS_POLL_MS, refetchOnInboxOf: owner },
+  );
+  const unmoved = (flow.data?.notices ?? []).filter((n) => !n.snoozed).length;
+  const counts = useMemo(
+    () => (decided.waiting === null ? decided : { ...decided, waiting: decided.waiting + unmoved }),
+    [decided, unmoved],
+  );
   return createElement(Reading.Provider, { value: counts }, children);
 }
 

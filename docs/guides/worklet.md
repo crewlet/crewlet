@@ -1626,7 +1626,7 @@ The first state that holds wins:
 | `working` | a turn or an executor run of the assignee is on the item now | `turn`, `run` | since it started |
 | `blocked` | the item has an open blocker | | since the [flow duty](#notices) recorded it blocked |
 | `waiting` | its start is in the future, the assignee's own question on it is unanswered, or the assignee's run is parked on it waiting on a person | `start`, `question`, `parked` | `until` the start, with the wait's words as `reason` |
-| `held` | the assignee cannot take a turn: paused, placed on no node, out of its token budget, out of its model limit, parked on another item waiting on a person, gone from the chart, or there is no assignee | `paused`, `unplaced`, `budget`, `limit`, `parked_elsewhere`, `departed`, `nobody` | `until` the limit's or the budget's reset, where known |
+| `held` | the assignee cannot take a turn: paused, placed on no node, out of its token budget, out of its model limit, parked on another item waiting on a person, gone from the chart, or there is no assignee | `paused`, `unplaced`, `budget`, `limit`, `parked_elsewhere`, `departed`, `nobody` | since the stop or the park began, or, with nobody assigned, since it entered progress unassigned or lost its assignee; `until` the limit's or the budget's reset, where known |
 | `due` | its start has passed and nothing of the assignee's is on it since: no turn of theirs on it ended and they wrote nothing on it | | since the start |
 | `stuck` | nothing changed on it for its project's [stuck window](#a-projects-stuck-window) | | since the last change |
 | `moving` | none of the above: the ordinary case | | since the last change |
