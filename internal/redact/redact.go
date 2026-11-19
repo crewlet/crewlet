@@ -168,6 +168,14 @@
 // hold it refuses none of them. A window decided early that read no claim
 // otherwise decided what the whole text does.
 //
+// [Prefix] is the first n bytes of what Secrets returns and how long all of it
+// is, for a reader that keeps an opening of a redacted text. A text up to the
+// longest the engine reads whole is redacted whole, where a stream costs more;
+// a longer one through one Stream read to its end, since a stream's output is
+// Secrets of the text only once Close answers nil. A text the stream refuses
+// is redacted whole, so the opening is always exact, at Secrets' cost on a
+// text built against the stream.
+//
 // # A key's block beside a password
 //
 // The keys' blocks are read beside what the rules claim in the text as
