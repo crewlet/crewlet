@@ -95,7 +95,10 @@ describe("whether the reader may ask", () => {
 
   test("each of the engine's reasons is its own sentence, and no model names the company", () => {
     const off = assistantUnavailableFor({ ...ready, assistant: "no_model" }, "Nimbus");
-    expect(off).toMatchObject({ reason: "no_model", short: "No model is assigned to Ask Crewlet yet." });
+    expect(off).toMatchObject({
+      reason: "no_model",
+      short: "No model is assigned to Ask Crewlet yet.",
+    });
     expect(off?.title).toBe("Ask Crewlet has no model for Nimbus yet");
     for (const reason of ["model_problem", "not_a_person", "no_permission"] as const) {
       const words = assistantUnavailableFor({ ...ready, assistant: reason }, "Nimbus");
