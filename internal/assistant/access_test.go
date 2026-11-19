@@ -19,6 +19,14 @@ import (
 // answerAboutENG7 is what the scripted model says after reading ENG-7.
 const answerAboutENG7 = "ENG-7 rotates the signing keys."
 
+// worklet is grace, who holds Worklet, and the task read as her node's table
+// holds it: a route that reads Worklet's records.
+func worklet(t *testing.T) (*iam.Principal, catalog.Tool) {
+	person := evals.Person("grace", "grace", iam.GrantWorklet)
+	return &person, assistanttest.ReadAPIFor(t, person, catalog.Route{
+		Pattern: "GET /worklet/{id}", Apps: []iam.Grant{iam.GrantWorklet}})
+}
+
 // withoutApps is p holding no app at all: a person whose access was taken away.
 func withoutApps(p iam.Principal) iam.Principal {
 	p.Grants = nil
@@ -33,7 +41,9 @@ func withoutApps(p iam.Principal) iam.Principal {
 // quoting the tracker reaches a person who can no longer open it.
 func TestAMessageIsHiddenFromAReaderWhoLostItsApps(t *testing.T) {
 	t.Parallel()
-	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+	person, read := worklet(t)
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{read}, Handler: task,
+		Person: person,
 		Rounds: []evals.Round{readTask(), evals.Say(answerAboutENG7), evals.Say("Ask me again.")}})
 	accepted, err := f.Ask("read", "What is ENG-7?", nil)
 	if err != nil {
@@ -79,9 +89,10 @@ func TestAMessageIsHiddenFromAReaderWhoLostItsApps(t *testing.T) {
 // then proposes a task, parking on it.
 func readThenProposeRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdomain.Proposal) {
 	t.Helper()
+	person, read := worklet(t)
 	f := assistanttest.NewRig(t, evals.RigOptions{
-		Tools: []catalog.Tool{getTask(t), assistanttest.Tool(t, "create_task")},
-		Acts:  []string{"create_work_item"}, Handler: task,
+		Tools: []catalog.Tool{read, assistanttest.Tool(t, "create_task")},
+		Acts:  []string{"create_work_item"}, Handler: task, Person: person,
 		Rounds: []evals.Round{readTask(),
 			evals.Call("c2", "create_task", map[string]any{"title": "Rotate keys again"}),
 			evals.Say("Created it.")}})

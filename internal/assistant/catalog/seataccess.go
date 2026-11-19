@@ -10,14 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
-	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -69,8 +66,8 @@ func seatAccessWrite() Tool {
 			"vendor's id or exact name, such as Datadog Standard Role, Developer or " +
 			"Viewers), its GitHub permissions, and its scope (the repositories, " +
 			"projects, spaces or channels it is narrowed to). Give only what changes; " +
-			"everything else stays as it is. Read the agent's access there with " +
-			seatAccessReadTool + " first. The person sees what the engine will do at the " +
+			"everything else stays as it is. Read the agent's access there first, with " +
+			"read_api on " + accessSeatRoute + ". The person sees what the engine will do at the " +
 			"vendor and approves it before anything is saved. The engine names and " +
 			"seals the agent's credential itself, so never name a variable, a key or a " +
 			"token. Use this for any change to an agent's access at an integration, " +
@@ -392,179 +389,5 @@ func scopeWords(scope []string) string {
 	return strings.Join(scope, ", ")
 }
 
-// seatAccessReadTool is the read of one agent's access at one integration.
-const seatAccessReadTool = "get_seat_access"
-
 // accessSeatRoute is one agent's lane at one integration, in words.
 const accessSeatRoute = "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}"
-
-// seatAccessRead is get_seat_access: the Agents tab's row for one agent on one
-// lane, worded by the engine ([seataccess.LaneView]).
-//
-// THE GRANT AND WHAT THE VENDOR HOLDS, SIDE BY SIDE: an agent's missing
-// permission is decided by its grant in Crewlet, which "In sync" never
-// compares with what the app holds past it.
-func seatAccessRead() Tool {
-	lanes := make([]string, 0, len(seataccess.Lanes()))
-	for _, lane := range seataccess.Lanes() {
-		lanes = append(lanes, string(lane))
-	}
-	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceSeat, ID: "handle",
-		Title: "name", Subtitle: "integration",
-		Facts: []cards.Fact{fact("Status", "status_label", tText),
-			fact("Grant in Crewlet", "grant", tText),
-			fact("Holds now", "holds", tText),
-			fact("App holds", "app_holds", tText),
-			fact("Grant leaves unused", "unused", tText),
-			fact("Scope", "scope", tText),
-			fact("Grants beside its level", "grants", tText),
-			fact("Open requests", "requests", tText),
-			fact("Can be granted", "grantable", tText),
-			fact("In the catalogue", "permissions", tText),
-			fact("Add at the vendor first", "at_vendor.add", tText),
-			fact("Catalogue read", "catalogue_read_at", tDatetime),
-			fact("Account", "account", tText),
-			fact("Tool", "tool", tLabel),
-			fact("Last check", "checked_at", tDatetime),
-			fact("Last applied", "applied_at", tDatetime),
-			fact("Last outcome", "outcome", tText),
-			fact("Refused because", "refusal", tText)},
-		Items: &cards.Items{Path: "plan", Label: "text", Fact: "by",
-			Noun: wire.Noun{One: "step for the next sync", Many: "steps for the next sync"}},
-		Open: &cards.Open{Screen: "integrations"}},
-		// What a person adds at the vendor, at the address the catalogue built.
-		Outside: vendorStep}
-	// ONE CARD PER LANE, so the same agent read at two integrations is two
-	// records to the drawer rather than the second replacing the first.
-	specs := make(map[string]cards.Spec, len(lanes))
-	for _, lane := range lanes {
-		specs[lane] = spec
-	}
-	return Tool{
-		Name: seatAccessReadTool, Phrase: "read an agent's access to an integration",
-		Description: "Administrators: one agent's access at one integration, as its Agents " +
-			"tab shows it. Its grant in Crewlet (what the agent is allowed; only an " +
-			"administrator changes it, with set_seat_access), what its credential holds at " +
-			"the vendor now, for GitHub what the agent's app is registered with and which of " +
-			"that its grant leaves unused (never drift: every token is narrowed to the grant), " +
-			"its scope, its status, what the next sync will do, and two clocks: when a pass " +
-			"last checked the vendor (every pass, Check now included) and when a sync last " +
-			"applied the grant. On an integration that grants single permissions beside a " +
-			"level, such as Cloudflare, also each such grant the agent holds (where, until " +
-			"when, for which of its requests), each request it has open for one with the two " +
-			"options of its question that grant it, how many more permissions the catalogue " +
-			"offers it, and for each permission its grants and requests name: whether its " +
-			"level holds it, whether it changes things, and whether the company's own " +
-			"connection can grant it, or what a person must add to that connection at the " +
-			"vendor first and where, which the card links to. Look any other permission up with " +
-			grantCatalogueTool + ". Read this whenever an agent says it lacks access, asks " +
-			"for a permission, or somebody asks whether an integration is set up right for " +
-			"an agent.",
-		schema: object([]string{"handle", "integration"}, map[string]*schema{
-			"handle": text("The agent's handle or name.", nameBytes),
-			"integration": oneOf("The integration. Jira and Confluence are read "+
-				"separately, on the agent's one Atlassian account.", lanes...),
-		}),
-		Names:  map[string]Directory{"handle": DirSeat},
-		Routes: []string{accessSeatRoute}, Apps: adminOnly,
-		// THE VENDOR'S WORDS REACH THE MODEL: a refusal quotes the vendor, and
-		// level, account and scope names are written there.
-		Fence: true, Trust: provenance.TrustExternal,
-		Build: func(a map[string]any) (exec.Request, error) {
-			args := Args(a)
-			lane := seataccess.Lane(args.String("integration"))
-			if !lane.Valid() {
-				return exec.Request{}, fmt.Errorf("%w: no integration %q", ErrInvalidArguments,
-					lane)
-			}
-			return get(accessSeatRoute, map[string]string{"kind": string(lane.Kind()),
-				"handle": args.String("handle"), "lane": string(lane)}, nil)
-		},
-		Variant: by("integration", string(seataccess.LaneGitHub)),
-		Cards:   specs,
-		Label: func(a map[string]any) string {
-			args := Args(a)
-			title := laneTitle(seataccess.Lane(args.String("integration")))
-			if handle := args.String("handle"); handle != "" && len(handle) <= nameBytes &&
-				title != "" {
-				return "Reading " + handle + "'s " + title + " access"
-			}
-			return "Reading an agent's access"
-		},
-	}
-}
-
-// vendorStep reads the lane view's step at the vendor ([seataccess.VendorStep]).
-var vendorStep = &cards.Outside{Path: "at_vendor.url", Label: "at_vendor.label"}
-
-// grantCatalogueTool looks a permission up in a lane's catalogue for one agent.
-const grantCatalogueTool = "search_grant_catalogue"
-
-// grantCatalogueSearch is search_grant_catalogue: the seat read with a lookup, as
-// a table. Its own tool, since the drawer keeps one card per record and two
-// lookups on one agent would leave only the second.
-func grantCatalogueSearch() Tool {
-	lanes := make([]string, 0, len(seataccess.Lanes()))
-	for _, lane := range seataccess.Lanes() {
-		lanes = append(lanes, string(lane))
-	}
-	return Tool{
-		Name: grantCatalogueTool, Phrase: "look a permission up in an integration's catalogue",
-		Description: "Administrators: look a permission up by part of its name (Origin Rules) " +
-			"in an integration's live catalogue of single permissions an agent can be " +
-			"granted beside its level, such as Cloudflare's. Each match says which level " +
-			"already holds it, whether it changes things, and whether the company's own " +
-			"connection to the vendor can grant it now or what a person must add to that " +
-			"connection at the vendor first and where. Read this before saying whether an " +
-			"agent needs a higher level or a grant of one permission, or what to add at the " +
-			"vendor. The catalogue is at most a minute old. An agent's own grants and " +
-			"requests are on get_seat_access.",
-		schema: object([]string{"handle", "integration", "q"}, map[string]*schema{
-			"handle": text("The agent's handle or name, whose level the matches are judged "+
-				"against.", nameBytes),
-			"integration": oneOf("The integration.", lanes...),
-			"q": chars("Part of the permission's name, as the vendor shows it.",
-				seataccess.MaxLookupChars),
-		}),
-		Names:  map[string]Directory{"handle": DirSeat},
-		Routes: []string{accessSeatRoute}, Apps: adminOnly,
-		// The vendor's words (names, why the connection cannot grant) reach the model.
-		Fence: true, Trust: provenance.TrustExternal,
-		Build: func(a map[string]any) (exec.Request, error) {
-			args := Args(a)
-			lane := seataccess.Lane(args.String("integration"))
-			if !lane.Valid() {
-				return exec.Request{}, fmt.Errorf("%w: no integration %q", ErrInvalidArguments,
-					lane)
-			}
-			return get(accessSeatRoute, map[string]string{"kind": string(lane.Kind()),
-				"handle": args.String("handle"), "lane": string(lane)},
-				query(args).str("q", "permission").values())
-		},
-		Cards: one(cards.Spec{Note: "lookup_note", Outside: vendorStep, Table: &cards.Table{
-			Title: "Permissions in the catalogue", Rows: "lookup", More: "lookup_more",
-			Brief: []string{"name", "level", "grantable", "missing"},
-			Columns: []cards.Column{col("name", "Permission", "name", tText),
-				col("level", "Held by", "level", tText),
-				col("grantable", "Can be granted", "grantable", tText),
-				col("missing", "Add at the vendor", "missing", tText),
-				col("where", "Where", "action_url", tText),
-				col("group", "Group", "group", tText),
-				col("write", "Changes things", "write", tText),
-				col("id", "Vendor name", "id", tText)},
-			Open: &cards.Open{Screen: "integrations"}}}),
-		// One lookup for two agents, or at two integrations, is two reads.
-		Scope: func(a Args) string {
-			return scopeOf(quoted(a), labelled(a, "handle", "for"),
-				laneTitle(seataccess.Lane(a.String("integration"))))
-		},
-		Label: func(a map[string]any) string {
-			args := Args(a)
-			title := laneTitle(seataccess.Lane(args.String("integration")))
-			if q := args.String("q"); q != "" && len(q) <= nameBytes && title != "" {
-				return "Looking up " + q + " in " + title + "'s catalogue"
-			}
-			return "Looking a permission up"
-		},
-	}
-}

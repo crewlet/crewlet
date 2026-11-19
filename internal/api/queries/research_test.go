@@ -5,51 +5,41 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/research"
 )
 
-// readerOf answers every listed page, and records the hosts it was handed.
-type readerOf struct{ hosts *[]string }
+// readerOf answers every public https page.
+type readerOf struct{}
 
-func (r readerOf) Read(_ context.Context, hosts []string, url string, from int) (research.Page, error) {
-	*r.hosts = hosts
-	if _, err := research.Allowed(hosts, url); err != nil {
+func (readerOf) Read(_ context.Context, url string, from int) (research.Page, error) {
+	if _, err := research.Public(url); err != nil {
 		return research.Page{}, err
 	}
 	return research.Page{URL: url, From: from, Text: "Words."}, nil
 }
 
-// A page is read only from the hosts the company lists: none listed is research
-// off, refused naming the setting, and a host off the list is refused.
-func TestAPageIsReadOnlyFromTheHostsTheCompanyLists(t *testing.T) {
+// TestAPageIsReadAtAnyPublicHttpsAddress: research_page answers any public
+// https page with no list to configure, and refuses an address that is not
+// one as the caller's to change. Mutation: hold the address to a list again.
+func TestAPageIsReadAtAnyPublicHttpsAddress(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
-		doc, url string
-		ok       bool
-	}{
-		"off":      {"name: Acme\n", "https://docs.example.com/a", false},
-		"listed":   {"name: Acme\nassistant:\n  research:\n    hosts: [docs.example.com]\n", "https://docs.example.com/a", true},
-		"unlisted": {"name: Acme\nassistant:\n  research:\n    hosts: [docs.example.com]\n", "https://collector.example/x", false},
+	for url, ok := range map[string]bool{
+		"https://docs.example.com/a": true, "https://collector.example/x": true,
+		"http://docs.example.com/a": false, "https://docs.example.com:8443/a": false,
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cfg, err := config.ParseCompany([]byte(tc.doc))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var hosts []string
-			s := viewerSources(t, &stubWork{})
-			s.Company, s.Research = companySource(t, cfg), readerOf{&hosts}
-			got, err := askAsSeat(t, s, "ana", "research_page", map[string]any{"url": tc.url})
-			switch {
-			case tc.ok && (err != nil || got.(research.Page).Text != "Words."):
-				t.Errorf("a listed page answered %v, %v", got, err)
-			case !tc.ok && !errors.Is(err, queries.ErrBadParams):
-				t.Errorf("%s answered %v, %v; want a refusal", tc.url, got, err)
-			}
-		})
+		s := viewerSources(t, &stubWork{})
+		s.Research = readerOf{}
+		got, err := askAsSeat(t, s, "ana", "research_page", map[string]any{"url": url})
+		switch {
+		case ok && (err != nil || got.(research.Page).Text != "Words."):
+			t.Errorf("%s answered %v, %v", url, got, err)
+		case !ok && !errors.Is(err, queries.ErrBadParams):
+			t.Errorf("%s answered %v, %v; want a refusal", url, got, err)
+		}
 	}
 }
 
@@ -63,8 +53,10 @@ func (s searcherOf) ResearchSearch(_ context.Context, q string) (research.Result
 	return research.Results{Query: q, Results: []research.Result{{Title: "Rules"}}}, nil
 }
 
-// A search is refused naming the setting while none is configured, a query
-// out of bounds is refused, and a server that fails is unavailable.
+// TestASearchAnswersOrSaysWhyNot: a search is answered through Ask Crewlet's
+// grant alone, refused where the model has no search run or the query is out
+// of bounds, and unavailable where the run fails. Asked at the keyboard it is
+// refused on authority, since only a turn is charged its spend.
 func TestASearchAnswersOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -79,7 +71,15 @@ func TestASearchAnswersOrSaysWhyNot(t *testing.T) {
 			t.Parallel()
 			s := viewerSources(t, &stubWork{})
 			s.Searcher = searcherOf{tc.err}
-			got, err := askAsSeat(t, s, "ana", "research_search", map[string]any{"q": "origin rules"})
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			person := iam.Principal{ID: uuid.New(), Login: "ana", Kind: iam.KindPerson,
+				Seat: "ana", Stage: iam.StageActive}
+			got, err := r.Answer(through(person), "research_search", map[string]any{"q": "origin rules"})
+			if _, kept := r.Answer(iam.WithPrincipal(t.Context(), person), "research_search",
+				map[string]any{"q": "origin rules"}); !errors.Is(kept, queries.ErrUnauthorized) {
+				t.Errorf("a search asked at the keyboard answered %v", kept)
+			}
 			switch {
 			case tc.want == nil && (err != nil || got.(research.Results).Query != "origin rules"):
 				t.Errorf("the search answered %v, %v", got, err)

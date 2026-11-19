@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Tool is the catalogue's own tool of that name, the one a suite drives a
@@ -22,6 +23,53 @@ func Tool(t testing.TB, name string) catalog.Tool {
 		t.Fatalf("assistanttest: the catalogue has no tool %q", name)
 	}
 	return tool
+}
+
+// API is the generic API tools (describe_api, read_api, propose_api_change)
+// over routes, offered to p: the tools a running node builds over its route
+// table, each route here deciding inside its handler as a suite's fake
+// answers it.
+func API(t testing.TB, p iam.Principal, routes ...string) []catalog.Tool {
+	t.Helper()
+	rs := make([]catalog.Route, 0, len(routes))
+	for _, r := range routes {
+		rs = append(rs, catalog.Route{Pattern: r})
+	}
+	table, err := catalog.NewRouteTable(rs)
+	if err != nil {
+		t.Fatalf("assistanttest: %v", err)
+	}
+	return catalog.GenericTools(table, p, nil)
+}
+
+// ReadAPI is the read_api tool over routes ([API]).
+func ReadAPI(t testing.TB, routes ...string) catalog.Tool {
+	t.Helper()
+	for _, tool := range API(t, iam.Principal{}, routes...) {
+		if tool.Name == catalog.ReadAPITool {
+			return tool
+		}
+	}
+	t.Fatalf("assistanttest: the generic tools hold no %s", catalog.ReadAPITool)
+	return catalog.Tool{}
+}
+
+// ReadAPIFor is the read_api tool offered to p over routes as a running node's
+// table holds them, each with its verb or the apps a route that decides inside
+// reads, so a read is tagged with the apps p drew on.
+func ReadAPIFor(t testing.TB, p iam.Principal, routes ...catalog.Route) catalog.Tool {
+	t.Helper()
+	table, err := catalog.NewRouteTable(routes)
+	if err != nil {
+		t.Fatalf("assistanttest: %v", err)
+	}
+	for _, tool := range catalog.GenericTools(table, p, nil) {
+		if tool.Name == catalog.ReadAPITool {
+			return tool
+		}
+	}
+	t.Fatalf("assistanttest: the generic tools hold no %s", catalog.ReadAPITool)
+	return catalog.Tool{}
 }
 
 // FullMeter is a meter whose company window is already full: every call is

@@ -104,11 +104,14 @@ func TestABriefsCapIsItsOwnAndEveryRoundIsCharged(t *testing.T) {
 	}
 }
 
-// A BRIEF ONLY READS: it is offered the reads and its answer, never a write, a
-// navigation or a page action. Mutation: pass every offered tool through.
+// A BRIEF ONLY READS: it is offered the reads, the route lookup and its answer,
+// never a write, a navigation or a page action. Mutation: pass every offered
+// tool through.
 func TestABriefIsOfferedOnlyReadsAndItsAnswer(t *testing.T) {
 	t.Parallel()
-	offered := []catalog.Tool{{Name: "get_task", Kind: catalog.KindRead},
+	offered := []catalog.Tool{{Name: catalog.ReadAPITool, Kind: catalog.KindRead},
+		{Name: catalog.DescribeAPITool, Kind: catalog.KindDocs},
+		{Name: "search_engine_docs", Kind: catalog.KindDocs},
 		{Name: "update_task", Kind: catalog.KindWrite},
 		{Name: "open_in_app", Kind: catalog.KindNavigate},
 		{Name: "propose_page_change", Kind: catalog.KindPageAction}}
@@ -116,8 +119,9 @@ func TestABriefIsOfferedOnlyReadsAndItsAnswer(t *testing.T) {
 	for _, tool := range briefTools(offered) {
 		names = append(names, tool.Name)
 	}
-	if len(names) != 2 || names[0] != "get_task" || names[1] != catalog.AnswerBriefTool {
-		t.Errorf("a brief is offered %v, want get_task and %s", names, catalog.AnswerBriefTool)
+	want := []string{catalog.ReadAPITool, catalog.DescribeAPITool, catalog.AnswerBriefTool}
+	if !slices.Equal(names, want) {
+		t.Errorf("a brief is offered %v, want %v", names, want)
 	}
 }
 

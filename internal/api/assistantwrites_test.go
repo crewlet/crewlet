@@ -122,10 +122,10 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 			"role": "viewer"}},
 		{"pause_agent", map[string]any{"handle": "pm", "reason": "Maintenance."}},
 	}
-	read := map[string]any{"item": "ENG-42"}
+	read := map[string]any{"route": "GET /worklet/{id}", "path": map[string]any{"id": "ENG-42"}}
 	var rounds []evals.Round
 	for _, o := range obeyed {
-		rounds = append(rounds, evals.Call("r-"+o.tool, "get_task", read),
+		rounds = append(rounds, evals.Call("r-"+o.tool, catalog.ReadAPITool, read),
 			evals.Call("w-"+o.tool, o.tool, o.args))
 	}
 	fx, audit := actingAssistApp(t)
@@ -228,8 +228,12 @@ func writingRig(t *testing.T, fx *assistApp, d exec.Dispatcher,
 			acts = append(acts, tool.Act)
 		}
 	}
+	tools := &catalog.API{}
+	if err := tools.Bind(fx.app.AssistantRoutes()); err != nil {
+		t.Fatalf("the App's assistant routes: %v", err)
+	}
 	rig := assistanttest.NewRig(t, evals.RigOptions{Rounds: rounds, Person: &person,
-		Catalogue: catalog.Curated{}, Acts: acts, Dispatcher: d, Revoker: fx.d})
+		Catalogue: tools, Acts: acts, Dispatcher: d, Revoker: fx.d})
 	onAppClock(rig)
 	return rig
 }

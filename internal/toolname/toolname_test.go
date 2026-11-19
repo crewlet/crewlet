@@ -126,12 +126,7 @@ var spelledElsewhere = map[string]map[string]string{
 	// every engine tool's name it needs off the authority verb.
 	"internal/assistant/catalog/toolnames.go": {
 		"answer_executor":  "a Dashboard Assistant tool's own name",
-		"get_artifact":     "a Dashboard Assistant tool's own name",
-		"get_page":         "a Dashboard Assistant tool's own name",
-		"list_artifacts":   "a Dashboard Assistant tool's own name",
-		"list_projects":    "a Dashboard Assistant tool's own name",
 		"mark_inbox":       "a Dashboard Assistant tool's own name",
-		"search_knowledge": "a Dashboard Assistant tool's own name",
 		"share_artifact":   "a Dashboard Assistant tool's own name",
 		"steer_turn":       "a Dashboard Assistant tool's own name",
 		"unshare_artifact": "a Dashboard Assistant tool's own name",

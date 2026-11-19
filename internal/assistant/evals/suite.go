@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,12 +36,11 @@ type Case struct {
 	// needs the page.
 	Mode    wire.TurnMode `yaml:"mode"`
 	Answers []CaseAnswer  `yaml:"answers"`
-	// Research are the hosts the company lists for web research; none is off.
-	// Search names a search server for them too.
-	Research []string    `yaml:"research"`
-	Search   bool        `yaml:"search"`
-	Script   []CaseRound `yaml:"script"`
-	Expect   Expect      `yaml:"expect"`
+	// Search is a model whose harness has a search-only run, so search_web
+	// is offered.
+	Search bool        `yaml:"search"`
+	Script []CaseRound `yaml:"script"`
+	Expect Expect      `yaml:"expect"`
 
 	page *wire.PageContext
 }
@@ -253,12 +253,8 @@ func (c Case) Validate() error {
 			fail("answers[%d].status: %d is not an HTTP status", i, a.Status)
 		}
 	}
-	if c.Search && len(c.Research) == 0 {
-		fail("search: a search needs the research hosts it keeps to")
-	}
 	offered := func(tool string) bool { // the web reads the case's company is offered
-		return tool == catalog.FetchWebPageToolName && len(c.Research) > 0 ||
-			tool == catalog.SearchWebToolName && c.Search
+		return tool == catalog.FetchWebPageToolName || tool == catalog.SearchWebToolName && c.Search
 	}
 	for i, r := range c.Script {
 		switch {
@@ -319,5 +315,6 @@ func (c Case) Validate() error {
 // answer among them.
 func known(name string) bool {
 	_, ok := catalog.Lookup(name)
-	return ok || name == catalog.AnswerBriefTool
+	return ok || slices.Contains([]string{catalog.AnswerBriefTool, catalog.DescribeAPITool,
+		catalog.ReadAPITool, catalog.ProposeAPIChangeTool}, name)
 }
