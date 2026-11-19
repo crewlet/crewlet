@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -987,6 +989,53 @@ func TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot(t *testing.T) {
 	}
 	if got["data"] != false {
 		t.Errorf("a question naming no wait is asked under a deadline")
+	}
+}
+
+// A QUESTION THAT PANICS IS ANSWERED AS FAILED, AND THE SOCKET AND THE PROCESS
+// GO ON, as net/http answers a request whose handler panicked: [panics] hears
+// the panic once, in [panics.ScopeAPI], the question is answered
+// `query_failed`, and the socket answers the next question.
+//
+// Mutation: drop the query goroutine's containment, and the panic ends the
+// test binary.
+func TestAQueryThatPanicsIsAnsweredAsFailedAndTheSocketGoesOn(t *testing.T) {
+	t.Parallel()
+	defect := errors.New("a question's own defect")
+	var mu sync.Mutex
+	var heard []panics.Scope
+	defer panics.Observe(func(p *panics.Panic) {
+		if p.Value == defect {
+			mu.Lock()
+			heard = append(heard, p.Scope)
+			mu.Unlock()
+		}
+	})()
+	f := newSocket(t, nil, func(_ context.Context, what string, _ map[string]any) (any, error) {
+		if what == "executor_session" {
+			panic(defect)
+		}
+		return "answered", nil
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "executor_session"})
+	got := next(t, conn)
+	if kindOf(got) != stream.KindError || got["id"] != float64(1) || got["error"] != stream.CodeQueryFailed {
+		t.Fatalf("the answer to a question that panicked = %v, want its error query_failed", got)
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 2, "what": "events"})
+	if got = next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(2) {
+		t.Fatalf("the answer after a question that panicked = %v, want the next question's result", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 1 || heard[0] != panics.ScopeAPI {
+		t.Errorf("panics heard the question's panic in %v, want once in %q", heard, panics.ScopeAPI)
 	}
 }
 

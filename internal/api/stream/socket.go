@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/presence"
 )
 
@@ -503,6 +504,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		defer cancel()
+		defer containPanic(ctx, "socket_write", func() {})
 		writeLoop(ctx, conn, client)
 	})
 
@@ -520,6 +522,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
+		// A SOCKET NOBODY DECIDES AGAIN IS CLOSED, so its tab's handshake decides.
+		defer containPanic(ctx, "socket_decide", func() {
+			_ = conn.Close(CloseUndecided, "Sign-in could not be decided again. Reconnecting.")
+		})
 		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now,
 			func(ctx context.Context, p iam.Principal) bool {
 				return !svc.AudienceFor(ctx, p).Equal(client.Audience())
@@ -532,7 +538,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval, rooms)
+	code, reason := readFrames(ctx, conn, seats, client, query, who, svc.interval, rooms)
 
 	// THE ROOM FRAMES FIRST, so no join lands after the leave below.
 	close(rooms.ops)
@@ -573,6 +579,12 @@ func (r *socketRooms) queue(ctx context.Context, req request) {
 // room's on the chat arm, which decides who may be in a chat room as it
 // decides who is shown what is said there.
 func (s *Service) roomOp(ctx context.Context, client *Client, chat *ChatHub, req request) {
+	defer containPanic(ctx, req.Kind, func() {
+		if req.Kind == "artifact_join" {
+			client.Reply(Envelope{Kind: KindError, ID: req.ID, What: artifactJoinWhat, Error: CodeQueryFailed,
+				Artifact: req.Artifact})
+		}
+	})
 	switch req.Kind {
 	case "artifact_join":
 		s.joinArtifact(ctx, client, req)
@@ -626,6 +638,19 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 			}
 		}
 	}
+}
+
+// readFrames is [readLoop], a panic in it contained ([containPanic]) and ending
+// the socket as an internal error, so the socket's own teardown runs: escaped,
+// it would wait on the decider that only that teardown ends.
+func readFrames(ctx context.Context, conn *websocket.Conn,
+	seats *watching, client *Client, query Query, who *asking,
+	healthEvery time.Duration, rooms *socketRooms,
+) (code websocket.StatusCode, reason string) {
+	defer containPanic(ctx, "socket_read", func() {
+		code, reason = websocket.StatusInternalError, "The node failed reading a frame. Reconnecting."
+	})
+	return readLoop(ctx, conn, seats, client, query, who, healthEvery, rooms)
 }
 
 // readLoop handles client frames until the socket closes, and reports the
@@ -720,6 +745,11 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 				defer running.Done()
 				defer func() { <-slots }()
 				defer stop()
+				defer containPanic(asked, req.What, func() {
+					if asked.Err() == nil {
+						client.Reply(queryError(req, CodeQueryFailed))
+					}
+				})
 				// AS WHOEVER THE LAST DECISION SAID, not whoever opened
 				// the socket: a permission taken away an hour ago must
 				// not still answer here. See lifetime.go.
@@ -1053,6 +1083,22 @@ func queryError(req request, code httpjson.Code) Envelope {
 // ignore — which is what makes a newer client safe against an older server.
 func decodeRequest(raw []byte, req *request) error {
 	return json.Unmarshal(raw, req)
+}
+
+// containPanic, deferred on a goroutine a socket's client is served on, contains
+// a panic there as net/http contains a request handler's: [panics] hears it in
+// [panics.ScopeAPI], the log has its stack, and failed answers whoever waited
+// (a query as failed, the socket closed where nothing else can). Uncontained,
+// one question's panic ended the engine's process, every socket and seat on it.
+// Deferred itself, since recover answers only the function a defer calls.
+func containPanic(ctx context.Context, what string, failed func()) {
+	v := recover()
+	if v == nil {
+		return
+	}
+	p := panics.Recovered(panics.ScopeAPI, v)
+	log.ErrorContext(ctx, "stream_panicked", "what", what, "panic", fmt.Sprint(v), "stack", p.Stack)
+	failed()
 }
 
 // maxWaitMS is the longest wait a frame names that a [time.Duration] holds;
