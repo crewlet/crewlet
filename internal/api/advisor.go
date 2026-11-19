@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -94,7 +96,7 @@ func advisorCall(w http.ResponseWriter, r *http.Request, p iam.Principal, verb, 
 	}
 	opID, err := statelog.KeyedOpID(key, verb, object, asks)
 	if err != nil {
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		refuseAdvisorLog(w, r, log, verb, err)
 		return advisordomain.Call{}, false
 	}
 	return advisordomain.Call{By: iam.ActorFor(p), OpID: opID}, true
@@ -112,7 +114,7 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	}
 	pending, err := a.advisor.PendingRequests(r.Context(), statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
-		httpjson.Refuse(w, err)
+		refuseAdvisorLog(w, r, log, "advisor_pending_requests", err)
 		return
 	}
 	if len(pending) > 0 {
@@ -122,13 +124,13 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := uuid.NewString()
-	call, ok := advisorCall(w, r, principal, "advisor.run", run, nil)
+	call, ok := advisorCall(w, r, principal, "advisor_run", run, nil)
 	if !ok {
 		return
 	}
 	if _, err := a.advisor.RequestRun(r.Context(), call, advisordomain.RunRequest{Run: run,
 		By: principal.Seat}); err != nil {
-		httpjson.Refuse(w, err)
+		refuseAdvisorLog(w, r, log, "advisor_run", err)
 		return
 	}
 	httpjson.Write(w, http.StatusAccepted, map[string]string{"run_id": run})
@@ -190,21 +192,21 @@ func (a *App) serveAdvisorDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		httpjson.Refuse(w, err)
+		refuseAdvisorLog(w, r, log, "advisor_finding", err)
 		return
 	}
-	call, ok := advisorCall(w, r, principal, "advisor."+string(body.Decision), id,
+	call, ok := advisorCall(w, r, principal, "advisor_"+string(body.Decision), id,
 		map[string]any{"reason": body.Reason})
 	if !ok {
 		return
 	}
 	if err := a.decide(r.Context(), call, row, body.Decision, reason); err != nil {
-		refuseDecision(w, err)
+		refuseDecision(w, r, err)
 		return
 	}
 	finding, err := a.advisorFinding(r.Context(), id)
 	if err != nil {
-		httpjson.Refuse(w, err)
+		refuseAdvisorLog(w, r, log, "advisor_finding", err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, finding)
@@ -243,16 +245,36 @@ func (a *App) decide(ctx context.Context, call advisordomain.Call, row advisordo
 
 // refuseDecision says why a decision was not recorded, in the log's own words
 // where they are the caller's to act on.
-func refuseDecision(w http.ResponseWriter, err error) {
+func refuseDecision(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, advisordomain.ErrStaleVersion), errors.Is(err, advisordomain.ErrIllegalMove):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeConflict, map[string]string{
 			"detail": "the finding changed since it was read: " + advisordomain.Sentence(err)})
+	default:
+		refuseAdvisorLog(w, r, log, "advisor_decision", err)
+	}
+}
+
+// refuseAdvisorLog answers a read or a write of the advisor log that failed:
+// 400 for what the log refuses as malformed, in its own words; 503 where no
+// copy could serve it now, with the state log's hint; and otherwise 500,
+// whose answer says the reason is in this node's log, SO IT IS WRITTEN THERE,
+// under what was being done. Never the request-body refusal, whose 400 would
+// blame a body for a store's failure.
+func refuseAdvisorLog(w http.ResponseWriter, r *http.Request, logger *slog.Logger, what string, err error) {
+	var read *statelog.Refused
+	var write *statelog.Unavailable
+	switch {
 	case errors.Is(err, advisordomain.ErrInvalid):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 			"detail": advisordomain.Sentence(err)})
+	case errors.As(err, &read), errors.As(err, &write), errors.Is(err, queries.ErrUnavailable):
+		stream.LogUnavailable(r.Context(), logger, "api_advisor_unavailable", err, "what", what)
+		u := stream.UnavailableOf(err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
-		httpjson.Refuse(w, err)
+		stream.LogFailed(r.Context(), logger, "api_advisor_failed", err, "what", what)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 	}
 }
 
