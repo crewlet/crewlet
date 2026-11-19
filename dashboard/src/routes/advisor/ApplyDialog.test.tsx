@@ -349,3 +349,60 @@ test("a fix with several options re-checks the one the person picks", async () =
   expect(bodies).toEqual([{ option: 0 }, { option: 1 }]);
   expect(writes(sent)).toEqual([]);
 });
+
+// AN OPTION PICKED WHILE ANOTHER IS STILL BEING RE-CHECKED wins: the earlier
+// answer, however late it lands, is never shown for the option now picked
+// (Apply would send its change), and its cancelled request is no failure.
+test("a re-check answered after the person picked another option is dropped", async () => {
+  const twoOptions: AdvisorKeptFinding = {
+    ...FINDING,
+    fix: {
+      ...FINDING.fix,
+      options: [
+        { label: "Add one seat", change: { entity: "units", id: "eng", set: {}, summary: "a" } },
+        {
+          label: "Raise the round cap",
+          change: { entity: "roles", id: "backend", set: {}, summary: "b" },
+        },
+      ],
+    },
+  };
+  let releaseFirst: () => void = () => {};
+  const firstHeld = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let calls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string) => {
+      if (new URL(input).pathname !== `/advisor/findings/${ID}/recheck`) {
+        return json({ error: "not_found" }, 404);
+      }
+      calls += 1;
+      // THE FIRST ANSWER WAS ALREADY IN HAND when the person picked again:
+      // it lands after the second, whatever the abort.
+      if (calls === 1) {
+        await firstHeld;
+        return json(answer({ outcome: "holds", digest: "sha256:option0" }));
+      }
+      return json(answer({ outcome: "not_applicable", send: null, digest: "sha256:option1" }));
+    }),
+  );
+  render(
+    <LayerHost>
+      <ApplyDialog finding={twoOptions} onClose={() => {}} onSettled={() => {}} />
+    </LayerHost>,
+  );
+  await screen.findByText("Checking it still holds");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
+  });
+  await screen.findByText("This no longer applies");
+  await act(async () => {
+    releaseFirst();
+    await firstHeld;
+  });
+  expect(screen.getByText("This no longer applies")).toBeDefined();
+  expect(screen.queryByText("It still holds")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});

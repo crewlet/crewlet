@@ -83,12 +83,15 @@ export function ApplyDialog({
   const live = useRef(new AbortController());
   const settled = useRef(false);
 
-  const run = useCallback(async (step: () => Promise<ApplyState>) => {
+  // A STEP ANSWERS ONLY WHILE ITS OWN RE-CHECK STANDS: one started for an
+  // option the person has since moved off (or a dialog since closed) is
+  // dropped, however late it lands, and its cancelled request is no failure.
+  const run = useCallback(async (signal: AbortSignal, step: () => Promise<ApplyState>) => {
     try {
       const next = await step();
-      if (!live.current.signal.aborted) setState(next);
+      if (!signal.aborted) setState(next);
     } catch (err) {
-      if (!live.current.signal.aborted) {
+      if (!signal.aborted) {
         setState((was) => ({
           kind: "failed",
           message: failureWords(err),
@@ -104,7 +107,7 @@ export function ApplyDialog({
     const controller = new AbortController();
     live.current = controller;
     setState({ kind: "checking" });
-    void run(async () => ({
+    void run(controller.signal, async () => ({
       kind: "checked",
       check: await recheck(finding.id, option, controller.signal),
     }));
@@ -124,8 +127,9 @@ export function ApplyDialog({
 
   const apply = (check: AdvisorRecheck) => {
     setState({ kind: "sending", check });
-    void run(async () => {
-      const answer = await applyFrom(finding.id, option, check, Date.now, live.current.signal);
+    const { signal } = live.current;
+    void run(signal, async () => {
+      const answer = await applyFrom(finding.id, option, check, Date.now, signal);
       return answer.kind === "applied"
         ? { kind: "applied", finding: answer.finding }
         : { kind: "checked", check: answer.check };
