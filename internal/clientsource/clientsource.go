@@ -49,7 +49,8 @@
 // `const` is initialised with, [Scalar] the one number or string one is,
 // [Union] the string members of a type alias, [Interface] the members of an
 // interface and whether each is optional, and [Calls] the string each call to
-// a named function is handed first. The same
+// a named function is handed first, and [Property] one row of a table keyed by
+// name. The same
 // declaration laid out on one line or forty, with or without a trailing comma,
 // in single quotes or double, with comments between its members, reads the
 // same. What is not a literal — a spread, a member computed from something
@@ -72,8 +73,8 @@
 // holds nothing else. A copy of an engine-owned set kept beside the screen
 // that draws it is one a reader of that screen edits without knowing a Go gate
 // holds it, so the dashboard keeps them in PURE modules of their own — data
-// and types, importing nothing but each other, which the dashboard's own
-// suite enforces — and `contract_test.go` holds the directory both ways: every
+// and types, importing nothing but each other, every export read, which the
+// dashboard's own suite enforces — and `contract_test.go` holds the directory both ways: every
 // row is declared there, and every name the directory exports is a row. A
 // reader still walks the WHOLE tree, so a second copy declared in a screen is
 // two declarations rather than one the gate cannot see.
@@ -91,6 +92,14 @@
 // at all is [internal/sourcetree]'s rule, for the same reason one level down:
 // a nested checkout's copy of a screen is neither a second declaration nor a
 // first.
+//
+// # A package, not a test helper
+//
+// The gates of every package that owns a declaration read this: engine
+// packages under `internal/`, and `cmd/crewlet` for a declaration the CLI's
+// own commands decide (the terminal steps a screen hands an operator, which
+// only package main's tests can run). A `_test.go` helper is visible to its
+// own package's tests alone, so this is a normal package.
 package clientsource
 
 import (
@@ -145,18 +154,13 @@ type Member struct {
 // Literal returns the array or object literal the ONE `const <name>` under
 // `tree` is initialised with.
 //
-// The head is `const <name>`, exported or not, with any type annotation after
-// it; the body is the first balanced `[…]` or `{…}` after the `=`, reached
-// through nothing but a constructor's name — so `[…] as const`,
-// `new Set([…])` and `{…} satisfies T` are all their bracket. EVERY
-// declaration in every file is counted, at any depth: a `const CATEGORIES`
-// at block scope inside a component is legal TypeScript, and with the
-// module-scope copy still above it a gate validated the first while the screen
-// rendered the second.
-//
-// A SPREAD in the literal is refused, because the members it brings are
-// declared somewhere this body does not show, and a gate over what IS shown
-// would certify part of a set.
+// The head is `const <name>`, exported or not, with any type annotation; the
+// body is the first balanced `[…]` or `{…}` after the `=`, reached through
+// nothing but a constructor's name, so `[…] as const`, `new Set([…])` and
+// `{…} satisfies T` are their bracket. EVERY declaration in every file counts,
+// at any depth: a block-scope `const CATEGORIES` would let a gate validate the
+// module-scope one while the screen rendered the other. A SPREAD is refused:
+// its members are declared where this body does not show.
 func Literal(tree, name string) (Body, error) {
 	if err := registered(name, ReadLiteral); err != nil {
 		return Body{}, err
@@ -553,19 +557,14 @@ func startsName(t token) bool {
 // it is handed as its first argument, mapped to the files (relative to the
 // tree, slash-separated, sorted) that make it.
 //
-// A call is the callee's name — bare, or as a method (`socket.query(`) —
-// optionally with type arguments (`useQuery<"x">(`) or an optional chain
-// (`f?.(`), then a `(` whose first argument is a string literal on its own:
-// followed by `,` or `)`, however many lines it sits across. A call handed
-// anything else first — a variable, an expression, a string with something
-// added to it — names no kind this package can read, and is not in the
-// answer. That is what a hook's own definition looks like
-// (`useQuery(what, …)`), and it is why a screen passing a kind through a
-// variable is invisible here: the dashboard's own `app/source.test.ts` is
-// where that is refused. It reads the calls this does — `useQuery` and
-// `query` by spelling, bare or as a method, whatever they are bound to — and
-// the literal this does, a quoted string or a template with nothing
-// substituted into it, so a call it passes is one this reads.
+// A call is the callee's name, bare or as a method (`socket.query(`), with
+// optional type arguments (`useQuery<"x">(`) or chain (`f?.(`), then a `(`
+// whose first argument is a string literal on its own, followed by `,` or `)`,
+// across any lines. A call handed anything else first (variable, expression,
+// concatenation) names no kind this package can read and is not in the answer,
+// so a screen passing a kind through a variable is invisible here; the
+// dashboard's `app/source.test.ts` refuses that. It reads the same calls and
+// literals (quoted, or an unsubstituted template) as that test.
 func Calls(tree string, callees ...string) (map[string][]string, error) {
 	files, err := scan(tree)
 	if err != nil {
@@ -961,21 +960,14 @@ func heads(toks []token, kind head, name string) []int {
 
 // scan reads and lexes every source file under `tree`.
 //
-// THE SUITES ARE EXCLUDED, or a case that quotes a constant to assert its
-// shape would count as a second declaration of it, and a call a test makes
-// would count as a screen reading a query. A benchmark (`.bench.`, which
-// `vitest bench` runs as `vitest run` runs a suite) is excluded with them: it
-// ships no more than a suite does, the dashboard's own walk
-// (`src/test/source.ts`) reads it as one, and two walks that disagree about
-// what a module is certify two different trees under one name. A file that does not scan FAILS the
-// read rather than being skipped: a gate that reads less than it thinks
-// reports a pass it did not earn.
-//
-// The walk is [sourcetree.Walk], so a nested checkout under the tree — a
-// worktree or a clone, each a copy of every screen at some other commit — and
-// an npm install are not read at all: read as this tree's, a nested copy puts
-// every declaration in two places and fails a gate on a tree holding one, or,
-// once a declaration is deleted here, passes it on the stale copy.
+// THE SUITES ARE EXCLUDED, or a case quoting a constant would count as a second
+// declaration of it, and a test's call as a screen reading a query. A benchmark
+// (`.bench.`) goes with them, as the dashboard's own walk (`src/test/source.ts`)
+// treats it; walks disagreeing about a module certify different trees. A file
+// that does not scan FAILS the read: a gate reading less than it thinks reports
+// a pass it did not earn. The walk is [sourcetree.Walk], so a nested checkout
+// and an npm install are not read: a nested copy puts every declaration in two
+// places.
 func scan(tree string) ([]file, error) {
 	var files []file
 	err := sourcetree.Walk(tree, func(path string, entry os.DirEntry, err error) error {
@@ -1098,19 +1090,14 @@ func spreadIn(toks []token) int {
 // process.
 //
 // KEYED ON THE CONTENT, never on the path. Every reader scans the whole tree,
-// a gate reads several declarations and the contract reads all of them, so
-// without this a package's gates lexed the same few megabytes once per
-// declaration — ten seconds under the race detector for the contract alone.
-// A path-keyed cache would answer a file's OLD tokens to a test that rewrote
-// it; a content-keyed one cannot be stale, because different content is a
-// different key.
+// so without a cache each declaration read lexed the same megabytes again. A
+// path-keyed cache would answer a file's OLD tokens to a test that rewrote it;
+// a content-keyed one cannot be stale.
 //
 // ONE LEX PER KEY, EVEN AT ONCE: the entry is the lex itself, run by whichever
-// caller stores it first, and every other caller waits for that one and is
-// handed its tokens — or its error, so a file that does not scan still fails
-// every read of it. A load-then-store cache let the two or three dashboard
-// gates of one package, started together, each lex the whole tree at the same
-// moment.
+// caller stores it first; every other caller waits and is handed its tokens or
+// its error, so a file that does not scan still fails every read of it. A
+// load-then-store cache let gates started together each lex the whole tree.
 func lexed(rel, src string, jsx bool) ([]token, error) {
 	key := lexKey{rel: rel, src: src, jsx: jsx}
 	entry, _ := lexCache.LoadOrStore(key, sync.OnceValues(func() ([]token, error) {

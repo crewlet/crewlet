@@ -17,26 +17,14 @@ import (
 )
 
 // A SEAT'S REMARK MADE AGAIN AFTER A DIFFERENT CALL IS A COMMENT OF ITS OWN,
-// however it named the page — end to end, from the model's tool call to the
-// rows.
+// however it named the page, end to end.
 //
-// comment_on_page takes its page as an id or as "CONTAINER/Title", so one
-// page can be named two ways. A turn's comment id is derived from what the
-// call RESOLVED to (the page id, the body) and its repeat count, and the
-// count compares the arguments AS TYPED, skipping every earlier call that
-// was this same call. Without the arguments in the identity the two could
-// disagree: "ok" by id, the same again, "ok" by title, "other" by id and
-// then "ok" by id once more gave the last call a count of two — the title
-// call and "other", the two "ok"s by id being itself — which is exactly the
-// count the title call had. So the last call derived the title comment's id
-// and was answered with that comment's success while nothing was written,
-// though it was the same words said again after a different remark, which
-// the rule says is a remark of its own.
-//
-// Nothing between the call and the rows is mocked: the store derives the id
-// from the key the tool hands it, the tool reads the key's count from the log,
-// and the surface writes the log — so the property lives in three packages and
-// is asserted where all three meet.
+// comment_on_page takes an id or "CONTAINER/Title". A comment id derives from
+// what the call RESOLVED to and its repeat count, and the count compares the
+// arguments AS TYPED. Else "ok" by id, again, "ok" by title, "other" by id,
+// then "ok" by id gave the last call the title call's count, so it derived the
+// title comment's id and was answered with that success while nothing was
+// written. Nothing is mocked: the property spans store, tool and surface.
 func TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

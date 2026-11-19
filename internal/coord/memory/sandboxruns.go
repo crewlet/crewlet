@@ -53,22 +53,18 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 	return true, nil
 }
 
-// MutateSandboxRun changes one run's record by a decision taken on the record
-// as it stands.
+// MutateSandboxRun changes one run's record by a decision on it as it stands.
 //
-// OPTIMISTIC, as the KV backend is, and never a decision taken under the
-// twin's lock: the record is read under the lock, decided on WITHOUT it, and
-// written under it again only where its version still holds — a write another
-// writer beat is decided again on the record as it then stands. So a decision
-// is asked again after a lost race here exactly as there, which is the case
-// every caller's decision has to be right for, and one a twin that decided
-// under its lock could never show a test; and a decision that reads or writes
-// the store itself, which the contract allows, does not deadlock on it.
+// OPTIMISTIC, as the KV backend is, never decided under the twin's lock: read
+// under it, decided WITHOUT it, written under it only where the version still
+// holds, else decided again on the record as it then stands. So a decision is
+// re-asked after a lost race exactly as there (a twin deciding under its lock
+// could never show a test that), and a decision that reads or writes the store
+// itself, which the contract allows, cannot deadlock.
 //
-// NO PATIENCE: every race this twin loses is another writer's write landing
-// under its lock, so the loop ends when the writers do. A ctx that ends
-// between two attempts is answered as the KV backend answers it, the store
-// unavailable for this write, because every attempt before it lost.
+// NO PATIENCE: each lost race is another writer's write, so the loop ends when
+// the writers do. A ctx ending between attempts is answered as the KV backend
+// does, the store unavailable for this write.
 func (f *Fleet) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 

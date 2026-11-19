@@ -28,16 +28,13 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // Rederive implements [statelog.Deriver]: every derived column recomputed
 // from what its row already holds.
 //
-// THE SAME DECODE THE APPLY WRITES THEM FROM ([DecodeMessage],
-// [DecodeChannel]), never a second reading of a document in SQL, for the
-// reason the statelog.Deriver doc gives: two implementations of one rule are
-// two answers the day either is edited. Only rows that differ are written, so
-// a node whose rows this build maintained repairs none, and a row re-derived
-// here equals the row a node replaying the log writes.
+// THE SAME DECODE THE APPLY WRITES THEM FROM ([DecodeMessage], [DecodeChannel]),
+// never a second reading in SQL (see the statelog.Deriver doc). Only differing
+// rows are written, so a row re-derived here equals the one a replaying node
+// writes.
 //
-// EACH TABLE IS READ WHOLE BEFORE ANY OF ITS ROWS IS WRITTEN, because an
-// UPDATE of a table a cursor is still walking is a write the cursor may or
-// may not see again. What is held between the two is the repairs alone.
+// EACH TABLE IS READ WHOLE BEFORE ANY ROW IS WRITTEN: an UPDATE of a table a
+// cursor is still walking may or may not be seen again. Only the repairs are held.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 	_ statelog.ApplyOptions) (int, error) {
 

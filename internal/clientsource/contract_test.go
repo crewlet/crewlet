@@ -41,20 +41,16 @@ func TestEveryContractRowIsDeclaredOnceInTheDashboard(t *testing.T) {
 
 // THE CONTRACT DIRECTORY HOLDS THE CONTRACT, AND NOTHING ELSE.
 //
-// Both ways. Every row is declared in `dashboard/src/contract/` — read there
+// Both ways. Every row is declared in `dashboard/src/contract/`, read there
 // with its own reader, so a declaration that moved back beside a screen fails
-// here by name rather than going on passing its gate from a file nobody
-// thinks of as the engine's. And every name the directory EXPORTS is a row:
-// a declaration put there without a gate is a module claiming the engine
-// holds it, which nothing does, and a reader who trusts the directory's name
-// trusts a copy that can drift. (What a module declares without exporting —
-// a row type composed into the one interface a screen names — is held by the
-// first half: it is a row because a gate reads it.)
+// here by name. And every name the directory EXPORTS is a row: one put there
+// without a gate claims the engine holds it, and a reader trusting the
+// directory's name trusts a copy that can drift. (What a module declares
+// without exporting is held by the first half: a gate reads it.)
 //
-// The walk refuses what it cannot see through — a re-export, a default
-// export, two names in one statement — for the reason every reader here
-// does: a walk that returned the names it could see would report the
-// directory as exporting less than it does.
+// The walk refuses what it cannot see through (a re-export, a default export,
+// two names in one statement): returning only the names it could see would
+// report the directory as exporting less than it does.
 func TestTheContractDirectoryHoldsExactlyTheContract(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(clientsource.Tree(t), clientsource.ContractDir)

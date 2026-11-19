@@ -231,20 +231,25 @@ type carrier interface {
 
 // saver is a [carrier] whose session the engine packs while its run still
 // works, as a save ([Runner.PackSave]): beside its harness, from outside the
-// run's script, to a place of the save's own, named after its taker. Only
-// Claude Code's runner is one: its session is files a pack beside the harness
-// can read, in a store it takes no lock on. An OpenCode session lives in the
-// database the run's server holds, reachable only from the run's script (the
-// server's address and password are the script's alone), so none is saved.
+// run's script, to a place of the save's own, named after its taker. Both
+// runners are: Claude Code's session is files a pack beside the harness can
+// read, in a store it takes no lock on; OpenCode's is exported by a private
+// server beside the run's own, from the database both open in WAL mode with a
+// busy timeout (the package doc's "An OpenCode session saved beside its
+// running server").
 type saver interface {
-	// PackSave is the script that packs session now, beside a harness that
-	// may still be working ([claudeHeldTar]), staged in staged
+	// PackSave is the script that packs rec's session now, beside a harness
+	// that may still be working ([claudeHeldTar]), staged in staged
 	// ([Paths.SessionSaveStaging]) and moved to dest ([Paths.SessionSave]) —
 	// never [Paths.SessionCapture] nor a place another save moves over — its
 	// digest kept as every pack's is. It ends as [carrier.Pack] does
-	// ([packNothing] where the harness wrote no transcript, [packFailed] where
-	// no save was made, its error stream saying why) and runs as it does.
-	PackSave(paths Paths, session, staged, dest string) string
+	// ([packNothing] where the harness holds none of the session, [packFailed]
+	// where no save was made, its error stream saying why), or [packNoRoom]
+	// where its box lacks the memory to pack it now, and runs as it does. An
+	// error, and no script, where the record alone refuses the save: handed
+	// the record as the box holds it ([Runner.packNow]), a saver judges it
+	// before any script runs.
+	PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error)
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
