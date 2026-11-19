@@ -85,7 +85,7 @@ func TestAFileAConditionKeptOutIsToldInAModelsWords(t *testing.T) {
 
 // A NODE WITHOUT AN OBJECT STORE KEEPS NO FILE, and says so with a nil seam
 // rather than a store whose every call fails: the orchestrator then offers no
-// attachment and no deep work, and the routes are not mounted.
+// attachment, and the routes are not mounted.
 func TestAssistantFilesAreNilWithoutAnObjectStore(t *testing.T) {
 	t.Parallel()
 	if files := AssistantFiles(&Engine{}); files != nil {

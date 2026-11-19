@@ -259,6 +259,7 @@ const (
 	UnreadMerges       = "merges"
 	UnreadEpisodes     = "alarm_episodes"
 	UnreadFlow         = "flow"
+	UnreadSkips        = "schedule_skips"
 	UnreadStaffing     = "staffing"
 )
 

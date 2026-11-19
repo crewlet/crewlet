@@ -32,6 +32,7 @@ import { ARTIFACT_PAGE_EXTENSIONS } from "../contract/artifactsworkspace.ts";
 
 const PAGES: ReadonlySet<string> = new Set(ARTIFACT_PAGE_EXTENSIONS);
 const XLINK = "http://www.w3.org/1999/xlink";
+const SVG = "http://www.w3.org/2000/svg";
 const ASSETS = "_assets/";
 
 /** One file the viewer can show: where it is, its path under the ticket, and what the page says it is. */
@@ -244,6 +245,7 @@ export const KIT = {
   spacing2: "8px",
   spacing3: "12px",
   spacing6: "24px",
+  breakpointPhone: "640px",
 } as const;
 
 const STYLE = `
@@ -285,6 +287,13 @@ button:hover { border-color: ${KIT.borderStrongHover}; }
 button:focus-visible { outline: 2px solid ${KIT.focus}; outline-offset: 2px; }
 button[hidden] { display: none; }
 button svg { width: 20px; height: 20px; pointer-events: none; }
+@media (max-width: ${KIT.breakpointPhone}) {
+  /* ON A PHONE the steps go under the file, which takes the frame's whole width. */
+  .stage { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  figure { grid-column: 1 / -1; grid-row: 1; }
+  .previous { grid-row: 2; justify-self: end; }
+  .next { grid-row: 2; justify-self: start; }
+}
 .said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 `;
 
@@ -355,7 +364,12 @@ export class FileViewer {
     this.opener = opener;
     parts.previous.hidden = parts.next.hidden = items.length < 2;
     this.show(at);
-    if (!parts.dialog.open) parts.dialog.showModal();
+    if (parts.dialog.open) return;
+    parts.dialog.showModal();
+    // FOCUS BY HAND, never by `autofocus`: a browser refuses autofocus in a
+    // frame from another origin, which an artifact's always is, and says so
+    // in the page's console.
+    parts.close.focus();
   }
 
   close(): void {
@@ -479,10 +493,11 @@ export class FileViewer {
     const bar = el("div", "bar");
     const count = el("span", "count");
     const close = button("Close", closeGlyph);
-    close.autofocus = true;
     const stage = el("div", "stage");
     const previous = button("Previous file", previousGlyph);
+    previous.className = "previous";
     const next = button("Next file", nextGlyph);
+    next.className = "next";
     const figure = el("figure", "");
     const said = el("p", "said");
     said.setAttribute("role", "status");
@@ -530,13 +545,46 @@ export class FileViewer {
     if (opener?.isConnected) (opener as HTMLElement).focus?.({ preventScroll: true });
   }
 
-  /** One of the kit's glyphs, read from its own drawing. */
+  /** One of the kit's glyphs, drawn from its own file ([drawGlyph]). */
   private glyph(source: string): Element {
-    const drawn = new DOMParser().parseFromString(source, "image/svg+xml").documentElement;
-    const svg = this.win.document.importNode(drawn, true);
-    svg.removeAttribute("class");
+    const svg = drawGlyph(this.win.document, source);
     svg.setAttribute("aria-hidden", "true");
     svg.setAttribute("focusable", "false");
     return svg;
   }
+}
+
+const GLYPH_TAG = /<(\/?)([a-z][\w-]*)((?:\s+[\w:-]+="[^"<]*")*)\s*(\/?)>/g;
+const GLYPH_ATTRIBUTE = /([\w:-]+)="([^"<]*)"/g;
+
+/**
+ * A kit glyph's element, built from its file's tags with createElementNS, never
+ * parsed as markup: a page may enforce Trusted Types, under which a parse of a
+ * string throws, and the dashboard's own suite holds every module to no such
+ * sink. A glyph file is one `<svg>` of plain elements and quoted attributes
+ * (Lucide's shape); its comment, `class` and `xmlns` are dropped, and anything
+ * else throws, since the kit's files are pinned and a new shape is a change
+ * to read here first.
+ */
+export function drawGlyph(doc: Document, source: string): SVGSVGElement {
+  const open: Element[] = [];
+  let root: Element | null = null;
+  const tags = source.matchAll(GLYPH_TAG);
+  for (const [, closing = "", tag = "", attributes = "", empty = ""] of tags) {
+    if (closing) {
+      if (open.pop()?.localName !== tag) throw new Error(`a glyph closes <${tag}> it did not open`);
+      continue;
+    }
+    const made = doc.createElementNS(SVG, tag);
+    for (const [, name = "", value = ""] of attributes.matchAll(GLYPH_ATTRIBUTE)) {
+      if (name !== "class" && name !== "xmlns") made.setAttribute(name, value);
+    }
+    const parent = open.at(-1);
+    if (parent) parent.append(made);
+    else if (root || tag !== "svg") throw new Error("a glyph is one <svg>");
+    else root = made;
+    if (!empty) open.push(made);
+  }
+  if (!root || open.length > 0) throw new Error("a glyph is one <svg>, closed");
+  return root as SVGSVGElement;
 }

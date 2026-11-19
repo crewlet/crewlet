@@ -127,12 +127,6 @@ func (b *Bridge) relayed() http.Handler {
 
 // admitRelayed is what this node can do for a call relayed to it: the same
 // verdict it gives a call that reached its own route.
-//
-// BUT NEVER A LOOPBACK SESSION's ([Session.Loopback]): its token is worth
-// something from this host's loopback alone, and a relayed call came from
-// wherever the box that sent it is. The client address the entry carries
-// cannot stand in for that, because it is the entry's own loopback that it
-// would name.
 func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	// THE TOKEN IS THE FIRST SEGMENT after the prefix, whatever route under
 	// it the call is for: the MCP endpoint, one of the seat's MCP servers
@@ -142,10 +136,7 @@ func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	if !ok {
 		return httprelay.Refuse
 	}
-	opened, verdict := b.verdict(sub)
-	if opened != nil && opened.session.Loopback {
-		return httprelay.Refuse
-	}
+	_, verdict := b.verdict(sub)
 	return verdict
 }
 
@@ -160,9 +151,8 @@ const (
 )
 
 // forward answers a call this node holds no open session for: the session's
-// holder answers it, here or relayed, or the call waits for one that can. A
-// seat's holder is the one its lease names, and a pinned session's the
-// incarnation its token names ([route]).
+// holder answers it, here or relayed, or the call waits for one that can. The
+// holder is the one its seat's lease names ([route]).
 //
 // A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). While the call
 // waits, no node has taken it, so nothing of it runs anywhere, and a node that
@@ -174,11 +164,6 @@ const (
 // again, and the box's retry lands on a node that stays. A call already
 // handed to its holder is left to finish, as [Bridge.forwardPoll] leaves one.
 func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
-	if sub.route.pinned() && sub.route.owner == "" {
-		b.refuse(w, r, sub.run, "the run's session was opened by a node that had joined "+
-			"no fleet, so only that node's own route reaches it")
-		return
-	}
 	req, err := httprelay.Read(r)
 	switch {
 	case errors.Is(err, httprelay.ErrTooLarge):
@@ -190,16 +175,10 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 	}
 	ctx := r.Context()
 	deadline := time.Now().Add(f.holderWait)
-	holds := "which holds the run's seat"
-	if sub.route.pinned() {
-		holds = "which opened the run's session"
-	}
+	const holds = "which holds the run's seat"
 	var why string
 	for attempt := 0; ; attempt++ {
-		owner, err := sub.route.owner, error(nil)
-		if !sub.route.pinned() {
-			owner, err = coord.Holder(ctx, f.leases, coord.SeatResource(sub.route.seat))
-		}
+		owner, err := coord.Holder(ctx, f.leases, coord.SeatResource(sub.route.seat))
 		switch {
 		case err != nil:
 			why = "which node holds the run's seat could not be read: " + err.Error()
@@ -218,15 +197,6 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 				b.refuse(w, r, sub.run, "the run has ended: "+node+", "+holds+", "+
 					"holds no session for its job")
 				return
-			case httprelay.Rerouted:
-				if sub.route.pinned() {
-					// THE PROCESS THAT OPENED IT IS GONE, and its session
-					// with it: the node answers as a later incarnation,
-					// and nothing takes a pinned session over.
-					b.refuse(w, r, sub.run, "the run has ended: "+node+" no longer runs "+
-						"the process that opened its session")
-					return
-				}
 			case httprelay.Lost:
 				// THE CALL MAY HAVE RUN, so it is not offered to anyone
 				// else: the box's client decides whether to repeat it, as

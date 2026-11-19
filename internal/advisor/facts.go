@@ -1,6 +1,9 @@
 package advisor
 
-import "slices"
+import (
+	"slices"
+	"sync"
+)
 
 // Unit is what a fact's number counts.
 type Unit string
@@ -31,63 +34,68 @@ type factWord struct {
 	unit  Unit
 }
 
-// factWords is every fact key a detector states. TestEveryFactADetectorStatesHasWords
+// factWords is every fact key a detector states, built at first use, as
+// explain.go's patterns are, off every push's hook. TestEveryFactADetectorStatesHasWords
 // holds every key in this package's detectors to an entry.
-var factWords = map[string]factWord{
-	"absorbed":         {"Wakes for changes already read", UnitCount},
-	"addressed":        {"Notices put to the person", UnitCount},
-	"agent_comments":   {"Agent comments", UnitCount},
-	"waits_day":        {"Waits in the last day", UnitCount},
-	"wait_minutes":     {"Item-minutes work waited for the seats", UnitMinutes},
-	"busy_percent":     {"Busy share of the available time", UnitPercent},
-	"idle_percent":     {"Idle share of the available time", UnitPercent},
-	"items":            {"Items worked", UnitItems},
-	"seats":            {"Seats", UnitCount},
-	"limit_minutes":    {"Item-minutes held on the model's limit", UnitMinutes},
-	"standing_minutes": {"Item-minutes the work wanted the seat or was held", UnitMinutes},
-	"minutes":          {"Minutes waited this week", UnitMinutes},
-	"quick_clears":     {"Alarms gone within ten minutes", UnitCount},
-	"alarm_turns":      {"Turns an alarm woke", UnitTurns},
-	"agents":           {"Agents", UnitCount},
-	"agents_open":      {"Open items all agents hold", UnitItems},
-	"answers":          {"Answers", UnitCount},
-	"auxiliary":        {"Tokens on learning", UnitTokens},
-	"cap":              {"Round cap", UnitCount},
-	"decided":          {"Decisions", UnitCount},
-	"delivered":        {"Pull requests the webhook delivered", UnitCount},
-	"entries":          {"Atlas entries", UnitCount},
-	"fires":            {"Schedule runs", UnitCount},
-	"hours":            {"Hours", UnitHours},
-	"idle":             {"Idle", UnitCount},
-	"logs":             {"Logs without a verified backup", UnitCount},
-	"memory_bytes":     {"Memory ceiling", UnitBytes},
-	"merges":           {"Merges put to people", UnitCount},
-	"moot":             {"Answers that came too late", UnitCount},
-	"moved":            {"Runs that moved work", UnitCount},
-	"named":            {"Times named with no question", UnitCount},
-	"nothing":          {"Turns that committed nothing", UnitTurns},
-	"notices":          {"Notices", UnitCount},
-	"open":             {"Open items", UnitItems},
-	"pickups":          {"Pickups", UnitCount},
-	"polled":           {"Pull requests found by polling", UnitCount},
-	"pressing":         {"Pressing items", UnitItems},
-	"questions":        {"Open questions", UnitCount},
-	"ready":            {"Ready items waiting", UnitItems},
-	"recommended":      {"Taken as recommended", UnitCount},
-	"refused":          {"Turns refused on budget", UnitTurns},
-	"runs":             {"Runs", UnitCount},
-	"superseded":       {"Answers overtaken", UnitCount},
-	"tokens":           {"Tokens", UnitTokens},
-	"turns":            {"Turns", UnitTurns},
-	"waiting":          {"Items waiting on it", UnitItems},
-	"woke":             {"Wakes", UnitCount},
-	"woken":            {"Agent wakes by a mention", UnitCount},
-	"words":            {"Pickups answered in words only", UnitCount},
-}
+var factWords = sync.OnceValue(func() map[string]factWord {
+	return map[string]factWord{
+		"absorbed":         {"Wakes for changes already read", UnitCount},
+		"addressed":        {"Notices put to the person", UnitCount},
+		"agent_comments":   {"Agent comments", UnitCount},
+		"waits_day":        {"Waits in the last day", UnitCount},
+		"paused_skips":     {"Runs skipped while the agent was paused", UnitCount},
+		"missed_skips":     {"Runs missed while no server ran the schedules", UnitCount},
+		"wait_minutes":     {"Item-minutes work waited for the seats", UnitMinutes},
+		"busy_percent":     {"Busy share of the available time", UnitPercent},
+		"idle_percent":     {"Idle share of the available time", UnitPercent},
+		"items":            {"Items worked", UnitItems},
+		"seats":            {"Seats", UnitCount},
+		"limit_minutes":    {"Item-minutes held on the model's limit", UnitMinutes},
+		"standing_minutes": {"Item-minutes the work wanted the seat or was held", UnitMinutes},
+		"minutes":          {"Minutes waited this week", UnitMinutes},
+		"quick_clears":     {"Alarms gone within ten minutes", UnitCount},
+		"alarm_turns":      {"Turns an alarm woke", UnitTurns},
+		"agents":           {"Agents", UnitCount},
+		"agents_open":      {"Open items all agents hold", UnitItems},
+		"answers":          {"Answers", UnitCount},
+		"auxiliary":        {"Tokens on learning", UnitTokens},
+		"cap":              {"Round cap", UnitCount},
+		"decided":          {"Decisions", UnitCount},
+		"delivered":        {"Pull requests the webhook delivered", UnitCount},
+		"entries":          {"Atlas entries", UnitCount},
+		"fires":            {"Schedule runs", UnitCount},
+		"hours":            {"Hours", UnitHours},
+		"idle":             {"Idle", UnitCount},
+		"logs":             {"Logs without a verified backup", UnitCount},
+		"memory_bytes":     {"Memory ceiling", UnitBytes},
+		"merges":           {"Merges put to people", UnitCount},
+		"moot":             {"Answers that came too late", UnitCount},
+		"moved":            {"Runs that moved work", UnitCount},
+		"named":            {"Times named with no question", UnitCount},
+		"nothing":          {"Turns that committed nothing", UnitTurns},
+		"notices":          {"Notices", UnitCount},
+		"open":             {"Open items", UnitItems},
+		"pickups":          {"Pickups", UnitCount},
+		"polled":           {"Pull requests found by polling", UnitCount},
+		"pressing":         {"Pressing items", UnitItems},
+		"questions":        {"Open questions", UnitCount},
+		"ready":            {"Ready items waiting", UnitItems},
+		"recommended":      {"Taken as recommended", UnitCount},
+		"refused":          {"Turns refused on budget", UnitTurns},
+		"runs":             {"Runs", UnitCount},
+		"superseded":       {"Answers overtaken", UnitCount},
+		"tokens":           {"Tokens", UnitTokens},
+		"turns":            {"Turns", UnitTurns},
+		"waiting":          {"Items waiting on it", UnitItems},
+		"woke":             {"Wakes", UnitCount},
+		"woken":            {"Agent wakes by a mention", UnitCount},
+		"words":            {"Pickups answered in words only", UnitCount},
+	}
+})
 
 // FactLabel is how a fact is labelled, its key where it has no words.
 func FactLabel(key string) string {
-	if w, ok := factWords[key]; ok {
+	if w, ok := factWords()[key]; ok {
 		return w.label
 	}
 	return key
@@ -95,7 +103,7 @@ func FactLabel(key string) string {
 
 // FactUnit is what a fact's number counts, a count where it has no words.
 func FactUnit(key string) Unit {
-	if w, ok := factWords[key]; ok {
+	if w, ok := factWords()[key]; ok {
 		return w.unit
 	}
 	return UnitCount

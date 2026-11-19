@@ -126,6 +126,8 @@ var contract = []Entry{
 	{"ITEM_CONVERSATION_PREFIX", ReadScalar,
 		"internal/worklet.TestTheDashboardKnowsAnItemsConversationByTheEnginesKey"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
+	{"FLOW_STATES", ReadLiteral, "internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause"},
+	{"FLOW_CAUSES", ReadLiteral, "internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause"},
 
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
@@ -632,8 +634,6 @@ var contract = []Entry{
 	{"AssistantBriefActionKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"ASSISTANT_PROTOCOL_VERSION", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_INPUT_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
-	{"ASSISTANT_TITLE_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
-	{"ASSISTANT_SEARCH_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"AssistantTitleSource", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantConversationRename", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"ASSISTANT_PAGE_CONTEXT_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},

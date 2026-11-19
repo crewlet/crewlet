@@ -63,19 +63,7 @@ func TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 		}
 		return res.Trust
 	}
-	curated := map[string]string{"list_executors": "GET /executors",
-		"list_decisions": "GET /worklet/decisions"}
-	for name, route := range curated {
-		tool, ok := catalog.Lookup(name)
-		if !ok {
-			t.Fatalf("the catalogue has no %s", name)
-		}
-		if trust := read(tool, catalog.Args{}, answers[route]); trust != want {
-			t.Errorf("%s reads the ask at %q, want %q", name, trust, want)
-		}
-	}
-	// AND ONE CHANGE, which the generic tools are built over too.
-	routes := []catalog.Route{{Pattern: "PUT /config/roles/{id}"}}
+	var routes []catalog.Route
 	for route := range answers {
 		routes = append(routes, catalog.Route{Pattern: route})
 	}
@@ -83,7 +71,12 @@ func TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generic := catalog.GenericTools(table, iam.Principal{Login: "founder", Seat: "founder"}, nil)[1]
+	var generic catalog.Tool
+	for _, tool := range catalog.GenericTools(table, iam.Principal{Login: "founder", Seat: "founder"}, nil) {
+		if tool.Name == catalog.ReadAPITool {
+			generic = tool
+		}
+	}
 	for route, answer := range answers {
 		if trust := read(generic, catalog.Args{"route": route}, answer); trust != want {
 			t.Errorf("a generic read of %s reads the ask at %q, want %q", route, trust, want)

@@ -84,6 +84,7 @@ var documented = []documentedDetector{
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
 	{ClassAlarmNoop, sourceLedger, alarmNoop},
 	{ClassModelHeld, sourceFlow, modelHeld},
+	{ClassScheduleOverdue, sourceSkips, scheduleOverdue},
 	{ClassAddSeat, sourceStaffing, addSeat},
 	{ClassRemoveSeat, sourceStaffing, removeSeat},
 }

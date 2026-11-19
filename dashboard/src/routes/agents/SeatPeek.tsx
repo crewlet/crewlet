@@ -27,8 +27,8 @@
  * windows all arrive with the org projection and the `agents` push, so they
  * cost nothing. What does cost a read:
  *
- *   * `work_workload`: the seat's open work, for a reader holding Worklet,
- *     whose question it is;
+ *   * `work_workload`: the seat's open work and its load, the items in
+ *     progress that want it now (ADR-0162), for a reader holding Worklet;
  *   * `fleet`: which node holds the seat and since when, on Admin, so it
  *     is asked only of an admin; every
  *     other reader is told what the health push says (`heldBy`: this node, by
@@ -97,6 +97,7 @@ import { PAUSE_NOTE_WORDS, useLiveOrg, withWord } from "~/lib/seatLive.ts";
 import { useAskTaskEntry } from "./AskTask.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
+import { workloadWords } from "~/lib/flow.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -521,9 +522,12 @@ function SeatPeekBody({
                 <EmptyValue label="Reading the tracker" />
               ) : load && load.open > 0 ? (
                 <a className="t-link" href={href(["worklet", "tasks"], { assignee: seat.handle })}>
-                  {plural(load.open, "task")}
-                  {load.blocked > 0 && ` · ${load.blocked} blocked`}
-                  {load.overdue > 0 && ` · ${load.overdue} overdue`}
+                  {[
+                    plural(load.open, "task"),
+                    ...workloadWords(load),
+                    ...(load.blocked > 0 ? [`${load.blocked} blocked`] : []),
+                    ...(load.overdue > 0 ? [`${load.overdue} overdue`] : []),
+                  ].join(" · ")}
                 </a>
               ) : (
                 "Nothing open"

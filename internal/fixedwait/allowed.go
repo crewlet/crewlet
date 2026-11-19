@@ -201,7 +201,6 @@ var allowed = []Entry{
 	{File: "internal/api/llmapi/llmapi_test.go", Func: "fakeSecrets.Reclaim", ExemptElapsed: 1, Piece: 12},
 	{File: "internal/api/mcpbridge/fleet_test.go", Func: "TestACallNoHolderAnswersIsUnavailable", ElapsedBound: 1, Piece: 12},
 	{File: "internal/api/mcpbridge/fleet_test.go", Func: "TestACallWaitsForAHolderStillTakingTheSeat", HeadStart: 1, Piece: 12},
-	{File: "internal/api/mcpbridge/fleet_test.go", Func: "TestACallersOwnSessionEndsWithItsOpener", ElapsedBound: 1, Piece: 12},
 	{File: "internal/api/mcpbridge/gates_test.go", Func: "TestARecordedCallCarriesItsTimingAndWhoAnswered", ElapsedBound: 1, Piece: 12},
 	{File: "internal/api/mcpbridge/started_test.go", Func: "TestARequestArrivingWhileTheSessionIsToldWaitsForIt", NegativeWindow: 1, ExemptWait: 1, Piece: 12},
 	{File: "internal/api/mcpbridge/steer_test.go", Func: "TestACancelledPollFreesItsWaiter", ExemptWait: 2, ElapsedBound: 1, ExemptElapsed: 1, Piece: 12},

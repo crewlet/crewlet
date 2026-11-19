@@ -83,7 +83,7 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 	tools := genericTools(t, fx)
 
 	// LOOKED UP, NOT GUESSED: the route is listed and documented.
-	listing, err := tools[catalog.DescribeAPITool].Docs(catalog.Args{"search": "units"})
+	listing, err := tools[catalog.DescribeAPITool].Docs(catalog.Args{"query": "units"})
 	if err != nil || !strings.Contains(listing, unitRoute) {
 		t.Fatalf("describe_api does not list %s: %v\n%s", unitRoute, err, listing)
 	}
@@ -94,7 +94,7 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 	}
 
 	// THE UNIT AS IT IS, through the read grant.
-	reader := tools[catalog.APIRequestTool]
+	reader := tools[catalog.ReadAPITool]
 	args := map[string]any{"route": "GET /config/units/{id}",
 		"path": map[string]any{"id": "engineering"}}
 	req, err := reader.Request(args)
@@ -103,7 +103,7 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 	}
 	resp, err := fx.disp.Do(t.Context(), read, req)
 	if err != nil || resp.Status != http.StatusOK {
-		t.Fatalf("api_request read the unit: %d %s, %v", resp.Status, resp.Body, err)
+		t.Fatalf("read_api read the unit: %d %s, %v", resp.Status, resp.Body, err)
 	}
 	shaped, err := catalog.Shape(reader, args, resp, provenance.NewBoundary(), time.Now(), cards.Options{})
 	if err != nil || !strings.Contains(shaped.Model, "cto") {
@@ -290,7 +290,7 @@ func TestATurnProposesTheSeatAndChangesNothing(t *testing.T) {
 	person := fx.principal(t)
 	rig := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{
 		evals.Call("c-docs", catalog.DescribeAPITool, map[string]any{"route": unitRoute}),
-		evals.Call("c-read", catalog.APIRequestTool, map[string]any{
+		evals.Call("c-read", catalog.ReadAPITool, map[string]any{
 			"route": "GET /config/units/{id}", "path": at}),
 		evals.Call("c-change", catalog.ProposeAPIChangeTool, map[string]any{
 			"route": unitRoute, "path": at, "body": unit}),
@@ -299,7 +299,7 @@ func TestATurnProposesTheSeatAndChangesNothing(t *testing.T) {
 	frames := askOne(t, rig, fx, "add a seat", nil)
 
 	for tool, want := range map[string]wire.StepState{
-		catalog.DescribeAPITool: wire.StepDone, catalog.APIRequestTool: wire.StepDone,
+		catalog.DescribeAPITool: wire.StepDone, catalog.ReadAPITool: wire.StepDone,
 		catalog.ProposeAPIChangeTool: wire.StepWaiting,
 	} {
 		if got := lastStep(t, frames, tool); got.State != want {

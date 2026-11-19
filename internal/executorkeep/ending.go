@@ -274,12 +274,13 @@ func (e Ending) Fit() Ending {
 // ([redact.MarkersAround]).
 //
 // REDACTED BEFORE IT IS CUT: a credential the bound runs across, cut first,
-// leaves a head no rule recognises, which a reader's redaction could not take
-// out. A reader still redacts a row's words (internal/executordomain's
+// leaves a head no rule recognises. Only the bound and one marker past it of
+// the redaction are kept ([redact.Prefix]), where every marker a cut can fall
+// in is whole. A reader still redacts a row's words (internal/executordomain's
 // Session.Redacted), reaching rules added since the record was written.
 func Excerpt(text string, bound int) string {
-	shown := redact.Secrets(text)
-	if len(shown) <= bound {
+	shown, whole := redact.Prefix(text, bound+redact.LongestMarker())
+	if whole <= bound {
 		return shown
 	}
 	kept := textcut.Bytes(shown, bound-len(textcut.Opening("", bound)))

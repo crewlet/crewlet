@@ -16,6 +16,7 @@ var sourceWords = map[source]string{
 	sourcePauses: UnreadPauses, sourceRuns: UnreadRuns, sourceFires: UnreadFires,
 	sourceStops: UnreadStops, sourceMerges: UnreadMerges, sourceEpisodes: UnreadEpisodes,
 	sourceFlow:     UnreadFlow,
+	sourceSkips:    UnreadSkips,
 	sourceStaffing: UnreadStaffing,
 }
 

@@ -219,6 +219,10 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_flow_unreadable", "error", err.Error())
 		ev.FlowUnread = true
 	}
+	if ev.Skips, err = s.scheduleSkips(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_schedule_skips_unreadable", "error", err.Error())
+		ev.SkipsUnread = true
+	}
 	// THE STAFFING CLASSES' EXACT READS, a week and two, over whole days.
 	for _, read := range []struct {
 		days int

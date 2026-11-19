@@ -98,13 +98,15 @@ type Evidence struct {
 	// Flow is how long each seat's items in progress stood in each flow
 	// state over the window (ADR-0162).
 	Flow []worklet.FlowHours
+	// Skips is every scheduled run the dispatch ledger skipped in the window.
+	Skips []ScheduleSkip
 	// StaffingWeek and StaffingFortnight are the staffing classes' exact
 	// reads over their windows of whole company days; nil where unread.
 	StaffingWeek, StaffingFortnight *Staffing
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread, StaffingUnread         bool
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread      bool
+	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread, SkipsUnread, StaffingUnread bool
 }
 
 // source is the record a detector reads.
@@ -131,6 +133,8 @@ const (
 	sourceEpisodes
 	// sourceFlow is the tracker's flow record, [Evidence.Flow].
 	sourceFlow
+	// sourceSkips is the schedules' skipped runs, [Evidence.Skips].
+	sourceSkips
 	// sourceStaffing is the seats' exact time, [Evidence.StaffingWeek].
 	sourceStaffing
 )
@@ -158,6 +162,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.EpisodesUnread
 	case sourceFlow:
 		return ev.FlowUnread
+	case sourceSkips:
+		return ev.SkipsUnread
 	case sourceStaffing:
 		return ev.StaffingUnread
 	}
@@ -349,6 +355,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.FlowUnread {
 		answer.Unread = append(answer.Unread, UnreadFlow)
+	}
+	if ev.SkipsUnread {
+		answer.Unread = append(answer.Unread, UnreadSkips)
 	}
 	if ev.StaffingUnread {
 		answer.Unread = append(answer.Unread, UnreadStaffing)
