@@ -219,6 +219,16 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_flow_unreadable", "error", err.Error())
 		ev.FlowUnread = true
 	}
+	// THE STAFFING CLASSES' EXACT READS, a week and two, over whole days.
+	for _, read := range []struct {
+		days int
+		into **advisor.Staffing
+	}{{advisor.AddSeatDays, &ev.StaffingWeek}, {advisor.RemoveSeatDays, &ev.StaffingFortnight}} {
+		if *read.into, err = s.advisorStaffing(ctx, company, now, read.days); err != nil {
+			log.WarnContext(ctx, "advisor_staffing_unreadable", "days", read.days, "error", err.Error())
+			ev.StaffingUnread, *read.into = true, nil
+		}
+	}
 	return ev
 }
 
