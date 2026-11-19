@@ -509,3 +509,49 @@ func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
 		}
 	}
 }
+
+// A PROJECT'S STUCK WINDOW IS ITS LEAD'S, BOUNDED, AND CLEARED BY ZERO: the
+// window an item in progress may go unchanged before its flow reads stuck.
+// Outside an hour to a week is refused by name, zero restores the default,
+// and the project's page says the window in force and whether the lead set it.
+func TestAProjectsStuckWindowIsTheLeadsAndBounded(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	window := func(hours int) worklet.ProjectEdit { return worklet.ProjectEdit{StuckAfterHours: &hours} }
+	lead := worklet.ProjectAuthority{Policy: true}
+
+	if _, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", window(24),
+		worklet.ProjectAuthority{}); !errors.Is(err, worklet.ErrForbidden) {
+		t.Fatalf("a seat that does not lead ENG set its stuck window: %v", err)
+	}
+	for _, hours := range []int{-1, worklet.MaxStuckAfterHours + 1} {
+		_, err := r.writer.WriteProject(t.Context(), "op-out", "ENG", window(hours), lead)
+		if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), "stuck_after_hours") {
+			t.Fatalf("a window of %d hours was not refused by name: %v", hours, err)
+		}
+	}
+	if got := r.project(worklet.ProjectDetailQuery{Project: "ENG"}); got.StuckAfterHours !=
+		worklet.DefaultStuckAfterHours || got.StuckAfterHoursSet {
+		t.Fatalf("a project nobody set reads a window of %d (set %v), want the default %d",
+			got.StuckAfterHours, got.StuckAfterHoursSet, worklet.DefaultStuckAfterHours)
+	}
+	for _, step := range []struct {
+		op    string
+		hours int
+		want  int
+		set   bool
+	}{
+		{"op-set", 24, 24, true},
+		{"op-clear", 0, worklet.DefaultStuckAfterHours, false},
+	} {
+		if _, err := r.writer.WriteProject(t.Context(), step.op, "ENG", window(step.hours), lead); err != nil {
+			t.Fatalf("%s: the lead could not set the window to %d: %v", step.op, step.hours, err)
+		}
+		r.drain()
+		got := r.project(worklet.ProjectDetailQuery{Project: "ENG"})
+		if got.StuckAfterHours != step.want || got.StuckAfterHoursSet != step.set {
+			t.Fatalf("after %s the window reads %d (set %v), want %d (set %v)",
+				step.op, got.StuckAfterHours, got.StuckAfterHoursSet, step.want, step.set)
+		}
+	}
+}

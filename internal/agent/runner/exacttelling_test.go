@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,9 @@ type reading struct {
 	held  []string
 	under map[string]string
 	names map[string]string
+	// byContent answers as the OpenCode reader does: held's ids are members
+	// of held classes, every other asked call a member of a class with no part.
+	byContent bool
 
 	mu    sync.Mutex
 	asks  []sandbox.HoldingsAsk
@@ -58,6 +62,9 @@ func (r *reading) answer(basis runner.SessionBasis, ask sandbox.HoldingsAsk) san
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.asks, r.bases = append(r.asks, ask), append(r.bases, basis)
+	if r.byContent {
+		return r.contentAnswer(ask)
+	}
 	h := sandbox.SessionHoldings{Read: true, Kind: sandbox.HoldingsByID, Calls: map[string]sandbox.CallRecords{},
 		Subagents: map[string]sandbox.SubagentThread{}}
 	for _, c := range ask.Calls {
@@ -74,6 +81,36 @@ func (r *reading) answer(basis runner.SessionBasis, ask sandbox.HoldingsAsk) san
 			h.Subagents[agent] = sandbox.SubagentThread{Why: "the session holds no answer to the call that " +
 				"started it", Description: r.names[agent]}
 		}
+	}
+	return h
+}
+
+// withArgsText is call with its digest and the text its log keeps of its
+// arguments, by which an OpenCode ask keys it.
+func withArgsText(call runner.BridgedCall) runner.BridgedCall {
+	raw, err := json.Marshal(call.Args)
+	if err != nil {
+		panic(err)
+	}
+	call.ArgsText = string(raw)
+	return digested(call)
+}
+
+// contentAnswer is r's reading of ask by content ([reading.byContent]).
+func (r *reading) contentAnswer(ask sandbox.HoldingsAsk) sandbox.SessionHoldings {
+	h := sandbox.SessionHoldings{Read: true, Kind: sandbox.HoldingsByContent, Members: map[string]sandbox.CallClass{},
+		Classes: map[sandbox.CallClass]sandbox.ClassRecords{}}
+	for _, c := range ask.Calls {
+		class, ok := sandbox.ClassOf(c)
+		if !c.Asked || !ok {
+			continue
+		}
+		h.Members[c.ID] = class
+		records := sandbox.ClassRecords{Calls: 1}
+		if slices.Contains(r.held, c.ID) {
+			records = sandbox.ClassRecords{Calls: 1, Parts: 1, Held: true}
+		}
+		h.Classes[class] = records
 	}
 	return h
 }
@@ -250,7 +287,13 @@ func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 		"toolu_12": {ID: "toolu_12", Asked: true, Failed: true, Output: failed.Result},
 		"toolu_13": {ID: "toolu_13", Asked: true, Output: cut.Result, OutputBytes: cut.OutputBytes},
 	} {
-		if got := outcomes[id]; got != want {
+		got := outcomes[id]
+		if got.Name == "" || got.Appended == 0 || got.Seq == 0 {
+			t.Errorf("call %s is asked with no tool or place: %+v", id, got)
+		}
+		got = sandbox.LoggedCall{ID: got.ID, Asked: got.Asked, Failed: got.Failed, Output: got.Output,
+			OutputBytes: got.OutputBytes}
+		if got != want {
 			t.Errorf("call %s is asked as %+v, want its outcome as the log keeps it, %+v", id, got, want)
 		}
 	}
@@ -330,16 +373,16 @@ func TestNoReadingIsAskedOfACaptureWhoseHarnessEndedItsOwnRun(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RELAUNCH IS ASKED NO READING AND TOLD AS BEFORE. No reader of an
-// OpenCode session's holdings exists, so it asks none, and where its count has
-// a bound and no restart in its job, its held brief (the one its launch judges
-// in its box) is byte for byte the one this build tells without a reading, for
-// a round where nothing is listed again, marked, or left unlisted (ADR-0073, a
-// told call is kept apart).
+// AN OPENCODE RELAUNCH WITH NO READING IS TOLD AS BEFORE: its relaunch asks
+// one reading, each call by its place in its round's log and its admission
+// place, and where the reading holds nothing its held brief (the one its
+// launch judges in its box) is byte for byte the one this build tells with no
+// reading, for a round where nothing is listed again, marked, or left
+// unlisted (ADR-0073, a told call is kept apart).
 //
-// Mutation: ask a reading under every verdict but the brief's, and this goes
-// red.
-func TestAnOpenCodeRelaunchIsAskedNoReadingAndToldAsBefore(t *testing.T) {
+// Mutation: build the brief from a reading that holds nothing, or skip the
+// ask, and this goes red.
+func TestAnOpenCodeRelaunchWithNoReadingIsToldAsBefore(t *testing.T) {
 	t.Parallel()
 	late := digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a late post"}, 3, 3))
 	late.Late = true
@@ -352,11 +395,43 @@ func TestAnOpenCodeRelaunchIsAskedNoReadingAndToldAsBefore(t *testing.T) {
 			digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a later post"}, 2, 2)),
 			late,
 		}})
-	if n := len(reads.asked()); n != 0 || req.Session.Exact != nil {
-		t.Errorf("an OpenCode relaunch was read %d times, its brief told by a reading %+v", n, req.Session.Exact)
+	asks := reads.asked()
+	if len(asks) != 1 || req.Session.Exact != nil {
+		t.Fatalf("an OpenCode relaunch was read %d times, its brief told by a reading %+v", len(asks),
+			req.Session.Exact)
+	}
+	for _, c := range asks[0].Calls {
+		if c.ID != strconv.Itoa(c.Appended) || c.Seq == 0 {
+			t.Errorf("an OpenCode call is asked as %+v; want it keyed by its place, with its admission place", c)
+		}
 	}
 	if req.Session.Brief != mainKeptOpenCode {
 		t.Errorf("an OpenCode relaunch is told\n%s\nwant main's\n%s", req.Session.Brief, mainKeptOpenCode)
+	}
+}
+
+// A CONTINUED OPENCODE SESSION IS TOLD ONLY THE CALLS ITS EXPORT LACKS: where
+// a reading by content holds the first of two calls after the save point, the
+// brief told by it lists the second alone.
+//
+// Mutation: ignore the reading, and the first call is told again.
+func TestAContinuedOpenCodeSessionIsToldOnlyTheCallsItsExportLacks(t *testing.T) {
+	t.Parallel()
+	basis := openCodeKept
+	basis.Release, basis.Window, basis.Count = "1.2.3", standard200k, far
+	reads := &reading{held: []string{"2"}, byContent: true}
+	req := lostRelaunchWith(t, buildOpts{reads: reads}, basis, nil, runner.Resume{BasisRestart: new(""),
+		Bridged: []runner.BridgedCall{
+			withArgsText(numbered("slack_post", map[string]any{"channel": "C1", "text": "at the point"}, 1, 1)),
+			withArgsText(numbered("slack_post", map[string]any{"channel": "C1", "text": "the held post"}, 2, 2)),
+			withArgsText(numbered("slack_post", map[string]any{"channel": "C1", "text": "a later post"}, 3, 3)),
+		}})
+	if req.Session == nil || req.Session.Exact == nil {
+		t.Fatalf("no brief told by the reading: %+v", req.Session)
+	}
+	brief := req.Session.Exact.Replaced
+	if strings.Contains(brief, "the held post") || !strings.Contains(brief, "a later post") {
+		t.Errorf("the brief told by the reading is\n%s\nwant the later post alone", brief)
 	}
 }
 
@@ -380,10 +455,12 @@ func TestNoReadingIsAskedWhereTheFirstRequestCompactsWhatever(t *testing.T) {
 
 // ONLY A FIRST REQUEST THIS BUILD JUDGES CARRIES A BRIEF TOLD BY A READING. A
 // cut-off OpenCode capture, under a known window and bounded count, is asked
-// no reading and told nothing of a summary whatever its count; a Claude Code
-// one, the same in all else, carries one.
+// a reading by its calls' places, which a reading of ids holds none of, and
+// told nothing of a summary whatever its count; a Claude Code one, the same
+// in all else, carries one.
 //
-// Mutation: judge every harness's first request, and this goes red.
+// Mutation: judge every harness's first request, or ask OpenCode's calls by
+// their ids, and this goes red.
 func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.T) {
 	t.Parallel()
 	bridged := []runner.BridgedCall{
@@ -391,13 +468,13 @@ func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.
 		calledAs("jira_create", map[string]any{"summary": "after it"}, 2, "toolu_02"),
 	}
 	for name, tc := range map[string]struct {
-		harness string
-		count   *sandbox.ResumedCount
-		exact   bool
+		harness      string
+		count        *sandbox.ResumedCount
+		asked, exact bool
 	}{
-		"Claude Code":         {harness: sandbox.ClaudeCodeHarness, count: far, exact: true},
-		"OpenCode":            {harness: "opencode", count: far},
-		"OpenCode, near full": {harness: "opencode", count: near},
+		"Claude Code":         {harness: sandbox.ClaudeCodeHarness, count: far, asked: true, exact: true},
+		"OpenCode":            {harness: "opencode", count: far, asked: true},
+		"OpenCode, near full": {harness: "opencode", count: near, asked: true},
 	} {
 		basis := cutOffClaude(tc.count)
 		basis.Harness = tc.harness
@@ -406,9 +483,9 @@ func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.
 		if req.Session == nil {
 			t.Fatalf("%s: the relaunch continues no kept session", name)
 		}
-		if got := req.Session.Exact != nil; got != tc.exact || (len(reads.asked()) > 0) != tc.exact {
-			t.Errorf("%s: carries a brief told by a reading %v, asked %d times, want %v", name, got,
-				len(reads.asked()), tc.exact)
+		if got := req.Session.Exact != nil; got != tc.exact || (len(reads.asked()) > 0) != tc.asked {
+			t.Errorf("%s: carries a brief told by a reading %v, asked %d times, want %v, asked %v", name, got,
+				len(reads.asked()), tc.exact, tc.asked)
 		}
 		// Only a session told as a possible summary is told its save point's call.
 		if strings.Contains(req.Session.Replaced, "at the point") {

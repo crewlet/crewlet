@@ -9,37 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// TestNoPackageLevelLoggerIsBoundToTheBootDefault fails the build when any
-// non-test file under internal/ or cmd/ builds a package-level logger out of
-// slog's default: `var log = slog.Default().With(…)`, `slog.With(…)`, or
-// `slog.Default()` itself.
+// TestNoPackageLevelLoggerIsBoundToTheBootDefault fails the build when a
+// non-test file under internal/ or cmd/ builds a FILE-SCOPE logger (outside a
+// function literal) from slog's default: `slog.Default().With(…)`,
+// `slog.With(…)` or `slog.Default()`.
 //
-// # Why this is a rule and not a review comment
-//
-// A package-level var is set at init, before main has parsed a flag or read
-// its config, so what slog.Default returns then is the boot default this
-// package's own init installs: info, the console, no file. A logger built from
-// it keeps that handler for the life of the process, so `-log-level debug`, a
-// log file and a format never reach its lines. [logging.Get] resolves the root
-// on every record instead, which is why it is the convention.
-//
-// And every process pays for one at init: the root's redaction reads an
-// attribute as it is bound ([slog.Handler.WithAttrs]), so the first such
-// logger in init order compiled every redact rule during its own package's
-// init. The tree's one such logger, internal/assistant/proposal/approval's,
-// allocated 189 KB at init in the plain build once redact's rule table was
-// built at first use, which put the module past the bound cmd/crewlet's
-// TestTheHookPaysLittleForTheEnginesInit holds. That test caught it by its
-// cost; this names the shape, whatever it costs.
-//
-// # What it flags
-//
-// A call of the file's log/slog import's Default or With anywhere in the
-// value of a FILE-SCOPE var, outside a function literal, which runs when it is
-// called rather than at init. Each is matched as a selector on the import, as
-// the discard guard matches, so a comment naming slog.Default or a local that
-// shares the import's name is not a hit.
-//
+// At init slog.Default is the boot default (info, console, no file), so such
+// a logger ignores `-log-level debug`, a log file and a format ([logging.Get]
+// resolves per record), and compiles every redact rule at init. Matched as a
+// selector on the import: a comment or same-named local is no hit.
 // Mutation: drop "Default" from the names bootBoundLoggers matches, and the
 // first, third, fourth and fifth controls go red.
 func TestNoPackageLevelLoggerIsBoundToTheBootDefault(t *testing.T) {

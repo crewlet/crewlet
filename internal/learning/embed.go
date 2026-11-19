@@ -7,30 +7,16 @@ import (
 
 // How a learning path turns text into a vector.
 //
-// # A FUNCTION, READ AT CALL TIME
+// The embedder is a function read at call time, never captured at build: an
+// apply builds tools before it stores the new embedder, so a captured one is an
+// epoch stale (none on first boot, the retired key after a rotation). The
+// function reads the CURRENT embedder per call, and "is there one" is its
+// answer ([ErrNoEmbeddings]).
 //
-// The company's embedder is replaced on every config apply — a new model, a
-// rotated key — and an apply builds its TOOLS before it stores the embedder it
-// is applying (and its reflection workers after). So a tool holding the
-// embedder it was built with ran one epoch behind for its whole life: the
-// first epoch a node booted had none at all, and re-activating an unchanged
-// revision to rotate a credential (the documented gesture) left every such
-// tool calling the provider with the retired key. The workers were current
-// only because of the order of two calls in the apply, which is no property
-// of theirs. What each path is handed instead is a function that reads the
-// engine's CURRENT embedder each time it is called, so the order of those
-// calls never matters, and "is there one" is that call's answer
-// ([ErrNoEmbeddings]) rather than a nil checked once at build.
-//
-// # A vector is a point in one model's space, and says which
-//
-// Two models of one width are two spaces — text-embedding-3-small and
-// embed-v4.0 both answer 1 536 floats — and a cosine across them ranks
-// nothing while looking exactly like a ranking. So what the seam answers is a
-// [Vector]: the floats AND the model they came from, read off the same
-// embedder in the same call, so the two can never describe different
-// providers across an apply. Every stored vector is tagged with it, and every
-// recall compares only rows of the query's model.
+// A vector is a point in one model's space: two models of one width are two
+// spaces, and a cosine across them looks like a ranking and ranks nothing. So
+// the seam answers a [Vector], floats AND model read in the same call; every
+// stored vector is tagged, and recall compares only rows of the query's model.
 
 // Vector is one text's embedding and the model whose space it is in.
 type Vector struct {

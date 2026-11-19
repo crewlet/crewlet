@@ -17,18 +17,13 @@ import (
 
 // mailboxes is what this node believes about the company's mailboxes.
 //
-// EVERYTHING HERE IS DERIVED FROM THE BROKER, never from what this node did.
-// The distinction is the whole design: a set filled in by "I created these"
-// is a set that survives the consumers it describes, and a recreated stream
-// has no consumers at all — so a node trusting its own memory would leave
-// every seat in the company with no mailbox and nothing to say so, which is
-// the failure [Node.EnsureMailboxes] exists to prevent rather than a new way
-// to cause it.
+// EVERYTHING HERE IS DERIVED FROM THE BROKER, never from what this node did:
+// a set filled by "I created these" outlives the consumers it describes, and a
+// recreated stream has none, so a node trusting its memory would leave every
+// seat without a mailbox and nothing to say so ([Node.EnsureMailboxes]).
 //
-// Guarded by its own mutex rather than by the node's, because the node's
-// guards the attachment map that the seat host's hooks write from their own
-// goroutines and this is written by the convergence loop. Never held across a
-// broker call.
+// Guarded by its own mutex, not the node's (which guards the attachment map the
+// seat host's hooks write). Never held across a broker call.
 type mailboxes struct {
 	// pass serialises whole convergence passes against each other. Two
 	// callers drive this concurrently — the loop's tick and a config
@@ -76,65 +71,14 @@ func newMailboxes() *mailboxes {
 // EnsureMailboxes converges the durable subscription behind every agent seat
 // in the company — not just the ones this node claims.
 //
-// A DURABLE SUBSCRIPTION IS A SEAT'S MAILBOX: it exists without a consumer and
-// retains what is published while nothing is attached. Its absence is not an
-// error anybody sees, because publishing to a topic no subscription covers
-// DROPS THE EVENT SILENTLY. That is a whole class of quiet loss: a company's
-// seats are claimed a few at a time across successive sweeps, so every
-// webhook, notification and scheduled trigger aimed at a seat this fleet had
-// not reached yet goes nowhere — during boot, during a rollout, and
-// permanently for any seat no live node's placement matches.
+// A DURABLE SUBSCRIPTION IS A SEAT'S MAILBOX: it retains what is published
+// while nothing is attached, and publishing to a topic no subscription covers
+// DROPS THE EVENT SILENTLY: during boot, a rollout, and permanently for a seat
+// no live node's placement matches. EVERY seat, not this node's share.
 //
-// EVERY seat, not this node's share: a mailbox is a fact about the company,
-// and the node that ends up serving a seat may not be this one.
-//
-// # It is a convergence, not a sweep
-//
-// It used to be a walk: every seat in the company, one EnsureSubscription
-// each, on boot and on every config apply. Each of those is a CREATE, and on
-// the broker this engine ships a create is a proposal through the metadata
-// Raft group whether or not the consumer is already there — so a company of N
-// seats spent N replicated writes per apply to be told what it already knew.
-// See docs/concepts/scaling.md for the measured numbers.
-//
-// So this pass asks what is missing before it writes anything:
-//
-//   - The set of mailboxes that exist is SEEDED FROM THE BROKER, with one
-//     subscription listing over the seat-inbox subject space, diffed against
-//     the company's seats. A listing is a read; the creates were writes.
-//   - Only the difference is ensured. A pass with nothing missing and a fresh
-//     seed makes no broker call at all, which is what a seat-sweep tick costs
-//     in the steady state.
-//   - The seed is re-taken when it is older than the seat lease TTL, because
-//     a set is a claim about somebody else's state and this one has exactly
-//     one way to go wrong: the stream is recreated, its consumers are gone,
-//     and a node reading its own memory would never notice. The TTL is not a
-//     knob of this pass's own — it is how long the fleet already tolerates a
-//     seat being unserved, and therefore how long a mailbox may be missing
-//     before somebody has to be told.
-//
-// # What a failure costs
-//
-// Best effort, per seat. A subscription that cannot be created is left OUT of
-// the set, so the next tick tries it again, and the rest of the company still
-// gets theirs — the alternative is a node that refuses to start because one
-// topic was unreachable, which loses strictly more mail. A seat still missing
-// one lease TTL later raises [Node.alarmMissingMailbox]; a single failure that
-// the next tick repairs is not news, and *still failing* is.
-//
-// REGISTERED FIRST. Each seat's mailbox is recorded with the fleet before it
-// is created, because once the seat leaves the company the handle is gone from
-// the org every node derives the name from, and the record is what the
-// retirement of that mailbox runs on. A registration that fails is logged and
-// the mailbox is created anyway, since a seat in the company losing mail is
-// worse than a mailbox the maintenance sweep registers on its next tick.
-//
-// Exported because three callers drive it: the node's own start, before it
-// claims anything; the config apply, because a revision that ADDS a role adds
-// a seat whose mail is dropped until something makes it a mailbox; and the
-// convergence loop, which is what makes the other two a floor rather than the
-// only chances this node gets. A fourth runs it on demand: a wake published
-// through [Node.Wakes] to a seat whose mailbox this node has not confirmed.
+// Exported because the node's start, the config apply (a revision that ADDS a
+// role adds a seat whose mail is dropped until it has a mailbox), the
+// convergence loop and a wake to an unconfirmed seat ([Node.Wakes]) run it.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
 	n.ensureMailboxes(ctx, n.cfg.Seats())
 }
@@ -155,7 +99,18 @@ func (n *Node) EnsureMailboxesFor(ctx context.Context, seats []placement.Seat) {
 	n.ensureMailboxes(ctx, seats)
 }
 
-// ensureMailboxes is the pass both of those run, over one seat list.
+// ensureMailboxes is the pass both of those run, over one seat list: a
+// convergence, not a sweep. A create is a proposal through the broker's Raft
+// group even for an existing consumer, so one per seat per apply cost N
+// replicated writes (docs/concepts/scaling.md). So it asks first:
+//
+//   - The existing mailboxes are SEEDED FROM THE BROKER by one listing over the
+//     seat-inbox subject space, diffed against the company's seats.
+//   - Only the difference is ensured; nothing missing and a fresh seed means no
+//     broker call.
+//   - The seed is re-taken once older than the seat lease TTL (how long the
+//     fleet tolerates an unserved seat): a recreated stream has lost its
+//     consumers, which a node reading its own memory would never notice.
 func (n *Node) ensureMailboxes(ctx context.Context, company []placement.Seat) {
 	n.mail.pass.Lock()
 	defer n.mail.pass.Unlock()
@@ -206,10 +161,17 @@ func (n *Node) ensureMailboxes(ctx context.Context, company []placement.Seat) {
 		return
 	}
 
+	// BEST EFFORT PER SEAT: a failed create stays OUT of the set so the next
+	// tick retries it, and a seat still missing one TTL later raises
+	// [Node.alarmMissingMailbox] (*still failing* is news, one failure is not).
 	created := 0
 	for _, s := range missing {
 		handle := s.Handle
 		inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
+		// REGISTERED FIRST: once the seat leaves the company its handle is gone
+		// from the org the name derives from, and the record is what retirement
+		// runs on. A failed registration is logged and the mailbox created
+		// anyway: lost mail is worse than one the sweep registers next tick.
 		if n.cfg.Mailboxes != nil {
 			if err := n.cfg.Mailboxes.Register(ctx, s); err != nil {
 				if ctx.Err() != nil {
@@ -347,23 +309,16 @@ func (n *Node) reportInterrupted(ctx context.Context) {
 
 // alarmMissingMailbox reports a seat this node could not give a mailbox.
 //
-// ONE LEASE TTL, and the threshold is not this alarm's own — that is ADR-0015.
-// A mailbox that cannot be created on one tick is retried on the next, nine
-// times inside a shipped lease, and an alarm on the first failure would fire
-// twelve times a minute for a condition that clears itself. What is worth an
-// operator's attention is a seat that has been without a mailbox for as long
-// as the fleet already tolerates a seat being unserved — the same number that
-// decides when its lease lapses and its work moves — because past that point
-// its mail is being dropped and nothing else in the engine will say so.
+// ONE LEASE TTL, and the threshold is not this alarm's own (ADR-0015): a failed
+// create is retried every tick, so alarming on the first would fire for a
+// condition that clears itself. A seat without a mailbox for as long as the
+// fleet tolerates an unserved seat is dropping mail nothing else will report.
 //
-// READ FROM THE HOST rather than copied from [seat.SeatLeaseTTL], which is the
-// ADR's second clause and a real property here: a deployment that shortens its
-// lease shortens this with it, in the same setting, with nobody remembering to.
+// READ FROM THE HOST rather than copied from [seat.SeatLeaseTTL] (the ADR's
+// second clause): a deployment that shortens its lease shortens this with it.
 //
-// Re-raised on that same interval rather than on every tick, for the reason
-// [seat.UndeadAlarmInterval] gives about the other seat-level alarm: the
-// failure itself is not news, *still failing* is, and one stuck seat must not
-// be able to fill a log with its own retries.
+// Re-raised on that interval, not every tick, for the reason
+// [seat.UndeadAlarmInterval] gives: one stuck seat must not fill a log.
 func (n *Node) alarmMissingMailbox(seat placement.Seat, cause error) {
 	handle := seat.Handle
 	now := time.Now()

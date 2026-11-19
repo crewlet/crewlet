@@ -52,6 +52,9 @@ type EntryWork struct {
 	Recent      []TaskRow  `json:"recent"`
 	OpenTotal   ClaimTotal `json:"open_total"`
 	RecentTotal ClaimTotal `json:"recent_total"`
+
+	// FlowLive is [Answer.FlowLive] for every row here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // EntryMarks is how many open tasks name each atlas entry, by the id the
@@ -152,7 +155,8 @@ func (r *Reader) EntryWork(ctx context.Context, q EntryWorkQuery, now time.Time)
 			return EntryWork{}, invalid("a read of the work on an atlas entry names it by its id")
 		}
 	}
-	out := EntryWork{}
+	at := rowsAt{dayStart: now.UTC(), flow: r.flowAt(now)}
+	out := EntryWork{FlowLive: at.flow.live()}
 	err := r.domainRead(ctx, q.Level, func(tx *sql.Tx) error {
 		ids := append(anyOf(q.Entries), string(RelationEntry))
 		since := store.EncodeTime(now.UTC().Add(-EntryWorkRecent))
@@ -175,7 +179,7 @@ func (r *Reader) EntryWork(ctx context.Context, q EntryWorkQuery, now time.Time)
 			if total == 0 {
 				continue
 			}
-			page, _, err := readTasks(ctx, tx, half.set, entryWorkOrder, MaxEntryWork, now.UTC())
+			page, _, err := readTasks(ctx, tx, half.set, entryWorkOrder, MaxEntryWork, at)
 			if err != nil {
 				return err
 			}

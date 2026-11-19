@@ -134,20 +134,15 @@ type DiaryRow struct {
 // EpisodeRow is one episode: a completed turn, summarised — or, compacted, a
 // cluster of them.
 //
-// EACH FIELD UNDER THE NAME OF WHAT IT IS, which the screen reading it depends
-// on: TaskSummary is the LABEL of the event that woke the turn ("Message from
-// Ana: Slack message") and PlanSummary what the turn DID, and a screen that
-// headed the first "What it did" told an operator every chat turn had done
-// "Message from Ana". A compacted row has neither, so it carries what it is
-// instead ([EpisodeRow.Compaction]).
+// EACH FIELD UNDER THE NAME OF WHAT IT IS: TaskSummary is the LABEL of the
+// event that woke the turn ("Message from Ana: Slack message") and
+// PlanSummary what the turn DID; headed "What it did", the label told an
+// operator every chat turn had done "Message from Ana". A compacted row has
+// neither and carries [EpisodeRow.Compaction] instead.
 //
-// A LISTED ROW CARRIES ITS TWO UNBOUNDED TEXTS AS THEIR OPENINGS — the ask and
-// the account, at most [ListedTextBytes] each, with the size of each whole
-// beside it — and [Reader.Episode] reads one row whole. Carried whole, a page of
-// fifty could be more than the transport takes, an ask being bounded only by
-// the event that delivered it, and the holder then refused the whole memory
-// read: the screen showed the seat unavailable for as long as those turns were
-// its newest.
+// A LISTED ROW CARRIES ITS TWO UNBOUNDED TEXTS AS OPENINGS (at most
+// [ListedTextBytes] each, with each whole size beside it); [Reader.Episode]
+// reads one whole. Whole, a page of fifty could exceed the transport.
 type EpisodeRow struct {
 	ID          string `json:"id"`
 	TurnID      string `json:"turn_id"`
@@ -202,20 +197,13 @@ type EpisodeCompaction struct {
 // row carries: the opening a listing draws on one line, the rest one read away
 // ([Reader.Episode]).
 //
-// THE PROMPT'S OWN FIGURE, [learning.EpisodeAccountBytes] — how much of a past
-// turn's own words a seat is shown before they are condensed, sized to a chat
-// message or two and a review's account of what landed — taken by reference
-// rather than written again, because the rule it keeps holds only while the two
-// are one number: a text the screen lists whole is one a seat was shown whole.
-// (Not quite the converse: a prompt measures a text drawn on one line, its runs
-// of whitespace collapsed, so a text the screen opens may still have been whole
-// there.) Written twice, a change to the prompt's figure left the screen
-// cutting what seats read whole, or showing whole what they never saw.
-//
-// It is also what bounds the page: fifty rows of two openings, sixty kilobytes
-// at six hundred bytes, where whole they were bounded only by fifty events —
-// and the prompt, which re-sends three such turns every round, keeps the
-// figure far inside the transport's bound (queue.MaxPayloadBytes).
+// THE PROMPT'S OWN FIGURE, [learning.EpisodeAccountBytes], taken by reference
+// because the rule holds only while the two are one number: a text listed
+// whole here is one a seat was shown whole. (Not the converse: the prompt
+// measures a text with whitespace runs collapsed.) Written twice, a change to
+// one would cut what seats read whole, or show whole what they never saw.
+// It also bounds the page: fifty rows of two openings is sixty kilobytes,
+// far inside the transport's bound (queue.MaxPayloadBytes).
 const ListedTextBytes = learning.EpisodeAccountBytes
 
 // EpisodeDetail is one episode read whole, as the `agent_episode` answer sends

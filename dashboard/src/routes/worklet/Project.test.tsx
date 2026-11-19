@@ -61,6 +61,8 @@ function serving(
 }
 
 const detail = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
+  stuck_after_hours: 8,
+  stuck_after_hours_set: false,
   key: "ENG",
   name: "Engineering",
   purpose: "Build and ship the product",
