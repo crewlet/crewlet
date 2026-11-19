@@ -52,6 +52,9 @@ func (*memAdvisor) PendingRequests(context.Context, statelog.Freshness) ([]advis
 func (*memAdvisor) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (*memAdvisor) AlarmEpisodes(context.Context, time.Time, statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	return nil, nil
+}
 func (*memAdvisor) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
 	return nil, "", nil
 }
@@ -60,6 +63,9 @@ func (*memAdvisor) Report(context.Context, string, statelog.Freshness) (advisord
 }
 func (*memAdvisor) Tally(context.Context, time.Time, time.Time, statelog.Freshness) (advisordomain.Tally, error) {
 	return advisordomain.Tally{}, nil
+}
+func (*memAdvisor) Explain(context.Context, advisordomain.Call, string, advisordomain.Explanation) (statelog.Result, error) {
+	return statelog.Result{}, nil
 }
 func (*memAdvisor) WriteReport(context.Context, advisordomain.Call, advisordomain.Report) (statelog.Result, error) {
 	return statelog.Result{}, nil

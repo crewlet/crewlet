@@ -301,6 +301,15 @@ export const ARTIFACT_ANSWER_VERSION = "version";
  */
 export const RUNTIME_CONTRACT = "1.0.0";
 
+/**
+ * The extensions of a version's pages: the files the artifact origin serves
+ * as HTML with the runtime placed in them, which are the only documents an
+ * artifact's frame can hold. The runtime leaves a link to one to the frame
+ * and opens a link to any other file of the artifact in its file viewer.
+ * Lower case, without the dot, in the media table's order.
+ */
+export const ARTIFACT_PAGE_EXTENSIONS = ["html", "htm"] as const;
+
 /** The most of a part's words a comment keeps, in bytes (`artifacts.MaxCommentQuoteBytes`). */
 export const ARTIFACT_COMMENT_QUOTE_MAX_BYTES = 1024;
 

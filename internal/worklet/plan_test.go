@@ -694,6 +694,8 @@ func taskReads() map[string]indexedRead {
 		"a create's guarding row":    seek(key, taskPresentStatement, task),
 		"a write's guards":           seek(key, taskGuardsStatement, task, task),
 		"a task's project":           seek(key, taskProjectStatement, task),
+		"an item's row for its past": seek(key, pastNowStatement, task),
+		"an edge's openness now":     seek(dependents, pastDepStatement, other, task),
 		"where dependents are filed": seek(key, tasksFiledStatement(3), task, other, "t-00003"),
 		"an ancestor mid-move":       seek(moving, movingAwayStatement, task, "P01"),
 		"a descendant left behind":   seek(key, uncarriedStatement, task, "P01"),
@@ -909,6 +911,18 @@ func taskCensuses() map[string]plannedRead {
 	statement, args = flowPageStatement(planFlow)
 	out["the flow duty's page of the items in progress"] = plannedRead{statement,
 		append(args, "", flowDutyPage)}
+	// AND THE BACKFILL'S: its walk of the items in id order, an item's
+	// history and a blocker's, and the flow expression over an item as it
+	// stood at an instant, each table it reads shadowed by its rows then.
+	out["the flow backfill's page of items"] = plannedRead{flowFillPageStatement,
+		[]any{"t-00001", flowBackfillItems}}
+	out["the flow backfill's page resumed"] = plannedRead{flowFillFromStatement,
+		[]any{"t-00001", flowBackfillItems}}
+	statement, args = pastFlowStatement(planFlow, &itemPast{id: "t-00001"},
+		pastRowAt{status: string(StatusInProgress), assignee: "dev", project: "P01",
+			updated: planNow, waiting: []string{"t-00002"}},
+		&flowChange{id: "c", state: FlowBlocked, recorded: planNow})
+	out["an item's flow as it stood"] = plannedRead{statement, args}
 	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
 	// tasks, and the window report's read of every live task's text.
 	statement, args = search.TaskCountRead()
@@ -1134,6 +1148,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		// WHEN A HELD ITEM WAS LAST ASSIGNED, by the item's own history.
 		"when an item last changed hands": seek(subject, handedOverStatement, task),
 		"a task's own history":            seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"an item's past, in log order":    seek(subject, pastHistoryStatement, task),
 		"a purged task's rows":            seek(subject, purgedHistoryStatement, purged),
 		"one change's routing":            seek(historyKey, routingRecordStatement, record),
 		"where a change sits":             seek(historyKey, recordPositionStatement, record),

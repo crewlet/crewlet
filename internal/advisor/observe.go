@@ -24,7 +24,7 @@ type Span struct {
 // BasisKind is what a fix was built against.
 type BasisKind string
 
-// The bases: the company document at a revision.
+// BasisConfig is the one basis: the company document at a revision.
 const BasisConfig BasisKind = "config"
 
 // Basis is one revision a fix was built against.
