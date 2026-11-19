@@ -141,7 +141,26 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 // stream holds before that text ([pendingText.lead]).
 type pendingText struct{ ctx, text string }
 
-func (p *pendingText) add(s string) { p.text += s }
+// add adds what the stream holds after what was added before.
+//
+// ONLY A LINE THE TEXT OPENS IS SHOWN: while the context ends inside a line,
+// s up to its first break ends that line and joins the context, untrimmed.
+// What a rule replaces runs no further than its line's break and is not
+// bounded short of it ([redact.MaxReach]), so a line's end redacts as its
+// line does, from the line's start. A line the text opens is redacted with
+// all the context the lead kept and the rest of the line it ended in, as the
+// first line a stream's end shows is with all read before it ([settledEnd]).
+func (p *pendingText) add(s string) {
+	if p.text == "" && p.ctx != "" && p.ctx[len(p.ctx)-1] != '\n' {
+		i := strings.IndexByte(s, '\n') + 1
+		if i == 0 {
+			i = len(s)
+		}
+		p.ctx += s[:i]
+		s = s[i:]
+	}
+	p.text += s
+}
 
 // lead adds context: what the stream holds before the text, which comes
 // before any text is added. Only its last [redactContext] bytes are kept,
@@ -158,12 +177,13 @@ func (p *pendingText) lead(s string) {
 
 // settle takes what is settled (all of it once the job is done), redacted.
 //
-// THE CONTEXT SETTLES THE TEXT'S START and is never shown: until what settles
-// reaches past it, settling is decided over context and text together, and
-// what is shown starts on the line after the last place where the text
-// redacted alone differs from the two together (a key whose BEGIN the context
-// holds would, read alone, publish its lines above three that part it). Past
-// that nothing before can change how what follows redacts, so the context goes.
+// THE CONTEXT SETTLES THE TEXT'S START, a line's ([pendingText.add]), and is
+// never shown: until what settles reaches past it, settling is decided over
+// context and text together, and what is shown starts on the line after the
+// last place where the text redacted alone differs from the two together (a
+// key whose BEGIN the context holds would, read alone, publish its lines above
+// three that part it). Past that nothing before can change how what follows
+// redacts, so the context goes.
 func (p *pendingText) settle(done bool) string {
 	if p.ctx == "" {
 		n := len(p.text)
