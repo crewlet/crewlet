@@ -220,14 +220,12 @@ func restoreSpools(t *testing.T, rig *coordRig) []string {
 }
 
 // A TURN'S KEPT SESSION IS CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS. The
-// job before was collected and its box handed back, so the relaunch's box is a
-// new one: the run is handed the job's kept archive to restore, the session it
-// names to take up, the brief written for a session in a box that replaced the
-// one it was last worked in — and, beside it, the fresh brief its script hands
-// a session of its own if the restore fails there. The launch's record says
-// which brief it handed, and its caller is told so before the run starts. And
-// the spool it carried the session in, in the node's spool directory, is gone
-// once the run has started.
+// job before was collected and its box handed back, so the relaunch's box is
+// new: the run is handed the kept archive to restore, the session to take up,
+// the brief written for a replaced box, and the fresh brief its script hands a
+// session of its own if the restore fails. The launch's record says which
+// brief it handed, its caller is told before the run starts, and the spool the
+// session was carried in is gone once the run has started.
 //
 // Mutation: continue only in the box the session lives in, hand the same-box
 // brief to a new box, tell the caller nothing, or leave the spool, and this
@@ -857,14 +855,11 @@ func TestABriefKindIsOneOfFour(t *testing.T) {
 }
 
 // A RELAUNCH CONTINUES ONLY THE SESSION OF THE JOB IT FOLLOWS. The turn's first
-// job kept its session; the job after it — a reviewer's send-back, or the job a
-// person's answer carried on — left no capture of its own: its box went with
-// its host before anything could be read off it. That job was told what the
-// first job's session never read — the review, the answer — and the calls a
-// continuation would list after the first job's capture are numbered in
-// another order where a send-back began a round. So the relaunch that follows
-// it continues nothing, asked by the launch's caller and again at the launch,
-// and starts a session of its own, saying why.
+// job kept its session; the job after it (a send-back, or one a person's answer
+// carried on) left no capture: its box went with its host. It was told what
+// the first session never read, and call numbering differs where a send-back
+// began a round. So the relaunch after it continues nothing, asked by the
+// caller and again at the launch, and starts a session of its own, saying why.
 //
 // Mutation: continue the turn's newest kept capture whichever job took it, at
 // either check, and the relaunch continues a session that never read what the
@@ -988,15 +983,13 @@ func (f *flakyStamps) StampCapture(ctx context.Context, turnID string, c Session
 }
 
 // A CAPTURE IS STAMPED EVEN THROUGH A STORE'S BAD MOMENT, its place and its
-// outcome. A stamp left begun reads as a keep still under way for as long as a
-// capture can take — the turn's end waits that long on it, and a relaunch reads
-// a capture that landed as one it cannot continue — and a place never reserved
-// is a capture nobody can know was made; so each is asked again until the store
-// takes it, within a record's budget.
+// outcome. A stamp left begun reads as a keep still under way (the turn's end
+// waits on it, and a relaunch reads a landed capture as one it cannot
+// continue), and a place never reserved is a capture nobody knows was made; so
+// each is asked again until the store takes it, within a record's budget.
 //
-// IN A SYNCTEST BUBBLE, so the asks again are held to the record's budget on
-// the bubble's clock, which only their own waits advance, never a starved
-// runner's scheduling.
+// IN A SYNCTEST BUBBLE, so the budget runs on the bubble's clock, never a
+// starved runner's scheduling.
 //
 // Mutation: stamp the place or the outcome once, and the row keeps no capture,
 // or keeps it begun.
@@ -1033,21 +1026,16 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 }
 
 // A SESSION ITS HARNESS DID NOT EXIT CLEANLY FROM IS CUT OFF, whoever packed it.
-// The run's script packs the session after its harness exits whatever its
-// status, so a harness killed while its wrapper lived on — a signal, its memory
-// limit — is packed by the script, its transcript ending wherever the kill
-// found it: the capture says so, as one the engine packs of a job still working
-// does, and the launch that continues it restores it over the box's copy and
+// The run's script packs the session whatever its harness's exit status, so a
+// harness killed while its wrapper lived on (a signal, its memory limit) is
+// packed with its transcript ending wherever the kill found it: the capture
+// says so, and the launch continuing it restores it over the box's copy and
 // tells its run it may end mid-call. The executor log's row says so too, with
-// the context the session's last request carried: the run's record that knew
-// both is deleted with the turn, and a launch continuing the session after the
-// turn ended reads them there.
+// the last request's context, since the run's record dies with the turn.
 //
-// Mutation: read a script-packed session as whole whatever its harness's exit,
-// and the capture is kept as one that ended cleanly; leave the cut-off or the
-// context off the stamp recordCapture hands the log, and the capture asked of it
-// says the session ended cleanly, with no context. The engine's word of that
-// stamp onto the log's row is held by
+// Mutation: read a script-packed session as whole, or leave the cut-off or
+// context off the stamp recordCapture hands the log, and a case goes red; the
+// log row is held by
 // TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives.
 func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 	t.Parallel()
@@ -1081,14 +1069,12 @@ func TestASessionItsHarnessDidNotExitCleanlyFromIsCutOff(t *testing.T) {
 
 // A CAPTURE STILL NAMES THE OPEN PLACES AN OLDER PEER READS. A build before the
 // save point's count read a capture's place by the order the bridge admitted
-// calls: the highest call the row held when the session was packed, and every
-// place below it the row held no call at — a call in flight, a slow write
-// beside a fast read — the highest of them within the bound, for its
-// continuation to list. This build writes them for that build, mid-upgrade, and
-// reads its own count instead (SessionCapture.Through), because of the long
-// round's case below: the places the bound dropped are the highest the row
-// leaves unlisted, so they fill the slots, and a call in flight below them is
-// named in none — which that build reads as answered.
+// calls: the highest call the row held when packed, and the highest places
+// below it with no call (in flight, a slow write), within the bound, for its
+// continuation to list. This build writes them for that build, mid-upgrade,
+// and reads its own count instead (SessionCapture.Through): see the long
+// round's case below, where places the bound dropped fill the slots and a call
+// in flight below them is named in none, which that build reads as answered.
 //
 // Mutation: stamp the highest call alone, or name the lowest places past the
 // bound rather than the highest, and a case goes red.
@@ -1163,16 +1149,13 @@ func TestACaptureStatesTheNotesItHoldsOnlyWhereItsHarnessEndedItsOwnRun(t *testi
 }
 
 // A CAPTURE'S NOTE CURSOR STOPS BEFORE A READ ITS HARNESS NEVER HAD. A take
-// whose write landed after its answer was lost is marked unanswered on the
-// record: the session lacks those notes however cleanly its harness ended,
-// while it holds the answered reads after them, which one number cannot say. So
-// the cursor stops before the first read marked unanswered, whichever job's
-// take it was: a mark can land after a later brief was built, and that brief
-// did not tell the note as marked. A launch that continues the session tells
-// every note past it, as notes it may already show. A read a later launch's
-// brief told again is no longer marked, its write recording it read by its
-// job: that job's session holds it from its brief. A record with none marked
-// holds every read, and a capture cut off states none either way.
+// whose write landed after its answer was lost is marked unanswered: the
+// session lacks those notes however cleanly its harness ended, yet holds the
+// answered reads after them, which one number cannot say. So the cursor stops
+// before the first read marked unanswered, whichever job's take it was (a mark
+// can land after a later brief was built). A launch continuing the session
+// tells every note past it. A read a later brief told again is no longer
+// marked; a capture cut off states none either way.
 //
 // Mutation: count a read marked unanswered as held, stop before the last such
 // read rather than the first, stop only before the capture's own job's, or stop
@@ -1749,16 +1732,13 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 }
 
 // A ROUND IS CARRIED ON IN THE SESSION ITS JOB'S BOX RAN, never the one the
-// job's launch chose. A launch that continues a session names, beside it, the
-// session its script starts of its own where its box cannot take that one up,
-// and its box says which it started by the token its harness dials: a person's
-// answer, or a replaced sign-in, carries the round on in the one the box said —
-// the one of its own where it fell back, the chosen one where it took that up —
-// and in none at all where the box's word never reached the row, which cannot
-// tell the two apart; there the round is carried on from the turn's kept
-// capture, or in a session of its own. A launch that continues no session
-// names no second one, and its box has nothing to say: the session it named is
-// the one it ran.
+// job's launch chose. A launch continuing a session names, beside it, the
+// session its script starts of its own where the box cannot take that one up,
+// and the box says which it started by the token its harness dials: a
+// person's answer, or a replaced sign-in, carries the round on in the one the
+// box said, and in none where the box's word never reached the row; there it
+// continues from the turn's kept capture, or a session of its own. A launch
+// continuing no session names no second: the one it named is the one it ran.
 //
 // Mutation: carry the round on in the session the launch chose whatever the box
 // said or where it said nothing, or leave the launch's second session off the

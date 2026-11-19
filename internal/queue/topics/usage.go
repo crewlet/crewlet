@@ -3,18 +3,15 @@ package topics
 // The usage domain's log: what each node's seats and schedules did each company
 // day, and why its grammar sits beside the other domains'.
 //
-// The usage domain is the state-log framework's FIFTH, and its second
-// COMPACTED one: one message per subject, so the stream is a keyed table of
-// node-days rather than a history. The subject is not an arbitration unit here
-// — exactly one writer, the node the day belongs to, ever publishes on it — but
-// it IS the compaction key, which makes it load-bearing in a different way: a
-// subject that named two different node-days would have the newer one's record
-// silently delete the older one's, and a node-day spread across two subjects
-// would keep a stale copy beside the current one for the stream's whole age.
+// The usage stream is COMPACTED: one message per subject, a keyed table of
+// node-days rather than a history. The subject is no arbitration unit (only
+// the node the day belongs to publishes on it) but it IS the compaction key: a
+// subject naming two node-days lets the newer record silently delete the
+// older, and a node-day spread across two subjects keeps a stale copy beside
+// the current one for the stream's whole age.
 //
-// It lives here for the reason the others do: the publisher builds it and the
-// applier and the stream's own wildcard read it, and none of the three can see
-// the others.
+// It lives here for the others' reason: the publisher, the applier and the
+// stream's wildcard each use it and none sees the others.
 
 const (
 	// UsageLogStream is the usage domain's compacted stream.

@@ -16,10 +16,8 @@ import (
 // that passed early would let a registration the withdrawal left standing hear
 // the broadcast after the case had looked, and the case would pass with it.
 //
-// In a bubble: the listener's handler is held inside the first of two
-// broadcasts, and the barrier not having passed is read once every goroutine
-// of the case is durably blocked — a barrier that was going to pass without
-// the handler has passed by then.
+// In a bubble: the handler is held inside the first of two broadcasts, and the
+// barrier not having passed is read once every goroutine is durably blocked.
 //
 // Mutation: close the barrier's channel where it is queued rather than where
 // the listener reaches it, and it passes with the handler still held.

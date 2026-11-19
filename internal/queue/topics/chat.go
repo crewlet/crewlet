@@ -1,35 +1,16 @@
 package topics
 
-// The company's own chat.
+// The company's own chat: the first log where a hot path and an arbitration
+// path coexist. Channel state arbitrates on the channel's own subject, so two writers
+// renaming one room contend and one wins. Messages ride a SEPARATE kind under
+// that channel's id with no expectation: talking never contends, and the
+// per-subject index is bounded by channels. The grammar lives here as the
+// publisher, wake feed and applier cannot see each other.
 //
-// The chat domain is the state-log framework's NINTH, and its subject space
-// is the first where a hot path and an arbitration path share a log. Channel
-// state — a topic, a membership set, an archive, a prune — arbitrates on the
-// channel's own subject, so two writers renaming one room contend at the
-// broker and exactly one wins. New messages ride a SEPARATE kind whose id is
-// that same channel's, sequenced with no expectation: two people talking in
-// one room never contend, and the broker's per-subject index is bounded by the
-// number of channels rather than by the number of things anybody ever said.
-//
-// It lives here for the reason the other domains' grammar does — the
-// publisher builds the subject, the wake feed's consumer filters on it, and
-// the applier's kind switch dispatches on the kind inside it, and none of the
-// three can see the others.
-//
-// PRESENCE HAS NO SUBJECT HERE. Typing, who is looking and the working
-// indicator are what is true of a room right now rather than events, so they
-// are the presence hub's (internal/presence, ADR-0038): a chat room is one
-// kind of room there, told on [PresenceSubject] under `crewlet.rooms.` —
-// outside every log's wildcard, because a durable stream created over it
-// would retain every keystroke for the length of its own age bound — in
-// frames sealed under the fleet keyring.
-//
-// A person's READ STATE has no subject here at all, and the obvious one — the
-// node that took a cursor write telling its peers to push it — is what it is
-// not. A cursor is a coordination record (internal/coord) that every node
-// already watches, so the push to that person's sockets on any node is derived
-// from the durable record itself; a scatter beside it would be an unsigned
-// instruction to show somebody a state no record holds.
+// PRESENCE has no subject here: it is the presence hub's (ADR-0038), outside
+// every log's wildcard, since a durable stream would retain every keystroke.
+// READ STATE has none: a cursor is a coordination record (internal/coord), so
+// a scatter would be an unsigned instruction to show a state no record holds.
 
 const (
 	// ChatLogStream is the chat domain's mutation stream.
