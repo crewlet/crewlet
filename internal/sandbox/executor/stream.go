@@ -50,7 +50,11 @@ type Decoder interface {
 	// needs, so it is read one way or the other, never both: a live reading
 	// asks once before its first line, so the decoder never holds for a
 	// Result, however much that line's read hands it.
-	Entries() []string
+	//
+	// With end (every line was fed and the run is done), a run of skipped
+	// lines still open is said too, as Result says it, so a reading ends on
+	// the note the record ends on.
+	Entries(end bool) []string
 }
 
 // maxLineBytes is the longest line of a run's output that is read; a longer
@@ -271,10 +275,14 @@ func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 // take hands over the entries added since the last take and forgets them,
 // and marks the reading live.
 //
-// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED: the next entry says it,
-// so a reading in pieces names the same lines as one taken whole.
-func (t *transcriptLines) take() []string {
+// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED until end ([Decoder.Entries]):
+// the next entry says it, so a reading in pieces names the same lines as one
+// taken whole, and at the stream's end nothing follows to say it.
+func (t *transcriptLines) take(end bool) []string {
 	t.live = true
+	if end {
+		t.flushSkipped()
+	}
 	lines := t.lines
 	t.lines, t.held = nil, 0
 	return lines

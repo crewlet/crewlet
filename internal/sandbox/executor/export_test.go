@@ -272,7 +272,7 @@ func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, 
 func FollowedNames(first string, rest ...string) int {
 	d := &openCodeEvents{}
 	d.Line([]byte(first))
-	_ = d.Entries()
+	_ = d.Entries(false)
 	for _, line := range rest {
 		d.Line([]byte(line))
 	}

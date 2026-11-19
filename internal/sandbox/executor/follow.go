@@ -123,14 +123,16 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 	if restarted || f.dec == nil {
 		f.dec, f.transcript = f.harness.Events(), pendingText{}
 		// Read through Entries from its first line ([Decoder.Entries]).
-		_ = f.dec.Entries()
+		_ = f.dec.Entries(false)
 	}
-	if len(lines) == 0 {
-		return nil
+	if len(lines) > 0 {
+		// A bytes.Reader cannot fail, so neither can this.
+		_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
 	}
-	// A bytes.Reader cannot fail, so neither can this.
-	_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
-	entries := f.dec.Entries()
+	// DONE, every line is fed ([rawStream.take]), so the end is said even by
+	// a read that brought no line: the skipped lines it ends on were fed by
+	// an earlier one.
+	entries := f.dec.Entries(done)
 	if len(entries) == 0 {
 		return nil
 	}
