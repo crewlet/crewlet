@@ -19,11 +19,14 @@ import (
 )
 
 // staleTasks answers one task read per item, and records each read's floors.
-// An item in blocked reads with an open blocker, and one in failing fails.
+// An item in blocked reads with an open blocker, one in failing fails, and
+// each reads its flow in flows, live as live says.
 type staleTasks struct {
 	tasks   map[string]worklet.Task
 	blocked map[string]bool
 	failing map[string]bool
+	flows   map[string]*worklet.Flow
+	live    bool
 	err     error
 	floors  [][]statelog.Position
 }
@@ -41,7 +44,7 @@ func (s *staleTasks) Task(_ context.Context, id string, _ worklet.DetailWants,
 	if !ok {
 		return worklet.TaskDetail{}, worklet.ErrNoTask
 	}
-	return worklet.TaskDetail{Task: t, Blocked: s.blocked[id]}, nil
+	return worklet.TaskDetail{Task: t, Blocked: s.blocked[id], Flow: s.flows[id], FlowLive: s.live}, nil
 }
 
 // staleWakeAt is the position a test wake's change was committed at.
@@ -271,6 +274,101 @@ func TestAWakeWhoseRelationEndedStartsNoTurn(t *testing.T) {
 	for _, floors := range tasks.floors {
 		if len(floors) != 1 || floors[0] != trackerAt(40) {
 			t.Fatalf("a read was floored at %v, want the wake's own change %v", floors, trackerAt(40))
+		}
+	}
+}
+
+// flowNotice is the one wake the flow duty's notice that item has been in
+// state puts on its lead cto's inbox, committed at seq of the tracker's log:
+// relayed, routed by the parser and woken by the notification service.
+func flowNotice(t *testing.T, reg *notify.Registry, op, item string, state worklet.FlowState,
+	seq uint64) *events.Event {
+
+	t.Helper()
+	since := time.Unix(1_700_000_000, 0).UTC()
+	flow := worklet.FlowRecord{ID: "key-" + op, Task: item, State: state, Since: &since, Seat: "swe",
+		Notice: worklet.FlowToldLead, Told: "cto"}
+	body, err := json.Marshal(flow)
+	if err != nil {
+		t.Fatalf("encode %s: %v", op, err)
+	}
+	record := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			OpID: op, Subject: worklet.FlowSubject(item), Op: worklet.OpFlow,
+			CreatedAt: since, Writer: "node-a",
+			Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
+		},
+		Mutation: body, Actor: "node-a", ActorKind: worklet.AuthorSystem,
+		Notify: &worklet.Notify{Kind: worklet.ChangeFlow, Snapshot: worklet.Snapshot{
+			Key: "ENG-" + item, Project: "ENG", Assignee: "swe", Task: item,
+			Flow: &worklet.FlowNotice{ID: flow.ID, Told: "cto", Role: worklet.FlowToldLead,
+				State: state, Since: &since},
+		}},
+	}
+	payload, err := record.Encode()
+	if err != nil {
+		t.Fatalf("encode %s: %v", op, err)
+	}
+	return noticeAt(t, reg, worklet.NewParser(worklet.ParserOptions{}), worklet.Prompt{}, payload,
+		"cto", trackerAt(seq).String())
+}
+
+// A FLOW NOTICE WHOSE ITEM LEFT ITS STATE STARTS NO TURN (ADR-0162): a lead
+// told an item is stuck, due or held is asked to look at it, which an item
+// finished, removed or moving again no longer asks. Judged only where the read
+// can tell: a read with no live facts keeps a notice of a hold it cannot see,
+// and an item still in the state it told of keeps it. Mutation: drop a notice
+// whatever its item reads, or keep one whose item moved on, and it fails.
+func TestAFlowNoticeWhoseItemLeftItsStateStartsNoTurn(t *testing.T) {
+	t.Parallel()
+	reg := notify.NewRegistry(audienceChart(t), nil)
+	open := worklet.Task{Assignee: "swe", Status: worklet.StatusInProgress}
+	flowOf := func(state worklet.FlowState) *worklet.Flow { return &worklet.Flow{State: state} }
+	tasks := func(live bool) *staleTasks {
+		return &staleTasks{live: live,
+			tasks: map[string]worklet.Task{
+				"stuck": open, "moving": open, "held": open, "blocked": open,
+				"done": {Assignee: "swe", Status: worklet.StatusDone},
+				"todo": {Assignee: "swe", Status: worklet.StatusTodo},
+			},
+			flows: map[string]*worklet.Flow{"stuck": flowOf(worklet.FlowStuck),
+				"moving": flowOf(worklet.FlowMoving), "held": flowOf(worklet.FlowDue),
+				"blocked": flowOf(worklet.FlowBlocked)},
+		}
+	}
+
+	// THE WAKE SAYS WHAT IT TELLS OF, and is a state notice its item's turn absorbs.
+	told := flowNotice(t, reg, "op-told", "stuck", worklet.FlowStuck, 40)
+	n, _ := events.DataAs[*types.ExternalNotification](told)
+	if state, ok := worklet.WakeFlow(n.Metadata); !ok || state != worklet.FlowStuck {
+		t.Fatalf("the flow notice tells of %q (%v), want stuck", state, ok)
+	}
+	if reason, state := worklet.StateNotice(n); !state || reason != worklet.ReasonFlow ||
+		!reason.Absorbable() {
+		t.Fatalf("the flow notice reads as %q (state notice %v), want an absorbable flow notice",
+			reason, state)
+	}
+
+	for _, c := range []struct {
+		what  string
+		item  string
+		state worklet.FlowState
+		live  bool
+		moot  bool
+	}{
+		{"an item still stuck", "stuck", worklet.FlowStuck, true, false},
+		{"an item moving again", "moving", worklet.FlowStuck, true, true},
+		{"an item moving again, read without live facts", "moving", worklet.FlowStuck, false, true},
+		{"an item finished", "done", worklet.FlowDue, true, true},
+		{"an item back to do", "todo", worklet.FlowDue, false, true},
+		{"a hold a read without live facts cannot see", "held", worklet.FlowHeld, false, false},
+		{"a hold that ended", "held", worklet.FlowHeld, true, true},
+		{"a hold behind a blocker", "blocked", worklet.FlowHeld, false, true},
+	} {
+		wake := flowNotice(t, reg, "op-"+c.item, c.item, c.state, 40)
+		got := staleWakes(t.Context(), tasks(c.live), "cto", []*events.Event{wake})
+		if moot := len(got) == 0; moot != c.moot {
+			t.Errorf("%s: the notice is moot %v, want %v", c.what, moot, c.moot)
 		}
 	}
 }

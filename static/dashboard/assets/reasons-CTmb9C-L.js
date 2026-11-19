@@ -1,0 +1,1 @@
+import{t as e}from"./reasons-BJBKcM6J.js";function t(t){return t===``?`no reason recorded`:e[t]?.short??t.replace(/_/g,` `)}function n(t){return t===``?`no reason recorded`:e[t]?.about??t.replace(/_/g,` `)}function r(t){return t===``?`no reason recorded`:e[t]?.why??`the engine recorded the reason “${t}”`}export{t as n,r,n as t};

@@ -164,55 +164,43 @@ does not.
 
 ## Turning it on
 
-1. **Add a dedicated `providers.llm` entry** for Ask Crewlet that meets
-   Ask Crewlet's rules: a harness run with no tool of its own beside the engine's
-   `crewlet` server, and
-   `overrides: { web_tools: denied }`. Which harnesses qualify, and why the others
-   are refused, is stated once in the
-   [Configuration Reference](../getting-started/configuration.md#ask-crewlet)
-   and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
-   A dedicated entry keeps its own `max_concurrent` slots, so a busy company's
-   seats never queue people's questions and the reverse.
-2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key),
-   which runs the exact argv Ask Crewlet runs and reports a shell or a fetch
-   that succeeded as a problem. It is the operator's proof before turning
-   Ask Crewlet on.
-3. **Set the `assistant:` block**: `enabled: true` and `llm:` naming the entry
-   (a fallback chain, first key first). The defaults for steps, turn timeout,
-   proposal lifetime and retention suit most companies. Every key, its range
-   and its default are in the generated
-   [company schema](https://github.com/crewlet/crewlet/blob/main/schema/company.schema.json)
-   (`crewlet schema company`) and described in the configuration reference;
-   this page does not repeat them.
-4. **Apply the revision** (`crewlet config import`, or the dashboard's
-   configuration editor). The next page load lights **Ask** for every person.
+Assign Ask Crewlet a model: set `assistant.model` to a `providers.llm` key the
+company already has, and apply the revision (`crewlet config import`, a
+`PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard,
+where an administrator picks Ask Crewlet's model from the company's models).
+The next page load lights **Ask** for every person. There is nothing else to
+set: the bounds of a turn are fixed ([Budgets and limits](#budgets-and-limits)).
 
-An administrator can also change every setting of the block where it is read,
-on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
-its model chain and the stronger chain, the bounds of a turn, the tool
-families turned off, the hosts web research may read, and deep work. Each change is checked by the engine
-before it is saved, as a configuration edit is.
+No entry has to be made for it. Ask Crewlet runs the entry as a helper's run:
+the engine turns the harness's own web tools off whatever the entry says and
+leaves the model no tool but the engine's `crewlet` server, while a seat on
+the same entry keeps its web tools. The helper's run takes slots of its own,
+so a busy company's seats never queue people's questions and the reverse.
+Which harnesses can be run that way, and why the others are refused, is
+stated once in the
+[Configuration Reference](../getting-started/configuration.md#ask-crewlet)
+and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
+The Models screen says of each entry whether a helper can run on it.
 
-`crewlet validate` and every `/config` write refuse a chain that breaks the
-rules above, naming the member and the field to change. A stored revision that
-somehow carries one still applies, so every seat keeps running, and
-Ask Crewlet reports **No model** until the chain is fixed.
+In the dashboard, the model is chosen on Ask Crewlet's own page (`#/ask`):
+the model named in the conversation's head is a picker for an administrator,
+with each entry a helper cannot run on drawn disabled beside the engine's
+reason. The change is checked by the engine before it is saved, as a
+configuration edit is.
 
-To turn it off, set `enabled: false` (or remove the block). Conversations are
-kept and purged on their normal retention; nothing is deleted by turning it off.
+`crewlet llm doctor <key>` proves it: for an entry a helper runs on, it probes
+the helper's run beside the entry's own, and reports a shell, a file read or a
+fetch that succeeded there as a problem.
 
-## Turning tool families off
+`crewlet validate` and every `/config` write refuse a model no helper can run
+on, naming `assistant.model` and why. A stored revision that somehow carries
+one still applies, so every seat keeps running, and Ask Crewlet reports that
+its model cannot run it until the model is changed.
 
-`assistant.tools.deny` keeps families of tools away from everybody, whatever
-their own permissions allow: `writes` makes Ask Crewlet read only, and
-`chat_writes`, `atlas_writes`, `agent_controls`, `generic_changes`,
-`generic_reads`, `page_changes` and `deep_work` each turn one family off. A
-denied tool is never offered to the model, in a question, a brief, a turn
-resumed after an approval or a deep-work run, so it cannot be talked into
-trying one. It only narrows: a person still never gets a tool their own
-permissions do not offer. The
-[configuration reference](../getting-started/configuration.md#ask-crewlet)
-lists what each family holds.
+To turn it off, remove `assistant.model`. Conversations are kept and purged on
+their normal retention; nothing is deleted by turning it off. Removing the
+model's entry asks what Ask Crewlet runs on next, like every other reference to
+it; answering "nothing" turns Ask Crewlet off in the same revision.
 
 ## Choosing the model
 
@@ -220,24 +208,12 @@ Every round is one launch of the vendor's harness, so the model and the harness'
 start time decide how quickly people get an answer. A mid-tier model is the
 recommended starting point: choosing among roughly thirty tools and shaping
 their arguments is where small models fail measurably, and a frontier model's
-per-round cost is rarely justified for lookups.
-
-**A stronger model for hard questions.** Set `assistant.deliberate.llm` to a
-second chain, for example a frontier model, and the drawer offers **Think
-harder** beside **Attach image**. A person presses it for one question, which
-then runs on that chain; the next question runs on `assistant.llm` again, and
-a turn that proposes a change resumes on the same chain after its approval.
-With `decision_briefs: true`, **Brief me on this decision** uses it as well.
-The chain is held to the same rules as `assistant.llm` and charged to the same
-budgets, and a question asking for it in a company that sets none is refused
-naming the setting. Each turn's end is logged with the chain it ran on
-(`strength` on `assistant_turn_ended`).
+per-round cost is rarely justified for lookups. Every question, brief and turn
+resumed after an approval runs on the one model; a company that wants a
+stronger model assigns one.
 
 Before switching models, run the evaluation suites against the candidate
-(`crewlet assistant eval`, below). Keep `turn_timeout_seconds` at its default
-of 900 seconds unless measurements on your hosts justify another value: a
-turn of thirty steps is thirty-one rounds, and each round pays the harness's start
-time.
+(`crewlet assistant eval`, below).
 
 ## Briefs
 
@@ -331,15 +307,18 @@ These limits are fixed, not configured:
 
 | Limit | Value | Why |
 |---|---|---|
+| Model rounds per turn | 40 | Each round calls any number of tools; every result stays in the context the model re-reads, and forty of the 16 KiB a result is cut to fit a 200,000 token context |
+| Longest turn | 20 minutes | The life of the read grant a turn holds, which no turn outlives; **Stop** ends one sooner |
+| How long a change waits for approval | 15 minutes | Long enough to read a change, short enough that what was previewed is what the write meets |
+| Conversations kept | 30 days after their last use | A transcript holds whatever the person's reads returned |
 | Running turns per person | 2 | A third answers `429 assistant_busy`, so one person cannot occupy the model slots |
 | Turns per person per minute | 20, burst of 5 | The same refusal; a loop in a browser cannot spend the budget in seconds |
-| One answer per conversation | 1 | A second question in the same conversation waits for the first (`409 assistant_turn_running`). A question asked while a change waits for approval is answered, and the change stays approvable until it expires (`assistant.proposal_ttl_seconds`). A turn waiting on an approval ends as `expired` once every change it proposed has expired, within a minute even if nobody opens the conversation again |
+| One answer per conversation | 1 | A second question in the same conversation waits for the first (`409 assistant_turn_running`). A question asked while a change waits for approval is answered, and the change stays approvable until it expires, 15 minutes after it was proposed. A turn waiting on an approval ends as `expired` once every change it proposed has expired, within a minute even if nobody opens the conversation again |
 | Open streams per person | 4 per node, 60 opens a minute (burst of 10) | A fifth stream, or a loop reopening one, answers `429 assistant_busy`, so one person cannot hold the node's connections or keep it unsealing a transcript |
 | Tool result handed to the model | 16 KiB | Larger answers are cut for the model; the card still shows the snapshot |
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
 | Attachments | 4 per question, 40 per conversation, 5 MiB each, PNG, JPEG, WebP or GIF | The type is read from the file's bytes, never its name, so a page dressed as an image is refused (`415 assistant_file_refused`); past 40 a conversation answers `409 assistant_file_limit`, which bounds what one conversation keeps in the object store to 200 MiB for its retention |
-| Files a deep-work run delivers | 10 per run, 100 per conversation, 5 MiB each | The same bound on what runs hand back |
-| Rounds of a brief | 7 rounds of reads, or `assistant.max_steps` where lower, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
+| Rounds of a brief | 7 rounds of reads, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
 | Tokens of a brief | 100,000, every round together | About five rounds of a 20,000 token context; past it the brief stops with "The brief read more than a brief may", which spends nothing of the company's windows beyond the rounds already made |
 
 ## Web research
@@ -377,139 +356,46 @@ read. A source opens in a new tab only after a stop that names its host and its
 whole address. A page's title is the site's words, so a mention of it in the
 answer stays plain text.
 
-## Deep work
+## Big tasks and images
 
-Deep work lets Ask Crewlet hand a large task to a harness with its own
-tools (shell, files, web search and fetch, image reading) for up to twenty
-minutes at a time (ADR-0054). It is off unless `assistant.deep_work` names an
-entry:
+A turn has no shell, files or browser of its own, and runs for at most twenty
+minutes. When a person asks for something that needs scripts, generated files
+or hours of steps (analysing a month of work to propose new teams, redesigning
+the brand's assets), Ask Crewlet proposes a task for one of the company's agent
+seats that can do it, with a brief of what to deliver, the seat to assign and
+links to the records it concerns. The person approves the task like any other
+change, and the seat does the work in its own box, with its own tools, budget
+and review.
 
-```yaml
-providers:
-  llm:
-    assistant-deep:
-      harness: claude-code     # deep work runs the harness's own loop and tools, in a box
-      model: sonnet
-      # run_in: e2b          # optional; see "Where a run happens"
-assistant:
-  enabled: true
-  llm: [assistant]
-  deep_work:
-    llm: assistant-deep
-    timeout_seconds: 1200    # 60..1200, the longest one run takes
-    max_steps: 150           # 10..400 agentic rounds and Crewlet calls a task makes
-    max_tokens: 3000000      # 10000..20000000 tokens a task may spend
-```
-
-Deep work is also the only path that reads the images a person attaches to a
-question. Without it, the dashboard draws Attach image disabled with that
-reason, says it while an image is dragged over the composer, and refuses a
-pasted or dropped image in place (`/viewer` answers
-`reads_images` only where deep work is configured), and a quick answer told of
-an attachment says it cannot see it and offers what works: pasting the text,
-or asking an administrator to turn on deep work, or asking again shortly where
-deep work is configured and cannot run on this node now.
-
-The entry must be Claude Code: a run on the engine host is confined around that
-harness's own install and temporary directories, which no other harness has been
-measured against, and a run parked on a proposal is continued in that harness's own
-session after the approval. A run's
-wall clock never passes the read grant of the turn it belongs to, which is why
-twenty minutes is the ceiling; a longer task proposes, waits and continues on
-the fresh grant the approval brings. Its tokens are charged to the person's and
-the company's budgets like any turn's, and appear on the spend history as
-`assistant_deep_work`.
-
-### What a run can reach
-
-Its only way into Crewlet is the person's own Ask Crewlet tools, served to it
-over the engine's tool bridge, so every read is the person's request and every
-change a proposal they approve. It is held to that bridge: unlike a seat's
-executor, it starts no MCP server a repository it checked out, its box or the
-account it signs in with would add (`--strict-mcp-config`). No API token, grant or engine credential is
-placed in its box; it holds a bridge token valid for that run alone, which
-stops working when the run ends. It does reach the web, always: a page can try
-to steer it, and it could carry what it read out in an address it fetches.
-
-### Where a run happens
-
-A run goes to the first of these the company configures:
-
-1. The deep-work entry's own `run_in`.
-2. An `e2b` cell under `providers.sandbox`.
-3. A `container` cell with `providers.sandbox.local.image`.
-4. The engine host, **confined**. Every command the run starts runs inside the
-   strongest boundary the host enforces: `sandbox-exec` on macOS, bubblewrap
-   over namespaces on Linux, or Landlock applied by the `crewlet` binary
-   itself. It cannot read or write the node's store and estate, the stream
-   store, the log file, the config files the node was started from, any
-   providers.llm login, any seat's box, or the operator's home directory, and
-   it writes only in its own box. A host that can enforce none of these runs
-   no deep work, and Ask Crewlet reports why. Install bubblewrap
-   (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
-   cell above.
-
-   Its box is made under the company's box root, where a seat's `direct`
-   boxes are made too: `providers.sandbox.local.state_dir`, else
-   `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes`, in a directory
-   of its own there (`<box root>/assistant/boxes/<id>`), which a seat's
-   backend never lists or reaps. So what a run checks out, installs and builds
-   lands on the volume you sized for boxes and never on the one holding the
-   store and the stream ([Where a box writes](deployment.md#where-a-box-writes)).
-   A revision that moves `state_dir` leaves a box kept for a proposal where it
-   is: for as long as the node runs, the approval continues the run in it and
-   its earlier box root stays denied to every other run.
-
-A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
-([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
-and its call is relayed to the node that opened its session wherever it lands.
-Where every box runs on the engine host — a single node whose
-`providers.sandbox` configures no `e2b` cell, such as one with only the
-`direct` cell the [Quickstart](../getting-started/quickstart.md) sets up —
-point that variable at the node's loopback address
-(`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
-such as `engine.localhost`, are loopback too). A confined run's bridge token
-is then admitted from that host's loopback only, under a loopback host name or
-a container runtime's name for the engine host, so a page in a browser on the
-host cannot spend a leaked one under a name of its own, and it is never
-relayed to another node. A run in a `container` box on the same host is
-handed the runtime's name for the engine host in place of loopback
-([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
-loopback all the same, so it can do nothing a confined run cannot. A runtime
-that delivers the box's calls over the host's loopback (Docker Desktop, and
-Podman's machine on macOS and Windows) meets that hold, and the bridge admits
-the runtime's name for the host those calls carry; one that delivers them from
-its bridge network (Docker Engine and Podman on Linux) does not, so run deep
-work `direct` or remote there.
-Don't do this where seats run boxes on other machines: they are given the same
-address, and a box on another machine cannot dial it.
+The images a person attaches to a question are handed to the model with the
+question, where the model's harness takes images: Claude Code does, through its
+structured input (`image_input` in [Harness profiles](../concepts/llm-backends.md));
+Pi does not. `/viewer` answers `reads_images` for the assigned model, and where
+it is false the composer takes no image, and a question that carries one all
+the same is answered with what works instead: pasting the text the image shows,
+or assigning Ask Crewlet a model that reads images.
 
 ## Retention and erasure
 
-A conversation untouched for `assistant.retention_days` (30 by default, 1 to
-365) is purged by the trash reaper. The setting is read from the revision the
-fleet's activation pointer names, and only on a node that runs that revision:
-a node that refused the fleet's revision, or booted on an offline import the
-fleet has not taken, purges no conversation for its age until it runs the
-fleet's, so a purge comes late rather than by a setting the company has since
-changed. **Clear** in the panel purges one at once.
+A conversation untouched for 30 days is purged by the trash reaper, the same
+term on every node. **Delete** on Ask Crewlet's page or in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
 bounded context a turn waiting on an approval resumes from and a long
 conversation's summary of its earlier messages. That summary is written by the
-quick chain after a turn once eight messages past the last twelve have
+model after a turn once eight messages past the last twelve have
 gathered, charged to the person's budget as `assistant_summary`, sealed beside
 the conversation and purged with it.
 
-Files go with their conversation. An image a person attaches and a file a
-deep-work run delivers are kept in the fleet's
+Files go with their conversation. An image a person attaches is kept in the
+fleet's
 [object store](../concepts/object-store.md) as one object each,
 sealed under the same keyring with the conversation and the file bound in, so
 the bucket holds none of them in the clear; the replicated row naming each
 object is removed with the conversation, and the object store's collector
 deletes the object at its next pass. A node without an object store keeps no
-files: there Ask Crewlet takes no attachment and offers no deep work.
+files: there Ask Crewlet takes no attachment.
 Downloading a kept file is always a download, never a page: it is served as an
 attachment of the type its bytes were read as, with `nosniff`, a `sandbox`
 content security policy and `Cache-Control: private, no-store`.
@@ -629,17 +515,17 @@ suite is under `examples/assistant-evals/`.
 
 | The dashboard says | Check |
 |---|---|
-| Turned off | `assistant.enabled` in the active revision |
-| No model | `crewlet llm doctor <key>` for each `assistant.llm` member, and the engine log for the chain's refusal |
+| No model yet (`no_model`) | `assistant.model` in the active revision: assign Ask Crewlet a model |
+| Cannot run on its model (`model_problem`) | `crewlet validate` names why: the model's harness runs with tools of its own Crewlet cannot turn off. Assign an entry on a harness a helper can run |
 | Not a person | The caller is a token or a token's session. Sign in as the person |
 | No permission | The person's account and the authority table's assistant column for the verbs they expected |
 | Signed out (`model_signed_out`) | The harness's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
-| Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Add a second model to `assistant.llm` to keep answering through a limit |
+| Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Assign Ask Crewlet another model to keep answering through a limit |
 | Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the harness's own start time on the host |
 | Cannot be started (`model_unavailable`) | The harness's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
 
-**The model's state is checked before anyone asks.** When every model in
-`assistant.llm` is known unusable, the drawer says so above its composer and
+**The model's state is checked before anyone asks.** When Ask Crewlet's model
+is known unusable, the drawer says so above its composer and
 disables Send rather than letting a person ask and wait for a failure. What
 the node knows comes from its own calls and configuration, never from a call
 made to check: a spent plan until its reset, a login a call was refused on, a

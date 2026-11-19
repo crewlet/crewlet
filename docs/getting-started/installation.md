@@ -132,7 +132,7 @@ Each archive holds the `crewlet` binary, `LICENSE`, `README.md` and the
 third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
 toolchain and every Go module the binary links, and
 `dashboard/THIRD_PARTY_NOTICES.txt` for the embedded dashboard: its npm
-packages, the Geist and Geist Mono faces (OFL-1.1) and the Lucide glyphs (ISC,
+packages with the NOTICE files they ship, the Geist and Geist Mono faces (OFL-1.1) and the Lucide glyphs (ISC,
 with Feather's MIT text for the glyphs derived from it). The container image carries the same files under
 `/usr/share/doc/crewlet/`, and a running engine serves the dashboard's at
 `/static/dashboard/THIRD_PARTY_NOTICES.txt`.

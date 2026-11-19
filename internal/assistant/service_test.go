@@ -308,13 +308,13 @@ func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	}
 }
 
-// AN OFF ASSISTANT AND A PRINCIPAL THAT IS NOT A PERSON ARE REFUSED, each with
-// the reason the viewer gives, before anything else.
+// AN ASSISTANT WITH NO MODEL AND A PRINCIPAL THAT IS NOT A PERSON ARE REFUSED,
+// each with the reason the viewer gives, before anything else.
 func TestTheAssistantRefusesWhoItMayNotServe(t *testing.T) {
 	t.Parallel()
 	f := assistanttest.NewRig(t, evals.RigOptions{Off: true})
-	if _, err := f.Ask("off", "Hi", nil); !isReason(err, wire.ViewerDisabled) {
-		t.Errorf("an assistant that is Off: err = %v", err)
+	if _, err := f.Ask("off", "Hi", nil); !isReason(err, wire.ViewerNoModel) {
+		t.Errorf("an assistant with no model: err = %v", err)
 	}
 	g := assistanttest.NewRig(t, evals.RigOptions{})
 	g.Person.Via = "pat:" + evals.ID("token").String()

@@ -9,50 +9,18 @@ import (
 	"time"
 )
 
-// A COPY HOLDS ITS FILE'S WRITE-AHEAD LOG FOR ITS WHOLE RUN, and this file is
-// what a handle knows of that.
+// A COPY HOLDS ITS FILE'S WRITE-AHEAD LOG FOR ITS WHOLE RUN: its read
+// transaction ([DB.vacuumInto]) stops every checkpoint, so the -wal grows by
+// every page committed meanwhile. Callers ask the handle: the `wal_large`
+// alarm names the copies holding the log ([DB.Copies]), and every room check
+// reserves for the log on the live volume ([DB.CopyHoldsBack]), not only for
+// the copy.
 //
-// The read transaction that keeps a copy one moment ([DB.vacuumInto]) is also
-// what stops every checkpoint at that moment: the -wal beside the live file
-// grows by every page the node commits while the copy runs, and the first
-// checkpoint after the copy folds them back in. Two things outside this package
-// have to know it, and each asks the handle:
-//
-//   - the `wal_large` alarm reads a large log as a checkpoint that is not
-//     happening. A copy's is not happening either, but it folds back when the
-//     copy ends, and an operator told that a reader is holding a snapshot open
-//     goes looking for something that is not there — so a reading names the
-//     copies holding the log ([DB.Copies]);
-//   - every judgement of whether a copy has room — the donor snapshot's gate,
-//     the fleet backup's, and the `volume_low` alarm saying the next copy
-//     would not fit — reserved room for the copy alone, where it lands, while
-//     the log it holds back grows on the live file's own volume: the one the
-//     node commits to ([DB.CopyHoldsBack]).
-//
-// # What a copy holds back is measured, not assumed
-//
-// The log grows by the node's write rate times the copy's run, and the run is
-// the file's size over the rate the copy reads it: two rates no constant
-// knows. Measured once each way on the pinned driver (two cores, no race
-// detector), a copy of a 139 MB replicated estate ran at about 104 MB/s for
-// 1.3 s beside a writer committing about 1 500 one-row updates a second, and
-// the log grew to 10.0 MB, where Turso's 1 000-frame autocheckpoint keeps it
-// under 4.1 MB with nothing holding it, and fell back to 1.2 MB once the copy
-// ended. At that copy rate a 44 GB estate's copy runs about seven minutes. So
-// every copy MEASURES what it held: the -wal's size when its hold is taken and
-// once the copy has returned, before the hold ends, as a share of the file it
-// copied ([copies.end]). A copy taken later holds back about that share of the
-// file as it stands then: its run scales with the file and the rate it reads
-// at does not, and the node's write rate is the one the last copy saw.
-//
-// THE LAST COPY THAT FINISHED is the measure, because it is the nearest to the
-// next one in time and so the best guess at the write rate the next will see;
-// a copy that failed changes nothing, having held the log for part of a copy.
-// Until a copy has finished through a handle — the first after a node opened
-// the file, or after an adoption reopened it — there is no measure, and what a
-// copy holds back is left to the margin each judgement keeps beside the copy
-// itself. A write burst past the rate the last copy saw is the same, and the
-// two alarms name it while it happens.
+// The hold is MEASURED, since growth is write rate times run length (a 139 MB
+// estate at ~104 MB/s grew the log to 10.0 MB, against 4.1 MB unheld): each
+// copy records its -wal as a share of the file ([copies.end]), and the LAST
+// COPY THAT FINISHED sets the share for the next. A failed copy changes
+// nothing; with none yet, each check's own margin covers it.
 
 // walSidecar is the sidecar a database in WAL mode keeps its uncheckpointed
 // pages in: the file a copy's hold makes grow.

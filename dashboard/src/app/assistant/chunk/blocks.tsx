@@ -25,12 +25,6 @@
  * address it writes is opened (`ASSISTANT_WORDS` in `lib/markdown.ts`): a link
  * is live only where the dashboard built it, and no picture is fetched. A card
  * this build cannot draw is a sentence saying so.
- *
- * A DEEP RUN IS ONE CARD, NOT A STEP AMONG STEPS: the step whose `deep` is set
- * is drawn as `DeepWorkCard` (its goal, its limits, its latest activity),
- * redrawn in place as the engine re-sends it under the same step id, and the
- * steps it made (`parent` is its index) are nested under it rather than
- * listed in the run chip.
  */
 
 import { type ReactNode } from "react";
@@ -39,15 +33,12 @@ import {
   Button,
   Callout,
   CopyButton,
-  DeepWorkCard,
   OpenInAppCard,
   ProposalCard,
   Prose,
   ReceiptStrip,
   RefusalCard,
   type ChangeListRow,
-  type DeepWorkMeasure,
-  type DeepWorkState,
   type ProposalState,
   type ReceiptStripTone,
   type RunState,
@@ -57,12 +48,10 @@ import {
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { DiffView } from "~/components/DiffView.tsx";
 import {
-  ASSISTANT_DEEP_ACTIVITY_LINES,
   type AssistantBriefAction,
   type AssistantBriefPoint,
   type AssistantBriefCard,
   type AssistantCardEvent,
-  type AssistantDeepProgress,
   type AssistantErrorCard,
   type AssistantProposalCard,
   type AssistantStepEvent,
@@ -82,7 +71,6 @@ import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageA
 import { DraftFile } from "./DraftFile.tsx";
 import { drawValue } from "./changeValue.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
-import { FilesCard } from "./files.tsx";
 import { cautionOf } from "./taint.ts";
 import { recordWord } from "../brief.ts";
 
@@ -91,7 +79,6 @@ type WireProposalState = AssistantProposalCard["state"];
 type WireChangeKind = AssistantProposalCard["changes"][number]["kind"];
 type WireWordOp = NonNullable<AssistantProposalCard["changes"][number]["words"]>[number]["op"];
 type WireColumnType = AssistantTableCard["columns"][number]["type"];
-type WireDeepState = AssistantDeepProgress["state"];
 
 /** A step's state as `StepList` draws it. */
 export const STEP_STATE: Record<WireStepState, StepState> = {
@@ -101,16 +88,6 @@ export const STEP_STATE: Record<WireStepState, StepState> = {
   refused: "refused",
   stopped: "stopped",
   waiting: "waiting",
-};
-
-/** A deep run's state as `DeepWorkCard` draws it. */
-export const DEEP_STATE: Record<WireDeepState, DeepWorkState> = {
-  starting: "starting",
-  running: "running",
-  waiting: "waiting",
-  finished: "finished",
-  stopped: "stopped",
-  failed: "failed",
 };
 
 /** A turn's phase as `RunChip` draws it. */
@@ -231,10 +208,6 @@ export function runChipOf(
   const elapsed = turn.done?.duration_ms ?? Math.max(0, now - Date.parse(turn.askedAt));
   const taken = turn.done?.steps ?? turn.steps.length;
   const state = RUN_STATE[turn.phase];
-  // THE ASSISTANT SWITCHED TO DEEP WORK: the chip says so while the run works.
-  if (BUSY.has(turn.phase) && deepRunsOf(turn).some((run) => DEEP_ACTIVE.has(run.deep.state))) {
-    return { state: RUN_STATE.working, title: "Deep work", meta: fmtElapsed(elapsed) };
-  }
   switch (turn.phase) {
     case "sending":
     case "thinking":
@@ -327,46 +300,9 @@ export function stepDuration(ms: number | undefined): string | undefined {
   return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : fmtDuration(ms);
 }
 
-/** The deep run states in which the run is still at work. */
-const DEEP_ACTIVE: ReadonlySet<WireDeepState> = new Set(["starting", "running"]);
-
-/** A deep run of a turn, and the steps it made. */
-export interface DeepRun {
-  step: AssistantStepEvent;
-  deep: AssistantDeepProgress;
-  children: AssistantStepEvent[];
-}
-
-/** A turn's deep runs, in step order, each with the steps nested under it. */
-export function deepRunsOf(turn: TurnView): DeepRun[] {
-  return turn.steps.flatMap((step) =>
-    step.deep
-      ? [
-          {
-            step,
-            deep: step.deep,
-            children: turn.steps.filter((child) => child.parent === step.index),
-          },
-        ]
-      : [],
-  );
-}
-
-/**
- * The steps the run chip lists: every step but a deep run and the steps it
- * nests. A step naming a parent no deep run in the turn has (its run not yet
- * heard) stays in the chip rather than being lost.
- */
-export function chipStepsOf(turn: TurnView): AssistantStepEvent[] {
-  const runs = new Set(turn.steps.flatMap((step) => (step.deep ? [step.index] : [])));
-  return turn.steps.filter(
-    (step) => !step.deep && (step.parent === undefined || !runs.has(step.parent)),
-  );
-}
-
 /** A turn's chip steps as `StepList` draws them; `technical` for an administrator. */
 export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
-  return stepListOf(chipStepsOf(turn), technical);
+  return stepListOf(turn.steps, technical);
 }
 
 /**
@@ -408,92 +344,6 @@ export function stepDetail(step: TurnView["steps"][number], technical: boolean):
     : (step.summary ?? "");
   if (why === "") return request;
   return request === "" ? why : `${why} (${request})`;
-}
-
-/** A deep run's time, rounded to the second it is said in. */
-const wholeSeconds = (ms: number) => Math.floor(Math.max(0, ms) / 1000) * 1000;
-
-/**
- * A deep run's limits as meters: its time against its deadline, its Crewlet
- * calls against their cap and the share of its budget used. A settled run's
- * time is how long it ran, where its step says so.
- */
-export function deepMeasures(run: DeepRun, now: number): DeepWorkMeasure[] {
-  const { deep, step } = run;
-  const measures: DeepWorkMeasure[] = [];
-  const started = Date.parse(deep.started_at);
-  const deadline = Date.parse(deep.deadline_at);
-  if (Number.isFinite(started) && Number.isFinite(deadline) && deadline > started) {
-    const total = deadline - started;
-    const end = DEEP_ACTIVE.has(deep.state)
-      ? now
-      : step.duration_ms !== undefined
-        ? started + step.duration_ms
-        : Math.min(now, deadline);
-    const spent = wholeSeconds(Math.min(total, end - started));
-    measures.push({
-      key: "time",
-      label: "Time",
-      value: spent,
-      max: total,
-      hint: `${fmtDuration(spent)} of ${fmtDuration(total)}`,
-    });
-  }
-  if (deep.max_steps > 0) {
-    measures.push({
-      key: "calls",
-      label: "Crewlet calls",
-      value: deep.steps,
-      max: deep.max_steps,
-      hint: `${fmtExact(deep.steps)} of ${fmtExact(deep.max_steps)}`,
-    });
-  }
-  const budget = Math.min(100, Math.max(0, deep.budget_percent));
-  measures.push({
-    key: "budget",
-    label: "Budget used",
-    value: budget,
-    max: 100,
-    hint: `${Math.round(budget)}%`,
-    valueText: `${Math.round(budget)} percent of the run's budget`,
-  });
-  return measures;
-}
-
-/** What a deep run's foot says: what a waiting run waits on, why one stopped or failed. */
-export function deepNote(deep: AssistantDeepProgress): string | undefined {
-  switch (deep.state) {
-    case "waiting":
-      return "Waiting for your approval of the change below.";
-    case "stopped":
-      return deep.reason ?? "It stopped before it finished.";
-    case "failed":
-      return deep.reason ?? "It could not finish.";
-    default:
-      return undefined;
-  }
-}
-
-/** A deep run, as its card at its latest state, with the steps it made nested under it. */
-export function DeepRunBlock({
-  run,
-  now,
-  technical,
-}: {
-  run: DeepRun;
-  now: number;
-  technical: boolean;
-}) {
-  return (
-    <DeepWorkCard
-      state={DEEP_STATE[run.deep.state]}
-      goal={run.deep.goal}
-      measures={deepMeasures(run, now)}
-      activity={(run.deep.activity ?? []).slice(-ASSISTANT_DEEP_ACTIVITY_LINES)}
-      steps={stepListOf(run.children, technical)}
-      note={deepNote(run.deep)}
-    />
-  );
 }
 
 /**
@@ -1014,8 +864,6 @@ export function CardBlock({
           {card.notice.text}
         </Callout>
       );
-    case "file":
-      return <FilesCard card={card.file} />;
     case "brief":
       return <Brief brief={card.brief} on={on} />;
   }

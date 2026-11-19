@@ -146,46 +146,34 @@ type Catalogue []catalog.Tool
 // Offered implements [assistant.Catalogue].
 func (c Catalogue) Offered(iam.Principal, []string) []catalog.Tool { return slices.Clone(c) }
 
-// Models answers every chain with one model: a scripted [Model] in a suite,
-// or a real providers.llm entry when `crewlet assistant eval -model` measures
-// one. Strong, where set, answers the stronger chain a question asks for when
-// the person asks to think harder ([assistant.Deliberate]), so a case can tell
-// which chain a turn ran on by which model answered it.
+// Models answers with one model: a scripted [Model] in a suite, or a real
+// providers.llm entry when `crewlet assistant eval -model` measures one.
 type Models struct {
-	Model     llm.Provider
-	Key       string
-	Strong    llm.Provider
-	StrongKey string
-	Err       error
+	Provider llm.Provider
+	Key      string
+	Err      error
+	// Images is whether the model takes images.
+	Images bool
 }
 
-// member is the one model that answers strength.
-func (m Models) member(strength assistant.Strength) (llm.Provider, string) {
-	if strength == assistant.Deliberate && m.Strong != nil {
-		return m.Strong, m.StrongKey
-	}
-	return m.Model, m.Key
-}
+// ReadsImages implements [assistant.Models].
+func (m Models) ReadsImages() bool { return m.Images && m.Err == nil }
 
-// Chain implements [assistant.Models].
-func (m Models) Chain(_ context.Context, _ iam.Principal, _ auxspend.Use,
-	strength assistant.Strength) (llm.Provider, string, error) {
-
+// Model implements [assistant.Models].
+func (m Models) Model(context.Context, iam.Principal, auxspend.Use) (llm.Provider, string, error) {
 	if m.Err != nil {
 		return nil, "", m.Err
 	}
-	model, key := m.member(strength)
-	return model, key, nil
+	return m.Provider, m.Key, nil
 }
 
-// Unready implements [assistant.Models] the engine's way: the chain's verdict
-// over its one member, so a model that knows it would fail says so.
-func (m Models) Unready(ctx context.Context, strength assistant.Strength) error {
-	model, _ := m.member(strength)
-	if model == nil {
+// Unready implements [assistant.Models] the engine's way: the model's own
+// verdict, so a model that knows it would fail says so.
+func (m Models) Unready(ctx context.Context) error {
+	if m.Provider == nil {
 		return nil
 	}
-	return chain.Unready(ctx, []llm.Provider{model})
+	return chain.Unready(ctx, []llm.Provider{m.Provider})
 }
 
 // Budget hands every turn one meter, or none.

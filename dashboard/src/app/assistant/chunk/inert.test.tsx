@@ -30,7 +30,11 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { AssistantCard, AssistantEventKind } from "~/contract/assistant.ts";
+import {
+  ASSISTANT_PROTOCOL_VERSION,
+  type AssistantCard,
+  type AssistantEventKind,
+} from "~/contract/assistant.ts";
 import {
   createAssistantStreamParser,
   type AssistantNarrowFrame,
@@ -162,7 +166,7 @@ function stream(): string {
   const event = <K extends AssistantEventKind>(kind: K, payload: unknown) => {
     seq++;
     const frame = {
-      v: 1,
+      v: ASSISTANT_PROTOCOL_VERSION,
       conversation_id: CONV,
       turn_id: TURN,
       seq,

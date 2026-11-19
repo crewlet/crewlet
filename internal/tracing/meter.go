@@ -86,22 +86,13 @@ func metricInterval(opts Options) time.Duration {
 // configureMeter builds the MeterProvider and registers every instrument in
 // the catalogue against the recorder.
 //
-// # Installed unconditionally, exactly as the TracerProvider is
+// Installed unconditionally, as the TracerProvider is: only the EXPORTER is
+// conditional, so no call site branches on whether metrics are "on" and the
+// operator record reads the same recorder a collector would.
 //
-// The provider is always built and always installed; only the EXPORTER is
-// conditional. That is the same decision this package already makes for
-// traces, and for the same reason one layer down: with the provider
-// unconditional, no call site branches on whether metrics are "on", and the
-// operator record reads the same recorder a collector would. A provider
-// installed only when an endpoint is set would make every measurement site a
-// place where two behaviours are possible.
-//
-// # Returned rather than installed
-//
-// The install itself belongs to [Configure], which puts both globals in place
-// together once the last thing that can fail has succeeded — see the commit
-// there. A half that installed itself would be a global written by a call that
-// can still return an error to a caller with no handle to undo it.
+// Returned rather than installed: [Configure] installs both globals together
+// once the last thing that can fail has succeeded, so none is written by a
+// call that can still return an error to a caller with no way to undo it.
 func configureMeter(
 	ctx context.Context, opts Options, rec *metrics.Recorder,
 ) (*sdkmetric.MeterProvider, error) {

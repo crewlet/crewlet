@@ -32,6 +32,8 @@
 
 **No atlas finding leaves the engine.** The insights sharer reads the advisor's findings without the atlas: they are added by the `advisor` question alone, for the principal who asked, and an insights record is made only of an evidence class of its closed catalogue.
 
+**Amended by ADR-0164.** Atlas findings are kept like every other finding, and their entries are named only to a holder of the atlas app when a finding is read rather than when it is computed.
+
 ## Why the obvious alternative is wrong
 
 **A second list on the Atlas screen.** The atlas already has a review for what waits on a decision. What is missing is the administrator's view of what the setup costs, and that list exists: a second advisor would need its own severity rules, its own "what could not be read" and its own place in the go-live check.

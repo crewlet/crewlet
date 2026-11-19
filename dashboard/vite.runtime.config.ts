@@ -37,6 +37,7 @@ import { cpSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUNTIME_CONTRACT } from "./src/contract/artifactsworkspace.ts";
+import { withPackageNotices } from "./notices.ts";
 
 const OUT = fileURLToPath(new URL("../static/artifacts", import.meta.url));
 const KIT = fileURLToPath(new URL("./node_modules/@crewlethq/artifact-kit", import.meta.url));
@@ -83,7 +84,7 @@ function artifactTrees(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [artifactTrees()],
+  plugins: [artifactTrees(), withPackageNotices(`${RUNTIME_DIR}/THIRD_PARTY_NOTICES.txt`)],
   build: {
     outDir: OUT,
     emptyOutDir: false,

@@ -117,7 +117,7 @@ func snoozeScopeNames() []string {
 	return out
 }
 
-// reasonNames is the eighteen, for a refusal that says what would have worked.
+// reasonNames is the nineteen, for a refusal that says what would have worked.
 func reasonNames() []string {
 	out := make([]string, 0, len(worklet.Reasons))
 	for _, r := range worklet.Reasons {

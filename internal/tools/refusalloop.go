@@ -76,19 +76,16 @@ type streakKey struct{ tool, target string }
 
 // settle records one call a tool answered, deciding the refusal-loop guard in
 // the same hold of the surface's lock as the record, so two calls answered at
-// once (a response's calls run side by side) cannot read the same count. It
-// answers the call as recorded, which is what the model reads, and the run of
-// policy refusals it ends or extends (0 when it is not one).
+// once cannot read the same count. It answers the call as recorded and the run
+// of policy refusals it ends or extends (0 if none).
 //
 // THE RUN IS CONSECUTIVE: a policy refusal ([RefusalInvalid]) of a tool not
 // annotated read-only extends its target's run, a success of the tool on that
-// target ends it, and any other answer (stale, conflict, forbidden, each with
-// its own instruction) leaves it as it was. From the [PolicyRefusalLimit]th
-// refusal in a row, the answer carries the instruction to stop.
+// target ends it, any other answer (stale, conflict, forbidden) leaves it.
+// From the [PolicyRefusalLimit]th in a row, the answer says to stop.
 //
-// NEVER A SILENT CAP. The call ran and its refusal is answered whole; the
-// guard adds the sentence a model needs to stop and refuses nothing itself,
-// so a model that does fix the version on its fifth attempt still publishes.
+// NEVER A SILENT CAP: the refusal is answered whole; the guard only adds the
+// sentence to stop.
 func (s *Surface) settle(c Call, ann Annotations, target string, unkept bool) (Call, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

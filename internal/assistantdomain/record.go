@@ -70,8 +70,8 @@ const (
 	// Additive: two reads never contend.
 	OpConversationAuditRead OpKind = "conversation_audit_read"
 
-	// OpFileStored records a file kept for a conversation (an attachment, or
-	// a file a deep-work run delivered), ON THE CONVERSATION'S SUBJECT: an
+	// OpFileStored records a file kept for a conversation (an attachment),
+	// ON THE CONVERSATION'S SUBJECT: an
 	// attachment exists before its turn. Additive under an id the caller
 	// mints: a duplicate publish writes one row; two uploads never contend.
 	OpFileStored OpKind = "file_stored"

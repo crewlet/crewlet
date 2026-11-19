@@ -21,7 +21,7 @@ import (
 // AssistantFileStore is the domain's file store over this node's assistant
 // writer and reader and its object store, or nil on a node missing any of the
 // three: a node with no object store keeps no file, so its assistant takes no
-// attachment and offers no deep work.
+// attachment.
 func AssistantFileStore(e *Engine) *assistantdomain.FileStore {
 	w, r, objects := e.AssistantWriter(), e.AssistantReader(), e.Objects()
 	if w == nil || r == nil || objects == nil {

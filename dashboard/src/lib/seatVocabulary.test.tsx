@@ -68,7 +68,6 @@ function queue(agents: AgentRow[]) {
     nameOf: (key) => key,
     mcpAlarms: [],
     notices: [],
-    findings: [],
     setupUnread: [],
     atlasDrift: [],
   };

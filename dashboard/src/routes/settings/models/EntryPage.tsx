@@ -84,16 +84,13 @@ export interface CategoryUse {
   backups: SeatOnCategory[];
 }
 
-/** Whether the Dashboard Assistant runs on the model, falls back to it, or neither. */
-export type AssistantUse = "runs" | "backup" | null;
-
 export interface WhoRuns {
   /** The seats that run every seat job on the model, said once, under Everything. */
   everything: string[];
   /** Each category's other seats: those that split their jobs, and the backups. */
   categories: CategoryUse[];
-  assistant: AssistantUse;
-  deepWork: AssistantUse;
+  /** Whether Ask Crewlet runs on the model. */
+  assistant: boolean;
   /** Every distinct seat on the model, at any position. */
   seats: number;
 }
@@ -138,11 +135,6 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
         whole: CATEGORY_JOBS[category].every((j) => jobs.includes(j)),
       }))
       .sort((a, b) => a.seat.localeCompare(b.seat));
-  const assistantOf = (which: "chat" | "deep_work"): AssistantUse => {
-    const uses = usedBy.filter((u) => u.assistant === which);
-    if (uses.some((u) => u.position === 0)) return "runs";
-    return uses.length > 0 ? "backup" : null;
-  };
   return {
     everything,
     categories: CATEGORY_ORDER.map((category) => ({
@@ -150,8 +142,7 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
       runs: list(category, runs),
       backups: list(category, backups),
     })).filter((c) => c.runs.length > 0 || c.backups.length > 0),
-    assistant: assistantOf("chat"),
-    deepWork: assistantOf("deep_work"),
+    assistant: usedBy.some((u) => u.assistant === "chat"),
     seats: new Set(usedBy.flatMap((u) => (u.seat ? [u.seat] : []))).size,
   };
 }
@@ -177,18 +168,13 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
   );
 }
 
-function assistantLine(use: AssistantUse, deepWork: AssistantUse): string[] {
-  return [
-    ...(use === "runs" ? ["Ask Crewlet runs on it."] : []),
-    ...(use === "backup" ? ["Ask Crewlet falls back to it."] : []),
-    ...(deepWork === "runs" ? ["Ask Crewlet's deep work runs on it."] : []),
-    ...(deepWork === "backup" ? ["Ask Crewlet's deep work falls back to it."] : []),
-  ];
+function assistantLine(runs: boolean): string[] {
+  return runs ? ["Ask Crewlet runs on it."] : [];
 }
 
 function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const who = useMemo(() => whoRuns(model.entry.used_by), [model.entry.used_by]);
-  const assistant = assistantLine(who.assistant, who.deepWork);
+  const assistant = assistantLine(who.assistant);
   return (
     <Card padding="none">
       <Card.Header count={who.seats}>

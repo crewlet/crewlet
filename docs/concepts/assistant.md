@@ -1,6 +1,6 @@
 # Ask Crewlet
 
-Ask Crewlet is a panel in the dashboard where you ask questions
+Ask Crewlet is a page and a panel in the dashboard where you ask questions
 about your company in plain language and have changes prepared for you to
 approve. It answers from the same screens and records you can already open,
 and it prepares the same changes you could already make yourself.
@@ -23,6 +23,14 @@ Select **Ask** in the page bar, or press `Mod+.` (`Cmd+.` on a Mac, `Ctrl+.`
 elsewhere). The panel opens beside the screen you are on and stays open as you
 move around the dashboard. Drag its edge to make it wider or narrower; your
 browser remembers the width.
+
+**Ask Crewlet** in the sidebar (or `g q`) opens its own page: every
+conversation of yours beside the one open, newest first under the day you last
+used it, with a search of their titles. The page and the panel hold the same
+conversation, so an answer still coming in one is the same answer in the other;
+**Open in full page** in the panel's head takes the conversation there. On the
+page, the Ask button and `Mod+.` put you in its message box. A question asked
+on the page carries no screen with it.
 
 When the panel opens, it greets you and says what it can see on your behalf:
 the apps your permissions open. Below that, under **This page**, it offers a
@@ -209,35 +217,22 @@ entries the connection reaches, or typed where the tab takes typed ones. An
 approved change lands in the tab's unsaved changes, and nothing changes at the
 vendor until you review and save them there.
 
-**Do deep work** on a task that needs research, scripts, generated files, the
-images you attached, or many steps, where your company turns it on: for
-example "look through last month's work and propose how to redefine our teams
-and roles", or "redesign our brand assets". Ask Crewlet decides on its own
-when a task needs it, says so, and hands it to a deep-work run: a harness
-with its own shell, files, web search and image reading, working in a sandbox.
-The panel shows the run as one step marked **Deep work**, with its goal, its
-time and step limits, how much of its budget it has used, the latest of what it
-is doing, and the Crewlet records it reads nested under it. The run reaches
-Crewlet only through Ask Crewlet's own tools, as you, so it reads only what
-you could read and every change it prepares is a proposal you approve. When it
-proposes a change it stops and waits for you; approving it continues the same
-run. Files it makes (a logo, a CSV, a report) appear on a card to download, and
-an image previews in the panel; putting one into Crewlet, such as setting a new
-logo on the brand draft you have open, is a further proposal by the file.
+**Hand a big task to an agent** that needs scripts, generated files or many
+hours of steps: for example "look through last month's work and propose how to
+redefine our teams and roles", or "redesign our brand assets". Ask Crewlet has
+no shell or files of its own, so it proposes a task for one of your company's
+agent seats that can do the work, with a brief of what to deliver and who it is
+assigned to. You approve it like any other change, and the seat does the work
+with its own tools.
 
 **Attach images** to a question (a screenshot, a sketch, a current logo): pick
 them, drop them on the panel or paste them, up to four PNG, JPEG, WebP or GIF
-images of at most 5 MiB each. Deep work reads them; quick answers cannot see
-them. Where your company has not turned on deep work, nothing reads an image,
-so Attach image is drawn disabled with that reason and a pasted or dropped
-image is refused: paste the text the image shows instead, or ask an
-administrator to turn on deep work. A question that reaches the engine with
-images all the same is answered with the same advice.
-
-**Think harder** on a hard question, where your company sets a stronger model:
-press it beside **Attach image** and the next question is answered by that
-model, which takes longer and costs more. It applies to that one question;
-press it again for another.
+images of at most 5 MiB each. The model reads them with your question where it
+can take images; where it cannot, Attach image is drawn disabled with that
+reason and a pasted or dropped image is refused: paste the text the image shows
+instead, or ask an administrator to assign Ask Crewlet a model that reads
+images. A question that reaches the engine with images all the same is answered
+with the same advice.
 
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
@@ -297,8 +292,14 @@ Select **Stop** (or press `Esc`) while an answer is running to stop it.
 Stopping changes nothing: a proposal it had prepared is declined.
 
 The head of the panel has **New conversation**, **Conversations** (your
-history, with **Clear** to delete a conversation for good after you confirm)
-and **Close**. One answer runs at a time in a conversation.
+recent conversations, with **Delete** to delete the open one for good after you
+confirm), **Open in full page** and **Close**. Ask Crewlet's page lists every
+conversation, each with **Delete**. One answer runs at a time in a
+conversation.
+
+A conversation is named from its first question. You can search your
+conversations by title and rename one; a name you give it is kept, and
+Ask Crewlet never writes over it.
 
 ## What it cannot do
 
@@ -307,16 +308,10 @@ These limits are structural: they hold whatever the model is asked or reads.
 - **It cannot do anything you cannot.** Every request is decided by the same
   permission rules as your own clicks.
 - **It cannot write without your approval.** There is no setting that lets it.
-- **A quick answer cannot reach the web.** The model that answers you runs
+- **It cannot reach the web on its own.** The model that answers you runs
   with its web tools turned off and has no shell or file access of its own; it
-  sees only what your requests returned and what you typed. **Deep work can**:
-  its run searches and reads the web, and runs scripts, in a sandbox that holds
-  none of the engine's credentials. A page it reads could try to steer it, or
-  it could put something it read into an address it fetches. It is told to
-  treat every page as data and never to send your data anywhere, and it still
-  changes nothing in Crewlet without your approval, but what it fetches from
-  the web is not checked by anyone. Do not hand deep work a task whose data
-  must not leave the company.
+  sees only what your requests returned, the images you attached and what you
+  typed.
 - **It cannot sign anybody in or handle a secret.** Signing in and the session
   and token ceremonies (creating or inviting a person, minting or revoking a
   token, resetting a password or a second factor, ending sessions), anything
@@ -364,8 +359,8 @@ The structural limits are why a model that is misled still cannot act on it.
 ## Your conversations and privacy
 
 Your conversations belong to you. They are stored encrypted in the company's
-estate and are kept for **30 days** after you last used them, unless your
-company sets a different retention; then they are deleted. **Clear** deletes a
+estate and are kept for **30 days** after you last used them; then they are
+deleted. **Delete** deletes a
 conversation immediately. If your account is removed, all of your
 conversations are erased.
 
@@ -397,8 +392,9 @@ conversation they came from.
 Ask Crewlet uses tokens from your company's model budget, and your company
 may also set a budget per person, per day, week or month. When a budget is spent, Ask Crewlet
 says so and when it resets, and stops before using more. A turn takes at most
-a few tool steps and a couple of minutes; a question that needs more is best
-split in two.
+40 model rounds and 20 minutes, a change it proposes waits 15 minutes for your
+approval, and your conversations are kept 30 days after you last used them;
+none of these is a setting. A question that needs more is best split in two.
 
 ## When Ask Crewlet cannot answer
 

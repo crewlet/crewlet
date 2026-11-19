@@ -54,10 +54,8 @@ func newerKindFor(t *testing.T, v int, team string) []byte {
 // (statelog's retain). A kind a later build adds is keyed on fields this build
 // cannot decode, and the subject composed from the ones it can — node, day,
 // an empty seat — made every object of that kind on one day the same subject,
-// so retaining the second team's day deleted the first's. Once this node was
-// upgraded only the last was applied, and its publisher re-derives no older
-// day: the replicated copies disagreed for good. The identity the writer
-// stated is what files each.
+// so retaining the second team's day deleted the first's for good. The
+// identity the writer stated is what files each.
 //
 // Mutation: compose the subject from the decoded fields for every kind, and
 // the two teams collide.
@@ -217,19 +215,15 @@ func TestANewerBuildsKindStillNamesItsNodeAndDay(t *testing.T) {
 	}
 }
 
-// A FULL SEAT-DAY FITS ONE MESSAGE. A record is published whole, so one the
-// transport cannot carry is refused on every attempt and its day never
-// replicates. [usage.ReadsPerSeatDay] is what keeps a seat-day small, and this
-// measures it at its worst: every read entry present, every id a UUID, every
-// entry carrying the longest query a search accepts — once as typed and once
-// spelled in the bytes JSON escapes to six — beside a generous set of spend
-// cells and a full duration histogram. The record has to fit the largest
-// record this log declares ([usage.LogMaxRecordBytes]) — the transport's
-// ceiling less what a signed append carries beside its body, which the
-// publisher refuses a record past before it is sent — and it is held under
-// the 1 MiB that ADR-0020 and the cap's own comment state, so a record that
-// outgrows the figure goes red here rather than leaving the prose to go
-// stale.
+// A FULL SEAT-DAY FITS ONE MESSAGE: a record the transport cannot carry is
+// refused on every attempt and its day never replicates. [usage.ReadsPerSeatDay]
+// keeps a seat-day small; this measures it at its worst: every read present,
+// every id a UUID, every entry carrying the longest query a search accepts
+// (once as typed and once in the bytes JSON escapes to six), beside a generous
+// set of spend cells and a full duration histogram. The record must fit [usage.LogMaxRecordBytes] (the
+// transport's ceiling less a signed append's overhead) and stay under the
+// 1 MiB that ADR-0020 and the cap's comment state, so growth past the figure
+// goes red here rather than leaving the prose stale.
 //
 // Mutation: raise ReadsPerSeatDay to 4096, and the escaped case outgrows the
 // log's largest record while the typed one outgrows the documented figure.

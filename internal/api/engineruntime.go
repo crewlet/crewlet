@@ -396,3 +396,27 @@ func (r engineRuntime) Fleet(ctx context.Context) FleetState {
 	}
 	return state
 }
+
+// The engine runtime reaches the advisor log, so a node serving the API runs
+// the Advisor's questions, routes and duty.
+var _ advisorRuntime = engineRuntime{}
+
+// AdvisorLog is the advisor log's two sides through the estate router, so a
+// node without `data` reaches it through a data node; false where this node
+// reaches no copy.
+func (r engineRuntime) AdvisorLog() (AdvisorReads, AdvisorWrites, bool) {
+	reads, ok := r.engine.AdvisorReads()
+	if !ok {
+		return nil, nil, false
+	}
+	writes, ok := r.engine.AdvisorWrites()
+	if !ok {
+		return nil, nil, false
+	}
+	return reads, writes, true
+}
+
+// AdvisorClaim is the claim on the Advisor's lease ([engine.Engine.AdvisorClaim]).
+func (r engineRuntime) AdvisorClaim() func(context.Context) (bool, error) {
+	return r.engine.AdvisorClaim()
+}

@@ -21,7 +21,7 @@ import (
 // Every seat and assistant field running on an entry names it, so removing it
 // alone leaves a document validation refuses. The removal and the repoint of
 // every dependant are ONE write, addressed by IDENTITY (a seat's handle and
-// job, or the assistant's chat or deep work), never a list index (a position
+// job, or the assistant's chat), never a list index (a position
 // moves with what is above it). Each reference
 // ([config.Company.ProviderReferences], validation's too) must be answered; an
 // unanswered one refuses the write naming every reference.
@@ -37,23 +37,21 @@ import (
 const WarningResolutionMoved = "resolution_moved"
 
 // RemovalAt addresses one written reference by identity: a seat's handle and
-// the job its field points at a model, or the assistant's `chat` (its `llm`)
-// or `deep_work`.
+// the job its field points at a model, or the assistant's `chat` (its
+// `model`).
 type RemovalAt struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
 }
 
-// Assistant targets a [RemovalAt] can name.
-const (
-	AssistantChat     = "chat"
-	AssistantDeepWork = "deep_work"
-)
+// AssistantChat is the one assistant target a [RemovalAt] can name.
+const AssistantChat = "chat"
 
 // Repoint is what one reference to the removed entry becomes: To replaces the
 // entry in the field's chain where it stood, and nil removes it, a chain left
-// empty deleting the field so the job resolves as an unset one does.
+// empty deleting the field so the job resolves as an unset one does. Ask
+// Crewlet's model repointed to nil turns Ask Crewlet off.
 type Repoint struct {
 	At RemovalAt `json:"at"`
 	To *string   `json:"to"`
@@ -62,9 +60,6 @@ type Repoint struct {
 // RemovalRequest is the body `DELETE /config/llm-providers/{id}` reads.
 type RemovalRequest struct {
 	Repoint []Repoint `json:"repoint"`
-	// AssistantOff turns the assistant off when the removal leaves its
-	// chat with no model: `assistant.enabled: false` in the same revision.
-	AssistantOff bool `json:"assistant_off"`
 }
 
 // RemovalReference is one written reference to the entry, as a refusal names
@@ -100,7 +95,6 @@ var jobWords = map[config.ProviderJob]string{
 	config.JobAuxiliary: "memory and summaries",
 	config.JobJudge:     "onboarding checks",
 	config.JobAssistant: "Ask Crewlet's chat",
-	config.JobDeepWork:  "Ask Crewlet's deep work",
 }
 
 // phaseJobs is the job each phase's chain is resolved for, the phases a
@@ -119,11 +113,8 @@ var phaseJobs = []struct {
 
 // addressOf is where a reference is answered.
 func addressOf(ref config.ProviderReference) RemovalAt {
-	switch ref.Job {
-	case config.JobAssistant:
+	if ref.Job == config.JobAssistant {
 		return RemovalAt{Assistant: AssistantChat}
-	case config.JobDeepWork:
-		return RemovalAt{Assistant: AssistantDeepWork}
 	}
 	return RemovalAt{Seat: ref.Seat, Job: string(ref.Job)}
 }
@@ -146,8 +137,7 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		return RemovalRequest{}, "", fmt.Errorf("the body is not {\"repoint\": [...], "+
-			"\"assistant_off\": false}: %w", err)
+		return RemovalRequest{}, "", fmt.Errorf("the body is not {\"repoint\": [...]}: %w", err)
 	}
 	req, summary := body.RemovalRequest, strings.TrimSpace(body.Summary)
 	// ONE ANSWER PER REFERENCE: a field named twice would move to whichever
@@ -167,13 +157,12 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and "+
 				"Ask Crewlet: address one", i)
 		case seat && (r.At.Seat == "" || !config.ProviderJob(r.At.Job).Valid() ||
-			config.ProviderJob(r.At.Job) == config.JobAssistant ||
-			config.ProviderJob(r.At.Job) == config.JobDeepWork):
+			config.ProviderJob(r.At.Job) == config.JobAssistant):
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs a seat and its job, "+
 				"one of executor, review, subagent, auxiliary or judge", i)
-		case !seat && r.At.Assistant != AssistantChat && r.At.Assistant != AssistantDeepWork:
+		case !seat && r.At.Assistant != AssistantChat:
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job} or "+
-				"{assistant: chat | deep_work}", i)
+				"{assistant: chat}", i)
 		}
 	}
 	return req, summary, nil
@@ -258,20 +247,6 @@ func repoint(c *config.Company, id string, req RemovalRequest) error {
 				Message: fmt.Sprintf("%s names no field of %s: nothing there to repoint", describeAt(r.At), id)})
 		}
 	}
-	// THE ASSISTANT'S CHAT LEFT WITH NO MODEL while it is on is a choice the
-	// write has to make out loud: turn it off, or name another model.
-	if c.Assistant.On() && len(c.Assistant.LLM) == 0 {
-		if req.AssistantOff {
-			off := false
-			c.Assistant.Enabled = &off
-		} else {
-			path := config.Path{"assistant", "llm"}
-			problems = append(problems, config.Problem{Path: path.String(), Segments: path,
-				Kind: "missing",
-				Message: "Ask Crewlet is on and this write leaves its chat with no model: " +
-					"repoint it to another model, or send assistant_off to turn Ask Crewlet off"})
-		}
-	}
 	if len(problems) > 0 {
 		if references == nil {
 			references = []RemovalReference{}
@@ -315,15 +290,10 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 		}
 		return out
 	}
-	switch ref.Job {
-	case config.JobAssistant:
-		c.Assistant.LLM = edit(c.Assistant.LLM)
-		return
-	case config.JobDeepWork:
-		if to == nil {
-			c.Assistant.DeepWork = nil
-		} else if c.Assistant.DeepWork != nil {
-			c.Assistant.DeepWork.LLM = *to
+	if ref.Job == config.JobAssistant {
+		c.Assistant.Model = ""
+		if to != nil {
+			c.Assistant.Model = *to
 		}
 		return
 	}
@@ -477,7 +447,7 @@ var modelRemoval = removalRoute{
 		return providerRemoval{id: id, req: req}, summary, err
 	},
 	bodyHint: "name every field that runs on the model by its seat and job, or " +
-		"Ask Crewlet's chat or deep work, with the model it moves to " +
+		"Ask Crewlet's chat, with the model it moves to " +
 		"(null to leave it unset)",
 	summaryHint: "name the model removed and where its work moves",
 }
@@ -688,7 +658,7 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 			"problems":   e.Problems,
 			"references": e.References,
 			"hint": "answer every reference in repoint, by its seat and job or " +
-				"Ask Crewlet's chat or deep work, with the model it moves to or null",
+				"Ask Crewlet's chat, with the model it moves to or null",
 		})
 }
 

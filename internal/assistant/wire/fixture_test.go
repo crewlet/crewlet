@@ -80,35 +80,8 @@ func vocabularyFrames() []wire.Frame {
 			Error: &wire.ErrorCard{Refusal: wire.Refusal{Code: "unauthorized",
 				Message: "You do not have access to this.", Reason: "no_grant",
 				Grants: []string{"admin"}}, Phrase: "read the fleet"}})),
-		// --- deep work (im-deep) ---
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
-			StepID: id("step:deep"), Index: 2, Tool: "start_deep_work",
-			Label: "Deep work: redesign the brand assets", State: wire.StepRunning, StartedAt: at,
-			Deep: &wire.DeepProgress{State: wire.DeepRunning, Goal: "Redesign the brand assets",
-				StartedAt: at, DeadlineAt: at.Add(20 * time.Minute), Steps: 1, MaxSteps: 150,
-				BudgetPercent: 12, Activity: []string{"Reading the brand draft",
-					"Ran a command"}}}}),
-		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
-			StepID: id("step:deep-read"), Index: 3, Tool: "api_request",
-			Label:   "Read GET /brand",
-			Request: &wire.StepRequest{Method: "GET", Route: "/brand"},
-			State:   wire.StepDone, StartedAt: at, DurationMS: 140, Summary: "1 record", Parent: 2}}),
-		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
-			StepID: id("step:deep"), Index: 2, Tool: "start_deep_work",
-			Label: "Deep work: redesign the brand assets", State: wire.StepDone, StartedAt: at,
-			DurationMS: 412000, Summary: "2 files",
-			Deep: &wire.DeepProgress{State: wire.DeepFinished, Goal: "Redesign the brand assets",
-				StartedAt: at, DeadlineAt: at.Add(20 * time.Minute), Steps: 1, MaxSteps: 150,
-				BudgetPercent: 40}}}),
-		read.Frame(cardFrame(answer, "card:file", wire.Card{Type: wire.CardFile,
-			File: &wire.FileCard{Files: []wire.FileRef{
-				{FileID: id("file:logo"), Name: "logo.svg", MediaType: "image/svg+xml", Size: 4096,
-					Download: wire.FilePath(id("conversation"), id("file:logo"))},
-				{FileID: id("file:palette"), Name: "palette.csv", MediaType: "text/csv", Size: 210,
-					Download: wire.FilePath(id("conversation"), id("file:palette"))},
-			}}})),
-		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
-			StepID: id("step:create"), Index: 4, Tool: "create_task",
+			StepID: id("step:create"), Index: 2, Tool: "create_task",
 			Label: "Prepare a new task", State: wire.StepWaiting, StartedAt: at}}),
 		read.Frame(cardFrame(answer, "card:proposal", wire.Card{Type: wire.CardProposal,
 			Proposal: &wire.ProposalCard{ProposalID: proposal, Scope: wire.ScopeServer,

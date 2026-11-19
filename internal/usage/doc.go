@@ -56,7 +56,8 @@
 // which its next start derives every day from again: the day a node stopped
 // in reaches the fleet when it comes back inside that read floor, a day older
 // than the dispatch ledger's retention without its schedules. And an orderly
-// stop flushes today and yesterday once more, so a node stopped and never
+// stop flushes today and yesterday once more, after every writer of a usage
+// row (the custody keeper among them) has stopped, so a node stopped and never
 // started again leaves its last day whole; one that crashed and never returns
 // loses up to a tick of it.
 //
@@ -106,7 +107,21 @@
 // remainder counted
 // ([KindRepoRead], record version 4: the one kind a build below version 4
 // retains rather than applies). A record is always the cumulative value; an
-// apply REPLACES.
+// apply REPLACES under a monotone position guard, so a republished day is
+// harmless and a replayed older one a no-op.
+//
+// A seat-day also carries its turns' calls to each MCP server's tool (read off
+// the tally each turn's end states, capped at [ToolsPerSeatDay]) and its code
+// day, [Record.Code]: the changes it opened, the reviews it gave, and, counted
+// on the OWNER of the change, the findings, failed checks and queue ejections
+// of its changes, each once by its id. The code day is written only where it
+// counts something, so a day with none stays the base format every build
+// applies, and a day with failed checks or ejections is retained by an older
+// build rather than applied without them. A person's record is published at
+// once, like a seat's and a schedule's, every [FlushInterval] when a cheap
+// fingerprint moves; an unresolved publish is sent again, while a refusal no
+// retry changes (a record too large, a full log) is logged once per object
+// and skipped until it changes.
 //
 // # Reading a window, a page at a time
 //

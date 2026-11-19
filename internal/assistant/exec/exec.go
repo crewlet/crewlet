@@ -161,6 +161,12 @@ type Response struct {
 	ModelDetail string `json:"-"`
 }
 
+// ReadLifetime is the longest a turn's read grant lives, and so the longest a
+// turn runs: twenty minutes, the forty rounds a turn may take at the harness's
+// fifteen to twenty-five second launch with slow reads beside them. A turn
+// ends or parks its grant as it ends, so a shorter one holds it no longer.
+const ReadLifetime = 20 * time.Minute
+
 // MaxResponseBytes is the most of one answer a call reads: sixty-four
 // kibibytes, sixteen of answer_knowledge's four-kibibyte sources: what one
 // step reads before the model's own cut (16 KiB per result, which is what

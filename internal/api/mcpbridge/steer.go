@@ -220,19 +220,13 @@ func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *bind
 // opening's end, the bridge's shutdown and the poller going away.
 //
 // A RUN WHOSE TOOLS ARE CLOSED is answered as one with nothing waiting, as its
-// steer_take is ([binding.takeSteer]): the seat moved or a person stopped it,
-// and its notes wait for whatever reads the turn next. Asked at every pass,
-// because the fence closes while a poll is held.
-//
-// A POLL THIS OPENING CANNOT HOLD IS REFUSED, never answered as an empty one:
-// once the bridge is shutting down or the opening has ended, a held poll is let
-// go and every later one turned away with a 503 and a Retry-After
-// ([steerPollRetry]). Answered 200 with nothing, a poller whose next poll is the
-// answer to its last — the OpenCode plugin's — asked again at once, and kept
-// asking for as long as this node went on serving its route: from the bridge's
-// shutdown to the node leaving the relay is most of a graceful stop. A failure
-// is what a poller pauses on; the notes wait on the run's record for the
-// session's next opening, here or on the seat's next holder.
+// steer_take is ([binding.takeSteer]); asked at every pass, since the fence
+// closes while a poll is held. A POLL THIS OPENING CANNOT HOLD IS REFUSED, never answered as an empty one:
+// once the bridge shuts down or the opening ends, a held poll is let go and
+// later ones get a 503 and Retry-After ([steerPollRetry]). Answered 200 with
+// nothing, a poller whose next poll answers its last (the OpenCode plugin's)
+// would ask again at once for most of a graceful stop. A failure is what a
+// poller pauses on; the notes wait on the run's record for the next opening.
 func (b *Bridge) pollNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	after := 0
 	if raw := r.URL.Query().Get("after"); raw != "" {
@@ -288,14 +282,13 @@ func isNotesPoll(r *http.Request) bool {
 // down, answering it as a poll held here is answered then: a 503 the poller
 // pauses on ([Bridge.pollNotes]).
 //
-// A RELAYED POLL IS HELD BY TWO NODES, the holder that waits for a note and this
-// one, which waits for the holder's answer, and only the holder's shutdown
-// released it. A node that is stopping relays its polls the longest — its seats
-// are handed to peers, and a direct box goes on dialling its loopback (ADR-0065)
-// — and one it went on waiting on kept its listener busy for the whole grace of
-// a graceful stop and was then cut, which a poller reads as a network error
-// rather than the answer to pause on. Only the poll: a relayed tool call or a
-// read may already be running on the holder, and is left to finish.
+// A RELAYED POLL IS HELD BY TWO NODES, the holder and this one waiting on its
+// answer, and only the holder's shutdown released it. A stopping node relays
+// its polls longest (its seats go to peers, a direct box keeps dialling its
+// loopback, ADR-0065), and one it kept waiting on held its listener for the
+// whole grace and was then cut, which a poller reads as a network error, not
+// the answer to pause on. Only the poll: a relayed tool call or read may
+// already be running on the holder, and is left to finish.
 func (b *Bridge) forwardPoll(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
 	if b.shuttingDown() {
 		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))

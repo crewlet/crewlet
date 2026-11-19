@@ -12,20 +12,16 @@ import (
 func escapedUnit(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 
 // A JSON TEXT MAY HOLD WHAT ANY STRETCH OF IT READS. A stretch cut from a JSON
-// text — a redaction's own words between its markers — can begin and end
-// anywhere, inside an escape too, and JSON reads it from its first byte: begun
-// after the backslash of an escaped line break, it reads the break's letter as
-// the first of the word after it; inside `\u` and its digits, those as a word's;
-// at the second backslash of an escaped one, the escape that backslash opens;
-// inside a surrogate pair, either half alone. Over every stretch of every
-// case's text, every term JSON reads in it is one MayHold of the whole text
-// says the text may hold — so a text whose stretches a reader is shown hold a
-// term is never passed over — and a term no stretch reads is one it may not.
+// text (a redaction's words between its markers) can begin and end anywhere,
+// inside an escape too, and JSON reads it from its first byte: after the
+// backslash of `\n` the letter starts a word; inside `\u` and its digits those
+// are a word's; at the second backslash of `\\` it opens an escape; inside a
+// surrogate pair either half stands alone. Every term JSON reads in any
+// stretch is one MayHold says the whole text may hold, and no other is.
 //
 // Mutation: read only the words JSON reads from the text's start, have MayHold
-// read the text as written while a stretch is read as JSON, or leave out a
-// pair's low half, or the escape a `\\`'s second backslash opens, and a case
-// goes red.
+// read the text as written, or leave out a pair's low half or the escape a
+// `\\`'s second backslash opens, and a case goes red.
 func TestAJSONTextMayHoldWhatAnyStretchOfItReads(t *testing.T) {
 	t.Parallel()
 	u := escapedUnit
