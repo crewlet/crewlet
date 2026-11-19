@@ -94,24 +94,47 @@ const lineChunkBytes = 64 << 10
 //
 // THE BUFFER IS THE CALLER'S, so a reader of many records (a transcript per
 // subagent) resets one. ONE IMPLEMENTATION for [eachLine] and a captured
-// session's transcript, so there is one answer to how long a line may be.
+// session's transcript, so there is one answer to how long a line may be: a
+// [streamLines] used for one whole read.
 func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
-	var (
-		held []byte
-		over int64 // the size of a line already past the bound
-	)
+	l := streamLines{bound: bound}
+	return l.read(br, true, line, skipped)
+}
+
+// streamLines is [readLines] with its place kept between reads that may end
+// anywhere, so a stream read in pieces is read as one read whole.
+type streamLines struct {
+	bound int
+	// held is the line so far while within bound, and over the size so far
+	// of one already past it.
+	held []byte
+	over int64
+	// taken is how many bytes of the stream the reads consumed: handed on,
+	// held or counted.
+	taken int64
+	// broken is whether the line last handed on, or counted as skipped, ended
+	// in a break rather than at the stream's end.
+	broken bool
+}
+
+// read hands line and skipped every line br completes, as [readLines] says.
+// At br's end with end set (the stream is whole), an unfinished last line is
+// handed on; without it, the line waits for the next read. br's own failure
+// returns with the place kept, and hands on nothing it cut short.
+func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, skipped func(int64) error) error {
 	for {
 		chunk, err := br.ReadSlice('\n')
+		l.taken += int64(len(chunk))
 		switch {
-		case over > 0:
-			over += int64(len(chunk))
-		case len(held)+len(chunk) > bound:
-			over = int64(len(held) + len(chunk))
+		case l.over > 0:
+			l.over += int64(len(chunk))
+		case len(l.held)+len(chunk) > l.bound:
+			l.over = int64(len(l.held) + len(chunk))
 			// RELEASED, not truncated: the buffer has grown to the bound,
 			// and keeping it would hold that much for the rest of the read.
-			held = nil
+			l.held = nil
 		default:
-			held = append(held, chunk...)
+			l.held = append(l.held, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
@@ -121,18 +144,29 @@ func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped fun
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		var stop error
-		if over > 0 {
-			stop = skipped(over)
-			over = 0
-		} else if len(held) > 0 {
-			stop = line(bytes.TrimRight(held, "\r\n"))
+		if err != nil && !end {
+			return nil
 		}
-		held = held[:0]
+		var stop error
+		if l.over > 0 {
+			l.broken = err == nil
+			stop = skipped(l.over)
+			l.over = 0
+		} else if len(l.held) > 0 {
+			l.broken = err == nil
+			stop = line(bytes.TrimRight(l.held, "\r\n"))
+		}
+		// A long line's buffer serves the next line only while a read with end
+		// ([readLines]' one read) goes on; otherwise it goes with its line, so
+		// a reader kept between reads holds only a line in transit.
+		if cap(l.held) > lineChunkBytes && (!end || stop != nil || err != nil) {
+			l.held = nil
+		}
+		l.held = l.held[:0]
 		switch {
 		case stop != nil:
 			return stop
-		case errors.Is(err, io.EOF):
+		case err != nil:
 			return nil
 		}
 	}
