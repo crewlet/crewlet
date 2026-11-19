@@ -67,6 +67,14 @@ func BrowserControlLaunch(resource string) (uuid.UUID, bool) {
 
 // BrowserControlEnd is why a tenure of a browser control ended: a closed list,
 // so an unknown value read off a newer build's record is a value, not a panic.
+// The node that ends a tenure writes its cause into the tombstone its release
+// leaves, and the end's instant is the store's stamp on that write; a lapse is
+// no write, the store reading it from its own clock at the deadline. Every
+// later take carries the launch's [MaxBrowserControlEnds] newest ends forward,
+// so how a past epoch ended can be read for at least a TTL and through four
+// later tenures: as long as the node holding the seat can still be finding
+// out, to tell the model. A generic Release names no cause and reads as
+// released; nothing in the engine sends one.
 type BrowserControlEnd string
 
 // The ends of a browser control. Every one but [ControlLapsed] is written by
@@ -116,7 +124,9 @@ func CheckBrowserControlEnd(by BrowserControlEnd) error {
 
 // BrowserControlOwner is who holds a browser control: a person, through the
 // browser session they act in, under one take, a uuid their panel mints per
-// take gesture, so two tabs of one session are two owners.
+// take gesture. Every tab of one session sends one cookie, so an owner of the
+// person and the session alone would hand two tabs one epoch, and the box
+// would answer one tab's input from its record of the other's.
 type BrowserControlOwner struct {
 	Person     uuid.UUID
 	Credential string
@@ -150,7 +160,9 @@ func (o BrowserControlOwner) Validate() error {
 
 // BrowserControlHolder is who a browser control's owner is to everybody
 // watching: their human seat and their display name, made a holder's name by
-// [BrowserControlHolderName].
+// [BrowserControlHolderName]. Owner and holder ride the lease's Meta beside
+// the launch, the turn and the seat, so a take, a renewal and an end each stay
+// one write, and a reader gets them with the tenure.
 type BrowserControlHolder struct {
 	Seat uuid.UUID
 	Name string
@@ -341,12 +353,22 @@ type BrowserControlWrite struct {
 	Epoch  int64
 }
 
-// BrowserControls is a person's control of the browser an executor launch runs
-// (the package doc, "A person's control of a run's browser"), certified by one
-// suite (coordtest.RunBrowserControls). Every error is UNKNOWN.
+// BrowserControls is a person's control of the browser an executor launch runs,
+// certified by one suite (coordtest.RunBrowserControls): a lease per launch
+// ([ClassBrowserControl]), taken and renewed by the node serving the person and
+// followed by the node holding the seat. A LEASE, not a record of its own: one
+// owner at a time by compare-and-set, a fencing epoch, and a lapse the store
+// judges on its own clock. A record carrying a deadline its writer stamped, as
+// [ModelChecks] does, is judged on its reader's clock, where a 30-second one
+// lapses at once or late at skews far inside the two hours a fleet tolerates,
+// and a second store-judged expiry would be a second copy of the rule
+// (ADR-0008). Every error is UNKNOWN, and the safe direction is CLOSED: a
+// control the store could not record is no control, and its caller asks again.
 type BrowserControls interface {
 	// TakeBrowserControl takes t's launch for its owner, holding it for ttl:
-	// taken, kept, or held, its Current naming the other owner's live tenure.
+	// taken at a new epoch, kept at the owner's own live one, or held, its
+	// Current the other owner's live tenure, read from the record that refused
+	// it and never one that is not live.
 	TakeBrowserControl(ctx context.Context, t BrowserControlTake, ttl time.Duration) (BrowserControl,
 		BrowserControlTaken, error)
 
@@ -362,7 +384,11 @@ type BrowserControls interface {
 	EndBrowserControl(ctx context.Context, launch uuid.UUID, owner BrowserControlOwner, epoch int64,
 		by BrowserControlEnd) (BrowserControl, bool, error)
 
-	// BrowserControl reads a launch's record, false where it has none.
+	// BrowserControl reads a launch's record, false where it has none, judging
+	// its newest tenure on the store's clock and handing out no deadline. A
+	// record and its ends stay readable at least three hours less a TTL after
+	// its last write: coord/kv's duty bucket ages a key out three hours after
+	// it, and the twin forgets an ended record at the same age.
 	BrowserControl(ctx context.Context, launch uuid.UUID) (BrowserControl, bool, error)
 
 	// WatchBrowserControls streams the launch of every write to the class made
@@ -432,7 +458,8 @@ type BrowserControlJudged struct {
 
 // The keys of a browser control's record, in its lease's Meta: short, since the
 // record crosses on every renewal ([MaxLeaseMetaBytes]). Every value is a JSON
-// string, an epoch included, which a JSON number would round past 2^53.
+// string, an epoch included: the stores hand a Meta back as JSON decodes it
+// ([Lease.Meta]), and a JSON number would round past 2^53.
 const (
 	keyLaunch     = "launch"
 	keyTurn       = "turn"
@@ -453,8 +480,11 @@ const (
 // BrowserControlTakeMeta is the Meta a take writes over prior, the Meta of the
 // record it replaces, whose tenure the store judged as was: the take's own
 // tenure, and the tenure prior held carried forward as an end before the ends
-// prior carries, the newest [MaxBrowserControlEnds]. Every key this build does
-// not declare is kept where it was (the package doc).
+// prior carries, the newest [MaxBrowserControlEnds]. THE RECORD KEEPS THE KEYS
+// IT DOES NOT DECLARE, at every level, as every write of it does: each rewrites
+// the record whole, so a build that kept only what it declares would strip
+// what a newer one added on its first write during a rolling upgrade. So the
+// codec edits the record it is handed rather than rebuilding it.
 func BrowserControlTakeMeta(t BrowserControlTake, prior map[string]any, was BrowserControlJudged) (map[string]any, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
@@ -530,7 +560,10 @@ func BrowserControlEndMeta(meta map[string]any, by BrowserControlEnd) (map[strin
 
 // BrowserControlKeptEnd is meta with how its tenure ended, as judged, written
 // into it, for a write that clears the record's owner and moves its stamp
-// without ending anything: a failed claim's give-back over it. A record
+// without ending anything: a failed claim's give-back over it. Unmarked, a
+// lapse would read afterwards as a release, and a lapse's or an end's instant
+// as the give-back's; so this is the one place an end's instant is written,
+// the moment a later write would move the stamp it was read from. A record
 // holding no tenure, or a live one, is left as it is.
 func BrowserControlKeptEnd(meta map[string]any, was BrowserControlJudged) (map[string]any, error) {
 	if was.Epoch == 0 || was.Live || len(meta) == 0 {

@@ -16,8 +16,7 @@ var _ coord.BrowserControls = (*Store)(nil)
 
 // TakeBrowserControl takes a launch's browser for t's owner: a claim of its
 // lease whose Meta is the take's record, and whose give-back keeps how the
-// tenure it covers ended (coord's package doc, "A person's control of a run's
-// browser").
+// tenure it covers ended ([coord.BrowserControlKeptEnd]).
 func (s *Store) TakeBrowserControl(ctx context.Context, t coord.BrowserControlTake,
 	ttl time.Duration) (coord.BrowserControl, coord.BrowserControlTaken, error) {
 

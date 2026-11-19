@@ -24,28 +24,24 @@
 //     compare their own wall clocks.
 //
 //   - crewlet_duties, holding every OTHER lease: the `worker:` leases of the
-//     fleet singletons, every class a caller leases under a name of its
-//     own (the tracker's `move:` and `merge:` claims), each process's taker
-//     lease and each run's browser control. Named for the duties, which are
-//     why it exists. See "Two lease buckets" below for why none of them can
-//     share the first.
+//     fleet singletons, the taker and browser control leases, and every class
+//     a caller leases under a name of its own (the tracker's `move:` and
+//     `merge:` claims). Named for the duties, which are why it exists. See
+//     "Two lease buckets" below for why none can share the first.
 //
 //   - crewlet_epochs, with NO TTL. One persistent record per resource holding
 //     the monotonic counter and the placement hint, for both lease buckets —
-//     save the taker leases and the browser controls, which count on ONE
-//     record for their whole class (coord.CounterResource), since each names
-//     a process or a launch and a record per resource would be one per
-//     process start or launch, never removed. Measured to survive the lease
-//     key's expiry, which is the entire fencing invariant. Gaps in the
-//     counter are harmless; resets are not. It is also the counter a single
-//     node's in-process leases mint from, because its tokens outlive that
-//     process too ([Epochs], epochs.go).
+//     save the taker leases and browser controls, which count on ONE record
+//     a class (coord.CounterResource): one per process start or launch would
+//     never be removed. Measured to survive the lease key's expiry, which is
+//     the entire fencing invariant. Gaps in the counter are harmless; resets
+//     are not. It is also the counter a single node's in-process leases mint
+//     from, because its tokens outlive that process too ([Epochs], epochs.go).
 //
-// So nothing a process start or a launch leaves here accumulates: a taker
-// lease's or a browser control's own key is in the duty bucket, whose age
-// removes it three hours after its last write — its release's tombstone, or
-// the last renewal of a holder that died — and its tokens are its class
-// counter's. The browser control's typed contract is browsercontrol.go.
+// So nothing a process start or a launch leaves here accumulates: such a
+// lease's own key is in the duty bucket, whose age removes it three hours
+// after its last write — its release's tombstone, or the last renewal of a
+// holder that died — and its tokens are its class counter's.
 //
 // # Per-key TTL cannot be used for this
 //
