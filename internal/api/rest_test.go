@@ -302,6 +302,14 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
+func (stubWorkReader) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (stubWorkReader) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
 func (stubWorkReader) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (
 	worklet.InboxAnswer, error) {
 	return worklet.InboxAnswer{Handle: q.Handle}, nil

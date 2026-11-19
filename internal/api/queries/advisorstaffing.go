@@ -29,14 +29,6 @@ import (
 // cannot be whole is an error, so the classes say nothing rather than judge a
 // partial week.
 
-// The reads the staffing read makes past the evidence's, each optional: a node
-// without one reads no staffing.
-type (
-	flowItemsReads interface {
-		FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error)
-	}
-)
-
 // stopEvents are the events a seat's pauses and model limits are read from,
 // each with the stop it is and whether it begins one.
 var stopEvents = []struct {
@@ -67,9 +59,7 @@ func (s Sources) advisorStaffing(ctx context.Context, company *config.Company, n
 	case !kept:
 		return nil, nil
 	}
-	flows, ok := s.Work.(flowReads)
-	items, itemsOK := s.Work.(flowItemsReads)
-	if !ok || !itemsOK || s.Config == nil || s.Usage == nil || s.Events == nil {
+	if s.Config == nil || s.Usage == nil || s.Events == nil {
 		return nil, errors.New("queries: this node reads no seat time to judge staffing on")
 	}
 	zone := s.zone()
@@ -82,15 +72,15 @@ func (s Sources) advisorStaffing(ctx context.Context, company *config.Company, n
 		return nil, fmt.Errorf("queries: the documents active since %s: %w", from, err)
 	}
 	window := worklet.FlowHoursQuery{Since: from, Until: to, Level: statelog.ReadStale}
-	if out.Flow, err = flows.FlowHours(ctx, window); err != nil {
+	if out.Flow, err = s.Work.FlowHours(ctx, window); err != nil {
 		return nil, err
 	}
-	if out.Items, err = items.FlowItems(ctx, window); err != nil {
+	if out.Items, err = s.Work.FlowItems(ctx, window); err != nil {
 		return nil, err
 	}
 	if days == advisor.AddSeatDays {
 		for d := from; d.Before(to); d = d.AddDate(0, 0, 1) {
-			hours, dayErr := flows.FlowHours(ctx, worklet.FlowHoursQuery{Since: d, Until: d.AddDate(0, 0, 1),
+			hours, dayErr := s.Work.FlowHours(ctx, worklet.FlowHoursQuery{Since: d, Until: d.AddDate(0, 0, 1),
 				Level: statelog.ReadStale})
 			if dayErr != nil {
 				return nil, dayErr
