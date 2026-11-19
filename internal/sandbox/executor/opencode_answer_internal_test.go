@@ -49,7 +49,7 @@ func TestAnOpenCodeAnswerPastItsBoundKeepsItsSettledOpening(t *testing.T) {
 		prose = append(prose, strings.Repeat("word ", 4+i%7)+"end")
 	}
 
-	for name, lines := range map[string][]string{"a key's body before its END": key, "prose": prose} {
+	for name, lines := range map[string][]string{"a block closed by a later line": key, "prose": prose} {
 		whole := redact.Secrets(strings.Join(lines, "\n") + "\n")
 		answer := &openCodeEvents{readBound: bound}
 		plain := &openCodeEvents{readBound: bound}

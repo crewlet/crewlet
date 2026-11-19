@@ -16,7 +16,7 @@ const (
 )
 
 // captureShapes are outputs whose redaction a line written later decides: a
-// key's body before its END, a key's block beside a password's key, a
+// block a later line closes, a key's block beside a password's key, a
 // password's key before its value, and the redact package's hold shapes (a
 // key's armour beside a long run, a value or blanks).
 func captureShapes() map[string]string {
@@ -31,7 +31,7 @@ func captureShapes() map[string]string {
 	armour := "a key: " + captureBegin + "\n" + captureKeyLine + "\n\n"
 	body := strings.Repeat(captureKeyLine+"\n", 200)
 	return map[string]string{
-		"a key's body before its END":       "build log\n" + body + captureEnd + "\n" + tail,
+		"a block closed by a later line":    "build log\n" + body + captureEnd + "\n" + tail,
 		"a key's body after prose":          "build log\n" + captureBegin + "\nsee below\n" + body + captureEnd + "\n" + tail,
 		"a password's key before its value": strings.Repeat("ok\n", 50) + "login password:\n\n  hunter2x9\n" + tail,
 		"an armour beside a token's run":    armour + "data: " + long[:1000] + "sk-" + long + "\n" + tail,
@@ -57,8 +57,8 @@ func fillerLines(n int) string {
 // reader that redacts what it was handed shows what the whole output's
 // redaction shows, no more; an output within the limit is kept as written.
 //
-// Mutation: keep the head back to its last line break alone, and a head kept
-// here redacts otherwise than the whole output.
+// Mutation: keep the head without asking [redact.Settled], and a shape goes
+// red.
 func TestACutCommandOutputKeepsOnlyWhatItsRedactionSettles(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 10))
