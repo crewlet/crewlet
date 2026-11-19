@@ -338,7 +338,7 @@ function HistoryList({
         {grouped(history.rows, now).map(({ group, rows }) => (
           <InboxGroup key={group} label={group}>
             {rows.map((row) => {
-              const name = row.title.trim() || "Untitled conversation";
+              const name = row.title?.trim() || "Untitled conversation";
               const state = rowState(row, view);
               return (
                 <InboxRow

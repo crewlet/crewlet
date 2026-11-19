@@ -37,9 +37,10 @@ const MADE = "403212ed-5a4a-586d-8af6-c62411a17c2f";
 const DAY = 86_400_000;
 
 const at = (ago: number) => new Date(Date.now() - ago).toISOString();
-const summary = (id: string, title: string, ago: number, state?: string) => ({
+const summary = (id: string, title: string | null, ago: number, state?: string) => ({
   id,
   title,
+  title_set_by: title === null ? null : "model",
   created_at: at(ago),
   updated_at: at(ago),
   last_activity_at: at(ago),
@@ -84,10 +85,12 @@ function engine(
           });
         }
         const q = (url.searchParams.get("q") ?? "").toLowerCase();
-        return json({ conversations: held.filter((r) => r.title.toLowerCase().includes(q)) });
+        return json({
+          conversations: held.filter((r) => (r.title ?? "").toLowerCase().includes(q)),
+        });
       }
       if (path === "/assistant/conversations" && method === "POST") {
-        const made = summary(MADE, "", 0);
+        const made = summary(MADE, null, 0);
         held = [made, ...held];
         return json({ conversation: made }, 201);
       }
@@ -183,6 +186,16 @@ test("your conversations are listed under the day each was last used, newest fir
     .getAllByText(/Payroll|Hiring plan|Budget review|Old incident/)
     .map((el) => el.textContent);
   expect(order).toEqual(["Payroll", "Hiring plan", "Budget review", "Old incident"]);
+});
+
+test("a conversation the engine has not named yet is listed as untitled", async () => {
+  engine([summary(PAYROLL, "Payroll", 60_000), summary(HIRING, null, 2 * 60_000)]);
+  mount("#/ask");
+  const list = await screen
+    .findByRole("list", { name: "Your conversations" })
+    .catch(() => screen.findByLabelText("Your conversations"));
+  await within(list).findByText("Payroll");
+  expect(within(list).getByText("Untitled conversation")).toBeDefined();
 });
 
 test("the address names the conversation: it is read from the engine, drawn, and marked in the list", async () => {
