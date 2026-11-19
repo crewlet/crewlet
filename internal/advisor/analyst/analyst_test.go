@@ -110,7 +110,7 @@ func TestTheAnalystListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 		t.Fatalf("run = %+v, want one finding listed", got)
 	}
 	f := got.Findings[0]
-	if f.Source != advisor.SourceAnalyst || f.Subject.Seat != "qa" || f.Subject.Name != "QA" ||
+	if f.Source != advisor.SourceModel || f.Subject.Seat != "qa" || f.Subject.Name != "QA" ||
 		len(f.Records) != 1 || f.Records[0].ID != "turn-9" || len(f.Evidence) != 2 {
 		t.Errorf("finding = %+v, want QA's, citing turn-9 and both numbers", f)
 	}

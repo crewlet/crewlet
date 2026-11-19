@@ -20,11 +20,12 @@ import (
 // record and number it cites is one the run's own tools answered and the engine
 // has built its fix. No model and no I/O here; internal/advisor/analyst runs it.
 
-// SourceAnalyst is a finding the analyst submitted and the engine grounded.
-const SourceAnalyst Source = "analyst"
+// SourceModel is a finding the Advisor's model submitted and the engine grounded.
+const SourceModel Source = "model"
 
-// ClassAnalyst is every analyst finding's class: what it is about is its words.
-const ClassAnalyst Class = "analyst.finding"
+// ClassModel is every model finding's class: what it is about is its words,
+// and its identity its [Fingerprint].
+const ClassModel Class = "model.finding"
 
 // Status is how an analyst run ended.
 type Status string
@@ -268,9 +269,10 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 	if !ok {
 		return Finding{}, DropFix
 	}
-	f := Finding{Class: ClassAnalyst, Severity: s.Severity, Actor: ActorOwner, Source: SourceAnalyst,
+	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
 		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item,
 		Evidence: facts, Records: records, Fix: fix}
+	f.Focus = Fingerprint(f)
 	if repeats(f, g.Rules) {
 		return Finding{}, DropRepeat
 	}
@@ -467,14 +469,4 @@ func (a Answers) Holding(now time.Time) map[string]bool {
 		}
 	}
 	return out
-}
-
-// Stale reports whether a run that started at started is past two of its
-// cadence's periods at now, so its findings are no longer this week's.
-func Stale(started, now time.Time, every config.AnalystCadence) bool {
-	period := 24 * time.Hour
-	if every == config.AnalystWeekly {
-		period = 7 * 24 * time.Hour
-	}
-	return now.Sub(started) > 2*period
 }

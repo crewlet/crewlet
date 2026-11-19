@@ -15,7 +15,7 @@ func TestTheAnalystsAnswerListsWhatPeopleHaveNotSetAside(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
 	finding := func(id string) advisor.Finding {
-		return advisor.Finding{Class: advisor.ClassAnalyst, Source: advisor.SourceAnalyst,
+		return advisor.Finding{Class: advisor.ClassModel, Source: advisor.SourceModel,
 			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "qa"},
 			Records: []advisor.Record{{Kind: advisor.RecordTurn, ID: id}}, Fix: advisor.Fix{Kind: advisor.FixNone}}
 	}

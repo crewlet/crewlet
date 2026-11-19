@@ -205,6 +205,10 @@ type Finding struct {
 	// Item is the one thing within the subject the finding is about, as a
 	// person reads it in a list: a schedule's name and how often it runs.
 	Item string `json:"item,omitempty"`
+	// Focus is what within the subject a class that raises several findings
+	// on one subject is about, stable across reads: a document path, an
+	// item's key, an integration finding's own subject. Part of [Key].
+	Focus string `json:"focus,omitempty"`
 	// Names is every seat the finding is about by display name, in the order
 	// of their handles, where one finding holds several.
 	Names []string `json:"names,omitempty"`
@@ -298,6 +302,7 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 	}
 	f.Title, f.Why = entry.words(c, place, w)
 	f.Item = w.Item
+	f.Focus = staticFocus(w)
 	f.Fix = entry.fix(c, place, w)
 	return f
 }
