@@ -131,6 +131,10 @@ type retention struct {
 	// node with no broker to publish to.
 	wakes *alarmOutbox
 
+	// episodes keeps every transition alarms makes as an episode on the
+	// advisor log, for the Advisor's alarm classes (alarmepisodes.go).
+	episodes *alarmEpisodes
+
 	// coverage is the fraction of this node's sources carrying a current
 	// vector, or false when this company has no embeddings configured.
 	// Nil on a node that cannot measure it, which reads as "nothing to
@@ -325,11 +329,24 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	// rather than said by the log alone — on the tracker just made, since a
 	// transition is told by the tracker it happens on. A raise the broker
 	// took is told back, which is what keeps it across a restart.
+	var handOn []func(statelog.AlarmTransition)
 	if e.backends.Queue != nil {
 		r.wakes = newAlarmOutbox(e.backends.Queue, e.metrics)
 		r.wakes.taken = r.alarms.Told
-		r.alarms.OnTransition(s.nodeID, r.wakes.Add)
+		handOn = append(handOn, r.wakes.Add)
 	}
+	// THE ADVISOR'S ALARM HISTORY, kept from the same transitions where they
+	// are made: each instance's every fire and clear (alarmepisodes.go).
+	r.episodes = newAlarmEpisodes(e.AdvisorWrites)
+	if r.wakes == nil {
+		r.episodes.taken = r.alarms.Told
+	}
+	handOn = append(handOn, r.episodes.Add)
+	r.alarms.OnTransition(s.nodeID, func(t statelog.AlarmTransition) {
+		for _, add := range handOn {
+			add(t)
+		}
+	})
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
 	// SIGTERM, which would make its lifetime differ from the appliers it
@@ -356,6 +373,9 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		// is still firing.
 		r.done.Go(func() { r.wakes.run(loop) })
 	}
+	// ENDED THE SAME WAY: an episode still queued at stop is lost, and the
+	// next start's first evaluation raises what still stands.
+	r.done.Go(func() { r.episodes.run(loop) })
 }
 
 // stopRetention ends the trim and the alarm heartbeat, waiting for an

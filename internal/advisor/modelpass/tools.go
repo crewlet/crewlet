@@ -19,8 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// SubmitTool is the call a run finishes with.
-const SubmitTool = "submit_findings"
+// SubmitTool is the call a run finishes with, and ExplainTool the one that
+// explains the findings [Data.Unexplained] holds, made before it.
+const (
+	SubmitTool  = "submit_findings"
+	ExplainTool = "submit_explanations"
+)
 
 // maxSubmissions is how many submit_findings calls a run may make: the first,
 // and one more after the engine said what was wrong with it.
@@ -53,6 +57,26 @@ var tools = map[string]tool{
 	"schedule_fires": {"Each schedule's fires in the last 7 days and how many moved any work.", firesOf},
 	"rule_findings":  {"What the advisor's own rules already list this week. Never repeat one.", rulesOf},
 	"past_answers":   {"How people dismissed earlier findings of yours: wrong or already known.", answersOf},
+	"findings_to_explain": {"The open findings, the rules' and yours, that have no explanation yet: " +
+		"each one's id, class, severity, title, why, item, facts and records. Explain them with " +
+		"submit_explanations.", unexplainedOf},
+}
+
+// unexplainedOf is the open findings to explain, with the records they cite.
+func unexplainedOf(d Data) (any, []advisor.Record) {
+	var records []advisor.Record
+	for _, e := range d.Unexplained {
+		records = append(records, e.Records...)
+	}
+	return map[string]any{"findings": nonNilList(d.Unexplained)}, records
+}
+
+// nonNilList is list, or an empty one.
+func nonNilList[T any](list []T) []T {
+	if list == nil {
+		return []T{}
+	}
+	return list
 }
 
 // toolNames is every read, sorted.
@@ -67,6 +91,23 @@ type surface struct {
 	submitted []advisor.Submitted
 	accepted  bool
 	attempts  int
+	// explaining is every explanation submitted, and explainings how many
+	// times submit_explanations was called.
+	explaining  []submittedExplanation
+	explainings int
+}
+
+// submittedExplanation is one explanation as the model sent it.
+type submittedExplanation struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// explanations is every explanation the run submitted.
+func (s *surface) explanations() []submittedExplanation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.explaining)
 }
 
 var _ toolloop.Surface = (*surface)(nil)
@@ -78,13 +119,14 @@ func (s *surface) ToolDefs() []llm.ToolDef {
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{},
 				"additionalProperties": false}})
 	}
-	return append(out, llm.ToolDef{Name: SubmitTool, Description: submitDescription, Parameters: submitSchema})
+	return append(out, llm.ToolDef{Name: ExplainTool, Description: explainDescription, Parameters: explainSchema},
+		llm.ToolDef{Name: SubmitTool, Description: submitDescription, Parameters: submitSchema})
 }
 
 func (s *surface) Revision() uint64 { return 0 }
 
 func (s *surface) AnnotationsOf(name string) mcp.Annotations {
-	if name == SubmitTool {
+	if name == SubmitTool || name == ExplainTool {
 		return mcp.Annotations{}
 	}
 	return mcp.Annotations{ReadOnly: mcp.Yes}
@@ -94,8 +136,11 @@ func (s *surface) Phase() string { return "advisor_model" }
 
 func (s *surface) Admit(name string, _ map[string]any) toolloop.Admitted {
 	return func(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
-		if name == SubmitTool {
+		switch name {
+		case SubmitTool:
 			return s.submit(call.Arguments), nil
+		case ExplainTool:
+			return s.explain(call.Arguments), nil
 		}
 		t, ok := tools[name]
 		if !ok {
@@ -112,6 +157,33 @@ func (s *surface) Admit(name string, _ map[string]any) toolloop.Admitted {
 		}
 		return toolloop.ToolResult{Output: string(raw)}, nil
 	}
+}
+
+// explain takes the run's explanations, or answers why it cannot. Each is
+// checked when the run ends, against the finding it names alone.
+func (s *surface) explain(args map[string]any) toolloop.ToolResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.explainings++; s.explainings > maxSubmissions {
+		return toolloop.ToolResult{Failed: true, Output: "this run's explanations are spent",
+			Cause: mcp.RefusalNotRunning}
+	}
+	raw, err := json.Marshal(args)
+	var sub struct {
+		Explanations []submittedExplanation `json:"explanations"`
+	}
+	if err == nil {
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
+		dec.DisallowUnknownFields()
+		err = dec.Decode(&sub)
+	}
+	if err != nil {
+		return toolloop.ToolResult{Failed: true, Cause: mcp.Classify(mcp.RefusalInvalid, err),
+			Output: "the explanations do not match the schema: " + err.Error() +
+				"; write them again, exactly as the schema says."}
+	}
+	s.explaining = append(s.explaining, sub.Explanations...)
+	return toolloop.ToolResult{Output: "received"}
 }
 
 // submit takes the run's findings, or answers every reason it cannot.
