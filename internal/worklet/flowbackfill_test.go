@@ -102,7 +102,7 @@ func TestABackfilledFlowIsTheRecordedFlow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	postures := &shiftingPostures{p: livePosture}
-	limitFrom, limitTo, resets := time.Duration(10*time.Minute), 20*time.Minute, 2*time.Hour
+	limitFrom, limitTo, resets := 10*time.Minute, 20*time.Minute, 2*time.Hour
 	past := &seatPast{covered: time.Unix(0, 0), stops: map[string][]worklet.SeatStop{}}
 	duty := backfillDutyOn(t, r, postures, past)
 	tick := func(now time.Time) { flowTick(t, r, duty, now) }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -297,14 +298,14 @@ func (r *Reader) flowFillStart(ctx context.Context, wrote statelog.Position) (*f
 		var seq, at int64
 		err := tx.QueryRowContext(ctx, flowHorizonStatement).Scan(&seq, &at)
 		switch {
-		case err == sql.ErrNoRows:
+		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
 			return fmt.Errorf("worklet: read the flow duty's first change: %w", err)
 		}
 		horizon = &flowHorizon{seq: seq, at: store.DecodeTime(at)}
 		err = tx.QueryRowContext(ctx, flowCursorStatement).Scan(&cursor)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("worklet: read the flow backfill's cursor: %w", err)
 		}
 		return nil
@@ -578,10 +579,11 @@ func (p *itemPast) readBlockers(ctx context.Context, tx *sql.Tx) error {
 		}
 		var open int
 		err = tx.QueryRowContext(ctx, pastDepStatement, id, p.id).Scan(&open)
-		if err != nil && err != sql.ErrNoRows {
+		missing := errors.Is(err, sql.ErrNoRows)
+		if err != nil && !missing {
 			return fmt.Errorf("worklet: read item %s's edge to %s: %w", p.id, id, err)
 		}
-		p.open[id] = err == sql.ErrNoRows || open == 1
+		p.open[id] = missing || open == 1
 	}
 	return nil
 }
@@ -793,7 +795,7 @@ func stuckWindow(ctx context.Context, tx *sql.Tx, project string) (time.Duration
 	var hours sql.NullInt64
 	err := tx.QueryRowContext(ctx, `SELECT stuck_after_hours FROM tracker_projects WHERE key = ?`,
 		project).Scan(&hours)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("worklet: read project %s's stuck window: %w", project, err)
 	}
 	if !hours.Valid || hours.Int64 == 0 {
