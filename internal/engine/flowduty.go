@@ -121,15 +121,15 @@ func (l *flowDutyLoop) dutyHere() *worklet.FlowDuty {
 }
 
 // flowChart is the flow duty's read of the current chart: its leads, and
-// which seats are agents, whose notice is their pickup.
+// which seats are people to tell.
 type flowChart struct{ liveLeads }
 
-// Agent reports whether handle is an agent seat in the current chart.
-func (c flowChart) Agent(handle string) bool {
+// Person reports whether handle is a person's seat in the current chart.
+func (c flowChart) Person(handle string) bool {
 	company := c.engine.Company()
 	if company == nil || company.Org == nil {
 		return false
 	}
-	_, ok := company.Org.AgentIDFor(company.Org.AgentSeatByHandle(handle))
-	return ok
+	seat := company.Org.SeatByHandle(handle)
+	return seat != nil && seat.IsHuman()
 }

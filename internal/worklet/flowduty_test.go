@@ -12,18 +12,20 @@ import (
 )
 
 // flowChart is the chart the flow duty reads: each project's lead, and which
-// seats are agents.
+// seats are people.
 type flowChart struct {
-	leads  map[string]string
-	agents map[string]bool
+	leads   map[string]string
+	persons map[string]bool
 }
 
 func (c flowChart) ProjectLead(project string) string { return c.leads[project] }
 func (c flowChart) UnitLead(string) string            { return "" }
-func (c flowChart) Agent(handle string) bool          { return c.agents[handle] }
+func (c flowChart) Person(handle string) bool         { return c.persons[handle] }
 
-// engChart is ENG led by the person lee, with bot an agent seat.
-var engChart = flowChart{leads: map[string]string{"ENG": "lee"}, agents: map[string]bool{"bot": true}}
+// engChart is ENG led by the person lee, with ada a person and bot an agent:
+// every other handle is a seat the chart no longer holds.
+var engChart = flowChart{leads: map[string]string{"ENG": "lee"},
+	persons: map[string]bool{"ada": true, "lee": true}}
 
 // livePosture is a seeded projection in which no seat is busy or stopped.
 var livePosture = worklet.Posture{Live: true}
@@ -256,12 +258,14 @@ func TestALateCheckIsToldOncePerStart(t *testing.T) {
 // An item in progress nothing changed on for its project's window is stuck:
 // its person assignee is told when it becomes stuck, and the project's lead a
 // window later if it is still stuck since the same change. An agent's stuck
-// item tells its lead at once.
+// item tells its lead at once, and so does one whose assignee the chart no
+// longer holds: nobody reads that seat's inbox.
 func TestAForgottenItemIsToldThenItsLead(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	fileInProgress(t, r, "t-1", "ada", nil)
 	fileInProgress(t, r, "t-2", "bot", nil)
+	fileInProgress(t, r, "t-3", "gone", nil)
 	duty := flowDutyOn(t, r, livePosture, engChart)
 	changed := detailOf(t, r, "t-1", time.Now()).Task.UpdatedAt
 	window := worklet.DefaultStuckAfterHours * time.Hour
@@ -274,6 +278,9 @@ func TestAForgottenItemIsToldThenItsLead(t *testing.T) {
 	}
 	if got := toldOf(t, r, "t-2"); !slices.Equal(got, []string{"lee:flow"}) {
 		t.Fatalf("an agent's stuck item told %v, want its lead and never the agent", got)
+	}
+	if got := toldOf(t, r, "t-3"); !slices.Equal(got, []string{"lee:flow"}) {
+		t.Fatalf("a stuck item whose assignee left the chart told %v, want its lead at once", got)
 	}
 	flowTick(t, r, duty, changed.Add(2*window-time.Minute))
 	if got := toldOf(t, r, "t-1"); len(got) != 1 {

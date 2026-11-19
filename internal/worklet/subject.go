@@ -170,7 +170,8 @@
 // WHOM IT TELLS: a person assignee once the state has lasted its threshold,
 // then the project's lead a threshold later if the item is still in that
 // state since the same instant. An agent assignee's notice is its pickup,
-// which carries the typed answer a notice cannot, so its lead is told first.
+// which carries the typed answer a notice cannot, so its lead is told first,
+// as it is for an assignee the chart no longer holds.
 // A held item tells its lead alone, and only when the hold costs something:
 // the item is urgent, or it would be due past the grace or quiet past its
 // window were it not held.

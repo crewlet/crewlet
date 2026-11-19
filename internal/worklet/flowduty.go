@@ -38,13 +38,13 @@ const FlowDutyInterval = time.Minute
 const flowDutyPage = 500
 
 // FlowChart is what the flow duty reads of the org chart, per call: the lead
-// a notice goes to, and whether an assignee is an agent seat, whose notice is
-// its pickup.
+// a notice goes to, and whether an assignee is a person to tell. An agent's
+// notice is its pickup, and a seat the chart no longer holds reads nothing.
 type FlowChart interface {
 	Leads
 
-	// Agent reports whether handle is an agent seat.
-	Agent(handle string) bool
+	// Person reports whether handle is a person's seat in the chart.
+	Person(handle string) bool
 }
 
 // FlowDutyDeps is what the flow duty needs that it does not own.
@@ -278,7 +278,7 @@ func (it flowItem) steps(entered time.Time, chart FlowChart) []flowStep {
 		return nil
 	}
 	var out []flowStep
-	if it.assignee != "" && !chart.Agent(it.assignee) {
+	if it.assignee != "" && chart.Person(it.assignee) {
 		out = append(out, flowStep{role: FlowToldAssignee, who: it.assignee, at: first})
 		first = second
 	}

@@ -1699,7 +1699,8 @@ Every minute it reads every item in progress, a page at a time, and:
 The first person told is the assignee when the assignee is a person. **An agent
 assignee is never told**: its notice is the work pickup, which hands it the item
 on its priority lane with the typed answer a notice cannot carry, so the first
-person told about an agent's item is the project's lead (the item's team lead
+person told about an agent's item, or about one whose assignee has left the
+org chart, is the project's lead (the item's team lead
 where the project has none), and a lead is never told of its own item. The lead
 is told only if the item is still in the same state since the same instant. A
 hold that ends on its own on an item nothing waits for asks nobody to act.
