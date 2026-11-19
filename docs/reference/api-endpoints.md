@@ -3047,7 +3047,7 @@ account, a vendor's sentence or a cost.
   "default_run_in": "container",
   "cells": {"direct": {"declared": true, "ready_on": ["node-1"], "not_ready_on": []}, …},
   "nodes": [{"id": "node-1", "reported": true,
-    "direct": {"state": "ready", "detail": "Landlock confinement; box root writable", "fix": null, "checked_at": "…"}, …}]
+    "direct": {"state": "ready", "detail": "box root /home/crewlet/.crewlet/sandboxes writable", "fix": null, "checked_at": "…"}, …}]
 }
 ```
 
