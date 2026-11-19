@@ -47,7 +47,9 @@ type Decoder interface {
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
 	// whole transcript. A decoder read this way stops keeping what Result
-	// needs, so it is read one way or the other, never both.
+	// needs, so it is read one way or the other, never both: a live reading
+	// asks once before its first line, so the decoder never holds for a
+	// Result, however much that line's read hands it.
 	Entries() []string
 }
 
@@ -152,8 +154,8 @@ const transcriptHoldBytes = sandbox.MaxFileBytes
 //
 // A WHOLE READING PAST THE HOLD STREAMS: its entries so far, then each one
 // after, are written to a redacting stream into the halves the record keeps,
-// a piece at a time. A live reading takes its entries after every read, each
-// well under the hold ([liveBacklog]), so it never streams.
+// a piece at a time. A live reading takes its entries before its first line
+// and after every read ([Decoder.Entries]), so it never streams.
 type transcriptLines struct {
 	lines []string
 	// held is the bytes of lines and the breaks joining them.

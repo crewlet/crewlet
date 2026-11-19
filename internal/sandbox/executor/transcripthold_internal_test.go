@@ -244,28 +244,32 @@ func TestATranscriptTheStreamRefusesIsWithheld(t *testing.T) {
 	}
 }
 
-// A LIVE READING TAKES ITS ENTRIES BEFORE THEY COULD STREAM: one read is
-// well under the hold, and a transcript taken once is held raw however long
-// it runs, so the live view never needs the halves.
-func TestALiveReadingTakesItsEntriesBeforeTheyCouldStream(t *testing.T) {
+// A LIVE READING IS LIVE FROM ITS FIRST READ: however many entries the read
+// that begins it hands the decoder, past the hold or not, every one is shown,
+// and the decoder holds none for a Result.
+//
+// Mutation: leave the reading to mark itself live at its first take, and a
+// first read past the hold streams: nothing is shown, then or after.
+func TestALiveReadingIsLiveFromItsFirstRead(t *testing.T) {
 	t.Parallel()
-	if liveWindow > transcriptHoldBytes/2 || liveBacklog+liveReadFloor > transcriptHoldBytes/2 {
-		t.Errorf("one live read (%d from the end, or %d) is not under half the hold %d",
-			liveWindow, liveBacklog+liveReadFloor, transcriptHoldBytes)
+	const hold = 4 << 10
+	entries := runEntries(400, 100)
+	join := strings.Join(entries, "\n")
+	if len(join) <= 4*hold {
+		t.Fatalf("the read of %d bytes is not well past the hold of %d", len(join), hold)
 	}
-	tr := transcriptLines{hold: 1 << 10}
-	tr.add("first")
-	if got := tr.take(); len(got) != 1 {
-		t.Fatalf("took %q", got)
+	runner, b, p := heldRun(t, hold, entries)
+	b.Put(p.Done(), "0")
+	reading := runner.Follow(sandbox.RunHandle{})
+	got, err := reading.Read(t.Context(), b)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
 	}
-	entries := runEntries(100)
-	for _, e := range entries {
-		tr.add(e)
+	if want := redact.Secrets(join + "\n"); got.Source != sandbox.SourceTranscript || got.Text != want {
+		t.Errorf("the first read shows %d bytes from %q; want every entry, %d bytes of the transcript",
+			len(got.Text), got.Source, len(want))
 	}
-	if tr.stream != nil {
-		t.Fatal("a transcript taken live streamed")
-	}
-	if got := tr.take(); strings.Join(got, "\n") != strings.Join(entries, "\n") {
-		t.Errorf("a live reading took %d entries of %d", len(got), len(entries))
+	if tr := &reading.(*follower).dec.(*claudeEvents).transcript; tr.stream != nil || len(tr.lines) != 0 {
+		t.Errorf("the reading's decoder streamed (%v) or holds %d entries", tr.stream != nil, len(tr.lines))
 	}
 }

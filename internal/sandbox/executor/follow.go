@@ -123,6 +123,8 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 	}
 	if restarted || f.dec == nil {
 		f.dec, f.transcript = f.harness.Events(), pendingText{}
+		// Read through Entries from its first line ([Decoder.Entries]).
+		_ = f.dec.Entries()
 	}
 	if len(lines) == 0 {
 		return nil
