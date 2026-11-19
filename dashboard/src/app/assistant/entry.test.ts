@@ -126,6 +126,9 @@ describe("the assistant's model", () => {
       message: "Ask Crewlet's model is signed out, so it cannot answer.",
       hint: "Ask an administrator to sign Ask Crewlet's model in again.",
     },
+    model: null,
+    can_assign: false,
+    reads_images: false,
   } as const;
 
   // THE MODEL'S STATE LEAVES THE ASK BUTTON LIT: the drawer opens, with the
@@ -133,11 +136,35 @@ describe("the assistant's model", () => {
   test("a model that is not ready is the drawer's notice, never a reason to refuse the reader", () => {
     expect(assistantUnavailable(signedOut)).toBeNull();
     expect(assistantModelNotice(signedOut)?.code).toBe("model_signed_out");
-    expect(assistantModelNotice({ available: true })).toBeNull();
-    expect(assistantModelNotice({ available: false, reason: "no_permission" })).toBeNull();
-    expect(assistantUnavailable({ available: false, reason: "no_permission" })).toBe(
-      "no_permission",
-    );
+    expect(
+      assistantModelNotice({
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBeNull();
+    expect(
+      assistantModelNotice({
+        available: false,
+        reason: "no_permission",
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBeNull();
+    expect(
+      assistantUnavailable({
+        available: false,
+        reason: "no_permission",
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBe("no_permission");
   });
 
   test("the notice is the engine's sentence and hint, and Send's reason its own phrase", () => {

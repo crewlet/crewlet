@@ -220,18 +220,18 @@ type AuditRead struct {
 type ViewerAssistant struct {
 	Available bool         `json:"available"`
 	Reason    ViewerReason `json:"reason,omitempty"`
-	// Model is the model Ask Crewlet runs on, absent where none is assigned.
-	Model *ViewerModel `json:"model,omitempty"`
+	// Model is the model Ask Crewlet runs on, null where none is assigned.
+	Model *ViewerModel `json:"model"`
 	// Notice is what a [ViewerModelNotReady] reason means for this person,
-	// absent for every other reason.
-	Notice *ModelNotice `json:"notice,omitempty"`
+	// null for every other reason.
+	Notice *ModelNotice `json:"notice"`
 	// CanAssign is whether this person may assign Ask Crewlet's model: they
 	// hold the company document's write, through which it is assigned.
-	CanAssign bool `json:"can_assign,omitempty"`
+	CanAssign bool `json:"can_assign"`
 	// ReadsImages is whether a question's images are read: only deep work
 	// reads them, so false where the company has none, and the composer
 	// does not take them.
-	ReadsImages bool `json:"reads_images,omitempty"`
+	ReadsImages bool `json:"reads_images"`
 }
 
 // ViewerModel is a helper's model as anybody is shown it: its providers.llm

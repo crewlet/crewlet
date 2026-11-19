@@ -246,7 +246,24 @@ describe("the bounds a request is held to before it is sent", () => {
 
   test("a viewer answer with no assistant member reads as no model", () => {
     expect(assistantUnavailable(undefined)).toBe("no_model");
-    expect(assistantUnavailable({ available: true })).toBeNull();
-    expect(assistantUnavailable({ available: false, reason: "not_a_person" })).toBe("not_a_person");
+    expect(
+      assistantUnavailable({
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBeNull();
+    expect(
+      assistantUnavailable({
+        available: false,
+        reason: "not_a_person",
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBe("not_a_person");
   });
 });

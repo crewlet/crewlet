@@ -945,14 +945,14 @@ interface AssistantAuditRead {
 export interface AssistantViewerAssistant {
   available: boolean;
   reason?: AssistantViewerReason;
-  /** The model Ask Crewlet runs on; absent where none is assigned. */
-  model?: AssistantViewerModel;
-  /** What a `model_not_ready` reason means for this person; absent for every other reason. */
-  notice?: AssistantModelNotice;
+  /** The model Ask Crewlet runs on; null where none is assigned. */
+  model: AssistantViewerModel | null;
+  /** What a `model_not_ready` reason means for this person; null for every other reason. */
+  notice: AssistantModelNotice | null;
   /** The person may assign Ask Crewlet's model: they hold the company document's write. */
-  can_assign?: boolean;
-  /** A question's images are read: only deep work reads them, so absent where the company has none. */
-  reads_images?: boolean;
+  can_assign: boolean;
+  /** A question's images are read: only deep work reads them, so false where the company has none. */
+  reads_images: boolean;
 }
 
 /** A helper's model as anybody is shown it: its `providers.llm` key and the model it names. */
