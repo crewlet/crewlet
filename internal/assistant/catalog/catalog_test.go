@@ -19,9 +19,9 @@ import (
 )
 
 // THE CATALOGUE HOLDS TOGETHER: every tool declares a schema, a route it may
-// send, a card for every shape of answer it reads, a preview exactly when it
-// proposes, and every exposure row names one surface and a tool of the kind it
-// says. Mutation: name a write tool on a read row and this fails.
+// send and a preview exactly when it proposes, every exposure row names one
+// surface and a tool of the kind it says, and no curated tool reads: every read
+// is read_api's. Mutation: name a write tool on a read row and this fails.
 func TestTheCatalogueHoldsTogether(t *testing.T) {
 	t.Parallel()
 	if err := catalog.Check(); err != nil {
@@ -30,13 +30,11 @@ func TestTheCatalogueHoldsTogether(t *testing.T) {
 	names := map[string]bool{}
 	for _, tool := range catalog.Tools() {
 		names[tool.Name] = true
+		if tool.Kind == catalog.KindRead {
+			t.Errorf("%s is a curated read; every read is %s's", tool.Name, catalog.ReadAPITool)
+		}
 	}
-	for _, want := range []string{"search_work", "list_tasks", "get_task", "get_task_thread",
-		"get_task_cost", "get_my_work", "list_projects", "get_workload", "list_decisions",
-		"list_agents", "get_agent", "get_org_chart", "list_turns", "list_executors",
-		"get_spend", "get_spend_series", "list_budgets", "search_knowledge", "list_spaces", "get_page",
-		"get_company_feed", "list_artifacts", "get_artifact", "list_integrations",
-		"get_fleet_health", "list_config_changes", "create_task", "update_task",
+	for _, want := range []string{"create_task", "update_task",
 		"comment_on_task", "answer_decision", "set_my_priorities", "mark_inbox",
 		"pause_agent", "resume_agent", "steer_turn", "answer_executor", "create_page",
 		"edit_page", "share_artifact", "unshare_artifact", "post_chat_message",
@@ -129,12 +127,17 @@ func TestEveryToolSendsOnlyItsOwnRoutes(t *testing.T) {
 			t.Errorf("%s mints its own operation key", tool.Name)
 		}
 	}
-	req, err := mustTool(t, "get_task").Request(map[string]any{"item": "../../secrets"})
+	_, read, _ := generic(t, admin)
+	req, err := read.Request(map[string]any{"route": "GET /worklet/{id}",
+		"path": map[string]any{"id": "../../secrets"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if req.Path != "/worklet/..%2F..%2Fsecrets" {
 		t.Errorf("a traversal key was sent as %q", req.Path)
+	}
+	if _, ok := read.RouteOf(req); !ok {
+		t.Errorf("the read's own request %s is not one of its routes", req.Path)
 	}
 }
 
@@ -170,10 +173,10 @@ func TestATiersDerivationIsNeverLowered(t *testing.T) {
 	}
 }
 
-// ONLY WHAT THE PERSON CAN TAKE IS OFFERED: a read whose app they do not hold,
-// an administrator's read to anybody else, and a write whose act tool the
-// viewer's acts do not list are left out, in a stable order. Mutation: offer
-// every read and the person without Worklet is handed list_tasks.
+// ONLY WHAT THE PERSON CAN TAKE IS OFFERED: a write whose act tool the
+// viewer's acts do not list, and an administrator's write to anybody else, are
+// left out, in a stable order. Mutation: offer every write and the person with
+// write_page alone is handed create_task.
 func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 	t.Parallel()
 	names := func(tools []catalog.Tool) []string {
@@ -186,14 +189,13 @@ func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 	writer := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantDoclet}}
 	offered := names(catalog.Offered(writer, []string{"write_page"}))
-	for _, want := range []string{"search_knowledge", "get_page", "list_agents", "create_page",
-		"propose_page_change", "open_in_app"} {
+	for _, want := range []string{"create_page", "propose_page_change", "open_in_app"} {
 		if !slices.Contains(offered, want) {
 			t.Errorf("a knowledge person is not offered %s", want)
 		}
 	}
-	for _, refused := range []string{"list_tasks", "list_integrations", "create_task",
-		"edit_page", "get_company_principles", "update_company_principles"} {
+	for _, refused := range []string{"create_task", "edit_page", "update_company_principles",
+		"set_token_budget"} {
 		if slices.Contains(offered, refused) {
 			t.Errorf("a knowledge person with write_page alone is offered %s", refused)
 		}
@@ -201,15 +203,10 @@ func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}
 	all := names(catalog.Offered(admin, nil))
-	if !slices.Contains(all, "list_integrations") || !slices.Contains(all, "list_tasks") {
-		t.Errorf("an administrator is offered %v", all)
-	}
 	// THE PRINCIPLES' WRITE IS NO OPERATOR TOOL, so acts never lists it: an
 	// administrator is offered it by the route's own class, with no acts.
-	for _, want := range []string{"get_company_principles", "update_company_principles"} {
-		if !slices.Contains(all, want) {
-			t.Errorf("an administrator is not offered %s", want)
-		}
+	if !slices.Contains(all, "update_company_principles") {
+		t.Errorf("an administrator is not offered update_company_principles: %v", all)
 	}
 	if again := names(catalog.Offered(admin, nil)); !slices.Equal(all, again) {
 		t.Error("two offers to one person differ in order")
@@ -324,49 +321,35 @@ func TestEveryStepIsASentence(t *testing.T) {
 	}
 }
 
-// A STEP SHOWS THE REQUEST IT MADE, ITS METHOD ONCE: every read's step carries
-// the method apart and the path it was sent to, wildcards filled in and no
-// query, so the drawer's "search_knowledge · GET /query/knowledge" names the
-// question asked rather than the pattern "/query/{what}", and never doubles
-// the method. Mutation: show the matched route pattern and the two named cases
-// fail; show the whole request URL and the query check fails.
+// A STEP SHOWS THE REQUEST IT MADE, ITS METHOD ONCE: a read's step carries the
+// method apart and the path it was sent to, wildcards filled in and no query,
+// so "GET /query/knowledge" names the question asked rather than the pattern.
+// Mutation: show the matched route pattern and the named cases fail.
 func TestAStepShowsTheRequestItMade(t *testing.T) {
 	t.Parallel()
-	for _, tool := range catalog.Tools() {
-		if tool.Kind != catalog.KindRead {
-			continue
-		}
-		req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
-		if err != nil {
-			t.Errorf("%s: %v", tool.Name, err)
-			continue
-		}
-		shown, ok := tool.StepRequest(req)
-		if !ok || shown.Method != req.Method || shown.Route != req.Path ||
-			strings.ContainsAny(shown.Route, "?{") {
-			t.Errorf("%s's step shows %+v for %s %s", tool.Name, shown, req.Method, req.Path)
-		}
-	}
+	_, read, _ := generic(t, admin)
 	for _, c := range []struct {
-		tool string
 		args map[string]any
 		want string
 	}{
-		{"get_task", map[string]any{"item": "ENG-1"}, "/worklet/ENG-1"},
-		{"search_knowledge", map[string]any{"q": "the mission"}, "/query/knowledge"},
+		{map[string]any{"route": "GET /worklet/{id}", "path": map[string]any{"id": "ENG-1"}},
+			"/worklet/ENG-1"},
+		{map[string]any{"route": "GET /query/{what}", "path": map[string]any{"what": "knowledge"},
+			"query": map[string]any{"q": "the mission"}}, "/query/knowledge"},
+		{map[string]any{"route": "GET /config"}, "/config"},
 	} {
-		tool := mustTool(t, c.tool)
-		req, err := tool.Request(c.args)
+		req, err := read.Request(c.args)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if shown, _ := tool.StepRequest(req); shown == nil || shown.Route != c.want {
-			t.Errorf("%s's step shows %+v, want the route %s", c.tool, shown, c.want)
+		shown, ok := read.StepRequest(req)
+		if !ok || shown.Method != "GET" || shown.Route != c.want ||
+			strings.ContainsAny(shown.Route, "?{") {
+			t.Errorf("%v's step shows %+v, want GET %s", c.args, shown, c.want)
 		}
 	}
-	if _, ok := mustTool(t, "get_task").StepRequest(exec.Request{Method: "GET",
-		Path: "/pages/x"}); ok {
-		t.Error("a request get_task could not have built is shown as one it made")
+	if _, ok := read.StepRequest(exec.Request{Method: "GET", Path: "/pages/x"}); ok {
+		t.Error("a request read_api could not have built is shown as one it made")
 	}
 }
 

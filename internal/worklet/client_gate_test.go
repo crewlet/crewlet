@@ -306,3 +306,61 @@ func TestTheDashboardKnowsAnItemsConversationByTheEnginesKey(t *testing.T) {
 		t.Errorf("the dashboard names item %s's conversation %q, the engine %q", id, got+id, want)
 	}
 }
+
+// THE DASHBOARD DRAWS EVERY FLOW STATE AND CAUSE THE ENGINE SENDS (ADR-0162).
+//
+// A state with no row draws a bare word in a neutral badge, and a cause with no
+// row leaves the item's sentence without its reason; a row the engine never
+// sends is unreachable. Every row carries its words, so half a row fails too.
+func TestTheDashboardDrawsEveryFlowStateAndCause(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	states, err := clientsource.Literal(tree, "FLOW_STATES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	causes, err := clientsource.Literal(tree, "FLOW_CAUSES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engineStates, engineCauses []string
+	for _, s := range worklet.FlowStates {
+		engineStates = append(engineStates, string(s))
+	}
+	for _, c := range worklet.FlowCauses {
+		engineCauses = append(engineCauses, string(c))
+	}
+	for _, set := range []struct {
+		name, key string
+		words     []string
+		body      clientsource.Body
+		engine    []string
+	}{
+		{"FLOW_STATES", "state", []string{"label", "tone"}, states, engineStates},
+		{"FLOW_CAUSES", "cause", []string{"phrase"}, causes, engineCauses},
+	} {
+		client := clientsource.Field(set.body, set.key)
+		if len(client) == 0 {
+			t.Fatalf("%s names nothing, so this gate certifies nothing", set.name)
+		}
+		for _, field := range set.words {
+			if got := clientsource.Field(set.body, field); len(got) != len(client) {
+				t.Errorf("%s has %d rows and %d %ss: every row carries one", set.name,
+					len(client), len(got), field)
+			}
+		}
+		for _, name := range set.engine {
+			if !slices.Contains(client, name) {
+				t.Errorf("the engine sends the flow %s %q and %s has no row for it: "+
+					"the item says a bare word with no reason. It names %v",
+					set.key, name, set.name, client)
+			}
+		}
+		for _, name := range client {
+			if !slices.Contains(set.engine, name) {
+				t.Errorf("%s draws the flow %s %q, which the engine never sends", set.name,
+					set.key, name)
+			}
+		}
+	}
+}

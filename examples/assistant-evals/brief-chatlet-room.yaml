@@ -34,15 +34,15 @@ answers:
       channel: {id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, kind: public, name: launch, topic: Friday's launch}
       members: [{handle: ada}, {handle: grace}]
 script:
-  - call: read_chat_messages
-    args: {channel: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31}
+  - call: read_api
+    args: {route: "GET /chatlet/channels/{channel_id}/messages", path: {channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31}}
   - call: answer_brief
     args:
       about: Ada asks you in #launch to approve the launch copy by Thursday.
       needs:
         - {ref_kind: room, ref_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, do: "Answer Ada in #launch: approve the launch copy?", why: "Asked at 09:00", tone: warning, action: open}
 expect:
-  calls: [read_chat_messages, answer_brief]
+  calls: [read_api, answer_brief]
   proposals: 0
   state: completed
   brief:

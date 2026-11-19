@@ -49,37 +49,6 @@ var (
 	policyBytes  = config.MaxPolicyChars * utf8.UTFMax
 )
 
-// principlesRead is get_company_principles.
-func principlesRead() Tool {
-	return Tool{
-		Name: "get_company_principles", Phrase: "read the company's principles",
-		Description: "The company's principles as Company › Principles shows them: its " +
-			"mission, its vision and its standing policies. Read them here, never by " +
-			"searching the knowledge base, whenever the person asks about or wants to " +
-			"change the mission, the vision or a policy.",
-		schema: object(nil, map[string]*schema{}),
-		Routes: []string{PrinciplesRoute},
-		// OFFERED AS THE ROUTE ADMITS: an administrator's, as the whole
-		// document is ([authz.ActionPrinciplesRead]). The page itself is
-		// everybody's, read from the org chart, which get_org_chart answers.
-		Apps: adminOnly,
-		// THE PRINCIPLES ARE PEOPLE'S PROSE, written by the company's own
-		// administrators: colleague text, fenced.
-		Fence: true,
-		Build: func(map[string]any) (exec.Request, error) {
-			return get(PrinciplesRoute, nil, nil)
-		},
-		Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceUnit,
-			Name: "Company principles", Prose: true,
-			Facts: []cards.Fact{fact("Mission", "mission", tText),
-				fact("Vision", "vision", tText)},
-			Items: &cards.Items{Path: "policies", Kind: wire.ResourceUnit, Plain: true,
-				Prose: true, Noun: wire.Noun{One: "policy", Many: "policies"}},
-			Open: &cards.Open{Screen: "principles"}}}),
-		Label: func(map[string]any) string { return "Reading the company's principles" },
-	}
-}
-
 // principlesWrite is update_company_principles.
 func principlesWrite() Tool {
 	act := authz.ActionPrinciplesWrite
@@ -89,7 +58,7 @@ func principlesWrite() Tool {
 		Description: "Propose changing the company's mission, vision or standing policies. " +
 			"Give only the parts that change, each as its whole new text (policies as " +
 			"the whole new list); the parts you leave out stay exactly as they are. Read " +
-			"them with get_company_principles first. The person sees the before and " +
+			"them first (GET /config/charter). The person sees the before and " +
 			"after and approves it before anything is saved. Use this for any request " +
 			"to change them; propose_page_change into the Principles editor only " +
 			"drafts into a part the person has open and asked you to draft.",

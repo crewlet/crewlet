@@ -101,6 +101,17 @@ func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
 	return call(ctx, w.r, opThread, nil, threadArgs{Query: q, Fresh: fresh})
 }
 
+// FlowHours answers how long each seat's items in progress stood in each flow
+// state over a window (ADR-0162's flow record).
+func (w Work) FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return call(ctx, w.r, opFlowHours, nil, q)
+}
+
+// FlowItems answers how many items in progress each seat had in a window.
+func (w Work) FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error) {
+	return call(ctx, w.r, opFlowItems, nil, q)
+}
+
 // WorkPatterns answers what the company's comments and answers did in a window.
 func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return call(ctx, w.r, opWorkPatterns, nil, q)

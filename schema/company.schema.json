@@ -141,7 +141,7 @@
       "additionalProperties": false,
       "properties": {
         "model": {
-          "description": "The providers.llm key Ask Crewlet runs on: an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Absent: Ask Crewlet is off.",
+          "description": "The providers.llm key Ask Crewlet runs on: any entry on a harness the engine can run with no tool of its own (Claude Code or pi), which turns the harness's own web tools off for Ask Crewlet whatever the entry says. Absent: Ask Crewlet is off.",
           "type": [
             "string",
             "number",
@@ -149,41 +149,9 @@
             "null"
           ]
         },
-        "research": {
-          "$ref": "#/$defs/AssistantResearch",
-          "description": "Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."
-        },
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "AssistantResearch": {
-      "additionalProperties": false,
-      "properties": {
-        "hosts": {
-          "description": "The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required.",
-          "items": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "search": {
-          "$ref": "#/$defs/ResearchSearch",
-          "description": "Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."
         }
       },
       "type": [
@@ -2995,7 +2963,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
+          "description": "Parent directory for box directories; used by both local placements.",
           "type": [
             "string",
             "number",
@@ -3681,24 +3649,6 @@
           "type": [
             "boolean",
             "string",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "ResearchSearch": {
-      "additionalProperties": false,
-      "properties": {
-        "mcp_server": {
-          "description": "The mcp_servers entry Ask Crewlet searches through: a shared, enabled entry the curated catalogue recognises as Tavily, whose tavily_search is not blocked. Each node serving the API runs its own instance of it for research alone. Required.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
             "null"
           ]
         }

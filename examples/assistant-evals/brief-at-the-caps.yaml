@@ -28,7 +28,8 @@ answers:
     body:
       task: {id: 5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f, key: ENG-42, title: Pick the store build, priority: normal}
 script:
-  - call: list_decisions
+  - call: read_api
+    args: {route: GET /worklet/decisions}
   - call: answer_brief
     args:
       about: "QA asks which build to test on ENG-42 before the café opening; the budget is at 80 %, Zoë."
@@ -37,7 +38,7 @@ script:
       context: "The review window opens tomorrow, 09:00; the Android signing key is due back for the café, Zoë says."
       follow_ups: ["Which store build did QA test last week, and did it pass all tests for the café?"]
 expect:
-  calls: [list_decisions, answer_brief]
+  calls: [read_api, answer_brief]
   proposals: 0
   state: completed
   brief:

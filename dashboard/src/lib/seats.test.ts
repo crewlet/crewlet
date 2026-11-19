@@ -24,7 +24,7 @@ import {
   labelOf,
   nameOfIn,
   leadsInLine,
-  liveOnItems,
+  liveOnRows,
   roundLabel,
   roundOf,
   stoppedLine,
@@ -60,6 +60,7 @@ import type {
   DerivedSeat,
   LiveCall,
   OrgProjection,
+  WorkSummary,
 } from "~/protocol/index.ts";
 import {
   type Lang,
@@ -1100,25 +1101,31 @@ test("a working seat's strip on a task counts its round from one", () => {
       role: "SWE",
       handle: "swe",
       activity: "working",
-      live_call: {
-        phase: "execute",
-        round_num,
-        rounds_used,
-        max_rounds: 25,
-        work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
-      },
+      live_call: { phase: "execute", round_num, rounds_used, max_rounds: 25 },
     }) as unknown as AgentRow;
-  expect(liveOnItems([working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
-  expect(liveOnItems([working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
+  const rows = [workedRow("i")];
+  expect(liveOnRows(rows, [working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnRows(rows, [working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
 });
 
-// A TURN IS ON ONE TASK, AND A KEY CAN BE TWO. A key another task claimed
-// first is flagged `key_collision` and stays on the task that did not claim
-// it, so two cards can carry one key — and a map keyed on it drew the working
-// seat's strip on both of them. Keyed on the task's id, only the task the turn
-// is charged to finds one.
-test("of two tasks sharing a key, only the one being worked on draws the strip", () => {
-  const row = {
+/** A task the engine reads `working` under swe (ADR-0162). */
+function workedRow(id: string, cause = "turn"): WorkSummary {
+  return {
+    id,
+    key: "ENG-7",
+    title: "",
+    status: "in_progress",
+    assignee: "swe",
+    flow: { state: "working", cause, since: "2031-04-16T11:57:00Z", until: null, reason: "" },
+  } as WorkSummary;
+}
+
+// WHICH TASK A TURN IS ON IS THE TASK'S OWN FLOW (ADR-0162), never a join of
+// the push's turns to the cards: a turn the push charges to a task whose flow
+// does not read working draws no strip, and of two tasks sharing a key only
+// the one the engine reads working draws one.
+test("a strip is drawn where the engine reads the task working, and nowhere else", () => {
+  const seat = {
     role: "SWE",
     handle: "swe",
     activity: "working",
@@ -1127,13 +1134,18 @@ test("of two tasks sharing a key, only the one being worked on draws the strip",
       round_num: 2,
       rounds_used: 2,
       max_rounds: 25,
-      work_item: { backend: "native", id: "t-duplicate", key: "ENG-7", project: "ENG" },
+      work_item: { backend: "native", id: "t-claimant", key: "ENG-7", project: "ENG" },
     },
   } as unknown as AgentRow;
-  const live = liveOnItems([row]);
+  const claimant = { ...workedRow("t-claimant"), flow: null };
+  const live = liveOnRows([workedRow("t-duplicate"), claimant], [seat]);
   expect(live.get("t-duplicate")?.handle).toBe("swe");
+  expect(live.get("t-duplicate")?.since).toBe("2031-04-16T11:57:00Z");
   expect(live.has("t-claimant")).toBe(false);
-  expect(live.has("ENG-7")).toBe(false);
+  // A RUN IS EXECUTING whatever the seat's own turn is doing.
+  expect(liveOnRows([workedRow("r", "run")], [seat]).get("r")?.doing).toBe("executing");
+  // A WORKING FLOW WHOSE SEAT THE PUSH HAS NOT SEEN WORK still draws, in plain words.
+  expect(liveOnRows([workedRow("q")], []).get("q")?.doing).toBe("working");
 });
 
 // ONE READING OF THE ROUND, on the roster's card and in the attention queue

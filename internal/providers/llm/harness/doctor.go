@@ -188,7 +188,8 @@ const (
 	// the engine host, beside the profile's stance.
 	CheckShell CheckName = "shell"
 	// CheckWeb is whether the harness fetched from the web with its own tool,
-	// beside the entry's stance.
+	// beside the entry's stance, and, where the profile declares web_search,
+	// whether its search-only run searched and refused a fetch and a shell.
 	CheckWeb CheckName = "web"
 	// CheckExecutor is what a seat's executor launch on the entry needs
 	// beyond a login, for an entry an executor chain holds.
@@ -650,10 +651,20 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 			c.fail(CheckShell, CheckKindConfig, problem)
 		}
 		verdict, problem, kind := p.webProbe(ctx)
-		c.set(CheckWeb, web+"; "+verdict)
 		if problem != "" {
 			c.fail(CheckWeb, kind, problem)
 		}
+		if p.profile.CanSearchWeb() {
+			// ASK CREWLET'S SEARCH RUN is the harness's web too, measured on
+			// the same line, and not a check of its own: the dashboard
+			// mirrors the check names.
+			searched, problem, kind := p.searchProbe(ctx)
+			verdict += "; " + searched
+			if problem != "" {
+				c.fail(CheckWeb, kind, problem)
+			}
+		}
+		c.set(CheckWeb, web+"; "+verdict)
 	}
 
 	// NOTHING THE ENGINE HANDS THE HARNESS SIGNS IT IN — which is a problem

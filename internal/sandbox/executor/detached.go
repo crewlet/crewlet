@@ -252,14 +252,6 @@ type saver interface {
 	PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error)
 }
 
-// mcpHolder is a harness that can be held to the MCP servers a run hands it,
-// starting none its own configuration, a repository's or a plugin's declares
-// ([sandbox.RunRequest.OnlyMCPServers]). Only Claude Code's runner is one, as
-// the one run that asks (the assistant's deep work) runs on Claude Code alone;
-// such a run on another harness is refused rather than started on every server
-// its configuration adds up to.
-type mcpHolder interface{ HoldsToItsMCPServers() bool }
-
 // sessionTotals is a harness whose result, on a run that continues a session,
 // may state the session's spend rather than the run's: from the release
 // TotalsRestored names, a continued session starts from the totals the job
@@ -566,11 +558,6 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseCarried(req); err != nil {
 		return sandbox.RunHandle{}, err
-	}
-	if h, ok := r.harness.(mcpHolder); req.OnlyMCPServers && (!ok || !h.HoldsToItsMCPServers()) {
-		return sandbox.RunHandle{}, fmt.Errorf("executor: %s starts the MCP servers its own "+
-			"configuration declares, and this run asks to be held to the ones it is handed",
-			r.harness.Name())
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
@@ -954,10 +941,11 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 // or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
 // which a retry would read again), degrades only itself: described, the run
 // not a success, its tokens, refs and transcript still collected and charged.
-// A read that fails is an error: the box could not be read back. Everything is
-// redacted whole before anything is bounded, since a secret cut in two
-// survives as fragments; report, failure and transcript leave whole, bounded
-// by the coordinator in one place ([sandbox.MaxRunTextBytes]).
+// A read that fails is an error. Everything is redacted whole before anything
+// is bounded, since a secret cut in two survives as fragments; report and
+// failure leave whole, and the transcript whole up to [transcriptHoldBytes],
+// past it as the record keeps it ([transcriptLines]): the coordinator bounds
+// what is sent, in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
@@ -1011,6 +999,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			parsed := r.harness.Parse(raw)
 			if out.Events {
 				parsed.Transcript = result.Transcript
+				parsed.TranscriptElidedLines = result.TranscriptElidedLines
+				parsed.TranscriptElidedBytes = result.TranscriptElidedBytes
 			}
 			result = parsed
 		}
@@ -1072,13 +1062,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the error stream: %w", err)
 	}
-	stderr, unread := streamEnd(errTail, r.failureBound)
-	stderr = strings.TrimSpace(stderr)
-	if result.Transcript == "" && stderr != "" {
+	shown, unread := streamEnd(errTail, r.failureBound)
+	stderr := strings.TrimSpace(shown)
+	// NOTHING OF ITS END SHOWN ([settledEnd]) but blank lines, the stream is
+	// said in the engine's own words, which the failure keeps whole.
+	continued := ""
+	if stderr == "" && unread > 0 {
+		continued = continuedNote(errTail.Size, shown != "")
+	}
+	switch {
+	case result.Transcript != "":
+	case stderr != "" && unread > 0:
+		result.Transcript = unreadNote(unread, false) + "\n" + stderr
+	case stderr != "":
 		result.Transcript = stderr
-		if unread > 0 {
-			result.Transcript = unreadNote(unread, false) + "\n" + stderr
-		}
+	default:
+		result.Transcript = continued
 	}
 
 	codeText, refusal, err := readWhole(ctx, box, paths.ExitCode(), "its exit status")
@@ -1158,7 +1157,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
-		said = append(said, result.Error)
+		said = append(said, result.Error, continued)
 		errStream = stderr
 	default:
 		said = append(said, result.Error)
@@ -1188,9 +1187,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	for i, ref := range result.DeliveredRefs {
 		result.DeliveredRefs[i] = redact.Secrets(ref)
 	}
-	// WHOLE, as the report and the failure leave here: the coordinator is
-	// the one home of the record's bound, and holds the transcript to it
-	// after redacting it again ([sandbox.MaxRunTextBytes]).
+	// Whole up to the hold, as the report and the failure leave here: the
+	// coordinator holds the transcript to the record's bound after redacting
+	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
 }
@@ -1346,6 +1345,18 @@ func unreadNote(unread int64, none bool) string {
 	return fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read from "+
 		"its end, as much of it as one condensation can take beside the engine's own account)",
 		humanSize(unread))
+}
+
+// continuedNote is what stands for an error stream of size bytes of whose end
+// nothing is shown: the end, as read, continues what was written before the
+// read, or every line it opens is blank.
+func continuedNote(size int64, blank bool) string {
+	why := "continues what was written before it"
+	if blank {
+		why = "opens only blank lines"
+	}
+	return fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s)",
+		humanSize(size), why)
 }
 
 // decodeStream reads one event stream through a fresh decoder, and keeps its

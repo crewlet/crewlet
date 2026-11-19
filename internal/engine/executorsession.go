@@ -308,7 +308,9 @@ func (e *Engine) executorSessionStore() (*executordomain.SessionStore, error) {
 // records on the executor log once every capture of the turn has settled and
 // before it deletes the row, so the seat's mail waits on it. Owed under the
 // coordinator's own context, so a frame a drain is cancelling still owes it. A
-// turn whose row is gone has its end recorded now ([Engine.endTurnNow]).
+// turn whose row is gone has its end recorded now ([Engine.endTurnNow]). Its
+// failure is fit as the log keeps it ([executorkeep.Excerpt]) before the row
+// carries it: an error's text has no bound of its own.
 //
 // DECIDED ONCE: a turn whose row owes an end already keeps that one.
 func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executorkeep.Ending) {
@@ -316,7 +318,7 @@ func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, end
 	if rt == nil {
 		return
 	}
-	ending.Failure = redact.Secrets(ending.Failure)
+	ending.Failure = executorkeep.Excerpt(ending.Failure, executorkeep.FailureMaxBytes)
 	owed, err := rt.coordinator.OweEnd(ctx, run.TurnID, ending)
 	if err == nil && owed {
 		return
@@ -331,13 +333,14 @@ func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, end
 
 // endTurnNow records a turn's end for a turn with no run record left to owe it
 // on ([sandbox.Coordinator.EndTurn], which owes it on the record where one is
-// there after all) — best effort, and said where the log does not take it.
+// there after all) — best effort, and said where the log does not take it. Its
+// failure is fit as the log keeps it ([executorkeep.Excerpt]).
 func (e *Engine) endTurnNow(ctx context.Context, end sandbox.TurnEnd) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return
 	}
-	end.Ending.Failure = redact.Secrets(end.Ending.Failure)
+	end.Ending.Failure = executorkeep.Excerpt(end.Ending.Failure, executorkeep.FailureMaxBytes)
 	if err := rt.coordinator.EndTurn(context.WithoutCancel(ctx), end); err != nil {
 		log.WarnContext(ctx, "executor_turn_end_left", "turn_id", end.TurnID, "agent", end.Handle,
 			"outcome", string(end.Ending.Outcome), "error", err.Error(),
@@ -403,39 +406,42 @@ func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) execu
 
 // abandonedEnding is how a resumed turn that broke and was abandoned ended
 // (turn.Abandon): failed, saying why — the turn's error redacted, since it can
-// quote what a tool or a box said.
+// quote what a tool or a box said, and fit as the log keeps it
+// ([executorkeep.Excerpt]).
 func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer, reason string,
 	err error) executorkeep.Ending {
 
 	ending := endingOf(res, reply, answered)
 	ending.Outcome = executorkeep.OutcomeFailed
-	ending.Failure = redact.Secrets(fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err))
+	ending.Failure = executorkeep.Excerpt(fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v",
+		reason, err), executorkeep.FailureMaxBytes)
 	return ending
 }
 
 // launchAbandonedEnding is how a dispatched turn whose first launch was
 // abandoned after its run's record was written ended: failed, saying why — the
-// launch's error redacted, since it can quote what a box or a store said —
-// beside whatever its loop had decided and answered by then.
+// launch's error redacted, since it can quote what a box or a store said, and
+// fit as the log keeps it ([executorkeep.Excerpt]) — beside whatever its loop
+// had decided and answered by then.
 func launchAbandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer,
 	err error) executorkeep.Ending {
 
 	ending := endingOf(res, reply, answered)
 	ending.Outcome = executorkeep.OutcomeFailed
-	ending.Failure = redact.Secrets(fmt.Sprintf("the turn's executor launch was abandoned after its run was "+
-		"recorded: %v", err))
+	ending.Failure = executorkeep.Excerpt(fmt.Sprintf("the turn's executor launch was abandoned after its run "+
+		"was recorded: %v", err), executorkeep.FailureMaxBytes)
 	return ending
 }
 
-// breachAccount is the end's account of the guard that ended a turn, redacted:
-// a guard's detail can be an error's or a panic's text, which quotes what
-// tripped it.
+// breachAccount is the end's account of the guard that ended a turn, redacted
+// and fit as the log keeps it ([executorkeep.Excerpt]): a guard's detail can be
+// an error's or a panic's text, which quotes what tripped it.
 func breachAccount(b *turn.Breach) string {
 	account := "the turn stopped on the engine's " + string(b.Kind) + " guard"
 	if detail := strings.TrimSpace(b.Detail); detail != "" {
 		account += ": " + detail
 	}
-	return redact.Secrets(account)
+	return executorkeep.Excerpt(account, executorkeep.FailureMaxBytes)
 }
 
 // replySurface is where the party waiting on a turn waits, as its end names it:

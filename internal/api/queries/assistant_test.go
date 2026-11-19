@@ -12,15 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// EVERY QUESTION A CURATED TOOL READS IS ONE THIS BUILD ANSWERS, AT ITS POSTURE.
+// EVERY QUESTION A CURATED WRITE'S PREVIEW READS IS ONE THIS BUILD ANSWERS.
 //
 // Walked over every question this build registers (every seam wired): a row of
-// the catalogue's exposure table naming a question nobody answers is a curated
-// tool that fails on every call while looking complete, and a curated read of a
-// question only one app opens is offered on exactly that app, so the tool is
-// not offered to whom the question refuses. Mutation: point a row at a question
-// that is not registered, or offer get_task on the knowledge app, and this
-// fails.
+// the catalogue's exposure table naming a question nobody answers is a write
+// whose preview fails on every call while looking complete. Mutation: point a
+// row at a question that is not registered, and this fails.
 func TestEveryCuratedQuestionIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
@@ -28,29 +25,17 @@ func TestEveryCuratedQuestionIsAnswered(t *testing.T) {
 	if names := r.Names(); len(names) < 60 {
 		t.Fatalf("the registry answers %d questions, so every seam is not wired", len(names))
 	}
-	tools := map[string]catalog.Tool{}
-	for _, tool := range catalog.Tools() {
-		tools[tool.Name] = tool
-	}
 	rows := 0
 	for _, e := range catalog.Exposures() {
 		if e.Question == "" {
 			continue
 		}
 		rows++
-		posture := r.PostureOf(e.Question)
-		if !posture.Valid() {
+		if !r.PostureOf(e.Question).Valid() {
 			t.Errorf("%s reads %s, which this build does not answer", e.Name, e.Question)
-			continue
-		}
-		if g := posture.Grant(); g != "" && e.As == catalog.AsReadTool {
-			if apps := tools[e.Name].Apps; len(apps) != 1 || apps[0] != g {
-				t.Errorf("%s requires %s and its tool %s is offered on %v", e.Question, g,
-					e.Name, apps)
-			}
 		}
 	}
-	if rows < 20 {
+	if rows < 10 {
 		t.Fatalf("walked %d curated questions; the exposure table is not being read", rows)
 	}
 }

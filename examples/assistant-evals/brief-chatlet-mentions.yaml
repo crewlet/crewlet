@@ -1,6 +1,6 @@
 # A brief of Chatlet's mentions: Ada asked the person in #launch whether they
 # approve the launch copy. A row may cite the chat room the ask waits in, by
-# its name with its # as the read gave it; the engine resolves the name to the
+# its name as the read gave it; the engine resolves the name to the
 # room's id through the room's own read as the person, keeps the row and counts
 # it in the verdict, and the row opens the room. Before a room could be cited,
 # no row could name it, and the brief said nothing needed the person while the
@@ -36,14 +36,15 @@ answers:
       channel: {id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, kind: public, name: launch, topic: Friday's launch}
       members: [{handle: ada}, {handle: grace}]
 script:
-  - call: list_chat_mentions
+  - call: read_api
+    args: {route: GET /chatlet/activity, query: {kind: mention}}
   - call: answer_brief
     args:
       about: Ada asks in #launch whether you approve the launch copy.
       needs:
-        - {ref_kind: room, ref_id: "#launch", do: "Answer Ada in #launch: approve the launch copy?", why: "Asked at 09:00", tone: warning, action: open}
+        - {ref_kind: room, ref_id: launch, do: "Answer Ada in #launch: approve the launch copy?", why: "Asked at 09:00", tone: warning, action: open}
 expect:
-  calls: [list_chat_mentions, answer_brief]
+  calls: [read_api, answer_brief]
   proposals: 0
   state: completed
   brief:

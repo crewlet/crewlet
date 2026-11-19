@@ -682,8 +682,8 @@ func (containerLike) EngineHost() string { return "host.docker.internal" }
 
 // THE HARNESS DIALS ITS SERVERS FROM INSIDE THE BOX, so its config names the
 // engine host as the box reaches it: a container's 127.0.0.1 is its own
-// loopback. Every run's config comes through Start (a seat's executor run and
-// the assistant's deep work alike), so the translation is there and only there.
+// loopback. Every run's config comes through Start, so the translation is
+// there and only there.
 func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()

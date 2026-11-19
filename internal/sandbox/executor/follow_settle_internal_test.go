@@ -107,7 +107,7 @@ func readLive(r *rand.Rand, text string, at int, byLines bool) string {
 func TestALiveReadingBegunInsideARunIsTheEndOfTheWholeRedaction(t *testing.T) {
 	t.Parallel()
 	filler := strings.Repeat("compiling a package of the build\n", 100)
-	for i, shape := range runsPastTheContext(100 << 10) {
+	for i, shape := range runsPastTheContext(redactContext + 36<<10) {
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
 			r := rand.New(rand.NewPCG(1170, uint64(i)))
@@ -185,7 +185,7 @@ func TestALiveReadingBegunInsideAKeysBlockIsTheEndOfTheWholeRedaction(t *testing
 // joins it, or keep the rest alone, and the context loses the lead's start.
 func TestALiveReadingBegunInsideALineKeepsAllItsLead(t *testing.T) {
 	t.Parallel()
-	given := strings.Repeat("compiling a package of the build\n", 3000) + "linking the"
+	given := strings.Repeat("compiling a package of the build\n", redactContext/32) + "linking the"
 	kept := given[len(given)-redactContext:]
 	var p pendingText
 	p.lead(given)

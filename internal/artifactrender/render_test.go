@@ -315,58 +315,60 @@ func TestARenderReportsATokenTheKitDoesNotDefine(t *testing.T) {
 // external link, console lines, a refused write, an asset listing, the action
 // played and an in-page link landing under the bar.
 func TestARenderReportsWhatAReviewerWouldTripOver(t *testing.T) {
-	g := newRig(t, chromiumtest.Newest(t), artifacts.OriginShared, "https://artifacts.example-usercontent.net")
-	g.request.Widths = []int{1440}
-	g.request.Themes = []artifactrender.Theme{artifactrender.ThemeLight}
-	rep, err := g.renderer.Render(t.Context(), g.request)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	if !slices.ContainsFunc(rep.Requests, func(f artifactrender.RequestFailure) bool {
-		return f.URL == "missing.png" && f.Status == 404
-	}) {
-		t.Fatalf("missing.png: %+v", rep.Requests)
-	}
-	for _, f := range rep.Requests {
-		if strings.Contains(f.URL, "/t/") {
-			t.Fatalf("a report named the ticket: %q", f.URL)
+	chromiumtest.Each(t, func(t *testing.T, chrome string) {
+		g := newRig(t, chrome, artifacts.OriginShared, "https://artifacts.example-usercontent.net")
+		g.request.Widths = []int{1440}
+		g.request.Themes = []artifactrender.Theme{artifactrender.ThemeLight}
+		rep, err := g.renderer.Render(t.Context(), g.request)
+		if err != nil {
+			t.Fatalf("Render: %v", err)
 		}
-	}
-	if !slices.ContainsFunc(rep.Links, func(l artifactrender.Link) bool {
-		return l.Href == "notes.html" && strings.Contains(l.Problem, "holds no notes.html")
-	}) || !slices.ContainsFunc(rep.Links, func(l artifactrender.Link) bool {
-		return l.Href == "https://example.org/" && strings.Contains(l.Problem, "openLink")
-	}) {
-		t.Fatalf("links: %+v", rep.Links)
-	}
-	if !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
-		return l.Level == "error" && l.Text == "chart failed to draw"
-	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
-		return l.Level == "warning" && l.Text == "state refused: forbidden"
-	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
-		return l.Level == "warning" && l.Text == "assets listed: 0"
-	}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
-		return l.Level == "error" && l.Source == "index.html" &&
-			strings.Contains(l.Text, "Content Security Policy")
-	}) {
-		t.Fatalf("console: %+v", rep.Console)
-	}
-	for _, l := range rep.Console {
-		if strings.Contains(l.Text, "header") {
-			t.Fatalf("a warning about the engine's own headers was reported: %+v", l)
+		if !slices.ContainsFunc(rep.Requests, func(f artifactrender.RequestFailure) bool {
+			return f.URL == "missing.png" && f.Status == 404
+		}) {
+			t.Fatalf("missing.png: %+v", rep.Requests)
 		}
-	}
-	if !slices.ContainsFunc(rep.Bridge, func(n artifactrender.BridgeNote) bool {
-		return n.Method == "state.set"
-	}) {
-		t.Fatalf("bridge: %+v", rep.Bridge)
-	}
-	if len(rep.Actions) != 1 || !rep.Actions[0].Done {
-		t.Fatalf("actions: %+v", rep.Actions)
-	}
-	if !slices.ContainsFunc(rep.Covered, func(c artifactrender.Covered) bool {
-		return c.Element == "#pricing" && c.By == "header.bar"
-	}) {
-		t.Fatalf("covered: %+v", rep.Covered)
-	}
+		for _, f := range rep.Requests {
+			if strings.Contains(f.URL, "/t/") {
+				t.Fatalf("a report named the ticket: %q", f.URL)
+			}
+		}
+		if !slices.ContainsFunc(rep.Links, func(l artifactrender.Link) bool {
+			return l.Href == "notes.html" && strings.Contains(l.Problem, "holds no notes.html")
+		}) || !slices.ContainsFunc(rep.Links, func(l artifactrender.Link) bool {
+			return l.Href == "https://example.org/" && strings.Contains(l.Problem, "openLink")
+		}) {
+			t.Fatalf("links: %+v", rep.Links)
+		}
+		if !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
+			return l.Level == "error" && l.Text == "chart failed to draw"
+		}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
+			return l.Level == "warning" && l.Text == "state refused: forbidden"
+		}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
+			return l.Level == "warning" && l.Text == "assets listed: 0"
+		}) || !slices.ContainsFunc(rep.Console, func(l artifactrender.ConsoleLine) bool {
+			return l.Level == "error" && l.Source == "index.html" &&
+				strings.Contains(l.Text, "Content Security Policy")
+		}) {
+			t.Fatalf("console: %+v", rep.Console)
+		}
+		for _, l := range rep.Console {
+			if strings.Contains(l.Text, "header") {
+				t.Fatalf("a warning about the engine's own headers was reported: %+v", l)
+			}
+		}
+		if !slices.ContainsFunc(rep.Bridge, func(n artifactrender.BridgeNote) bool {
+			return n.Method == "state.set"
+		}) {
+			t.Fatalf("bridge: %+v", rep.Bridge)
+		}
+		if len(rep.Actions) != 1 || !rep.Actions[0].Done {
+			t.Fatalf("actions: %+v", rep.Actions)
+		}
+		if !slices.ContainsFunc(rep.Covered, func(c artifactrender.Covered) bool {
+			return c.Element == "#pricing" && c.By == "header.bar"
+		}) {
+			t.Fatalf("covered: %+v", rep.Covered)
+		}
+	})
 }
