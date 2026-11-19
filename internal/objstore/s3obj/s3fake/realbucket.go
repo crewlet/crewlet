@@ -65,25 +65,18 @@ func RealBackend(b *testing.B) objstore.Backend {
 // a lifecycle rule can clear, never among the bucket's other keys.
 const benchPrefix = "crewlet-bench/"
 
-// RealBucket is the bucket the CREWLET_BENCH_S3_* variables name — for the
-// benchmarks that measure a real bucket beside this fake — or false when
-// CREWLET_BENCH_S3_BUCKET names none. A bucket named without what a request
-// to it needs, or a variable holding what it cannot mean, fails b naming the
-// variable to change: a region left out, a path style that is neither true
-// nor false. internal/objstore/s3obj's package doc lists the variables.
+// RealBucket is the bucket the CREWLET_BENCH_S3_* variables name, or false when
+// CREWLET_BENCH_S3_BUCKET names none. A bucket missing what a request needs, or
+// a variable holding what it cannot mean, fails b naming the variable to change
+// (internal/objstore/s3obj's package doc lists them).
 //
-// BENCHMARKS ONLY, which is why it takes a [*testing.B] rather than a
-// [testing.TB]: a test that reached a real bucket would pass or fail on
-// somebody's network. And it is the ONE place the variables are read, so the
-// object store's own benchmark and every later one that measures a real
-// bucket agree on what they mean rather than each parsing them in a copy of
-// its own (s3fake's tests hold that no other package spells their names, or
-// the stem one is built from).
+// BENCHMARKS ONLY, hence [*testing.B] rather than [testing.TB]: a test reaching
+// a real bucket would pass or fail on somebody's network. It is the ONE place
+// the variables are read, so every benchmark agrees on what they mean (s3fake's
+// tests hold that no other package spells their names).
 //
-// NO CREDENTIAL IS A CREWLET_ VARIABLE: the access key and secret are left
-// empty, so [s3obj.Open] takes the SDK's own chain — AWS_ACCESS_KEY_ID and
-// AWS_SECRET_ACCESS_KEY, AWS_PROFILE, a web identity, the instance's role —
-// exactly as a node holding none does.
+// NO CREDENTIAL IS A CREWLET_ VARIABLE: key and secret are left empty, so
+// [s3obj.Open] takes the SDK's own chain, as a node holding none does.
 func RealBucket(b *testing.B) (s3obj.Config, bool) {
 	b.Helper()
 	cfg, ok, err := parseRealBucket(os.Getenv)

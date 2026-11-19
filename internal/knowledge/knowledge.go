@@ -40,6 +40,17 @@
 //     die because a wiki was slow, nor be told the company has written
 //     nothing down because one did not answer.
 //
+// # A hit carries its own label
+//
+// [Hit.Provenance] (ADR-0040) is decided by the backend that found the page:
+// Doclet's pages are a colleague's with nobody named ([doclet.HitLabel]; every
+// write there is a company principal's and the index does not say which),
+// Confluence's are external with nobody named ([confluence.HitLabel]; the site
+// is not the company's alone). The label crosses the estate router's wire with
+// the hit, since the node rendering it is often not the one that searched.
+// [Render] is the ONE renderer of hits into a model's text, for the turn-start
+// block and search_knowledge alike.
+//
 // # The rule every caller honours
 //
 // A QUERY IS BOUNDED, and the bound is declared here ([MaxQueryBytes]) for
@@ -244,25 +255,18 @@ type Searcher interface {
 	// own to answer would cost more than it saves.
 	CanSearch(seat *org.Role, o *org.Organization) bool
 
-	// Search returns up to Limit ranked hits, and what the search
-	// actually did — see [Outcome].
+	// Search returns up to Limit ranked hits and what the search did ([Outcome]).
 	//
-	// BEST EFFORT: it never reports an error. Every failure path answers
-	// no hits and, where nothing ran, no [Outcome.ServedMode] — which the
-	// prefetch and search_knowledge render as "the knowledge base could
-	// not be searched" rather than failing a turn because a wiki was slow,
-	// and rather than "nothing matched", which a seat acts on by writing a
-	// duplicate of a page that exists. What it does NOT do is fail
-	// silently: a search that could not cover the whole corpus, or could
-	// not rank the way it was asked to, says so in the outcome.
+	// BEST EFFORT: it never reports an error. A failure answers no hits and,
+	// where nothing ran, no [Outcome.ServedMode], which renders as "could not
+	// be searched", not "nothing matched" (a seat acts on that by writing a
+	// duplicate page). It does not fail silently: a search that could not
+	// cover the corpus, or rank as asked, says so in the outcome.
 	//
-	// AN EMPTY TEXT IS A PROBE: it runs nothing and does no I/O, and it
-	// answers the outcome a search in that mode would START from — the
-	// [Outcome.Modes] this backend serves as asked, and the
-	// [Outcome.Degraded] its configuration decides (no embeddings, a
-	// backend with no such ranker). That is how a screen learns which
-	// modes to offer before anybody has typed, rather than after the first
-	// search came back degraded.
+	// AN EMPTY TEXT IS A PROBE: no run, no I/O; it answers the outcome a search
+	// in that mode would START from ([Outcome.Modes] served as asked, the
+	// [Outcome.Degraded] its configuration decides), so a screen learns which
+	// modes to offer before anybody has typed.
 	Search(ctx context.Context, q Query) Result
 }
 
@@ -318,23 +322,15 @@ func Permitted(scope []string, selfAuth bool) (allowed bool, unscoped bool) {
 
 // Excludes reports whether a hit sits under any excluded ancestor.
 //
-// Case-insensitive on the title, because a backend hands back whatever
-// somebody typed and an exclusion that missed on capitalisation would leak
-// exactly the drafts it exists to hide.
+// Case-insensitive on the title: a miss on capitalisation would leak the
+// drafts the exclusion hides.
 //
-// The TITLE PREFIX is the fail-closed backstop, and it applies ONLY when the
-// hit has no ancestor chain to judge by — a lookup that failed, or a backend
-// that has no such chain at all. An outage must hide drafts rather than leak
-// them.
-//
-// It deliberately does NOT apply to a hit whose chain came back and does not
-// match: that page has been MOVED out of the draft parent, and moving is the
-// gesture that means reviewed. Renaming is optional, so a prefix check that
-// outranked a known-good chain would leave every published draft invisible
-// until somebody noticed the title.
-//
-// Both halves are gated on the auto-draft parent actually being excluded: a
-// caller who asked to see drafts means it.
+// The TITLE PREFIX is the fail-closed backstop, applied ONLY when the hit has
+// no ancestor chain to judge by (a failed lookup, or a backend with none), so
+// an outage hides drafts rather than leaks them. It does NOT apply to a hit
+// whose chain came back and does not match: that page was MOVED out of the
+// draft parent, the gesture that means reviewed, and renaming is optional.
+// Both halves apply only when the auto-draft parent is actually excluded.
 func Excludes(h Hit, ancestors []string) bool {
 	if len(ancestors) == 0 {
 		return false
@@ -356,24 +352,14 @@ func Excludes(h Hit, ancestors []string) bool {
 
 // Snippet trims a page's text to `limit` bytes of plain summary.
 //
-// THE ONE PLACE a knowledge excerpt is shortened, and one of the few cuts in
-// this engine that is correct: the block it feeds tells an agent WHICH page
-// to open and says so in as many words, and the page is re-readable in full
-// through the seat's own tools. A pointer that says it is a pointer is not the
-// same thing as content that was quietly halved.
+// THE ONE PLACE a knowledge excerpt is shortened: the block it feeds says
+// WHICH page to open and the page is re-readable in full, so the cut is a
+// pointer that says it is one.
 //
-// Three properties the two hand-rolled copies of this used to get wrong:
-//
-//   - ALWAYS MARKED. Every cut ends in an ellipsis, including the no-space
-//     fallback. An unmarked cut is indistinguishable from a page that really
-//     does end there, which is how an agent concludes a runbook has no step 4.
-//   - NEVER THROUGH A RUNE. A byte slice splits whatever multi-byte character
-//     straddles the boundary and yields invalid UTF-8, which reaches a model as
-//     a replacement character — a bug that appears the first time a page is not
-//     ASCII.
-//   - LENGTH ONLY. A copy of this in the Confluence parser also cut at the
-//     first newline or ". " before applying any limit, so it decapitated a page
-//     to its opening sentence even when asked for an unlimited snippet.
+//   - ALWAYS MARKED: every cut ends in an ellipsis, the no-space fallback
+//     included; an unmarked cut looks like a page that really ends there.
+//   - NEVER THROUGH A RUNE: a byte slice would yield invalid UTF-8.
+//   - LENGTH ONLY: never cut at the first newline or ". " first.
 //
 // A limit of zero or less is unbounded.
 func Snippet(text string, limit int) string {

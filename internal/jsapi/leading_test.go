@@ -17,13 +17,12 @@ import (
 // A STREAM'S LEADER IS NAMED BY ITS LEADER, AND NEVER BY A MEMBER'S OWN COPY.
 //
 // A reader that cannot ask the leader for a message reads it through a
-// consumer, and keeps only one the broker placed on the leader's server
-// (internal/queue/jetstream's copy reads): the leader's name is what tells it
-// which copy is the leader's. A stream's info is the leader's except while its
-// group has none, when a member answers from its own copy and names no leader
-// — refused, as is an answer naming no cluster at all. And the read names no
-// subjects, so its answer carries none of the stream's subjects: it is the
-// size of a stream's info, whatever the stream holds.
+// consumer and keeps only one placed on the leader's server
+// (internal/queue/jetstream's copy reads): the leader's name tells it which
+// copy that is. A stream's info is the leader's except while its group has
+// none, when a member answers from its own copy and names no leader: refused,
+// as is an answer naming no cluster. The read names no subjects, so its answer
+// is the size of a stream's info whatever the stream holds.
 //
 // Mutation: take the answer of a group with no leader, and the case reads a
 // leader named by nobody.
