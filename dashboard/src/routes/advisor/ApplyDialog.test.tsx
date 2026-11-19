@@ -6,7 +6,10 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import type { ReactNode } from "react";
 import { LayerHost } from "@crewlethq/ui";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ApplyDialog } from "./ApplyDialog.tsx";
 import type { AdvisorKeptFinding, AdvisorRecheck } from "~/protocol/advisorFindings.ts";
 
@@ -61,6 +64,21 @@ const FINDING: AdvisorKeptFinding = {
     kind: "config_change",
     sentence: "Add a second Backend Engineer, cloned from the first.",
     options: [],
+  },
+};
+
+/** A fix offering two changes, for the person to pick between. */
+const TWO_OPTIONS: AdvisorKeptFinding = {
+  ...FINDING,
+  fix: {
+    ...FINDING.fix,
+    options: [
+      { label: "Add one seat", change: { entity: "units", id: "eng", set: {}, summary: "a" } },
+      {
+        label: "Raise the round cap",
+        change: { entity: "roles", id: "backend", set: {}, summary: "b" },
+      },
+    ],
   },
 };
 
@@ -132,12 +150,29 @@ function engine(
   return sent;
 }
 
-function mount(onSettled = vi.fn()) {
+/**
+ * The page's client: its `advisor_finding` question answers `standing`, the
+ * finding as the engine holds it now (read where a re-check is refused as a
+ * conflict), and records each time it is asked.
+ */
+function host(children: ReactNode, standing: AdvisorKeptFinding = FINDING) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const asked: string[] = [];
+  (socket as unknown as { query: (name: string) => Promise<unknown> }).query = (name) => {
+    asked.push(name);
+    return Promise.resolve(name === "advisor_finding" ? standing : {});
+  };
   render(
-    <LayerHost>
-      <ApplyDialog finding={FINDING} onClose={() => {}} onSettled={onSettled} />
-    </LayerHost>,
+    <ClientContext.Provider value={{ store, socket }}>
+      <LayerHost>{children}</LayerHost>
+    </ClientContext.Provider>,
   );
+  return asked;
+}
+
+function mount(onSettled = vi.fn(), finding: AdvisorKeptFinding = FINDING) {
+  host(<ApplyDialog finding={finding} onClose={() => {}} onSettled={onSettled} />);
   return onSettled;
 }
 
@@ -314,31 +349,15 @@ test("an engine holding a newer revision of the finding answers the send with a 
 // before it can be sent: the engine builds and checks the change picked.
 test("a fix with several options re-checks the one the person picks", async () => {
   const sent = engine([answer(), answer({ digest: "sha256:opt1" })]);
-  render(
-    <LayerHost>
-      <ApplyDialog
-        finding={{
-          ...FINDING,
-          fix: {
-            ...FINDING.fix,
-            options: [
-              {
-                label: "Add one seat",
-                change: { entity: "units", id: "eng", set: {}, summary: "a" },
-              },
-              {
-                label: "Raise the round cap",
-                change: { entity: "roles", id: "backend", set: {}, summary: "b" },
-              },
-            ],
-          },
-        }}
-        onClose={() => {}}
-        onSettled={() => {}}
-      />
-    </LayerHost>,
-  );
+  mount(vi.fn(), TWO_OPTIONS);
   await screen.findByText("It still holds");
+  // NONE IS CHOSEN FOR THE PERSON: no change is shown or offered until they pick.
+  const radios = screen.getAllByRole("radio");
+  expect(radios.map((r) => (r as HTMLInputElement).checked)).toEqual([false, false]);
+  expect(screen.queryByRole("region", { name: "The change" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Apply change" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
   });
@@ -347,6 +366,9 @@ test("a fix with several options re-checks the one the person picks", async () =
     .filter((r) => r.path.endsWith("/recheck"))
     .map((r) => JSON.parse(String(r.init.body)));
   expect(bodies).toEqual([{ option: 0 }, { option: 1 }]);
+  // THE CHANGE IS NAMED BY THE OPTION PICKED, which says what it changes.
+  const change = await screen.findByRole("region", { name: "The change" });
+  expect(within(change).getByText("Raise the round cap")).toBeDefined();
   expect(writes(sent)).toEqual([]);
 });
 
@@ -354,22 +376,9 @@ test("a fix with several options re-checks the one the person picks", async () =
 // answer, however late it lands, is never shown for the option now picked
 // (Apply would send its change), and its cancelled request is no failure.
 test("a re-check answered after the person picked another option is dropped", async () => {
-  const twoOptions: AdvisorKeptFinding = {
-    ...FINDING,
-    fix: {
-      ...FINDING.fix,
-      options: [
-        { label: "Add one seat", change: { entity: "units", id: "eng", set: {}, summary: "a" } },
-        {
-          label: "Raise the round cap",
-          change: { entity: "roles", id: "backend", set: {}, summary: "b" },
-        },
-      ],
-    },
-  };
-  let releaseFirst: () => void = () => {};
-  const firstHeld = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
+  let releaseHeld: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    releaseHeld = resolve;
   });
   let calls = 0;
   vi.stubGlobal(
@@ -379,30 +388,174 @@ test("a re-check answered after the person picked another option is dropped", as
         return json({ error: "not_found" }, 404);
       }
       calls += 1;
-      // THE FIRST ANSWER WAS ALREADY IN HAND when the person picked again:
-      // it lands after the second, whatever the abort.
-      if (calls === 1) {
-        await firstHeld;
-        return json(answer({ outcome: "holds", digest: "sha256:option0" }));
+      if (calls === 1) return json(answer({ digest: "sha256:option0" }));
+      // THE SECOND PICK'S ANSWER WAS ALREADY IN HAND when the person picked
+      // again: it lands after the third, whatever the abort.
+      if (calls === 2) {
+        await held;
+        return json(answer({ outcome: "holds", digest: "sha256:option1" }));
       }
-      return json(answer({ outcome: "not_applicable", send: null, digest: "sha256:option1" }));
+      return json(answer({ outcome: "not_applicable", send: null, digest: "sha256:option0b" }));
     }),
   );
-  render(
-    <LayerHost>
-      <ApplyDialog finding={twoOptions} onClose={() => {}} onSettled={() => {}} />
-    </LayerHost>,
-  );
-  await screen.findByText("Checking it still holds");
+  mount(vi.fn(), TWO_OPTIONS);
+  await screen.findByText("It still holds");
   await act(async () => {
     fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
   });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: /Add one seat/ }));
+  });
   await screen.findByText("This no longer applies");
   await act(async () => {
-    releaseFirst();
-    await firstHeld;
+    releaseHeld();
+    await held;
   });
   expect(screen.getByText("This no longer applies")).toBeDefined();
   expect(screen.queryByText("It still holds")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// THE FIX'S CHOICES BELONG TO AN ANSWER THAT CAN SEND: while the dialog
+// checks, after an answer that sends nothing, after a refusal and after a
+// failure there is nothing to choose, and no choice is drawn.
+test("a fix's choices are drawn only beside an answer that can send", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
+  mount(vi.fn(), TWO_OPTIONS);
+  expect(screen.getByText("Checking it still holds")).toBeDefined();
+  expect(screen.queryByRole("radio")).toBeNull();
+  cleanup();
+
+  const outcomes: [string, Partial<AdvisorRecheck>][] = [
+    [
+      "No longer needed",
+      {
+        outcome: "resolved",
+        send: null,
+        preview: null,
+        finding: { ...TWO_OPTIONS, state: "resolved", close_reason: "condition_cleared" },
+      },
+    ],
+    [
+      "This no longer applies",
+      {
+        outcome: "not_applicable",
+        send: null,
+        preview: null,
+        finding: { ...TWO_OPTIONS, state: "retired", close_reason: "subject_gone" },
+      },
+    ],
+    ["You can't apply this one", { refusal: { reason: "Needs admin.", who_can: "An admin." } }],
+  ];
+  for (const [said, patch] of outcomes) {
+    engine([answer({ finding: TWO_OPTIONS, ...patch })]);
+    mount(vi.fn(), TWO_OPTIONS);
+    await screen.findByText(said);
+    expect(screen.queryByRole("radio")).toBeNull();
+    cleanup();
+  }
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => json({ error: "internal_error", message: "Something went wrong." }, 500)),
+  );
+  mount(vi.fn(), TWO_OPTIONS);
+  await screen.findByText("Nothing was applied");
+  expect(screen.queryByRole("radio")).toBeNull();
+});
+
+// A FAILED RE-CHECK IS TITLED BY WHERE IT STANDS, the finding its subtitle:
+// titled by the finding, the dialog said the finding's title twice.
+test("a re-check that failed is titled by what happened, not by the finding twice", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => json({ error: "internal_error", message: "Something went wrong." }, 500)),
+  );
+  mount();
+  await screen.findByText("Couldn't check it");
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getAllByText(FINDING.title)).toHaveLength(1);
+});
+
+// ANOTHER WINDOW APPLIED IT FIRST: the send is refused (412), the re-check
+// after it is refused too, since the finding is open no more (409), and the
+// person is told where it stands in words, never the engine's refusal of a move.
+test("a finding applied from another window says so after this one's send is refused", async () => {
+  const sent = engine([answer()], { sendStatus: 412 });
+  const fetched = vi.mocked(fetch);
+  let rechecks = 0;
+  fetched.mockImplementation(async (input: string | URL | Request, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    sent.push({ method: init.method ?? "GET", path: url.pathname + url.search, init });
+    if (url.pathname.endsWith("/recheck")) {
+      rechecks += 1;
+      return rechecks === 1
+        ? json(answer())
+        : json(
+            {
+              error: "conflict",
+              message: "This changed since you read it.",
+              detail:
+                "the finding changed since it was read: a finding that is applied is not applied",
+            },
+            409,
+          );
+    }
+    if (url.search.includes("dry_run")) return json({ result: "valid" });
+    return json({ error: "precondition_failed", message: "It moved." }, 412);
+  });
+  cleanup();
+  const asked = host(<ApplyDialog finding={FINDING} onClose={() => {}} onSettled={() => {}} />, {
+    ...FINDING,
+    state: "applied",
+    effect_due_at: "2026-11-22T09:00:00Z",
+  });
+  await screen.findByText("It still holds");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+  });
+  await screen.findByText("Already applied");
+  expect(screen.getByText(/applied from another window or by another person/)).toBeDefined();
+  expect(screen.queryByText(/is not applied/)).toBeNull();
+  expect(asked).toContain("advisor_finding");
+  expect(sent.some((r) => r.path.endsWith("/applied"))).toBe(false);
+});
+
+// THE CHANGE IS SAID IN WORDS: each field the engine labelled, as it is and
+// as it would be, in the body's type, never a code diff over config keys.
+test("the change and what moved are drawn as labelled rows in words", async () => {
+  engine([
+    answer({
+      preview: {
+        rows: [
+          {
+            field: "health_tools",
+            label: "Watches the engine's health",
+            before: "No",
+            after: "Yes",
+          },
+        ],
+        notes: [],
+      },
+    }),
+  ]);
+  mount();
+  const change = await screen.findByRole("region", { name: "The change" });
+  expect(within(change).getByText("Watches the engine's health")).toBeDefined();
+  expect(within(change).getByText("No")).toBeDefined();
+  expect(within(change).getByText("Yes")).toBeDefined();
+  expect(change.querySelector(".crewlet-diff-list")).toBeNull();
+  expect(within(change).queryByText("health_tools")).toBeNull();
+});
+
+// ON A PHONE THE DIALOG IS A SHEET, its facts, choices and change scrolling
+// between a still head and foot.
+test("the Apply dialog becomes a sheet on a phone", async () => {
+  engine([answer()]);
+  mount();
+  await screen.findByText("It still holds");
+  expect(document.querySelector(".crewlet-modal-overlay--phone-sheet")).not.toBeNull();
 });
