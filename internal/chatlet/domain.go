@@ -11,79 +11,28 @@ import (
 // Domain is the company's own chat as the state-log framework sees it.
 //
 // A DECLARATION, not a behaviour: every method answers a question the
-// framework asks before it applies anything, and each one has a failure mode
-// that is silent if the answer is wrong. What tables exist decides what a
-// donated snapshot scrubs and what an identity claim compares; which kinds
-// arbitrate decides where an anchor row is written; whether a record installs
-// a gate decides whether an unknown version stops the applier or is filed for
-// later.
+// framework asks before it applies anything, and a wrong answer fails silently.
 //
-// THE FRAMEWORK'S NINTH DOMAIN, and its SEVENTH strictly-ordered,
-// identity-claiming one. What it adds over the eight before it is a single log
-// carrying TWO DISCIPLINES — a room's state contends on its own subject while
-// the messages in it are sequenced and decided by the applier — and the only
-// place that
-// difference can be stated is [statelog.StreamSpec.ArbitratedKinds], because
-// arbitration is a property of the subject kind and a stream has no field for
-// it. A domain that declared its messages arbitrated would serialise the
-// hottest subject in the company behind itself; one that declared its rooms
-// unarbitrated would let two writers rename a room to two different names and
-// keep both.
+// ONE LOG, TWO DISCIPLINES: a room's state contends on its own subject while
+// its messages are sequenced by the applier, stated only in
+// [statelog.StreamSpec.ArbitratedKinds]. Arbitrating messages would serialise
+// the hottest subject behind itself; leaving rooms unarbitrated would let two
+// writers rename a room to two names and keep both.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "chat" }
 
-// ChatLogMaxBytes is the ceiling this domain declares for its log, which is
-// what the framework's own suites provision the stream with.
+// ChatLogMaxBytes is the ceiling this domain declares for its log. A node sizes
+// the real stream from Tier A (`stream.chat_log_max_bytes`); unset asks for
+// THIS, capped by the volume (`config.DerivedChatLogDivisor`), scaled with the
+// other ceilings. A full log REFUSES an append rather than dropping the oldest
+// record; the last sixteenth is the gate reserve ([statelog.Reservation]).
 //
-// A NODE DOES NOT SIMPLY CREATE THE STREAM AT IT. Every state log's ceiling is
-// a reservation the broker grants in full, so the engine sizes them together
-// from Tier A (`stream.chat_log_max_bytes`) inside what the broker can
-// actually grant — the arrangement the wiki's log was added to after a fixed
-// reservation on top of an already-divided budget became the one thing a small
-// disk refused. An unset field asks for THIS number, capped by the volume (a
-// sixteenth of its free space, `config.DerivedChatLogDivisor`, which says why
-// so small) and scaled with the others, which is why it is declared here
-// beside the census rather than in Tier A.
-//
-// Crossing a ceiling REFUSES an append rather than dropping the oldest record.
-// On this log the refusal is a message somebody typed and could not send,
-// which is the one failure a chat system may not have — and it is still the
-// better half of the trade, because the alternative is a year of a company's
-// conversation shed silently. Nothing here is derivable from anything else.
-//
-// AND IT COMES A SIXTEENTH SHORT OF THE CEILING. This log claims identity, so
-// it keeps the framework's gate reserve ([statelog.Reservation]): ordinary
-// writes — every post, every reaction, every prune — are refused `log_full`
-// at fifteen sixteenths of whatever ceiling the node created it at, and the
-// last sixteenth is held for the one record that can unpin a log a gone node
-// filled, that node's own eviction. At this log's records ([MaxRecordBytes])
-// the reservation's fleet term is far under a sixteenth of any ceiling the
-// field accepts, so the sixteenth is what governs.
-//
-// EIGHT GIBIBYTES, an EXCURSION BUDGET rather than a ratio to the tracker's.
-// Chat is the highest-VOLUME domain and carries the SMALLEST records —
-// [ChatMessagesPerDay] is twenty thousand where the reference company files a
-// few thousand work-item commits a day, but a remark is a couple of sentences
-// and a routing snapshot, where a task's commit carries a description, a field
-// set and the deltas of both. At a mean record near a kibibyte and a half that
-// is about 31 MB a day of messages, and the log's barriers add about 1.7 MB
-// more ([LinearizableReadsPerSeatDay] × the reference company's 100 seats ×
-// the ≈ 140 bytes a signed barrier costs) — about 32 MB a day, a little FASTER
-// than the tracker's log grows, so the census ratio the wiki's ceiling keeps
-// to the tracker's would put this above the tracker's 16 GiB, not at half of
-// it. It is not that ratio because every node's ceilings share one budget, and
-// the largest ask in it would take the vector changelog's room for a model
-// change (Tier A's field says by how much). It is sized instead for the
-// failure a ceiling exists for: a completely blocked trim spends the fifteen
-// sixteenths ordinary writes may use in about eight months at the census, and
-// in about three and a half at the supported fifty thousand a day — where the
-// whole of it is created, which an embedded broker does from about 664 GiB
-// free; on a smaller volume the ask is capped and scaled with the others, and
-// Tier A's field states what that costs. A healthy trim holds the window at
-// days, so a log anywhere near this number is an unmistakable operator failure
-// rather than a surprise.
+// EIGHT GIBIBYTES, an EXCURSION BUDGET, not a ratio to the tracker's: about
+// 32 MB a day at the census ([ChatMessagesPerDay], [LinearizableReadsPerSeatDay])
+// and all ceilings share one budget. A blocked trim fills it in about eight
+// months at the census, three and a half at fifty thousand messages a day.
 const ChatLogMaxBytes = 8 << 30
 
 // ChatLogDuplicates is the window the broker collapses a repeated operation id
@@ -100,24 +49,13 @@ const ChatLogDuplicates = 2 * time.Minute
 // a day each agent seat's chat reads put on it, which is what `census_drift`
 // holds the log to and the barrier term in its ceiling ([ChatLogMaxBytes]).
 //
-// ONE HUNDRED AND TWENTY: thirty turns a seat a day — the reference company's
-// 3 000 over its 100 seats, the turns [ChatMessagesPerDay] is derived from —
-// times the four chat reads a turn is declared to make, each at the seat's own
-// level ([statelog.SurfaceSeat]), so each a barrier: the turn-start thread read
-// ([ThreadReader]) — ONE read that runs, even where it falls back to the plain
-// thread during a rolling upgrade, since the second walk is asked only after
-// no node ran the first — the room read a reply is written from, the lookup a room's
-// name resolves through, and the visible set a search intersects. Past twice
-// it — eight a turn — seats are re-reading rooms in a loop, which is exactly
-// the drift worth telling an operator about. A surface that starts reading
-// this log at `linearizable` somewhere else brings its own reads into this
-// number, in the same change.
-//
-// ITS OWN FIGURE, not the tracker's [statelog.LinearizableReadsPerSeatDay]
-// borrowed: the census does not say how a company's reads split between the
-// tracker and the knowledge base, so each of those declares all of them, but
-// what a chat turn reads is this domain's own tools and its own thread block,
-// counted here.
+// ONE HUNDRED AND TWENTY: thirty turns a seat a day ([ChatMessagesPerDay]'s
+// basis) times four seat-level, so barrier, reads a turn makes: the turn-start
+// thread read ([ThreadReader], ONE read even when it falls back during a
+// rolling upgrade), the reply's room read, a room-name lookup and a search's
+// visible set. Past twice that, seats are re-reading rooms in a loop. A surface
+// reading this log at `linearizable` elsewhere adds its reads here. Not
+// [statelog.LinearizableReadsPerSeatDay]: the census does not split reads.
 const LinearizableReadsPerSeatDay = 120
 
 // Stream is the chat domain's log.
@@ -180,18 +118,14 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // InstallsGate reports a record whose unknown version must STOP the applier
 // rather than be filed for later.
 //
-// Answered from the envelope alone, because that is all a node has when it
-// cannot decode the payload. An eviction is a gate by its KIND; an erase and a
-// prune are gates by their OP, on an ordinary channel subject, because both
-// DELETE rows and a deferred deletion is a node still serving what every other
-// node destroyed.
+// Answered from the envelope alone, all a node has when it cannot decode the
+// payload. An eviction is a gate by its KIND; an erase and a prune by their OP,
+// because both DELETE rows and a deferred deletion is a node still serving what
+// every other node destroyed.
 //
-// IT ASKS [RecordEnvelope.InstallsGate] RATHER THAN RESTATING THE RULE, which
-// is the whole of why this method is three lines. The rule has two conditions
-// and the framework reaches it through a translated envelope, so a second
-// spelling here would be a build that stops on an unreadable erase in one half
-// of the package and defers it in the other — and the deferring half is the
-// one that runs.
+// IT ASKS [RecordEnvelope.InstallsGate] RATHER THAN RESTATING THE RULE: a
+// second spelling would stop on an unreadable erase in one half of the package
+// and defer it in the other.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return RecordEnvelope{
 		Subject: Subject{Kind: ObjectKind(env.Kind), ID: env.Subject.ID},
@@ -267,21 +201,13 @@ func (Domain) GatesSeatAdmission() bool { return true }
 // ClaimsIdentity reports that every node's Replicated tables must be
 // byte-identical.
 //
-// TRUE, and here the claim is unusually load-bearing: the per-channel sequence
-// is MINTED BY THE APPLIER from log order rather than carried on the record,
-// so two nodes agreeing about a room's transcript is not a property any writer
-// can assert — it is exactly what this claim is about. Every column of every
-// ROW table is owned by a record or derived from one inside the same
-// transaction, so what the claim leaves out is the log's own machinery: the
-// deferral tables, which are Local — this node's verdict on a record it could
-// not read — and the operation ledger, the one Divergent table, whose
-// `applied_at` is each node's own clock ([Domain.Tables]).
+// TRUE, and load-bearing: the per-channel sequence is MINTED BY THE APPLIER
+// from log order, so no writer can assert agreement on a transcript. Left out
+// are the deferral tables (Local: this node's verdict on a record it could not
+// read) and the operation ledger, the one Divergent table ([Domain.Tables]).
 //
 // ASSERTED AND NOT VERIFIED, on the terms
-// [github.com/crewlet/crewlet/internal/worklet.Domain.ClaimsIdentity] states:
-// a checksum over each node's identity-claimed tables, published and compared,
-// is what would turn "should be identical" into something a fleet reports on,
-// and nothing builds one.
+// [github.com/crewlet/crewlet/internal/worklet.Domain.ClaimsIdentity] states.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // FeedGroup is the change feed's own consumer on this log: [FeedGroup], the

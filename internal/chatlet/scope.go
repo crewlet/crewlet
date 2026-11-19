@@ -116,22 +116,16 @@ func (t ScopeTerm) Path() string {
 
 // ScopeSet is the COMPLETE set of objects a record's apply may write.
 //
-// NEVER EMPTY. The exactly-the-subject case — almost every record — encodes as
-// the one-byte sentinel, so the field can never be absent by accident. An
-// absent or unreadable scope on a record this build cannot decode is the
-// DOMAIN term, never "just the subject": assuming a V1 convention holds for a
-// V2 operation is the bug this field exists to close.
+// NEVER EMPTY. The exactly-the-subject case, almost every record, encodes as
+// the one-byte sentinel, so the field is never absent by accident. An absent or
+// unreadable scope on a record this build cannot decode is the DOMAIN term,
+// never "just the subject": assuming a V1 convention holds for a V2 operation
+// is the bug this field closes.
 //
-// # Why the sentinel carries nothing beside itself
-//
-// The wiki's sentinel has to carry a CONTAINER, because a page's subject is
-// its uuid and which space it lives in is a mutable column only the writer
-// knows. Nothing here is in that position: a channel subject's id is the room,
-// a message subject's id is ALSO the room, and a name subject's id is the
-// address token. Every chat subject already contains everything its path needs,
-// which is the same property ruling that a message is channel-scoped — so a
-// field here would be a second copy of the channel id that could disagree with
-// the first.
+// The sentinel carries nothing beside itself, unlike the wiki's container:
+// every chat subject's id (the room, or the address token for a name) already
+// holds everything its path needs, so a field would be a second copy of the
+// channel id that could disagree with the first.
 type ScopeSet struct {
 	// Subject is true for the sentinel: this record touches exactly the
 	// object its subject names, and nothing else.

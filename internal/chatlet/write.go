@@ -20,110 +20,35 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE WRITE PATH: one record per caller gesture, published on the subject of
-// the thing that gesture contends for.
+// THE WRITE PATH: one record per gesture, published on the subject it contends
+// for. Take ONE snapshot of this node's rows, decide and form the expectation
+// inside it, publish, let the broker arbitrate ([statelog.Publisher]'s rule).
+// A node that is behind can only fail to write, never corrupt a conversation;
+// every write answers applied, pending or unknown, never a bool.
 //
-// # The authority, and every clause of it
+// A room's own state arbitrates: topic, archive, membership, prune and erase
+// are decided against the room's last record, so two writers contend and one
+// wins. Messages are sequenced: post, edit, delete and reaction carry NO
+// expectation, since a rejection would lose a typed message. What the decide
+// cannot see the applier decides at the record's position ([Store.decided]).
+// A create arbitrates on a named room's address or a direct room's derived id.
+
+// Recipients, mentions and the unit's lead are resolved INSIDE the decide,
+// against this node's applied rows and the live roster, never at wake time:
+// the winner may not have applied the post yet, and a lead is a fact about the
+// EPOCH. An archived room takes no new post or reply ([ErrArchived]); edits,
+// take-backs, moderation and reactions stay open, since freezing them would
+// make moderating a closed room an un-archive. A room this build cannot
+// classify takes nothing ([unknownKind]).
 //
-//	Take ONE snapshot of this node's own rows. Decide and form the
-//	expectation INSIDE it. Publish. Let the broker arbitrate. Never guess.
-//
-// That is [statelog.Publisher]'s rule rather than this package's, and what it
-// buys here is that a node which is behind cannot corrupt a conversation — it
-// can only fail to write. Every write below answers with the framework's three
-// outcomes unchanged: applied, pending, unknown. There is no bool anywhere on
-// this path, because "the record is durable and this node has not applied it"
-// is a third fact with a third thing to do about it.
-//
-// # Which subject, and why this domain has two answers
-//
-// A ROOM'S OWN STATE ARBITRATES. A topic, a purpose, an archive, a membership
-// set, a retention prune and a compliance erase are all decided against the
-// room's last record on its own subject, so two writers changing one room
-// contend at the broker and exactly one wins.
-//
-// MESSAGES ARE SEQUENCED. A post, an edit, a deletion and a reaction carry NO
-// expectation at all: they ride the room's message subject, which arbitrates
-// nothing, because two people talking in one room are not racing for anything,
-// and a rejection there would be a message somebody typed and lost — the one
-// failure a chat system may not have. What the decide below cannot see — a
-// record ahead of this one that archived the room, took the author out, took
-// the message back or filled its reactions — the applier decides at the
-// record's position, identically on every data node, and [Store.decided] reads
-// what it decided before the gesture answers; what orders two edits of one
-// message is the log, which every data node applies in one order.
-//
-// A CREATE TAKES EITHER, decided by what it is making: a NAMED room arbitrates
-// on its address, create-only, so two people typing `#launch` fight and one is
-// told the name is taken; a DIRECT conversation has no name to fight over, so
-// it arbitrates on its own DERIVED id and the loser is told the room is
-// already there — which is the right answer, because it is.
-//
-// # What is resolved inside the decide, and why none of it is looked up later
-//
-// The recipients and the mentions a record carries are resolved HERE, inside
-// the snapshot's own transaction, against this node's applied rows and the
-// live roster — never at wake time. The node that wins a feed message may be
-// one whose applier has not reached the post, so a parser that read the room's
-// membership instead would route from a room it has not seen, or stall the
-// feed until it had. The same argument settles the unit's lead: who leads a
-// unit is a fact about the EPOCH, and a lead resolved later would route a
-// message posted under one org chart to whoever leads under the next.
-//
-// # What an archive closes, and what it leaves open
-//
-// AN ARCHIVED ROOM TAKES NO NEW MESSAGES — a post and a reply are refused
-// ([ErrArchived]) — and that is the whole of what it closes. What was already
-// said there stays its authors' and stays moderated: an author may still edit
-// or take back their own words, a moderator may still take a message down,
-// and a reaction is still taken. Each of those is attributed and shows as what
-// it is — an edit says so, a delete leaves a tombstone naming who — so the
-// archive keeps an honest record rather than a frozen one; and freezing them
-// would make moderating a closed room an un-archive, which reopens it to every
-// post the archive was there to stop. Its settings take a patch for the same
-// reason ([Store.PatchChannel]): a topic is for whoever reads the room after.
-//
-// A ROOM THIS BUILD CANNOT CLASSIFY TAKES NOTHING, an edit and a delete
-// included ([unknownKind]). Authorship does not admit one and neither does a
-// moderator's, because both are answers about a room whose readership this
-// build cannot state.
-//
-// # Who decides what, and what this store decides itself
-//
-// WHO MAY MAKE A GESTURE AT ALL is the authority table's, decided on the node
-// the caller asked before anything reaches here: whether this principal holds
-// chat, whether a room's archive is theirs to make, whether a delete of
-// somebody else's words is moderation they are admitted to, whether a
-// retention, an erase or a prune is an admin's. This store holds no grant and
-// no chart, so what crosses to it is the DECISION, as a value — the
-// moderation of a delete ([MessageAuthority]), the grounds an archive was
-// admitted on ([ChannelAuthority]) — and it is judged here against the rows in
-// the decide's own snapshot, which is the one place a stored author or a
-// room's current unit can be read in the transaction the record is decided in.
-//
-// WHICH ROOM is the domain's own, and stays here: a room the actor cannot read
-// refuses a write into it ([reachable]), in that same snapshot, because
-// membership is a replicated row and the write authority's one rule is that a
-// decision and its expectation come from one read of them.
-//
-// # What this build does NOT write, stated so nobody looks for it
-//
-// A RENAME. A channel's name is the address its create arbitrated on, and
-// moving it is a second claim plus a release of the first on a record whose
-// subject is the NEW name — which needs an op, a payload and an applier arm
-// this build's vocabulary does not have ([ChannelPatch] says the same). The
-// schema's `scoped_through` column is where such a record would stamp the
-// room, and it stays zero until one exists.
-//
-// A FOLLOW GESTURE. There is no op that subscribes somebody to a thread or
-// unsubscribes them, and `chat_follows` is not empty for it: BEING NAMED is
-// what subscribes you, and the applier derives the row from the thread's own
-// mentions — written when a post or an edit names you there, taken back when
-// the last message in the thread naming you stops (an edit that drops the
-// name, a delete, an erase). The routing below reads those rows and never
-// writes one, which is the same division every derived table in this domain
-// has — participation and subscription are facts about the messages, not
-// claims a record makes.
+// Who may make a gesture is the authority table's, decided before it reaches
+// here; this store judges the DECISION it receives ([MessageAuthority],
+// [ChannelAuthority]) against its own snapshot, and refuses a write into a
+// room the actor cannot read ([reachable]).
+
+// Not written: a RENAME (a channel's name is its create's address; moving it
+// needs an op and applier arm this build lacks) and a FOLLOW gesture (BEING NAMED subscribes you; the applier derives
+// `chat_follows` from a thread's mentions, and the routing below only reads it).
 
 // Store is the company's chat as a write authority.
 type Store struct {
@@ -201,18 +126,10 @@ type Roster interface {
 	// has. It is the [ReasonAnswerer] of every named room that is not a
 	// unit's, asked over that room's members.
 	//
-	// THE CHART RATHER THAN THE ROOM decides, because a room made by hand
-	// carries nothing about who is responsible in it: the membership says
-	// who is there, and only the chart says who among them answers for
-	// the others. Seniority is the one ranking every company's chart
-	// already states, so a person who asks a room of six agents a
-	// question is answered by the one the rest report to, or the nearest
-	// thing to it.
-	//
-	// THE RANKING LIVES BEHIND THIS SEAM rather than in this package,
-	// because it is a walk of the chart, and this package reads the chart
-	// through nothing else: a second copy of "who manages whom" here would
-	// be a second answer to it.
+	// The chart decides, not the room: a hand-made room says who is there,
+	// only the chart says who answers for the others. The ranking lives
+	// behind this seam because this package reads the chart through nothing
+	// else, and a second copy of "who manages whom" would be a second answer.
 	Senior(handles []string) string
 
 	// Seats is every seat handle the company has, people and agents: the
@@ -422,32 +339,24 @@ type Actor struct {
 	// seat. AN AGENT THAT STATES NOTHING WRITES NOTHING ([decide]), and every
 	// other kind carries nobody: see [types.WrittenFor]. A read ignores it.
 	//
-	// ASKED OF NO NODE UNSTATED: internal/estate refuses a chat write whose
-	// actor this field refuses before the write is asked anywhere, in process
-	// as routed, so no node ever sends a data node an agent's write that
-	// states nothing. Sent only where it carries somebody (`omitzero`), so an
-	// actor carrying nobody goes out byte for byte as a build without the
-	// field sends it, and decoded as stated ([Actor.UnmarshalJSONFrom]).
+	// internal/estate refuses a write whose actor this field refuses before it
+	// is asked anywhere, so no node sends an agent's write stating nothing.
+	// `omitzero` keeps an actor carrying nobody byte for byte as a build
+	// without the field sends it ([Actor.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:",omitzero"`
 
 	// OpKey is the caller's own operation key: the value a RETRY of this
 	// same gesture reproduces, which every gesture here derives its
 	// operation id from when it is set ([Store.operation]).
 	//
-	// ON THE ACTOR because it travels with the call and not with the store,
-	// for the same reason the actor does — and because it is how the wiki
-	// takes one (`doclet.Actor.OpKey`), so the two domains a person and a
-	// seat write through take a retry key the same way. EMPTY MINTS A FRESH
-	// ID PER CALL, which is right for every caller that will never retry
-	// the same gesture — and wrong for the one that must: a post whose
-	// answer was `unknown` can only be retried safely under the SAME id,
-	// because the operation ledger is what recognises a second arrival, and
-	// a fresh one would say it twice.
+	// On the actor because it travels with the call, as `doclet.Actor.OpKey`
+	// does. EMPTY MINTS A FRESH ID PER CALL, wrong for a caller that must
+	// retry: a post answered `unknown` is safe to retry only under the SAME
+	// id, since the operation ledger recognises a second arrival.
 	//
-	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
-	// by every surface that takes one and by [Actor.validate], which refuses
-	// an actor carrying any other: the ids derived from it carry its instant
-	// — see [statelog.KeyedOpID].
+	// An engine-minted operation id, held to [statelog.CheckCallerOpID] by
+	// every surface and by [Actor.validate]: derived ids carry its instant
+	// ([statelog.KeyedOpID]).
 	OpKey string
 }
 
@@ -458,24 +367,18 @@ type Actor struct {
 // [Actor.WrittenFor] field); an absent carrier is nobody, which is also what
 // an older node sends.
 //
-// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
-// estate's wire a member this build does not declare, in the actor or in its
-// carrier, refuses the request, named at its path, as one anywhere else in
-// the arguments does. An UnmarshalJSON would be handed bytes and decode them
-// again under encoding/json's own defaults, which drop such a member without
-// a word. NO ENCODER OF ITS OWN: what crosses is the plain encoding of its
-// fields under the caller's options.
+// Through the caller's own decoder, so on the estate's wire an undeclared
+// member, in the actor or its carrier, refuses the request at its path; an
+// UnmarshalJSON would re-decode under encoding/json's defaults, which drop it
+// silently. No encoder of its own.
 func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type wire Actor
 	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
-		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
-		// hands its caller a *jsonv2.SemanticError a method returns as it
-		// is, and wraps any other in a second one, typed as this actor and
-		// placed wherever the decoder stopped. The estate's wire names the
-		// member it refuses from the first SemanticError it finds, so
-		// returned bare that is the decoder's own, at the member's path as
-		// the decoder recorded it, never a position json/v2 inferred, which
-		// is the member's only because that is where the decoder stops.
+		// Unwrapped, against the %w rule: json/v2 returns a method's
+		// *jsonv2.SemanticError as is but wraps any other in a second one
+		// typed as this actor. The estate's wire names the refused member
+		// from the first SemanticError, so bare it is the decoder's own, at
+		// the member's recorded path.
 		return err
 	}
 	a.WrittenFor = a.WrittenFor.Received()
@@ -483,25 +386,15 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 // recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
-// or why this actor may write none: an agent's carrier on a record that routes
-// to somebody ([Notify.Recipients]), the only records a later turn reads to
-// learn whom it works for; nobody on any other, a narration, an erase and a
-// prune among them, which every build reads; and a refusal for an agent that
-// states nobody, or for any other kind carrying somebody
-// ([types.WrittenFor.For]).
+// or why this actor may write none: an agent's carrier on a record routing to
+// somebody ([Notify.Recipients]), the only records a later turn reads; nobody
+// on any other; a refusal for an agent stating nobody or another kind
+// carrying somebody ([types.WrittenFor.For]).
 //
-// DECIDED BY THE RECIPIENTS, which the write path routed the record to in the
-// decide's own snapshot and which every seat it wakes is among, never by
-// whether the message was silent: a silent message answering an asker still
-// wakes them. A seat the routing held back ([Notify.Held]) is woken by
-// nothing, so it does not count.
-//
-// ASKED OF EVERY RECORD, whether it carries or not, in the one builder every
-// gesture shares ([decide]): the rule is the actor's, and an agent's actor
-// whose builder forgot whom its turn works for is a bug however its next
-// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
-// ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
-// older node never sends.
+// Decided by the recipients, never by silence: a silent answer to an asker
+// still wakes them, while a seat held back ([Notify.Held]) does not count.
+// Asked of every record in the one builder ([decide]), since an agent that
+// forgot whom its turn works for is a bug however its next record routes.
 func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
 	if err != nil {
@@ -554,19 +447,14 @@ func (a Actor) validate() error {
 // speaks refuses an actor that would say something IN a room without being a
 // seat: a credential acting as itself ([AuthorOperator]).
 //
-// A ROOM RENDERS A SPEAKER BY SEAT. A person is a member of a room, is
-// mentioned, is woken and reads it as the seat they hold, so a line authored
-// by a credential's login is a speaker nobody can reply to, mention or find in
-// the room's membership — and a token that could join a private room as
-// itself would read it as nobody the room's people know is there. A pipeline
-// that should post is given a human seat and its credential bound to it, and
-// then posts as that seat.
+// A room renders a speaker by seat: a credential's login is a speaker nobody
+// can reply to, mention or find in the membership, and a token joining a
+// private room as itself would read it as nobody the people know. A pipeline
+// that should post is given a human seat with its credential bound to it.
 //
-// EVERY GESTURE SAID IN A ROOM ASKS THIS, after [Actor.validate]: a post, a
-// reply, an edit, a delete, a reaction, a room's create and settings, a
-// membership. The authority table refuses such a principal first, naming why
-// (an unseated principal holds no chat seat); this is the backstop for a
-// caller that reached the store some other way.
+// Every gesture said in a room asks this after [Actor.validate]. The
+// authority table refuses such a principal first; this is the backstop for a
+// caller reaching the store some other way.
 func (a Actor) speaks() error {
 	if a.Kind == AuthorOperator {
 		return fmt.Errorf("%w: %s is a credential acting as itself, and a room "+
@@ -587,22 +475,14 @@ func (a Actor) seatedOrSystem() error {
 
 // Written is what a write reports back.
 //
-// # An unvouched answer carries the operation and nothing else
-//
-// Where the framework answered `unknown` because this node's operation ledger
-// cannot vouch for the operation ([statelog.Result.Unvouched]), every field a
-// decision fills — the room, the message, the revision — is ZERO, whichever arm
-// produced the answer. There are two, and neither describes a record that
-// exists: a refusal taken on rows that may already hold the operation's own
-// first application, and a decision the framework then declined to publish,
-// which formed a complete message out of the request and appended nothing. A
-// caller cannot tell the two apart and must not have to, because the true
-// answer to both is the same — this node cannot say which remark, room or
-// membership the operation left, if any. Reporting the decision's would name a
-// message echoed off the call, for a record that was never appended. What is
-// left is enough to act on: [Written.ChangeID] names the operation to finish on
-// a node whose ledger can answer it, and the outcome says why that is the
-// remedy. [answered] is the one place every gesture's answer passes through.
+// An unvouched answer ([statelog.Result.Unvouched]: `unknown` because this
+// node's ledger cannot vouch for the operation) carries the operation and
+// nothing else: every field a decision fills is ZERO, whether the decision was
+// a refusal on rows that may hold the operation's first application or one the
+// framework declined to publish. Neither describes a record that exists, and
+// reporting the decision's would name a message echoed off the call.
+// [Written.ChangeID] names the operation to finish on a node whose ledger can
+// answer it. [answered] is the one place every answer passes through.
 type Written struct {
 	// Channel is the room this write was about, as the decision read it —
 	// and, for a create, as the record wrote it. Zero on an unvouched
@@ -612,21 +492,15 @@ type Written struct {
 	// Message is what a message gesture authored, and the zero value for a
 	// room gesture.
 	//
-	// ITS CreatedAt IS ZERO on a message this call decided, deliberately. A
-	// message's instant is the BROKER'S, which is what makes one node's copy
-	// of a conversation byte-identical to another's — and it does not exist
-	// yet when this answer is formed. A caller that needs it reads the
-	// message back rather than being handed this node's own clock dressed
-	// as it. A retry answered as another copy of its operation IS read back
-	// ([Store.answer]), and carries the broker's instant like any read.
+	// Its CreatedAt is ZERO on a message this call decided: the instant is
+	// the BROKER'S (what keeps every node's copy byte-identical) and does
+	// not exist yet. A caller needing it reads the message back; a retry
+	// answered as another copy IS read back ([Store.answer]).
 	//
-	// ZERO ON ANY UNVOUCHED ANSWER ([statelog.Result.Unvouched]), whether
-	// the decision refused or ran to completion and was never published:
-	// this node cannot say which remark, if any, exists, and the message a
-	// decision formed is the request's own words rather than a record's.
-	// Under an `unknown` this node COULD vouch for — an acknowledgement
-	// that was lost — it is this call's own decision, the one that may
-	// have landed.
+	// Zero on any unvouched answer ([statelog.Result.Unvouched]): the
+	// message a decision formed is the request's words, not a record. Under
+	// an `unknown` this node COULD vouch for (a lost acknowledgement) it is
+	// this call's decision, which may have landed.
 	Message Message
 
 	// Revision is the log revision the room's row is AT after this write,
@@ -681,18 +555,12 @@ func answered(w Written) Written {
 // with, written ONCE because every reader compares against it and none may
 // disagree.
 //
-// MAX(version, scoped_through) RATHER THAN version, on the rule the schema
-// states: a record that writes this row FROM ANOTHER SUBJECT stamps
-// `scoped_through` and never `version`, so the row's broker expectation still
-// matches its own subject's last message and cannot be poisoned into permanent
-// unwritability.
-//
-// EVERY MESSAGE IS SUCH A RECORD HERE, which is what makes this expression
-// load-bearing on the hottest path rather than a provision for some future
-// rename: a post arbitrates on the room's MESSAGE subject and moves the room's
-// own high-water mark, so it stamps `scoped_through`. A number taken from
-// `version` alone would not move when somebody spoke, and a caller waiting to
-// see its own message in the room would wait for ever.
+// MAX(version, scoped_through) rather than version, per the schema: a record
+// writing this row FROM ANOTHER SUBJECT stamps `scoped_through`, never
+// `version`, so the row's broker expectation keeps matching its own subject.
+// Every message is such a record (it rides the room's message subject), so
+// `version` alone would not move when somebody spoke and a caller waiting to
+// see its own message would wait for ever.
 const ChannelRevision = `MAX(version, scoped_through)`
 
 // ---- the two channel-state gestures that make a room ------------------- //
@@ -752,19 +620,12 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 			"alphanumerics and hyphens, starting with an alphanumeric, at most "+
 			"%d bytes", in.Name, MaxChannelName)
 	}
-	// AN UNSTATED VISIBILITY IS THE COMPANY'S TO DECIDE, and this is the
-	// only place that decision is made. Every caller that omits the kind —
-	// the operator catalogue's `create_channel`, from the dashboard or a
-	// person's own assistant — arrives here with the empty value, so
-	// resolving it at this one point is what makes
-	// `chat.chatlet.default_channel_private` mean the same thing on every
-	// surface that offers a create.
-	//
-	// RESOLVED BEFORE THE GATE BELOW, not inside it: the gate's subject is
-	// "is this a kind a NAMED room can have", and an unresolved empty
-	// string is not an answer to that question. It used to reach the gate
-	// and be refused, which is why the config field had no reader at all —
-	// there was no way to ask for the default.
+	// An unstated visibility is the company's to decide, here only: every
+	// caller omitting the kind (the operator catalogue's `create_channel`)
+	// arrives empty, so resolving it at this one point makes
+	// `chat.chatlet.default_channel_private` mean the same on every surface.
+	// Resolved BEFORE the gate below, which asks whether a NAMED room can
+	// have the kind, and an empty string is no answer to that.
 	kind := in.Kind
 	if kind == "" {
 		kind = KindPublic
@@ -900,30 +761,15 @@ func (s *Store) CreateChannel(ctx context.Context, actor Actor, in NewChannel) (
 // OpenDirect opens the conversation between these participants, and reports
 // whether it had to be created.
 //
-// THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, on
-// `doclet.Store.EnsureContainer`'s terms: a seat that sends a direct message
-// opens the conversation on every send, so the ordinary outcome is that the
-// room is already there — and a caller that could not tell that from a create
-// would log a new conversation every time somebody replied.
-//
-// FALSE BESIDE AN UNVOUCHED ANSWER, like every other field of one ([Written]):
-// the framework publishes no decision its ledger cannot vouch for, so nothing
-// this node can claim was written — and the `unknown` beside it, not this
-// value, is what tells that apart from a conversation already open.
-//
-// # Why the refusal IS the answer
-//
-// The id is DERIVED from the participants ([DirectChannelID]), so two sides
-// opening one conversation from two nodes publish the same create on the same
-// subject and exactly one wins. The loser is told the object already exists,
-// which is not a failure: it is the room, and this reads it back rather than
-// handing a caller a refusal it would have to interpret. One path serves both
-// cases, which is why there is no pre-read here — a pre-read would be a second
-// path that the race takes anyway.
-//
-// THE KEY DERIVES THE OPERATION, never the room: the room is its participants'
-// whatever the call, and the key ([Actor.OpKey]) is what makes the same call
-// made again one create rather than a second one refused as already there.
+// The second value is whether anything was written, as
+// `doclet.Store.EnsureContainer`'s: a seat opens the conversation on every
+// send, so it is usually there already. False beside an unvouched answer
+// ([Written]); the `unknown` beside it tells that from an open conversation.
+// The refusal IS the answer: the id is derived from the participants
+// ([DirectChannelID]), so two sides publish the same create and one wins; the
+// loser is told it exists and this reads the room back, with no pre-read the
+// race would take anyway. The key ([Actor.OpKey]) derives the operation, never
+// the room, so a repeated call is one create, not a refusal.
 func (s *Store) OpenDirect(ctx context.Context, actor Actor, participants []string) (
 	Written, bool, error) {
 
@@ -1029,22 +875,16 @@ func (s *Store) OpenDirect(ctx context.Context, actor Actor, participants []stri
 
 // PatchChannel changes a room's settings.
 //
-// IT TAKES THE RECORD'S OWN PAYLOAD rather than a second struct that maps onto
-// it one for one: every field a caller may change is a field of
-// [ChannelPatch], and two shapes for one set of settings is a place for them
-// to drift. The version is this build's and is set here, never by the caller.
+// It takes the record's own payload, not a second struct that could drift
+// from [ChannelPatch]; the version is set here, never by the caller. A patch
+// changing nothing publishes nothing and is reported as applied
+// ([ChannelPatch.Validate] refuses an empty one earlier).
 //
-// A PATCH THAT CHANGES NOTHING PUBLISHES NOTHING and is reported as applied.
-// The alternative is a record on the log and a live frame for a change nobody
-// made — which is what [ChannelPatch.Validate] refuses an empty patch for, one
-// step earlier.
-//
-// AN ARCHIVE IS NOT ANY MEMBER'S. A topic and a purpose are for whoever reads
-// the room after; closing the room to everybody in it, or opening it again,
-// is its creator's, its unit's lead's or an admin's — decided by the caller
-// against the room it read, and carried here as [ChannelAuthority]. A patch
-// that moves the archive with no admission for it is refused, and one admitted
-// on a unit the room is no longer recorded under is refused as a conflict.
+// An archive is not any member's: closing or reopening a room is its
+// creator's, its unit's lead's or an admin's, decided by the caller against
+// the room it read and carried as [ChannelAuthority]. A patch moving the
+// archive without admission is refused, and one admitted on a unit the room
+// is no longer under is a conflict.
 func (s *Store) PatchChannel(ctx context.Context, actor Actor, channelID string,
 	patch ChannelPatch, authority ChannelAuthority) (Written, error) {
 
@@ -1200,31 +1040,14 @@ func (a ChannelAuthority) archives(room Channel) error {
 
 // SetMembers replaces a room's membership, WHOLE.
 //
-// A DELTA CANNOT REBUILD A ROW ON A REPLAY FROM ZERO, and membership is where
-// that matters most: it is what a private room's readability IS, so a node
-// that replayed a room's adds and missed one of its removals would serve a
-// conversation to somebody who was taken out of it.
-//
-// # Stated against the membership the caller read
-//
-// A whole set is built from a read, and the room may have moved since: a
-// screen that changes one member's following restates everybody else as it
-// last saw them, so a member taken out a moment before would be written back
-// in, and for a private room that is read access granted again by somebody
-// who never meant to grant it. expected is that read: the membership (each
-// handle and its following) the caller built the set from. When it is not
-// nil and the room, AS THIS SNAPSHOT HOLDS IT, holds anything else, the write
-// is refused with [ErrMembersChanged], and the caller reads the room again.
-//
-// The room's revision cannot stand in for it: [ChannelRevision] moves with
-// every message said in the room, so a busy room would refuse every change
-// stated against it. A set the room already holds is the no-op every
-// membership write answers, expected or not: a retry of a change that landed
-// finds its own set there, and is told so rather than refused.
-//
-// nil states no expectation, which is the caller that names the whole
-// membership from its own knowledge rather than from a read (a seeding
-// script, a test); a pointer to the empty list expects an empty room.
+// Whole: a delta cannot rebuild a row on replay and a node missing a removal
+// would serve a private room to somebody taken out. A set built from a read may overwrite a member removed meanwhile, granting
+// read access nobody meant to, so expected is that read (handles and
+// following): when not nil and the room, AS THIS SNAPSHOT HOLDS IT, holds
+// anything else, the write is [ErrMembersChanged]. [ChannelRevision] cannot
+// stand in (it moves with every message). A set already held is the no-op
+// every membership write answers. nil states no expectation; a pointer to the
+// empty list expects an empty room.
 func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 	members []Member, expected *[]Member) (Written, error) {
 
@@ -1263,27 +1086,14 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 
 // Join puts the actor in a room.
 //
-// A SEAT ALREADY IN THE ROOM IS TOLD IT IS IN THE ROOM, whatever its kind: the
-// set it would publish is the set the room holds, which is the no-op every
-// membership write answers ([Store.setMembership]). Asked after the kinds
-// below, a member re-joining their own private room was told only someone
-// already in it could add them, and a seat the chart put in its unit's room
-// that the chart decides who is in it.
-//
-// THREE KINDS REFUSE EVERYBODY ELSE, each for its own reason: a private room's
-// membership is the only way in, and somebody outside it is answered as
-// though it were not there, by the rule every write into it takes
-// ([reachable]); a direct conversation's membership IS its identity, so adding
-// somebody does not widen the room, it names a different one; and a unit's
-// room is the ORG CHART'S, which is the rule [Store.Leave] already stated from
-// the other side.
-//
-// THE UNIT REFUSAL IS THE SAME SENTENCE AS LEAVE'S, and it has to be. Leave
-// refuses because "leaving it would be undone by the next apply, with nothing
-// to say so" — and a join is undone by exactly the same apply, for exactly the
-// same reason. Refusing one and admitting the other left a gesture that
-// appears to work and silently reverts, which is the failure Leave's refusal
-// exists to prevent.
+// A seat already in the room is told so, whatever its kind ([Store.setMembership]'s
+// no-op); checked after the kinds below, a member re-joining their private
+// room would be refused. Three kinds refuse everybody else: a private room's
+// membership is the only way in ([reachable]); a direct conversation's
+// membership IS its identity, so adding somebody names a different room; a
+// unit's room is the ORG CHART'S, refused as [Store.Leave] is, since the next
+// apply undoes a join and a gesture that seems to work and reverts is what
+// that refusal prevents.
 func (s *Store) Join(ctx context.Context, actor Actor, channelID string) (Written, error) {
 	if err := actor.seatedOrSystem(); err != nil {
 		return Written{}, err
@@ -1332,82 +1142,17 @@ func (s *Store) Leave(ctx context.Context, actor Actor, channelID string) (Writt
 }
 
 // SetUnitMembers staffs a unit room for unit, with members, from the org chart
-// activated at activatedAt.
-//
-// THE SECOND VALUE IS WHAT WAS WRITTEN ([MembershipWrite]), on
-// `doclet.Store.EnsureContainer`'s terms and one step past them: this runs on
-// every node at every boot and every apply, so the ordinary outcome is that
-// the room already holds what the chart says — and a caller that could not
-// tell that from a write would log a changed membership on every restart of a
-// company nobody edited. A bool could not carry the third answer, a RE-STAMP:
-// every activation moves every unit room's stamp on the node that wins it,
-// re-activating an unchanged revision (the credential-rotation gesture)
-// included, and a caller told only "written" logged a membership change per
-// room for a set nobody moved.
-//
-// THE ONE WRITER [Store.SetMembers] AND [Store.Join] REFUSE FOR. Those two
-// refuse a unit room because anything they wrote would be undone by the next
-// apply; this is the thing that would undo it, so it is the only caller whose
-// write survives. Keeping it a separate method rather than a flag on
-// SetMembers is what makes that readable at the call site: the engine's
-// reconcile names this, and nothing else can reach it by passing an argument.
-// And it is [AuthorSystem]'s alone, the engine narrating the room — as the
-// create of a unit room is ([Store.CreateChannel]) — because a seat or a
-// token that could call it would be choosing a membership the chart decides.
-//
-// IT TAKES THE WHOLE SET, like SetMembers, because the chart states the whole
-// membership: a reconcile that added without removing would leave a seat in
-// its old team's room for ever after it moved, and one that diffed here would
-// be deciding from rows it read in another transaction.
-//
-// # And the unit, which the chart may MOVE
-//
-// unit is the key of the unit the chart staffs this room for — the one that
-// declares its channel at this activation — and a room recorded under another
-// key is RE-HOMED to it by the same record ([MemberSet.Unit]): the channel
-// moved to the unit that replaced its team in a reorg, or the unit was renamed
-// without an `id`, or it gained an id (the room is then recorded under the
-// spelling that survives a later rename). Without it a declared channel could
-// never change hands: its new declarer was refused the room for good, and the
-// room — no longer declared by the unit it was recorded under — was emptied.
-// Nothing about who may READ the room moves with it: a unit room is readable
-// by every seat of the company, so a re-home discloses nothing, and a room a
-// PERSON opened is never one this takes ([KindUnit] alone).
-//
-// # Stamped with the activation, and never walked back
-//
-// The membership is the CONFIGURATION's, and every node applies one
-// configuration separately — at its reconcile tick and again at every boot.
-// So the room carries the activation its membership came from
-// ([Channel.ChartEpoch]), and a write whose activation is OLDER than the
-// room's decides nothing — its unit included: a node that boots on a revision
-// the fleet has since replaced leaves the newer membership and the newer
-// owner alone, where it used to write its own chart's back over them. A write
-// at the SAME activation with the same set and unit decides nothing either,
-// which is what makes the call free after the first node; one at the same
-// activation that DIFFERS is written, because that is a room an equal-epoch
-// race left wrong. A LATER activation over an unchanged set and unit is
-// written too — a re-stamp, which the applier records without touching the
-// members or announcing a change — because a room left at the older stamp is
-// open to any activation between the two. A zero instant is refused
-// ([ErrNoActivation]), and so is an empty unit ([ErrInvalid]): a room the
-// chart staffs is staffed for some unit, and a room it staffs with nobody is
-// [Store.ReleaseUnitRoom]'s. These are [doclet.Store.EnsureContainer]'s rules,
-// and [worklet.Writer.ApplyChart]'s, for the same projection into a third
-// domain.
-//
-// A FRESH OPERATION PER CALL, on the reasoning those two give: this is a
-// reconcile decided from the row, so a second call — on another node, at the
-// next boot, after a lost acknowledgement — finds the chart's set there, and N
-// nodes racing one activation are settled by the broker's arbitration on the
-// room. Minted as a fresh one rather than derived from the set, so nothing
-// reading the call could take the id for a function of the membership.
-//
-// NO SPECIAL PATH THROUGH THE GUARDS. It goes through [Store.setMembership]
-// exactly as every other membership write does, and needs no bypass: a unit
-// room is not private ([privateRoom]), so the reachability gate admits an
-// actor that is not in it, and the refusals above live in their own callers'
-// closures rather than in the shared path.
+// activated at activatedAt. The second value is what was written
+// ([MembershipWrite]): this runs on every boot and apply, so the room usually
+// holds the chart's set already, and a re-stamp is a third answer a bool
+// cannot carry. The one writer [Store.SetMembers] and [Store.Join] refuse for:
+// [AuthorSystem]'s alone, taking the WHOLE set (a diff would decide from rows
+// read elsewhere), under a fresh operation per call. A room under another
+// unit key is RE-HOMED by the same record ([MemberSet.Unit]); a person's room
+// is never taken ([KindUnit] alone). Stamped with the activation
+// ([Channel.ChartEpoch]), never walked back: an OLDER one decides nothing; the
+// SAME one only a different set or unit; a LATER one is a re-stamp. A zero
+// instant is [ErrNoActivation], an empty unit [ErrInvalid].
 func (s *Store) SetUnitMembers(ctx context.Context, actor Actor, channelID, unit string,
 	members []Member, activatedAt time.Time) (Written, MembershipWrite, error) {
 
@@ -1424,17 +1169,12 @@ func (s *Store) SetUnitMembers(ctx context.Context, actor Actor, channelID, unit
 // ReleaseUnitRoom staffs a unit room with nobody, from the org chart activated
 // at activatedAt: the room no unit in that chart declares any more.
 //
-// THE ROOM'S UNIT STAYS WHERE IT IS, and that is why this is not
-// [Store.SetUnitMembers] with an empty set: a caller naming the unit would be
-// naming the one it READ, in another transaction, and a room another node had
-// re-homed in between would be written back under the old key. Here the
-// record moves no unit at all ([MemberSet.Unit] empty), so whoever the room is
-// recorded under when it is decided is who it stays recorded under — and
-// declaring the channel again, on that unit or another, staffs it again.
-//
-// Every other rule is [Store.SetUnitMembers']: the chart's alone, stamped with
-// the activation, an older one deciding nothing, the same one over an empty
-// room deciding nothing.
+// The room's unit stays where it is, which is why this is not
+// [Store.SetUnitMembers] with an empty set: a named unit would be one READ in
+// another transaction, and a room re-homed meanwhile would be written back
+// under the old key. The record moves no unit ([MemberSet.Unit] empty);
+// declaring the channel again staffs it again. Every other rule is
+// [Store.SetUnitMembers'].
 func (s *Store) ReleaseUnitRoom(ctx context.Context, actor Actor, channelID string,
 	activatedAt time.Time) (Written, MembershipWrite, error) {
 
@@ -1693,25 +1433,14 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 // Erase removes message rows permanently — an admin redacting what should
 // never have been said.
 //
-// ARBITRATED ON THE ROOM, because the room is its blast radius: an erase
-// racing an archive has a defined order rather than two. And it is a PERSON'S
-// or a CREDENTIAL'S gesture — who among them may make one is the authority
-// table's, decided before this is reached — refused HERE, in the decide, to a
-// seat and to the engine, as well as by the payload: an author that could
-// erase its own messages could erase the evidence of what it did, and a rule
-// enforced only at whichever route happened to be the way in is a rule the
-// next route does not have.
-//
-// IT REACHES PAST MEMBERSHIP without reading: a credential pasted into a
-// private room is destroyed by somebody who is not in it and is never shown
-// what else the room said.
-//
-// THE OPERATION IS THE CALLER'S, handed over WHOLE rather than derived from
-// an [Actor.OpKey], exactly as a purge's is: an erase that answers `unknown`
-// may or may not have destroyed what it named, so the only correct next step
-// is the same operation again — and the caller that holds it is the one that
-// brings it back, bound to the room and to [EraseSet] of what it names. See
-// the head of ids.go for whose rule holds it.
+// Arbitrated on the room, its blast radius, so an erase racing an archive has
+// one order. A person's or a credential's gesture, refused HERE too to a seat
+// and the engine: an author erasing its own messages could erase the evidence.
+// It reaches past membership without reading, so a credential pasted into a
+// private room is destroyed by somebody never shown the rest. The operation is
+// the caller's, WHOLE, as a purge's: an erase answering `unknown` may have
+// landed, so the next step is the same operation, bound to the room and
+// [EraseSet] (see the head of ids.go).
 func (s *Store) Erase(ctx context.Context, actor Actor, opID, channelID string,
 	messageIDs []string, reason string) (Written, error) {
 
@@ -1806,21 +1535,12 @@ func (s *Store) Erase(ctx context.Context, actor Actor, opID, channelID string,
 // Prune removes everything in a room stored before an instant, which is how
 // retention is enforced.
 //
-// A RECORD RATHER THAN A LOCAL SWEEP, and that is the whole reason the gesture
-// exists: "older than a year" evaluated against each node's own clock deletes a
-// different set on every node, for ever, and nothing would ever report it. A
-// cutoff on the log is one number every applier compares identically against
-// the broker's own stored timestamps.
-//
-// IT IS THE RETENTION DUTY'S GESTURE, A PERSON'S OR A CREDENTIAL'S — who among
-// the last two may is the authority table's. A seat that could prune a room
-// could delete a year of the company's decisions as a turn's side effect, and
-// no wake and no inverse would bring it back. It reaches past membership for
-// [Store.Erase]'s reason.
-//
-// THE OPERATION IS THE CALLER'S, handed over whole, for [Store.Erase]'s
-// reason: the duty mints one per record it publishes and the human surface's
-// route takes the one a retry brings back, bound to the room and the cutoff.
+// A record, not a local sweep: "older than a year" on each node's clock
+// deletes a different set per node. A log cutoff is one number every applier
+// compares against the broker's timestamps. The retention duty's gesture, a
+// person's or a credential's; a seat that could prune would delete a year of
+// decisions irreversibly. It reaches past membership and takes the caller's
+// operation whole, both for [Store.Erase]'s reason.
 func (s *Store) Prune(ctx context.Context, actor Actor, opID, channelID string,
 	cutoff time.Time) (Written, error) {
 
@@ -1882,20 +1602,14 @@ func (s *Store) Prune(ctx context.Context, actor Actor, opID, channelID string,
 // SetRetention states how long a room keeps what is said in it: days, or nil
 // for the company's default, and [RetentionForever] for a room never pruned.
 //
-// ITS OWN GESTURE, NOT A SETTING ON A PATCH. A shorter horizon is a prune on a
-// delay — the retention duty publishes it ([Prune]) — so a room's retention is
-// a destruction somebody schedules, and who may schedule one is an admin's to
-// decide, on a surface that can ask a fresh proof of who they are. As a field
-// of a room's settings it was any member's: anybody who could reach a room
-// could have the duty destroy a year of it, with no admin, no confirmation and
-// no step-up, beside an erase that asked all three.
+// Its own gesture, not a patch field: a shorter horizon is a prune on a delay
+// ([Prune]), a destruction an admin alone may schedule on a surface that can
+// ask step-up. As a room setting any member could have the duty destroy a year
+// of it. A person's or a credential's, reaching past membership, like
+// [Store.Erase].
 //
-// A PERSON'S OR A CREDENTIAL'S, like [Store.Erase] — and reaching past
-// membership for its reason: a room's horizon is set by somebody who is never
-// shown what the room says.
-//
-// KEYED LIKE EVERY OTHER GESTURE ([Actor.OpKey]), and a setting that matches
-// the room's publishes nothing and is reported as applied.
+// Keyed like every gesture ([Actor.OpKey]); a setting matching the room's
+// publishes nothing and is reported as applied.
 func (s *Store) SetRetention(ctx context.Context, actor Actor, channelID string,
 	days *int) (Written, error) {
 
@@ -2310,38 +2024,18 @@ func (s *Store) Reach(ctx context.Context, actor Actor, channelID, replyTo strin
 	return out, nil
 }
 
-// answer is a gesture's answer: [answered]'s, and — where the framework
-// answered the call as ANOTHER COPY of its operation
-// ([statelog.Result.Collapsed]) — the room and, for a message gesture, the
-// message as this node's own rows have them. Every gesture returns through it,
-// so a gesture written next cannot forget either half.
-//
-// # Why a collapsed answer is read back
-//
-// THE ROWS, NOT THE REQUEST, AND NOT THIS CALL'S DECISION EITHER. A collapsed
-// answer is one of two things. The ledger answered it before any decision ran
-// ([statelog.Snap.Held]), so this call filled in nothing at all — no room, no
-// message — and an answer built from it would name a room with no id; or the
-// broker's duplicate window collapsed this append onto an earlier copy, so this
-// call DID decide, from rows and a roster that may have moved since the copy
-// that landed: a mention the roster has dropped, a thread root, a room's
-// settings, and an instant that was never stored. In both, what exists is what
-// the first record wrote. A key derives the operation from what the call ASKED
-// for ([Store.operation]), so the words agree — everything resolved inside the
-// decision may not.
-//
-// A ROW THIS NODE DOES NOT HOLD answers with the identity the caller already
-// holds and nothing else, and that is true wherever it arises: the copy landed
-// and this node has not applied it yet — the outcome is `pending`, and a read
-// once it applies answers the rest — or an erase or a prune removed the
-// message since. Neither is a failure; the identity is the whole of what this
-// node can truthfully say about a row it does not hold.
-//
-// ANY OTHER READ FAILURE IS RETURNED, wrapped and beside the identity, rather
-// than swallowed into a room or a message with nothing in it — which a caller
-// would render as a remark nobody made. The gesture is durable; it is the read
-// back that failed, and the same call made again is answered from the ledger
-// without writing anything.
+// answer is a gesture's answer: [answered]'s, and for a call answered as
+// ANOTHER COPY of its operation ([statelog.Result.Collapsed]) the room and
+// message as this node's rows have them. Every gesture returns through it.
+// A collapsed answer is read back from the ROWS, not the request or this call's
+// decision: the ledger answered before any decision ran ([statelog.Snap.Held]),
+// or the broker's duplicate window collapsed this append onto an earlier copy
+// whose decision used rows and a roster that may have moved. What exists is
+// what the first record wrote ([Store.operation] derives from what the call
+// ASKED for, so the words agree). A row this node does not hold (`pending`,
+// or erased or pruned) answers with the identity alone. Any other read failure
+// is returned beside the identity, never as an empty message rendered as a
+// remark nobody made; the same call again writes nothing.
 func (s *Store) answer(ctx context.Context, channelID, messageID string,
 	w Written) (Written, error) {
 
@@ -2405,22 +2099,15 @@ func (s *Store) answer(ctx context.Context, channelID, messageID string,
 
 // EditMessage is a message's new content.
 //
-// THE MENTIONS ARE RE-CARRIED, because the body is what they were derived
-// from: an edit that added a mention and did not carry the new set would leave
-// the row naming whoever the first draft named.
+// Mentions are re-carried, since they derive from the body. Links do not, so
+// nil KEEPS the message's links and a non-nil list, empty included, replaces
+// them: a plain slice could not tell the two apart and a typo fix would drop
+// every link (the pointer is [ChannelPatch]'s shape for an empty-is-a-setting
+// field).
 //
-// THE LINKS ARE NOT DERIVED FROM THE BODY, so they are carried only when the
-// edit changes them. Nil KEEPS the message's links; a non-nil list — empty
-// included — replaces them. A plain slice could not tell the two apart, and
-// every edit that fixed a typo without re-sending the links silently removed
-// all of them: the gesture a person makes most often destroyed the part of
-// the message they did not touch. The pointer is the shape [ChannelPatch]
-// gives a field whose empty value is a setting.
-//
-// A RETRIED EDIT IS ONE RECORD under the actor's key ([Actor.OpKey]): the
-// operation is derived over the message and the new words, so the same edit
-// sent again is the same operation, and an edit back to an earlier draft,
-// made under another key after a different one, is another.
+// A retried edit is one record under the actor's key ([Actor.OpKey]), derived
+// over the message and the new words; an edit back to an earlier draft under
+// another key is another operation.
 type EditMessage struct {
 	Body     string
 	Links    *[]string
@@ -2429,17 +2116,13 @@ type EditMessage struct {
 
 // Edit rewrites a message's body in place.
 //
-// ONLY THE AUTHOR, an admin included, and it is refused against the row read
-// in the decide's own snapshot. A remark somebody else can rewrite is a remark
-// attributed to a person who did not make it — on a row that outlives the
-// thread and is quoted in every wake it produced. Removing somebody else's
-// words is [Store.Delete] and destroying them is [Store.Erase]; both record who
-// did it, which is exactly what an edit cannot.
+// Only the author, an admin included, checked against the row in the decide's
+// own snapshot: words somebody else rewrote would be attributed to a person who
+// did not write them, and are quoted in every wake. Removal is [Store.Delete]
+// and destruction [Store.Erase]; both record who did it, which an edit cannot.
 //
-// AN EDIT WAKES ONLY WHOM IT NEWLY NAMES. It is not a second message: raising
-// the room's standing arms again would page a thread every time somebody fixed
-// a typo, while a colleague the edit now names has been addressed by it and has
-// heard nothing else about it.
+// An edit wakes only whom it newly names: it is not a second message, and
+// re-arming the room's standing would page a thread on every typo fix.
 func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID string,
 	in EditMessage) (Written, error) {
 
@@ -2813,40 +2496,18 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 	})
 }
 
-// decided is a message gesture's answer once this node's applier has decided
-// its record: [Store.answer]'s where the record landed, and the domain's own
-// refusal where it did not.
-//
-// # Why a message gesture reads its verdict back
-//
+// decided is a message gesture's answer once the applier has decided its
+// record: [Store.answer]'s where it landed, the domain's refusal where not.
 // A message record is SEQUENCED ([statelog.PatternSequenced]): the applier
-// decides it at its position, from rows the decision above could not see — a
-// record ahead of it that archived the room, took the author out, took the
-// message back or filled its reactions. So `applied` from the framework says
-// only that this node consumed the record, and the answer a caller acts on is
-// the verdict: read here, inside the snapshot that holds the applier's rows,
-// and answered with the sentinel the decision would have refused with had the
-// record ahead been in its snapshot ([Verdict.refusal]) — so a surface answers
-// both arms with one class.
-//
-// ONLY ON `applied`. Under `pending` this node has not applied the record and
-// under `unknown` it may not exist, so neither has a verdict here yet, and both
-// are answered as they always were: the record may yet be refused, which
-// [Written.Verdict] being empty says. A retry the ledger answers
-// ([statelog.Result.Collapsed]) reads its first copy's verdict the same way,
-// by the operation, so a refused post retried is refused again rather than
-// answered as said.
-//
-// FOUR ANSWERS THE VERDICT READ CAN GIVE besides a decision: a record this
-// node holds retained — consumed and not applied, so the outcome is `pending`;
-// one a gate dropped everywhere, which is this node's own eviction landing
-// between its decision and its append; one whose verdict the horizon may have
-// let go ([verdictLost]), which is `unknown` and [statelog.Result.Unvouched],
-// the framework's own answer for an operation its ledger may have lost —
-// whether the record landed or was refused, nothing here can say any more;
-// and a read that failed, which is returned beside the identity like
-// [Store.answer]'s, since the gesture is durable and the same call made again
-// is answered without writing again.
+// decides it at its position from rows the decision could not see, so
+// `applied` only says this node consumed it. The verdict is read in the
+// snapshot holding those rows and answered with the sentinel the decision
+// would have refused with ([Verdict.refusal]). Only on `applied`; otherwise
+// [Written.Verdict] is empty. A ledger-answered retry
+// ([statelog.Result.Collapsed]) reads its first copy's verdict. A verdict the
+// horizon let go is `unknown` ([verdictLost], [statelog.Result.Unvouched]); a
+// record a gate dropped is this node's own eviction between decision and
+// append; a failed read is returned beside the identity.
 func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID string,
 	w Written) (Written, error) {
 
@@ -2905,30 +2566,15 @@ func (s *Store) decided(ctx context.Context, op OpKind, channelID, messageID str
 // publish runs one request and translates the framework's refusals into this
 // package's own vocabulary.
 //
-// THE THREE OUTCOMES TRAVEL UNCHANGED. What this adds is the one thing the
-// framework cannot know: which of its refusals a caller can act on, and what
-// each one means HERE. A write that ran out of compare-and-set rounds is A
-// ROOM SOMEBODY KEPT CHANGING, and a refused create is one of two different
-// facts — which is why the translation reads the subject's KIND rather than
-// answering both with one sentinel. On an ADDRESS it is a name somebody else
-// holds, and there is a conversation to have about what to call the room. On a
-// ROOM it can only be a direct conversation, whose id is derived from its
-// participants, and "that already exists" is not a problem at all: it is the
-// conversation, which [Store.OpenDirect] reads back and returns.
-//
-// The conflict carries the framework's SENTINEL along with this package's, so
-// a caller reasoning in either vocabulary matches — and not the framework's
-// error, whose text names the subject the race was lost on, a broker path
-// that is the room's id or a digest of its name: carried, every caller that
-// printed the error showed it to whoever read the answer. The two create
-// refusals carry neither: each is the whole of what happened, while the
-// framework's wording for them names an object nobody asked about.
-//
-// ROOMS AND MESSAGES ONLY. Every subject this store publishes on is an address,
-// a room or a room's messages, so a lost race here is always a room somebody
-// kept changing; the node gate publishes on a NODE's subject and goes to the
-// framework directly ([GateWriter]), because the same translation there would
-// name a room after a node id.
+// The outcomes travel unchanged; refusals map to what they mean HERE.
+// Exhausted compare-and-set rounds are a room somebody kept changing. A
+// refused create reads the subject's KIND: an ADDRESS is a name somebody
+// holds; a ROOM is a direct conversation whose derived id exists
+// ([Store.OpenDirect] reads it back). A conflict carries the framework's
+// sentinel but not its error, whose text names a broker path callers would
+// print; the two create refusals carry neither. Rooms and messages only: the
+// node gate goes to the framework directly ([GateWriter]), as this would name
+// a room after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
 	return result, publishRefusal(ObjectKind(req.Subject.Kind), err)
@@ -2956,36 +2602,23 @@ func publishRefusal(kind ObjectKind, err error) error {
 
 // decide builds one record inside the snapshot's own transaction.
 //
-// EVERY PAYLOAD IS VALIDATED HERE, through the one method the [Payload]
-// contract exists for: a cap enforced at each caller is a cap missing from
-// whichever caller is written next.
+// Every payload is validated here ([Payload]): a cap enforced at each caller
+// is missing from the next caller written.
 //
-// THE FRAMEWORK'S STAMP RIDES EVERY RECORD, both halves, and this is the one
-// builder every gesture's decision goes through — so it is the one place the
-// stamp can be kept or lost. The writer is what the eviction gate compares on
-// every applier in the fleet, and the generation is what makes a record from
-// before a reanchor comparable and safely stale; the publisher refuses a record
-// whose envelope carries neither ([statelog.Stamp]).
+// The framework's stamp (writer and generation) rides every record and this
+// is the one builder, so the one place it can be lost; the publisher refuses
+// a record without it ([statelog.Stamp]).
 //
-// A FUNCTION RATHER THAN A METHOD, because two writers share it and it reads
-// nothing either holds: the room store's gestures and the node gate's
-// ([GateWriter]), which is built without the roster a room's routing needs.
+// A function, not a method: the room store and the node gate ([GateWriter],
+// built without a roster) share it and it reads nothing either holds.
 func decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
 	scope ScopeSet, opID string, payload Payload, notify *Notify, at time.Time) (statelog.Decision, error) {
 
-	// THE OP RIDES THE SUBJECT KIND THE TABLE NAMES, and this is where the
-	// table is consulted rather than written down beside the writers.
-	// Every gesture picks its subject constructor itself, and the applier
-	// dispatches on (kind, op) on its own — so a writer that put an op on
-	// the wrong kind would publish without complaint and then fault the
-	// domain on every node, at apply, over a pair nobody meant. Refused
-	// here, before anything is encoded, it is one failed call on the node
-	// that formed it.
-	//
-	// NOT [invalid]: nothing about the request could be changed to fix
-	// it. It is this build's own writer disagreeing with this build's own
-	// table, which is a bug to report rather than a refusal to show a
-	// caller.
+	// The op rides the subject kind the table names. Writers pick their
+	// subject constructor themselves and the applier dispatches on
+	// (kind, op), so a mismatch would publish and then fault the domain on
+	// every node; refused here it is one failed call. Not [invalid]: the
+	// request is fine, this build's writer disagrees with its own table.
 	want, ok := SubjectKind(op, createKindOf(payload))
 	if !ok || subject.Kind != want {
 		return statelog.Decision{}, fmt.Errorf("chatlet: a %s record was formed "+
@@ -3086,17 +2719,12 @@ func writtenRevision(result statelog.Result, read uint64) uint64 {
 // notifyOf builds the routing snapshot a wake is derived from, or nil for a
 // record that wakes nobody.
 //
-// A SYSTEM LINE WAKES NOBODY BY CONSTRUCTION, and it is nil rather than a
-// snapshot with an empty recipient set — because nil is the shape the wake
-// filter asks about, and a flag inside the payload is read after a
-// version-gated decode that a newer build's record does not survive. The
-// engine narrating its own room — somebody joined, the room was archived — is
-// a line to render, not a question to answer.
+// A system line wakes nobody and is nil rather than an empty snapshot: nil is
+// the shape the wake filter asks about, and a payload flag is read after a
+// version-gated decode a newer build's record does not survive.
 //
-// EVERYTHING ELSE CARRIES ONE EVEN WHEN IT WAKES NOBODY, because the snapshot
-// is also what a card and a mention feed render: a message that named a
-// colleague who happens to be a person still named them, and a record that
-// carried no snapshot would render as though it had not.
+// Everything else carries one even when it wakes nobody, because a card and a
+// mention feed render from it: a message naming a person still named them.
 func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Channel,
 	message Message, routing Routing) (*Notify, error) {
 
@@ -3320,18 +2948,15 @@ func owingTx(ctx context.Context, tx *sql.Tx, channelID, root, author string) (
 // answerer resolves the seat a person's post in this room is answered by when
 // it reaches nobody else, or empty.
 //
-// ASKED ONLY WHERE IT CAN BE USED ([answerable]): a record carries an answerer
-// for exactly the messages the routing would wake one for, so a reader of the
-// record never has to wonder whether a named seat was ever eligible. A
-// message that named a seat the company has, a person included, was
-// addressed to them and carries none ([Routing.namesASeat]).
+// Asked only where it can be used ([answerable]): a record carries an answerer
+// for exactly the messages routing would wake one for. A message naming a seat
+// the company has, a person included, is addressed and carries none
+// ([Routing.namesASeat]).
 //
-// A UNIT'S ROOM IS ANSWERED BY THE UNIT'S LEAD, through the chart rather than
-// the membership, because whose a unit room is belongs to the chart: a unit
-// that stops declaring its room leaves a room the chart gives to nobody, and
-// its lead must not go on answering it. Every OTHER named room is answered by
-// its most senior agent member. A private room's answerer is therefore always
-// somebody who can read it, and a room with no agent member has none.
+// A unit's room is answered by the unit's lead, through the chart rather than
+// the membership: a unit that stops declaring its room gives it to nobody.
+// Every other named room is answered by its most senior agent member, so a
+// private room's answerer can always read it; none if no agent is a member.
 func (s *Store) answerer(room Channel, actor Actor, routing Routing) string {
 	if !answerable(room.Kind, actor.Kind) || routing.namesASeat(s.roster.Seat, actor.Name()) {
 		return ""
@@ -3571,24 +3196,12 @@ func handlesTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]st
 
 // countChannelsTx is how many LIVE rooms the company holds.
 //
-// ARCHIVED ROOMS DO NOT COUNT, and that is what makes the refusal's own
-// advice true. It counted every row, and there is no channel delete in this
-// vocabulary at all — so a company that had ever created [MaxChannels] rooms
-// could never create another, and the refusal told it to archive one, which
-// changed nothing. A cap somebody cannot get under is not a cap; it is a
-// permanent stop with a remedy that reads like an oversight.
-//
-// AN ARCHIVED ROOM IS STILL READ, still searched and still counted by
-// retention. What archiving ends is new messages, which is exactly the cost
-// this cap is about: a sidebar of live rooms, and a routing surface somebody
-// has to keep in their head.
-//
-// THE OTHER HALF OF THE OLD COUPLING IS GONE. This cap used to be load-bearing
-// for chat SEARCH, because a query named one bound variable per visible room
-// and the statement compiler refused past its own limit — so raising this cap
-// would have broken search rather than the sidebar. `search.chatPostings`
-// chunks that list now, and this constant answers only the question it is
-// named for.
+// ARCHIVED ROOMS DO NOT COUNT: there is no channel delete, so counting them
+// would leave a company at [MaxChannels] unable to create another, with a
+// refusal telling it to archive one to no effect. An archived room is still
+// read and searched; archiving ends only new messages, the cost this cap
+// bounds (a sidebar of live rooms and a routing surface). The cap is
+// independent of search, which chunks its room list (`search.chatPostings`).
 func countChannelsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	var held int
 	if err := tx.QueryRowContext(ctx,
@@ -3650,52 +3263,18 @@ func eraseableTx(ctx context.Context, tx *sql.Tx, channelID string, ids []string
 
 // ---- the small shared rules -------------------------------------------- //
 
-// reachable refuses a write into a room the actor cannot even read.
+// reachable refuses a write into a room the actor cannot even read: a private
+// room ([privateRoom]) admits only members, a public or unit room anybody. An
+// outsider is told the room is not there ([notFound]): its existence, and a
+// direct room's id derived from two handles, is itself information. Edit,
+// deletes, erase, prune and retention have their own authority; a moderator's
+// delete ([Store.Delete], [MessageAuthority]) and the destructions ([erases])
+// reach past membership.
 //
-// ONE RULE FOR EVERY GESTURE WITH NO NARROWER GATE OF ITS OWN, and it is the
-// schema's own: a room is private when its transcript is reachable only
-// through its membership ([privateRoom]), so a non-member writing there would
-// be posting into a conversation they cannot open. A public or a unit room
-// refuses nobody, which is what makes a unit's room the place work addressed
-// to nobody in particular lands.
-//
-// SOMEBODY OUTSIDE A PRIVATE ROOM IS TOLD IT IS NOT THERE ([notFound]), the
-// answer the reader gives them, and never that they may not: a private room's
-// existence is itself information, and a direct conversation's id is derived
-// from the two people in it, so a refusal that said "members only" — the room's
-// name included — told anybody holding an id, or two handles, who talks to whom
-// and what the room is called.
-//
-// FOUR GESTURES DO NOT TAKE IT, because each has an authority of its own for
-// which membership is the wrong question — and they are not all narrower.
-//
-// An EDIT refuses anybody but the message's own AUTHOR, and a DELETE by its
-// author is the same rule; both are strictly narrower, since nobody is the
-// author of a message in a room they were never in. What they deliberately
-// still allow is somebody taking their own words back out of a room they have
-// since left.
-//
-// A DELETE BY A MODERATOR reaches PAST membership, deliberately. Taking
-// somebody else's words down is moderation ([Store.Delete]), which the
-// authority table admits an admin to ([MessageAuthority]), so a moderator may
-// tombstone a message in a private room or a direct conversation they are not
-// in and cannot read. An ERASE, a PRUNE and a room's RETENTION are destructions
-// behind a gate of their own: they refuse a seat ([erases], and a prune also
-// admits the retention duty), and they reach past membership for the same
-// reason — each destroys or schedules the destruction of what a room said
-// without showing it to whoever made it.
-//
-// AN UNKNOWN KIND IS REFUSED, which is the SAME answer [Visible] gives a
-// reader and has to be: [privateRoom] is a two-valued question asked of an
-// open enum, so a kind a newer peer wrote falls out of it as "not private" —
-// and defaulting an AUTHORIZATION to yes because the rule is unknown is the
-// one direction of this that cannot be walked back. The write path can never
-// mint one ([Store.CreateChannel] refuses a kind that is not [Kind.Named] and
-// [Store.OpenDirect] one that is not [Kind.Direct]), so the only way a room
-// gets here is a rolling upgrade: a newer node created it and this node
-// applied the record rather than dropping it. Refusing costs a gesture that
-// waits for this node's upgrade; allowing writes into a room whose readership
-// this build cannot state.
+// AN UNKNOWN KIND IS REFUSED, as [Visible] does: [privateRoom] over an open
+// enum reads a newer peer's kind as "not private", and defaulting an
+// authorization to yes cannot be walked back. Only a rolling upgrade brings
+// such a room here.
 func reachable(room Channel, members []Member, actor Actor) error {
 	if !room.Kind.Valid() {
 		return unknownKind(room)

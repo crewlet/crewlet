@@ -11,18 +11,14 @@ import (
 )
 
 // The trash's far end: what the trash reaper (internal/trashreap) reads and
-// writes to keep the promise [StatusTrashed] makes, that a trashed page is
-// recoverable for the trash term and gone after it.
+// writes to keep [StatusTrashed]'s promise: recoverable for the trash term,
+// gone after.
 //
-// # Why the purge is decided here and not by the reaper
-//
-// The reaper lists from this node's copy and purges what it listed, and between
-// the two somebody may restore the page, or restore and trash it again, which
-// starts its term over. A purge decided from the listing would destroy a page a
-// person had just taken back. So [Store.PurgeTrashed] asks again inside the
-// snapshot the record is decided in, where the broker's arbitration on the page
-// holds the answer to the append: a restore that lands first sends the decision
-// round again, and that round refuses.
+// The purge is decided here, not by the reaper: between its listing from this
+// node's copy and the purge, somebody may restore the page, or restore and
+// trash it again, which restarts its term. So [Store.PurgeTrashed] asks again
+// inside the snapshot the record is decided in; a restore that lands first
+// sends the decision round again, and that round refuses.
 
 // ErrNotInTrash refuses a purge of a page that is not in the trash, or went in
 // at or after the cutoff the purge was asked for: restored, or trashed again
@@ -32,18 +28,14 @@ var ErrNotInTrash = errors.New("doclet: the page is not in the trash past the cu
 // TrashedBefore lists the pages this node's copy holds in the trash since
 // before cutoff, oldest first and then by id, at most limit of them.
 //
-// FROM THIS NODE'S OWN COPY, with no barrier: the list only nominates. Every
-// page it names is purged through [Store.PurgeTrashed], which decides again in
-// a snapshot the broker arbitrates, so a copy that is behind costs a refused
-// purge or a page purged on the next pass, never a page purged wrongly.
+// FROM THIS NODE'S OWN COPY, with no barrier: the list only nominates, and
+// [Store.PurgeTrashed] decides again in a snapshot the broker arbitrates, so a
+// copy that is behind costs a refused purge or a later pass, never a wrong one.
 //
-// OLDEST FIRST so a pass that stops at its cap has purged the pages longest
-// past their term, and the next pass starts where it left off. THE ID BREAKS A
-// TIE, so two passes over the same rows list them in the same order on every
-// node. A SEEK OF THE INDEX IN THAT ORDER, with no sort: the partial index on
-// `trashed_at` and the id (replicated 0066) holds the trashed pages and
-// nothing else, so the LIMIT stops the seek at the cap rather than after every
-// page past the cutoff has been read and sorted.
+// OLDEST FIRST so a capped pass purges the longest past term; THE ID BREAKS A
+// TIE so every node lists the same order. A SEEK, with no sort: the partial
+// index on `trashed_at` and id (replicated 0066) holds only trashed pages, so
+// the LIMIT stops the seek at the cap.
 func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
 	switch {
 	case cutoff.IsZero():
@@ -88,23 +80,14 @@ const trashedBeforeStatement = `SELECT id FROM pages_heads
 // PurgeTrashed destroys a page that has been in the trash since before cutoff,
 // as [Store.Purge] does, and refuses one that has not ([ErrNotInTrash]).
 //
-// The reaper's purge, made as the engine ([SystemActor]) and under the
-// operation key the actor carries ([Actor.OpKey]), so a retry the reaper makes
-// within one pass collapses into the first.
+// Made as the engine ([SystemActor]) under the actor's operation key
+// ([Actor.OpKey]), so a retry within one pass collapses into the first. THE
+// CONDITION IS ASKED IN THE DECISION'S SNAPSHOT: see the file head. A page
+// gone answers [ErrNotFound], what a second reaper finds.
 //
-// THE CONDITION IS ASKED IN THE DECISION'S SNAPSHOT, not here: see the file
-// head. A page gone already answers [ErrNotFound], which is what a second
-// reaper finds after the first purged it.
-//
-// QUIET: the record wakes nobody. The page's watchers were told when it went
-// into the trash, which was the change anybody could act on; a second wake a
-// month later, for a page nobody restored, would be a turn spent on every
-// watching seat for nothing.
-//
-// The reason the record carries, and the deletion marker keeps, names the
-// cutoff, so the one account that survives the purge says why it happened.
-// It is a function of the cutoff alone, so the operation a retry derives
-// ([Store.operation]) is the first attempt's.
+// QUIET: watchers were told at the trash; a second wake would spend a turn on
+// every watching seat for nothing. The reason names the cutoff alone, so a
+// retry's operation ([Store.operation]) is the first attempt's.
 func (s *Store) PurgeTrashed(ctx context.Context, actor Actor, pageID string,
 	cutoff time.Time) (Written, error) {
 
