@@ -2248,6 +2248,9 @@ test("the Checks tab lists the attempts that judge the change, asked by its numb
 // WHOM IT WOKE IS SAID IN SOMEBODY ELSE'S VOICE: a recipient is named with
 // why they heard, never "asked for your review" beside a colleague's name.
 test("More names each recipient with why they heard, in the third person", async () => {
+  // The clock is pinned a day after the record, so "ago" holds whatever day the suite runs.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine(detail(), () => json({}));
   mount("#/gitlet/repos/web/changes/42?tab=more");
   const list = await screen.findByRole("list", { name: "Whom it notified" });
