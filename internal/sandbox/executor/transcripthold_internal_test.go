@@ -49,10 +49,32 @@ func recordOf(text string) (string, int, int) {
 	return h.Bounded()
 }
 
+// heldDecoders are each harness's decoder with its transcript held to hold,
+// and how its stream carries an entry: Claude Code's keeps a line that is no
+// event as an entry of its own, OpenCode's a text event's words.
+func heldDecoders(t *testing.T, hold int) map[string]struct {
+	dec  Decoder
+	line func(entry string) []byte
+} {
+	claude, openCode := &claudeEvents{}, &openCodeEvents{}
+	claude.transcript.hold, openCode.transcript.hold = hold, hold
+	return map[string]struct {
+		dec  Decoder
+		line func(entry string) []byte
+	}{
+		"Claude Code": {claude, func(e string) []byte { return []byte("  " + e + " ") }},
+		"OpenCode":    {openCode, func(e string) []byte { return openCodeText(t, "m1", e) }},
+	}
+}
+
 // A TRANSCRIPT PAST ITS HOLD IS THE RECORD OF ITS WHOLE REDACTION: what a run
 // sends once it streamed is exactly what the coordinator would keep of the
-// transcript held whole, in text and counts, keys split across entries
-// wherever they fall. Below the hold it is the entries joined, as before.
+// transcript held whole, in text and counts, from either harness's decoder,
+// keys split across entries wherever they fall. Below the hold it is the
+// entries joined, as before.
+//
+// Mutation: leave the counts out of either decoder's Result, and the record
+// past the bound reads as whole.
 func TestATranscriptPastItsHoldIsTheRecordOfItsWholeRedaction(t *testing.T) {
 	t.Parallel()
 	const hold = 64 << 10
@@ -61,32 +83,88 @@ func TestATranscriptPastItsHoldIsTheRecordOfItsWholeRedaction(t *testing.T) {
 		"past the hold, within the record": runEntries(900, 0, 300, 890),
 		"past the record":                  runEntries(6000, 0, 380, 3000, 4400, 5999),
 	} {
-		d := &claudeEvents{}
-		d.transcript.hold = hold
-		for _, e := range entries {
-			// Plain lines: Claude Code's decoder keeps a line that is no
-			// event as an entry of its own.
-			d.Line([]byte("  " + e + " "))
-		}
-		got := d.Result()
 		join := strings.Join(entries, "\n")
-		if len(join) <= hold {
-			if got.Transcript != join || got.TranscriptElidedLines != 0 || got.TranscriptElidedBytes != 0 {
-				t.Errorf("%s: kept %d bytes and counted %d lines, %d bytes; want the %d bytes of its entries "+
-					"joined", name, len(got.Transcript), got.TranscriptElidedLines, got.TranscriptElidedBytes,
-					len(join))
+		for harness, d := range heldDecoders(t, hold) {
+			for _, e := range entries {
+				d.dec.Line(d.line(e))
 			}
-			continue
+			got := d.dec.Result()
+			if len(join) <= hold {
+				if got.Transcript != join || got.TranscriptElidedLines != 0 || got.TranscriptElidedBytes != 0 {
+					t.Errorf("%s, %s: kept %d bytes and counted %d lines, %d bytes; want the %d bytes of its "+
+						"entries joined", harness, name, len(got.Transcript), got.TranscriptElidedLines,
+						got.TranscriptElidedBytes, len(join))
+				}
+				continue
+			}
+			want, lines, bytes := recordOf(join)
+			if got.Transcript != want || got.TranscriptElidedLines != lines || got.TranscriptElidedBytes != bytes {
+				t.Errorf("%s, %s: kept %d bytes and counted %d lines, %d bytes; the record of the whole keeps "+
+					"%d, %d and %d", harness, name, len(got.Transcript), got.TranscriptElidedLines,
+					got.TranscriptElidedBytes, len(want), lines, bytes)
+			}
+			if strings.Contains(got.Transcript, "MIIEowIBAAKCAQEA") || strings.Contains(got.Transcript, "hunter2") {
+				t.Errorf("%s, %s: a credential survived", harness, name)
+			}
 		}
-		want, lines, bytes := recordOf(join)
-		if got.Transcript != want || got.TranscriptElidedLines != lines || got.TranscriptElidedBytes != bytes {
-			t.Errorf("%s: kept %d bytes and counted %d lines, %d bytes; the record of the whole keeps %d, "+
-				"%d and %d", name, len(got.Transcript), got.TranscriptElidedLines, got.TranscriptElidedBytes,
-				len(want), lines, bytes)
-		}
-		if strings.Contains(got.Transcript, "MIIEowIBAAKCAQEA") || strings.Contains(got.Transcript, "hunter2") {
-			t.Errorf("%s: a credential survived", name)
-		}
+	}
+}
+
+// heldClaudeCode is Claude Code with its decoders' transcripts held to hold.
+type heldClaudeCode struct {
+	ClaudeCode
+	hold int
+}
+
+func (h heldClaudeCode) Events() Decoder {
+	d := &claudeEvents{}
+	d.transcript.hold = h.hold
+	return d
+}
+
+// heldRun is a box a Claude Code run held to hold was installed in, its event
+// stream the entries, one plain line each, and the runner.
+func heldRun(t *testing.T, hold int, entries []string) (*Runner, *sandbox.FakeSandbox, Paths) {
+	t.Helper()
+	runner := New(heldClaudeCode{hold: hold})
+	b := sandbox.NewFakeSandbox("box-1")
+	if err := runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	p := PathsFor(b)
+	b.Put(p.Stream(), strings.Join(entries, "\n")+"\n")
+	b.Put(p.Err(), "")
+	return runner, b, p
+}
+
+// A COLLECTED RUN CARRIES ITS TRANSCRIPT'S COUNTS where its result file
+// replaces what the stream said, as every Claude Code run's does: the record
+// says how much of the transcript's middle was left out, as the stream's
+// decoder counted it.
+//
+// Mutation: drop the counts where the parsed result file takes the stream's
+// transcript, and the run's record reads as whole.
+func TestACollectedRunCarriesItsTranscriptsCounts(t *testing.T) {
+	t.Parallel()
+	const hold = 64 << 10
+	entries := runEntries(6000, 0, 3000)
+	runner, b, p := heldRun(t, hold, entries)
+	const result = `{"type":"result","subtype":"success","is_error":false,"result":"done"}`
+	b.Put(p.Result(), result)
+	b.Put(p.ExitCode(), "0")
+	b.Put(p.SessionRecord(), "id 9a8b7c6d-0000-4000-8000-000000000003\ncontinued no\n")
+	got, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	want, lines, bytes := recordOf(strings.Join(entries, "\n"))
+	if lines == 0 || got.TranscriptElidedLines != lines || got.TranscriptElidedBytes != bytes {
+		t.Errorf("the collected run counts %d lines and %d bytes left out; its stream's record counts %d and %d",
+			got.TranscriptElidedLines, got.TranscriptElidedBytes, lines, bytes)
+	}
+	if got.Transcript != redact.Secrets(want) {
+		t.Errorf("the collected transcript is %d bytes, not the %d of its stream's record", len(got.Transcript),
+			len(want))
 	}
 }
 
