@@ -1665,6 +1665,15 @@ func nullableStringPtr(v *string) any {
 	return *v
 }
 
+// nullableHours is a project's stuck window as its column holds it: NULL for
+// none set, which the flow reads as [DefaultStuckAfterHours].
+func nullableHours(hours int) any {
+	if hours == 0 {
+		return nil
+	}
+	return hours
+}
+
 // insertMany writes a whole collection as MULTI-ROW INSERTS, chunked to the
 // estate's parameter limit.
 //

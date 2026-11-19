@@ -119,6 +119,9 @@ type ReadyWork struct {
 	Level      statelog.ReadLevel `json:"read_level"`
 	Complete   bool               `json:"complete"`
 	Incomplete *Incomplete        `json:"incomplete,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every item here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // ReadyWork answers one page of what a seat could start now, at `now`.
@@ -134,14 +137,16 @@ func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time)
 	if q.Page < 0 {
 		return ReadyWork{}, fmt.Errorf("worklet: a ready-work page is %d; pages count from 0", q.Page)
 	}
-	out := ReadyWork{Handle: q.Handle, Items: []ReadyItem{}}
+	// The ready order reads `now` as the overdue mark's boundary too.
+	at := rowsAt{dayStart: now, flow: r.flowAt(now)}
+	out := ReadyWork{Handle: q.Handle, Items: []ReadyItem{}, FlowLive: at.flow.live()}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// THE DOMAIN, for my_work's reason: a seat's work is in every project.
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
-		return readReady(ctx, tx, q, now, &out)
+		return readReady(ctx, tx, q, at, &out)
 	})
 	if err != nil {
 		return ReadyWork{}, err
@@ -207,14 +212,16 @@ func heldBlock(handle string, status Status, started, blockers string, now time.
 	}
 }
 
-func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	out *ReadyWork) error {
+
+	now := at.flow.now
 
 	var blocks [3][]TaskRow
 	for i, status := range readyStatuses {
 		block := readyBlock(q.Handle, status, now)
 		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
-			block.terms, MaxReady, now)
+			block.terms, MaxReady, at)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's %s work: %w", q.Handle, status, err)
 		}
@@ -225,11 +232,11 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	waits, err := readyWaits(ctx, tx, q, now, &out.Capped)
+	waits, err := readyWaits(ctx, tx, q, at, &out.Capped)
 	if err != nil {
 		return err
 	}
-	dead, err := readyDead(ctx, tx, q.Handle, now, &out.Capped)
+	dead, err := readyDead(ctx, tx, q.Handle, at, &out.Capped)
 	if err != nil {
 		return err
 	}
@@ -262,11 +269,12 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 // readyDead is the items handle holds whose every open blocker is a dead wait,
 // in queue order, started work first; one in review only where the seat moved
 // it there itself, since a reviewer holding it is moving it.
-func readyDead(ctx context.Context, tx *sql.Tx, handle string, now time.Time, capped *bool) ([]TaskRow, error) {
+func readyDead(ctx context.Context, tx *sql.Tx, handle string, at rowsAt, capped *bool) ([]TaskRow, error) {
+	now := at.flow.now
 	var blocks [3][]TaskRow
 	for i, status := range readyStatuses {
 		block := deadBlock(handle, status, now)
-		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args), block.terms, MaxReady, now)
+		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args), block.terms, MaxReady, at)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: read %s's %s work on dead waits: %w", handle, status, err)
 		}
@@ -426,8 +434,10 @@ type waitRow struct {
 // readyWaits is the items q's seat holds that an agent set aside until a later
 // date with a reason naming a person ([PersonsNamed]) the agent has not asked
 // on the item, in queue order, each status's started work first.
-func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	capped *bool) ([]waitRow, error) {
+
+	now := at.flow.now
 
 	if len(q.People) == 0 {
 		return nil, nil
@@ -436,7 +446,7 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 	for _, status := range readyStatuses {
 		block := waitBlock(q.Handle, status, now)
 		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
-			block.terms, MaxReady, now)
+			block.terms, MaxReady, at)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: read %s's %s work set aside: %w", q.Handle, status, err)
 		}
