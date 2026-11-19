@@ -26,7 +26,7 @@ import (
 // a few KiB of identifiers; a new field of box-written text needs a term here.
 // Past it the report and failure are condensed ([Condenser]), since a cut head
 // reads as the whole; the transcript, read only by a person, keeps whole lines
-// from both ends ([transcriptHeadBytes]).
+// from both ends and the note between them, all within it ([transcriptHeadBytes]).
 const MaxRunTextBytes = 256 << 10
 
 // MaxFileBytes is the most one [Sandbox.ReadFile] reads out of a box, bounding
@@ -263,9 +263,14 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 // boundBox is the half of [Coordinator.fitResult] that reads no model: the
 // transcript and the delivered refs held to their bounds, what was left out
 // counted. Applied ONCE, where the box is read: a second pass counts nothing.
+// The transcript's counts are ADDED to a runner's, which counted what it left
+// out as it read the transcript: that one is within the bound, so this keeps
+// it whole and adds nothing. A count below zero is no count.
 func boundBox(result Result) Result {
-	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
-		boundTranscript(result.Transcript)
+	text, lines, bytes := boundTranscript(result.Transcript)
+	result.Transcript = text
+	result.TranscriptElidedLines = max(result.TranscriptElidedLines, 0) + lines
+	result.TranscriptElidedBytes = max(result.TranscriptElidedBytes, 0) + bytes
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
 	if len(result.Event) > MaxRunEventBytes {
 		// DROPPED WHOLE, never cut: a cut event is no JSON, and the one
@@ -383,11 +388,17 @@ func boundRefs(refs []string) ([]string, int) {
 // ([wholeLines]). The START is kept for the run's plan, which a log cut to its
 // end loses. 64 KiB is some 370 tool lines at their longest (a tool's name and
 // at most 160 bytes of what it ran, never its output); the rest of
-// [MaxRunTextBytes] is the end.
+// [MaxRunTextBytes] is the end, but for [transcriptNoteRoom].
 const (
 	transcriptHeadBytes = 64 << 10
-	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes
+	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes - transcriptNoteRoom
 )
+
+// transcriptNoteRoom is the room the note standing for a transcript's middle
+// ([elidedNote]) takes inside [MaxRunTextBytes]: several times the note at its
+// widest, some 220 bytes. Inside the bound, a bounded transcript fits it, so
+// bounding it again keeps it whole and counts nothing.
+const transcriptNoteRoom = 1 << 10
 
 // boundTranscript holds a run's transcript to its record: REDACTED WHOLE FIRST
 // (a secret straddling a cut would survive as an unrecognisable fragment),

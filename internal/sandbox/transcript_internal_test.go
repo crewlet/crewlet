@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +163,64 @@ func TestTheRecordCarriesWhatTheBoundLeftOut(t *testing.T) {
 		rec.ActivityTranscriptElidedBytes != got.TranscriptElidedBytes {
 		t.Errorf("the record carries %d/%d, the result %d/%d", rec.ActivityTranscriptElidedLines,
 			rec.ActivityTranscriptElidedBytes, got.TranscriptElidedLines, got.TranscriptElidedBytes)
+	}
+}
+
+// A BOUNDED TRANSCRIPT IS WITHIN THE BOUND, its note included, so bounding it
+// again keeps it whole and counts nothing; and the box's half ADDS what a
+// runner counted as it read the transcript to its own count.
+func TestBoundingABoundTranscriptChangesNothing(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"tool lines":                strings.Join(toolLines(longRun), ""),
+		"one line past the bound":   strings.Repeat("日", MaxRunTextBytes),
+		"an over-long first line":   strings.Repeat("x", transcriptHeadBytes*2) + "\n" + strings.Join(toolLines(3000), ""),
+		"an over-long last line":    strings.Join(toolLines(3000), "") + strings.Repeat("y", transcriptTailBytes*2),
+		"lines filling both halves": strings.Repeat(strings.Repeat("z", transcriptHeadBytes-1)+"\n", 8),
+	} {
+		once, lines, bytes := boundTranscript(text)
+		if lines+bytes == 0 {
+			t.Fatalf("%s: the transcript was not bounded, so the case tests nothing", name)
+		}
+		if len(once) > MaxRunTextBytes {
+			t.Errorf("%s: a bounded transcript is %d bytes, past the bound of %d", name, len(once), MaxRunTextBytes)
+		}
+		if again, l, b := boundTranscript(once); again != once || l != 0 || b != 0 {
+			t.Errorf("%s: bounding it again changed it: %d bytes → %d, %d lines and %d bytes counted",
+				name, len(once), len(again), l, b)
+		}
+		got := boundBox(Result{Transcript: once, TranscriptElidedLines: lines, TranscriptElidedBytes: bytes})
+		if got.Transcript != once || got.TranscriptElidedLines != lines || got.TranscriptElidedBytes != bytes {
+			t.Errorf("%s: the box's half kept %d lines and %d bytes of a runner's %d and %d", name,
+				got.TranscriptElidedLines, got.TranscriptElidedBytes, lines, bytes)
+		}
+	}
+	got := boundBox(Result{Transcript: strings.Join(toolLines(longRun), ""), TranscriptElidedLines: 7,
+		TranscriptElidedBytes: 700})
+	_, lines, bytes := boundTranscript(strings.Join(toolLines(longRun), ""))
+	if got.TranscriptElidedLines != lines+7 || got.TranscriptElidedBytes != bytes+700 {
+		t.Errorf("the box's half counted %d lines and %d bytes; want its own %d and %d plus the runner's 7 and 700",
+			got.TranscriptElidedLines, got.TranscriptElidedBytes, lines, bytes)
+	}
+	if got := boundBox(Result{TranscriptElidedLines: -3, TranscriptElidedBytes: -4}); got.TranscriptElidedLines != 0 ||
+		got.TranscriptElidedBytes != 0 {
+		t.Errorf("a runner's negative counts survived: %d lines, %d bytes", got.TranscriptElidedLines,
+			got.TranscriptElidedBytes)
+	}
+}
+
+// THE NOTE FITS ITS ROOM at any counts a transcript can reach, so the halves
+// and the note together stay within [MaxRunTextBytes].
+func TestTheElidedNoteFitsItsRoom(t *testing.T) {
+	t.Parallel()
+	const most = math.MaxInt / 2
+	for _, c := range [][3]int{{most, 0, most}, {0, most, most}, {most, most, most}, {1, 1, 1}} {
+		if note := elidedNote(c[0], c[1], c[2]); len(note) > transcriptNoteRoom {
+			t.Errorf("the note at %v is %d bytes, past its room of %d: %q", c, len(note), transcriptNoteRoom, note)
+		}
+	}
+	if transcriptHeadBytes+transcriptNoteRoom+transcriptTailBytes != MaxRunTextBytes {
+		t.Errorf("the halves and the note's room add to %d, not the bound %d",
+			transcriptHeadBytes+transcriptNoteRoom+transcriptTailBytes, MaxRunTextBytes)
 	}
 }
