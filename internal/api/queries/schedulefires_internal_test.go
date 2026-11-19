@@ -146,3 +146,40 @@ func TestTheAdvisorReadsTheWeeksFiresAndWhatTheirTurnsWrote(t *testing.T) {
 		t.Errorf("a vendor's tracker: fires = %+v, %v, want none judged and no error", got, err)
 	}
 }
+
+// skipsUsage answers the week's runs of each outcome in one page.
+type skipsUsage struct {
+	UsageReads
+	runs map[string][]usage.ScheduleRun
+}
+
+func (s skipsUsage) ScheduleRuns(_ context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error) {
+	return s.runs[q.Outcome], false, nil
+}
+
+// A SCHEDULE'S SKIPPED RUNS ARE READ FROM THE DISPATCH LEDGER by why each was
+// skipped, a unit's schedule by its unit and a seat's by its handle; one whose
+// seat the chart no longer holds is left out. Mutation: read one outcome
+// alone, and the paused or the missed run is lost.
+func TestASchedulesSkippedRunsAreReadByWhy(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	run := func(scope, id, name string, at time.Duration) usage.ScheduleRun {
+		return usage.ScheduleRun{ScopeType: scope, ScopeID: id, Name: name, FiredAt: now.Add(-at)}
+	}
+	s := Sources{Usage: skipsUsage{runs: map[string][]usage.ScheduleRun{
+		"skipped_paused":  {run("unit", "eng", "standup", time.Hour), run("role", "gone-seat", "poll", 2*time.Hour)},
+		"skipped_catchup": {run("unit", "eng", "standup", 3*time.Hour), run("unit", "eng", "standup", 9*24*time.Hour)},
+	}}}
+	got, err := s.scheduleSkips(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []advisor.ScheduleSkip{{Unit: "eng", Name: "standup", Paused: true}, {Unit: "eng", Name: "standup"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("skips %+v, want the unit's paused and missed runs in the week", got)
+	}
+	if _, err := (Sources{}).scheduleSkips(t.Context(), now); err == nil {
+		t.Error("a node with no usage half read the skipped runs")
+	}
+}

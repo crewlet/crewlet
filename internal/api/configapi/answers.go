@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
@@ -375,4 +377,72 @@ func (s *Service) revision(ctx context.Context, revisionID string) (fleetRevisio
 		return fleetRevision{}, false, err
 	}
 	return cur, true, nil
+}
+
+// ErrHistoryShort is a span the kept revisions do not reach back over: the
+// revision active at its start is no longer held.
+var ErrHistoryShort = errors.New("configapi: the kept revisions do not reach back over the span")
+
+// CompaniesActiveSince is every company document the fleet held active at some
+// instant since since, oldest first: the one active at since, each revision
+// dated after it, and the active one. A revision is dated by the latest instant
+// this node knows the fleet activated it at, else by when it was written, so a
+// revision written and never activated counts too: a reader asking whether
+// something changed over the span sees at least every document that could have
+// been active. [ErrHistoryShort] where no kept revision is dated at or before
+// since, so a span the history does not cover is never read as unchanged.
+func (s *Service) CompaniesActiveSince(ctx context.Context, since time.Time) ([]*config.Company, error) {
+	cur, found, err := s.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrNoActiveRevision
+	}
+	dated := func(r store.Revision) time.Time {
+		if !r.ActivatedAt.IsZero() {
+			return r.ActivatedAt
+		}
+		return r.CreatedAt
+	}
+	var kept []store.Revision
+	reached := false
+	for offset := 0; ; offset += MaxPage {
+		page, err := s.configs.List(ctx, MaxPage, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range page {
+			kept = append(kept, r)
+			reached = reached || !dated(r).After(since)
+		}
+		if len(page) < MaxPage || reached {
+			break
+		}
+	}
+	if !reached && dated(cur.revision).After(since) {
+		return nil, ErrHistoryShort
+	}
+	slices.SortStableFunc(kept, func(a, b store.Revision) int { return dated(a).Compare(dated(b)) })
+	var span []store.Revision
+	for i, r := range kept {
+		atStart := i+1 == len(kept) || dated(kept[i+1]).After(since)
+		if dated(r).After(since) || atStart {
+			span = append(span, r)
+		}
+	}
+	out := make([]*config.Company, 0, len(span)+1)
+	seen := map[string]bool{}
+	for _, r := range append(span, cur.revision) {
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		company, err := s.open(fleetRevision{revision: r})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, company)
+	}
+	return out, nil
 }

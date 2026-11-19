@@ -939,6 +939,13 @@ func taskPasses() map[string]plannedRead {
 	return map[string]plannedRead{
 		"every reopen count cleared":     {clearReopensStatement, nil},
 		"every project's active recount": {activeCountsStatement, []any{string(GroupActive), string(GroupActive)}},
+		// THE ADVISOR'S READ OF HOW LONG WORK STOOD IN EACH FLOW STATE: every
+		// change of the items in progress over the window, in the flow
+		// index's own order.
+		"the flow hours of a window": func() plannedRead {
+			statement, args := flowHoursStatement(planNow.Add(-7 * 24 * time.Hour))
+			return plannedRead{statement, args}
+		}(),
 	}
 }
 

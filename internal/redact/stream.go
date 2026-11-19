@@ -272,7 +272,7 @@ func newPipeline(out *endSink, keys bool, hold int) *pipeline {
 	// keys with the values they name ([claimed]).
 	var readers fanout
 	for _, r := range table {
-		if r.keyed == passwordRule {
+		if r.keyed == passwordRule() {
 			break
 		}
 		if r.value != nil {
@@ -1979,14 +1979,14 @@ func (k *keyStage) readArmours(text string, lo, readTo int, c *claims, early boo
 	}
 	from, to := k.read-lo, readTo-lo
 	carried := len(r.forward)
-	begins := keyBegin.FindAllStringIndex(text, -1)
+	begins := keyBegin().FindAllStringIndex(text, -1)
 	for _, b := range begins {
 		if from <= b[0] && b[0] < to {
 			r.begin(text, b, c)
 		}
 	}
 	c.take(r.forward)
-	spans := append(slices.Clone(r.forward[carried:]), r.ends(text, c, begins, keyEnd.FindAllStringIndex(text, -1), from, to)...)
+	spans := append(slices.Clone(r.forward[carried:]), r.ends(text, c, begins, keyEnd().FindAllStringIndex(text, -1), from, to)...)
 	for _, s := range c.shortOfNames(spans) {
 		if early && (s[1] <= s[0] || s[0]+lo < k.pos) {
 			k.miss(lo)

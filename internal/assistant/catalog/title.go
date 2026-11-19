@@ -28,7 +28,7 @@ import (
 const titleValueBytes = 80
 
 // RequestTitle is the title of the request a generic call names on pattern
-// ("GET /config/roles/{id}", a HEAD read as its GET) with the wildcard values
+// ("GET /config/roles/{id}") with the wildcard values
 // path holds, as a person reads it. Every value passes redact.Secrets: a value
 // is the model's to write, and a credential it pasted into a path is a
 // credential in a heading.
@@ -113,8 +113,7 @@ func lowerFirst(s string) string {
 }
 
 // callTitle is the title of the request a generic call names: [RequestTitle]
-// of its route and the path values it filled in. The method plays no part, so
-// a HEAD is titled as its GET.
+// of its route and the path values it filled in. The method plays no part.
 func callTitle(args Args) string {
 	path, _ := pathValues(args["path"])
 	return RequestTitle(args.String("route"), path)

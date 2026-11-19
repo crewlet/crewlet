@@ -8,9 +8,10 @@ name: pins
 #     (RELEASING.md): every git node runs the image's git, and Debian's
 #     updates to its own git never reach it.
 #   - Chromiums: scripts/chromium-pin.env names the two Chrome for Testing
-#     builds the suite drives, the newest and the floor of the engine's CDP
-#     client, each by version and the SHA-256 of its zip on every released
-#     platform. No release carries them, so a bump is the suite's alone.
+#     builds the suite drives, the newest and the floor
+#     (internal/browser.MinChromiumMajor), each by version and the SHA-256 of
+#     its zip on every released platform. No release carries them, so a bump
+#     is the suite's alone.
 # No Dependabot ecosystem watches a source tarball or a Chrome for Testing
 # build, so without this each pin would be watched by nothing, which looks
 # exactly like a pin with nothing to update.

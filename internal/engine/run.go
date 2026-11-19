@@ -68,7 +68,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -936,10 +935,6 @@ type Engine struct {
 	// engine rather than one per epoch: the children are processes, and an
 	// apply that replaced the bridge would orphan every one of them.
 	mcp *mcp.Bridge
-	// research is this node's research instance of the company's search server
-	// (ADR-0151), on a bridge of its own; made at its first search.
-	research     *research.Searcher
-	researchOnce sync.Once
 
 	// mcpFileMu serialises filing the shared bridge's catalogue into an epoch's
 	// registry outside an apply's own build: what supervision changed (a retried
@@ -2362,6 +2357,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
 		SeatDone: e.releaseSeat,
+		// WHICH NODE HELD THE SEAT WHEN (seatplacement.go).
+		SeatPlaced: func(ctx context.Context, s placement.Seat, lease coord.Lease) {
+			e.publishSeatPlacement(ctx, s, seatPlaced(nodeID, lease))
+		},
+		SeatReleased: func(ctx context.Context, s placement.Seat, lease coord.Lease, reason seat.ReleaseReason) {
+			e.publishSeatPlacement(ctx, s, seatReleased(nodeID, lease, reason))
+		},
 		// A seat that starts admitting turns re-checks at once what was
 		// refused for want of one: an answer whose resume the seat's
 		// preparation inherited waits on exactly this, not on the next

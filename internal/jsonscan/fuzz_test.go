@@ -79,7 +79,7 @@ var readings = []reading{
 // is read, is false exactly where utf8.Valid takes its bytes, and false wherever its text is passed over.
 // Where it refuses, the thread layer would class its fault as today (refusedFault). The two decoders are
 // held to each other first, so a release that parts them fails here. THE ANSWER DOES NOT DEPEND ON HOW
-// THE TEXT IS READ: whole, by bytes or in halves, read through a p of any size, skipped or captured.
+// THE TEXT IS READ: whole, by bytes or in halves, read through a p of any size, skipped, captured or teed.
 // Mutation: decode `\n` as `n`, pair a high half with any escape, take a 10,001st container, accept a byte
 // after the value or a raw control byte in a string, end a number at a cut exponent, offset it at its second
 // byte, read a lone surrogate's escape as invalid UTF-8, or keep a text past its token: seeds fail.
@@ -157,25 +157,41 @@ func assertReadsAlike(t *testing.T, data []byte, want scanned, how reading, text
 	}
 }
 
-// assertSkipsAndCapturesAlike holds Skip and Capture over data to what the baseline found: skipping the
-// value, or capturing it within its bound and past it, ends the scan alike, and a capture of a text that is
-// one value is that value's bytes as written; and so is capturing every value one level in.
+// assertSkipsAndCapturesAlike holds Skip, Capture and Tee over data to what the baseline found: skipping the
+// value, capturing it within its bound and past it, or teeing it while it is skipped or read, ends the scan
+// alike, and a capture or a tee of a text that is one value is that value's bytes as written; and so is
+// capturing every value one level in, which a tee of it writes too.
 func assertSkipsAndCapturesAlike(t *testing.T, data []byte, want scanned) {
 	t.Helper()
 	value := bytes.Trim(data, " \t\r\n")
+	teed := func(how string) func(*jsonscan.Scanner, jsonscan.Kind) error {
+		return func(s *jsonscan.Scanner, k jsonscan.Kind) error {
+			var w bytes.Buffer
+			err := s.Tee(&w)
+			if err == nil {
+				err = take(s, k, how)
+			}
+			if err == nil && want.err == nil && !bytes.Equal(w.Bytes(), value) {
+				t.Fatalf("a tee of %q, %s, writes %q", data, how, w.Bytes())
+			}
+			return err
+		}
+	}
 	for _, step := range []struct {
 		name string
-		do   func(*jsonscan.Scanner) error
+		do   func(*jsonscan.Scanner, jsonscan.Kind) error
 	}{
-		{"Skip", func(s *jsonscan.Scanner) error { return s.Skip() }},
-		{"Capture within its bound", func(s *jsonscan.Scanner) error {
+		{"Skip", func(s *jsonscan.Scanner, _ jsonscan.Kind) error { return s.Skip() }},
+		{"Tee, then Skip", teed("skipped")},
+		{"Tee, its tokens read", teed("read")},
+		{"Capture within its bound", func(s *jsonscan.Scanner, _ jsonscan.Kind) error {
 			raw, whole, err := s.Capture(len(data))
 			if err == nil && want.err == nil && (!whole || !bytes.Equal(raw, value)) {
 				t.Fatalf("Capture of %q within its bound answers %q (whole %v)", data, raw, whole)
 			}
 			return err
 		}},
-		{"Capture past its bound", func(s *jsonscan.Scanner) error {
+		{"Capture past its bound", func(s *jsonscan.Scanner, _ jsonscan.Kind) error {
 			raw, whole, err := s.Capture(len(value) - 1)
 			if err == nil && want.err == nil && (whole || raw != nil) {
 				t.Fatalf("Capture of %q, %d bytes, at %d answers %q (whole %v)", data, len(value), len(value)-1,
@@ -185,9 +201,9 @@ func assertSkipsAndCapturesAlike(t *testing.T, data []byte, want scanned) {
 		}},
 	} {
 		s := jsonscan.NewSized(bytes.NewReader(data), jsonscan.MinBufferSize)
-		_, err := s.Next()
+		k, err := s.Next()
 		if err == nil {
-			err = step.do(s)
+			err = step.do(s, k)
 		}
 		if err == nil {
 			_, err = s.Next()
@@ -221,9 +237,16 @@ func assertSkipsAndCapturesAlike(t *testing.T, data []byte, want scanned) {
 			}
 		}
 		at := s.Offset()
+		var w bytes.Buffer
+		if err = s.Tee(&w); err != nil {
+			t.Fatalf("teeing the %s at byte %d of %q: %v", k, at, data, err)
+		}
 		raw, whole, err := s.Capture(len(data))
 		if err != nil || !whole || !bytes.Equal(raw, data[at:at+int64(len(raw))]) || !begins(k, raw[0]) {
 			t.Fatalf("Capture of the %s at byte %d of %q answers %q (whole %v, %v)", k, at, data, raw, whole, err)
+		}
+		if !bytes.Equal(w.Bytes(), raw) {
+			t.Fatalf("a tee of the %s at byte %d of %q writes %q, and its capture is %q", k, at, data, w.Bytes(), raw)
 		}
 	}
 }

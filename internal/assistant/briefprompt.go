@@ -14,7 +14,7 @@ import (
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
 // stamped on its turn row and audit record in place of [PromptVersion]. A
 // reworded sentence is a new version.
-const BriefPromptVersion = "assistant.brief.v6"
+const BriefPromptVersion = "assistant.brief.v7"
 
 // promptVersion is the prompt this turn runs on.
 func (t *turn) promptVersion() string {
@@ -149,8 +149,9 @@ func briefQuestion(in promptInput) string {
 		// read, or the latest when nothing is unread, and what waits on them.
 		fmt.Fprintf(&b, "Catch the person up on the chat room they have open (%s %s) and "+
 			"nothing else on the screen: read how many of its messages they have not read "+
-			"(the room's unread count, from list_chat_rooms), then read the room with "+
-			"read_chat_messages, and a thread with get_chat_thread where a reply matters. "+
+			"(the room's unread count, from GET /chatlet/channels), then read the room's "+
+			"messages (GET /chatlet/channels/{channel_id}/messages), and a thread (GET "+
+			"/chatlet/channels/{channel_id}/threads/{root_id}) where a reply matters. "+
 			"Summarise the messages they have not read as points, or the latest messages "+
 			"when nothing is unread, then say what, if anything, waits on them.",
 			record.Kind, record.ID)

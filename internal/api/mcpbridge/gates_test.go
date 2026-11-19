@@ -125,7 +125,6 @@ func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callabl
 	}
 	if len(parks) > 0 {
 		f.session.Surface = parking{Surface: f.surface, parks: parks}
-		f.session.Caller = actingSeat{f.surface}
 	}
 	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,

@@ -26,6 +26,7 @@ type memAdvisor struct {
 	held     *advisordomain.FindingRow
 	asked    []advisordomain.RunRequest
 	moved    []advisordomain.Move
+	released int
 }
 
 func (*memAdvisor) Findings(context.Context, advisordomain.Filter, statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
@@ -97,7 +98,8 @@ func (m *memAdvisor) RequestRun(_ context.Context, _ advisordomain.Call, r advis
 	m.asked = append(m.asked, r)
 	return statelog.Result{}, nil
 }
-func (*memAdvisor) Release(context.Context, advisordomain.Call, string, uint64) (statelog.Result, error) {
+func (m *memAdvisor) Release(context.Context, advisordomain.Call, string, uint64) (statelog.Result, error) {
+	m.released++
 	return statelog.Result{}, nil
 }
 
@@ -183,5 +185,33 @@ func TestAnAdministratorsRunNowAndDecisionsAreRecorded(t *testing.T) {
 	}
 	if len(log.moved) != 3 {
 		t.Errorf("the decisions moved the finding %d times, want 3", len(log.moved))
+	}
+}
+
+// A DISMISSAL REOPENED IS RAISED AGAIN AT ONCE: the reopen lifts the
+// dismissal's hold and asks for a run now, so the condition that still holds
+// returns within the duty's next tick rather than at the next hourly pass.
+// Mutation: lift the hold alone, and no run is asked for.
+func TestADismissalReopenedIsRaisedAgainAtOnce(t *testing.T) {
+	t.Parallel()
+	f := advisor.Finding{Class: advisor.ClassNoopShare, Severity: advisor.SeverityNote, Actor: advisor.ActorEngine,
+		Source: advisor.SourceEvidence, Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev"},
+		Fix: advisor.Fix{Kind: advisor.FixNone, Options: []advisor.Option{}}}
+	body, err := json.Marshal(advisor.Observe(f, advisor.Span{From: time.Now().Add(-time.Hour), To: time.Now()}, "r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.NewString()
+	log := &memAdvisor{recorded: make(chan struct{}), held: &advisordomain.FindingRow{ID: id, Key: advisor.Key(f),
+		Class: string(f.Class), Severity: advisordomain.SeverityNote, State: advisordomain.StateDismissed,
+		CloseReason: advisordomain.ReasonDismissedKnown, Body: body}}
+	a := newApp(t, api.Options{Runtime: advisorNode{
+		fakeRuntime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}, log: log}})
+	if status, answer := writeAs(t, a, "/advisor/findings/"+id+"/decision", `{"decision":"reopen"}`); status != http.StatusOK {
+		t.Fatalf("reopen answered %d %v, want 200", status, answer)
+	}
+	if log.released != 1 || len(log.asked) != 1 {
+		t.Errorf("the reopen released %d holds and asked %d runs, want the hold lifted and one run asked for",
+			log.released, len(log.asked))
 	}
 }

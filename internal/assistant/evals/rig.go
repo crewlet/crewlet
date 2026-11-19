@@ -77,6 +77,9 @@ type RigOptions struct {
 	Files assistant.Files
 	// Images is whether the rig's own model takes images.
 	Images bool
+	// Search is a model whose harness has a search-only run, so search_web
+	// is offered.
+	Search bool
 }
 
 // Assemble builds a rig over o. Its person is grace, holding Worklet, on
@@ -113,7 +116,7 @@ func Assemble(o RigOptions) (*Rig, error) {
 		r.Revoker = &Revoker{}
 		revoker = r.Revoker
 	}
-	models := Models{Provider: r.Model, Key: "assistant", Images: o.Images}
+	models := Models{Provider: r.Model, Key: "assistant", Images: o.Images, Search: o.Search}
 	if o.Models != nil {
 		models = *o.Models
 	}

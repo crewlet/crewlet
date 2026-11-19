@@ -36,15 +36,15 @@ type Options struct {
 // scripted reports whether the cases play their own scripts.
 func (o Options) scripted() bool { return o.Model == nil }
 
-// patience is how long one turn is waited for: a scripted turn answers at
-// once, and a real model's has the assistant's own turn timeout plus the
-// time its last round takes to be recorded.
-func (o Options) patience() time.Duration {
-	if o.scripted() {
-		return 10 * time.Second
-	}
-	return assistant.TurnTimeout + 30*time.Second
-}
+// turnPatience is how long one turn's stream is waited for: the service's own
+// bound on a turn ([assistant.TurnTimeout]), past which it ends the turn
+// itself, and 30 s for the records it writes as it ends, each bounded at 10 s.
+// A scripted turn is held to the same bound, not to a guess at its speed: only
+// its model is scripted, and its tools do their real work on this process's
+// CPU. The first docs search builds the docs index, which takes seconds under
+// -race on a busy runner, so the stream's end is the signal and this is only
+// the service's own promise that it comes.
+const turnPatience = assistant.TurnTimeout + 30*time.Second
 
 // Result is one case's trials.
 type Result struct {
@@ -98,9 +98,6 @@ func RunSuite(ctx context.Context, cases []Case, o Options) ([]Result, error) {
 func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	person := Person("eval", "eval", c.Person.Apps...)
 	company, err := Company(true, person.Seat)
-	if len(c.Research) > 0 {
-		company, err = ResearchCompany(c.Research, c.Search, person.Seat)
-	}
 	if err != nil {
 		return Trial{}, err
 	}
@@ -120,8 +117,12 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
+	tools, err := c.catalogue()
+	if err != nil {
+		return Trial{}, err
+	}
 	rig, err := Assemble(RigOptions{Person: &person, Company: company,
-		Models: &Models{Provider: meter, Key: meter.key}, Catalogue: catalog.Curated{},
+		Models: &Models{Provider: meter, Key: meter.key, Search: c.Search}, Catalogue: tools,
 		Acts: c.Person.Acts, Handler: handler})
 	if err != nil {
 		return Trial{}, err
@@ -143,7 +144,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	frames, err := rig.Await(ctx, accepted.TurnID, 0, o.patience())
+	frames, err := rig.Await(ctx, accepted.TurnID, 0, turnPatience)
 	if err != nil {
 		return Trial{}, err
 	}
@@ -161,6 +162,24 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	trial := judge(c.Expect, frames, refusals, o.scripted())
 	trial.Rounds, trial.Tokens, trial.Latencies = meter.read()
 	return trial, nil
+}
+
+// catalogue is what the case's person is offered: the curated tools and the
+// generic API tools over the routes the case answers, the API a case's world
+// holds. Each route decides inside its handler here, as the case's answer
+// does, so every one is listed and read.
+func (c Case) catalogue() (*catalog.API, error) {
+	var routes []catalog.Route
+	for _, a := range c.Answers {
+		if !slices.ContainsFunc(routes, func(r catalog.Route) bool { return r.Pattern == a.Route }) {
+			routes = append(routes, catalog.Route{Pattern: a.Route})
+		}
+	}
+	tools := &catalog.API{}
+	if err := tools.Bind(routes); err != nil {
+		return nil, fmt.Errorf("answers: %w", err)
+	}
+	return tools, nil
 }
 
 // handler answers each request from the case's answers, by net/http's own

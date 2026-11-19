@@ -32,6 +32,15 @@
  * with every write would read as a new question, and a new question shows
  * nothing of the old one until it answers.
  *
+ * NOR IS A MOVING WINDOW'S START ([CodeWindow]). "The last 24 hours",
+ * aligned to the hour, has a new `since` every hour; in the key, each hour
+ * would be a new question, and the screen's rows would give way to its
+ * loading placeholder on the hour and come back as new elements. The window's
+ * NAME is part of the question and its EDGES are read at every ask, so the
+ * screen's next poll reads the moved window over the rows on screen (Settings ›
+ * Audit's identity trail keys its read the same way). The poll, rather than an
+ * ask on the hour, because every open tab's window moves at the same instant.
+ *
  * AND THE SHAPE A SCREEN READS: `data`, `loading`, the refusal's code and what
  * it said, and `refetch` — `useQuery`'s result, so `QueryState` and `usePaged`
  * read a code question as they read any other.
@@ -86,15 +95,9 @@ export type CodeParams = Readonly<
   Record<string, string | number | boolean | undefined | readonly string[]>
 >;
 
-export interface CodeQueryOptions {
+interface CodeAskOptions {
   /** Skip the question entirely — for a screen whose parameter is not chosen yet. */
   enabled?: boolean;
-  /**
-   * Re-ask every N ms, quietly. Only for an answer something else moves while
-   * the screen is open: the code log has no push to the dashboard, so another
-   * person's push reaches a screen by this or not at all.
-   */
-  pollMs?: number;
   /** Ask again when the tab comes back. See `useQuery`'s option of the same name. */
   refetchOnFocus?: boolean;
   /**
@@ -104,6 +107,25 @@ export interface CodeQueryOptions {
    */
   refetchOnReconnect?: boolean | "unreached";
 }
+
+/**
+ * A window the clock moves (the file's doc): `name` is the window the reader
+ * chose ("1d") and part of the question; `edges` are the instants it stands
+ * for now (`since`), sent with every ask and never part of the question.
+ */
+export interface CodeWindow {
+  name: string;
+  edges: CodeParams;
+}
+
+/**
+ * `pollMs` re-asks every N ms, quietly. Only for an answer something else
+ * moves while the screen is open: the code log has no push to the dashboard,
+ * so another person's push reaches a screen by this or not at all. A
+ * `window` needs it, since the poll is what reads the window's edges again.
+ */
+export type CodeQueryOptions = CodeAskOptions &
+  ({ pollMs?: number; window?: undefined } | { pollMs: number; window: CodeWindow });
 
 /**
  * The most pages one filled reading of a listing of changes asks, its first
@@ -126,7 +148,9 @@ export interface CodeQueryOptions {
 export const CHANGES_FILL_PAGES = 4;
 
 /** A `code_changes` question's options: a code question's, and the fill. */
-export interface CodeChangesOptions extends CodeQueryOptions {
+export type CodeChangesOptions = CodeQueryOptions & CodeFill;
+
+interface CodeFill {
   /**
    * The changes the screen draws: follow `next` until this many are kept or
    * the listing ends, for at most [CHANGES_FILL_PAGES] pages, rather than
@@ -335,13 +359,21 @@ export function useCodeQuery<K extends CodeQueryName>(
   // A FILL IS ONLY EVER A LISTING OF CHANGES': the overloads offer it on
   // `code_changes` alone, the listing a screen draws a few kept rows of.
   const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect, fill } = options;
+  const windowed = options.window;
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
   // so their serialisation is what is compared; a fill is part of the
-  // question, since it changes what the answer holds.
-  const key = enabled ? keyOf(what, params) + (fill ? `#fill=${String(fill)}` : "") : null;
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
+  // question, since it changes what the answer holds, and so is a window's
+  // name, but never its edges (the file's doc).
+  const key = enabled
+    ? keyOf(what, params) +
+      (fill ? `#fill=${String(fill)}` : "") +
+      (windowed ? `#window=${windowed.name}` : "")
+    : null;
+  // WHAT AN ASK SENDS: the question, and the window's edges as they stand at the ask.
+  const sent: CodeParams | undefined = windowed ? { ...params, ...windowed.edges } : params;
+  const paramsRef = useRef(sent);
+  paramsRef.current = sent;
   const tagged = useRef<Tagged<CodeQueryMap[K]> | null>(null);
 
   const result = useRest<CodeQueryMap[K]>(
@@ -352,7 +384,9 @@ export function useCodeQuery<K extends CodeQueryName>(
         const filled: unknown = await filledChanges(paramsRef.current ?? {}, fill, signal);
         return filled as CodeQueryMap[K];
       }
-      const asking = key ?? "";
+      // KEPT AND TAGGED BY WHAT WAS SENT, edges included: an answer belongs to the instants it was
+      // asked at, whatever the question's key.
+      const asking = keyOf(what, paramsRef.current);
       // AN ANSWER THE ENGINE MARKED IMMUTABLE is the tab's, and never asked
       // again while it is kept (the file's doc).
       const keptBody = keptAnswer(asking);

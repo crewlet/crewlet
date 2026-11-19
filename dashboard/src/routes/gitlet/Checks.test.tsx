@@ -281,6 +281,41 @@ test("a row's time is said after its state word and its duration in short", asyn
   expect(unended.querySelector(".code-list__facts")!.textContent).not.toMatch(/\b0s\b/);
 });
 
+// Mutation: put the window's start back in the question's key, so the hour turning asks a new
+// question whose placeholder takes the rows off screen and stops the running row's clock.
+test("the hour turning keeps the rows on screen and ticking, and the next poll reads the moved window", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(new Date("2026-11-18T13:59:57.500Z"));
+  // ONE BOARD, its instants fixed as the engine's are, so a read again moves no clock.
+  const rows = board();
+  const { asked, list } = await mountBoard("#/gitlet/checks", {
+    "/query/code_checks": () => jsonAnswer({ checks: rows, ...page }),
+  });
+  await afterMicrotasks();
+  // ONE TICK FIRST, so the shared clock reads the faked one.
+  await act(async () => void vi.advanceTimersByTime(1_000));
+  const running = rowOf(list, `web:e2e:1:${sha("c44b0d1")}:refs/heads/main`);
+  const seconds = () => {
+    const took = running.querySelector(".code-checks-row__took")!.textContent ?? "";
+    const m = /^(\d+)m (\d+)s$/.exec(took);
+    expect(m, took).not.toBeNull();
+    return Number(m![1]) * 60 + Number(m![2]);
+  };
+  const before = seconds();
+  // From 13:59:58.5, over 14:00, past the first poll 30 s after mounting.
+  for (let s = 1; s <= 32; s++) {
+    await act(async () => void vi.advanceTimersByTime(1_000));
+    expect(list.isConnected).toBe(true);
+    expect(running.isConnected).toBe(true);
+    expect(list.querySelectorAll("[data-key]")).toHaveLength(rows.length);
+    expect(seconds()).toBe(before + s);
+  }
+  const windows = listed(asked)
+    .filter((u) => u.searchParams.has("standing"))
+    .map((u) => u.searchParams.get("since"));
+  expect(windows).toEqual(["2026-11-17T13:00:00.000Z", "2026-11-17T14:00:00.000Z"]);
+});
+
 // Mutation: filter the rows loaded, or offer only the names of the narrowed page.
 test("Every repository and Check narrow on the engine", async () => {
   const { asked } = await mountBoard("#/gitlet/checks?repo=api&name=e2e");

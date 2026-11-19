@@ -95,10 +95,18 @@ type Evidence struct {
 	Waiting map[string]int
 	// Episodes is every alarm episode on any node that stood in the window.
 	Episodes []AlarmEpisode
+	// Flow is how long each seat's items in progress stood in each flow
+	// state over the window (ADR-0162).
+	Flow []worklet.FlowHours
+	// Skips is every scheduled run the dispatch ledger skipped in the window.
+	Skips []ScheduleSkip
+	// StaffingWeek and StaffingFortnight are the staffing classes' exact
+	// reads over their windows of whole company days; nil where unread.
+	StaffingWeek, StaffingFortnight *Staffing
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread, EpisodesUnread                                     bool
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread      bool
+	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread, SkipsUnread, StaffingUnread bool
 }
 
 // source is the record a detector reads.
@@ -123,6 +131,12 @@ const (
 	sourceMerges
 	// sourceEpisodes is the advisor log's alarm history, [Evidence.Episodes].
 	sourceEpisodes
+	// sourceFlow is the tracker's flow record, [Evidence.Flow].
+	sourceFlow
+	// sourceSkips is the schedules' skipped runs, [Evidence.Skips].
+	sourceSkips
+	// sourceStaffing is the seats' exact time, [Evidence.StaffingWeek].
+	sourceStaffing
 )
 
 // unread reports whether ev could not read src.
@@ -146,6 +160,12 @@ func (ev Evidence) unread(src source) bool {
 		return ev.MergesUnread
 	case sourceEpisodes:
 		return ev.EpisodesUnread
+	case sourceFlow:
+		return ev.FlowUnread
+	case sourceSkips:
+		return ev.SkipsUnread
+	case sourceStaffing:
+		return ev.StaffingUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -333,6 +353,15 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	if ev.EpisodesUnread {
 		answer.Unread = append(answer.Unread, UnreadEpisodes)
 	}
+	if ev.FlowUnread {
+		answer.Unread = append(answer.Unread, UnreadFlow)
+	}
+	if ev.SkipsUnread {
+		answer.Unread = append(answer.Unread, UnreadSkips)
+	}
+	if ev.StaffingUnread {
+		answer.Unread = append(answer.Unread, UnreadStaffing)
+	}
 	return answer
 }
 
@@ -382,6 +411,9 @@ var engineWords = map[Class]said{
 	ClassRedeliveredSeen: {"Wakes repeated changes an agent had already read.",
 		"These agents were woken for changes a turn of theirs had already read, so the engine " +
 			"absorbed the wakes instead of starting turns."},
+	ClassRemoveSeat: {"A group of seats sat idle most of two weeks.",
+		"Every seat of this group was idle most of the time it could take a turn, and almost nothing " +
+			"waited for them, so one seat fewer would cost nothing in waiting work."},
 	ClassFalseAlarm: {"An objective alarm fired and cleared within minutes, again and again.",
 		"Each of these cleared within ten minutes of its raise: the node recovered from a short " +
 			"burst by itself, so they were not outages, and nobody needs to act on the next one like them."},

@@ -390,8 +390,8 @@ func TestACallsWordsAreReadThroughItsInputsEscapes(t *testing.T) {
 // a marker ends (`deploy` before a token) is a hit in both, though as recorded
 // only one password held it whole; a full page stops at the next hit in both,
 // whether or not an earlier entry held the guess under a marker; and an entry
-// states its redacted text's size (an over-long opening: its recorded size
-// rounded up to a KiB), never the recorded size, which leaks the password's length.
+// states its whole text's redacted size, an over-long opening's too, never the
+// recorded size.
 //
 // Mutation: test the recorded text for every term before redacting it, check
 // the page's bound before deciding the hit, or state an entry's recorded size,
@@ -410,8 +410,7 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 			openCodeUser("deploy hunter2 hunter345"))
 		return gzipped(t, openCodeDoc(messages...))
 	}
-	// LONGER THAN A SEAT'S READ REDACTS, the password in its opening: both
-	// records' sizes as recorded lie inside one KiB.
+	// LONGER THAN AN ENTRY SHOWS, the password in its opening.
 	opening := "connect with password: hunter2 then run the migration "
 	longer := func(password string) []byte {
 		return gzipped(t, openCodeDoc(openCodeUser(strings.Replace(opening, "hunter2", password, 1)+
@@ -458,11 +457,10 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 		}
 	}
 	read := seatRead(t, longer("hunter2"), 0, executor.TranscriptFilter{})
-	recorded := len(opening) + len(strings.Repeat("and wait ", 20<<10))
-	if e := read.Entries[0]; !e.Cut || e.Bytes%executor.StatedSizeGrain != 0 || e.Bytes < recorded ||
-		e.Bytes >= recorded+executor.StatedSizeGrain {
-		t.Errorf("the opening of a text of %d bytes states %d, cut %v; want its size rounded up to a KiB",
-			recorded, e.Bytes, e.Cut)
+	whole := len(redact.Secrets(opening + strings.Repeat("and wait ", 20<<10)))
+	if e := read.Entries[0]; !e.Cut || e.Bytes != whole {
+		t.Errorf("the opening of a text redacting to %d bytes states %d, cut %v; want its whole redaction's size",
+			whole, e.Bytes, e.Cut)
 	}
 }
 

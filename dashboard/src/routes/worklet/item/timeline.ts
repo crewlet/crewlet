@@ -1,6 +1,6 @@
 /**
- * A task's activity as ONE list: what changed on it, what was said on it and
- * the agent turns charged to it, in the order it happened.
+ * A task's activity as ONE list: what changed on it, what was said on it, the
+ * agent turns charged to it and its recorded flow, in the order it happened.
  *
  * # Three histories, each paged on its own
  *
@@ -25,7 +25,12 @@
  * dropped from both the merged list and the Changes tab.
  */
 
-import type { WorkActivityRecord, WorkComment, WorkItemTurn } from "~/protocol/index.ts";
+import type {
+  WorkActivityRecord,
+  WorkComment,
+  WorkFlowEntry,
+  WorkItemTurn,
+} from "~/protocol/index.ts";
 
 /** The four views of a task's activity. */
 export const ACTIVITY_TABS = ["all", "comments", "turns", "changes"] as const;
@@ -37,7 +42,8 @@ export type Source = "changes" | "comments" | "turns";
 export type Entry =
   | { kind: "change"; id: string; at: number; record: WorkActivityRecord }
   | { kind: "comment"; id: string; at: number; comment: WorkComment }
-  | { kind: "turn"; id: string; at: number; turn: WorkItemTurn };
+  | { kind: "turn"; id: string; at: number; turn: WorkItemTurn }
+  | { kind: "flow"; id: string; at: number; flow: WorkFlowEntry };
 
 /** One history as far as it has been read. */
 export interface Loaded<T> {
@@ -78,6 +84,9 @@ export function timeline(
     changes: Loaded<WorkActivityRecord>;
     comments: Loaded<WorkComment>;
     turns: Loaded<WorkItemTurn>;
+    /** The item's recorded flow (ADR-0162), drawn with the changes: not paged,
+     *  the detail carries its newest records. */
+    flow?: readonly WorkFlowEntry[];
   },
 ): Timeline {
   const shown = SOURCES[tab];
@@ -119,8 +128,16 @@ export function timeline(
   for (const source of shown) {
     if (loaded[source].more) horizon = Math.max(horizon, oldest(source));
   }
-  const entries = shown
-    .flatMap((source) => bySource[source])
+  const flow: Entry[] = shown.includes("changes")
+    ? (loaded.flow ?? []).map((entry) => ({
+        kind: "flow" as const,
+        // AT, THEN LOG POSITION: a backfilled record lands after the past it records.
+        id: `flow:${String(entry.log_seq).padStart(16, "0")}:${entry.id}`,
+        at: instant(entry.at),
+        flow: entry,
+      }))
+    : [];
+  const entries = [...shown.flatMap((source) => bySource[source]), ...flow]
     .filter((e) => e.at >= horizon)
     .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   const earlier = shown.filter((source) => loaded[source].more && oldest(source) >= horizon);

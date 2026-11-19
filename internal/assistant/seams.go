@@ -43,6 +43,9 @@ type Models interface {
 	// ReadsImages is whether the model's run takes images beside its
 	// prompt, false where no model resolves.
 	ReadsImages() bool
+	// Searches is whether the model's harness has a search-only run, which
+	// search_web is answered through.
+	Searches() bool
 }
 
 // Budget is the meter a turn charges its rounds through: the company's

@@ -501,7 +501,7 @@ func streamBound() (text, entries int) {
 	table := len(rules())
 	readers := 1
 	for _, r := range rules() {
-		if r.value != nil && r.keyed != passwordRule {
+		if r.value != nil && r.keyed != passwordRule() {
 			readers++
 		}
 	}

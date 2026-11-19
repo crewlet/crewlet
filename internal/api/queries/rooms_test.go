@@ -280,6 +280,18 @@ func (emptyChat) Reach(_ context.Context, _ chatlet.Actor, channelID, _ string,
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
 
+func (emptyWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (emptyWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (emptyWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
+
 func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
 	return worklet.Answer{}, nil
 }
@@ -520,8 +532,6 @@ var readOutsideTheDashboard = map[string]string{
 		"own tool work_inbox",
 	// THE ADVISOR'S WEEKLY REPORTS, read by a script until the Advisor page's
 	// Reports tab reads them; that tab makes these lines red, and they go.
-	"advisor_reports": "an admin's script: GET /advisor/reports, as docs/guides/advisor.md prints it",
-	"advisor_report":  "an admin's script: GET /advisor/reports/{week}, as docs/guides/advisor.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
@@ -779,7 +789,7 @@ func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []str
 // noResearch reads no page, for the sweep that only needs the seat filled.
 type noResearch struct{}
 
-func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
+func (noResearch) Read(context.Context, string, int) (research.Page, error) {
 	return research.Page{}, nil
 }
 

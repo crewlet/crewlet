@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -125,6 +126,47 @@ func fleet(t *testing.T, h http.Handler, tune func(*Relay)) (entry, holder *node
 func fast(rl *Relay) {
 	rl.clock.heartbeat, rl.clock.idle, rl.clock.openWait, rl.clock.pushWait = 50*time.Millisecond,
 		300*time.Millisecond, 200*time.Millisecond, 200*time.Millisecond
+}
+
+// silentFabric is a broker that answers nothing: a holder's OPEN is answered
+// by calling [Relay.answer] directly, and its pushes go unacknowledged.
+type silentFabric struct{}
+
+func (silentFabric) Ask(ctx context.Context, _ string, _ []byte, _ int) ([][]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (silentFabric) Serve(context.Context, string, int, queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return func(context.Context) error { return nil }, nil
+}
+
+// bubbledHolder is a holder alone, serving on a [silentFabric], for a case run
+// in a synctest bubble: everything it starts blocks on a channel or the
+// bubble's clock, never on a socket the bubble cannot see idle. Stopped, so its
+// exchanges end, before the bubble does.
+func bubbledHolder(t *testing.T, h http.Handler) *Relay {
+	t.Helper()
+	rl, err := New(Options{
+		Fabric: silentFabric{}, Name: "testrelay", Node: "holder", Owner: "holder:incarnation", Keyring: ring,
+		Admit: func(*http.Request) Verdict { return Serve }, Handler: h,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stop, err := rl.Serve(t.Context())
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+	return rl
+}
+
+// pastEveryTimer is a span of a bubble's clock past every timer a holder arms:
+// its heartbeat, a push's wait and the idle bound that ends an exchange whose
+// pushes go unanswered, twice over.
+func pastEveryTimer(rl *Relay) time.Duration {
+	return 2 * (rl.clock.idle + rl.clock.heartbeat + rl.clock.pushWait)
 }
 
 // manualTime is a relay's time that moves only when a case moves it
@@ -416,70 +458,92 @@ func TestAnOpenForAnotherIncarnationIsRerouted(t *testing.T) {
 // AN OPEN REPEATED AFTER A LOST REPLY RUNS NOTHING TWICE: the entry cannot
 // tell an exchange that started from one that did not, so it opens again under
 // the same id, and the holder starts each id once.
+//
+// IN A BUBBLE ([bubbledHolder]), so both halves are facts: the holder decides
+// and starts an exchange inside its answer to the OPEN, so once the third reply
+// is back every start is decided and its handler's goroutine exists, and
+// synctest.Wait returns only once each has run to its release. Past every timer
+// the relay arms, a start a clock delayed would have run as well.
+//
+// Mutation: drop the holder's per-id dedup (Relay.known and start's check), so
+// every open starts the request: the handler runs three times, red.
 func TestARepeatedOpenRunsTheRequestOnce(t *testing.T) {
 	t.Parallel()
-	var runs atomic.Int32
-	release := make(chan struct{})
-	_, holder := fleet(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		runs.Add(1)
-		<-release
-	}), nil)
-	defer close(release)
-	rl := holder.relay
-	open := func() openReply {
-		id := signedask.NewID()
-		sealed, err := rl.opens.SealRequest(openRequest{
-			ID: id, Deadline: time.Now().Add(time.Minute), Kind: kindOpen,
-			Owner: rl.owner, Exchange: "EXCHANGE", Request: &Request{Method: http.MethodPost, URI: "/x"},
-		})
-		if err != nil {
-			t.Fatalf("SealRequest: %v", err)
+	synctest.Test(t, func(t *testing.T) {
+		var runs atomic.Int32
+		release := make(chan struct{})
+		defer close(release)
+		rl := bubbledHolder(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			runs.Add(1)
+			<-release
+		}))
+		open := func() openReply {
+			id := signedask.NewID()
+			sealed, err := rl.opens.SealRequest(openRequest{
+				ID: id, Deadline: time.Now().Add(time.Minute), Kind: kindOpen,
+				Owner: rl.owner, Exchange: "EXCHANGE", Request: &Request{Method: http.MethodPost, URI: "/x"},
+			})
+			if err != nil {
+				t.Fatalf("SealRequest: %v", err)
+			}
+			raw, err := rl.answer(t.Context(), sealed)
+			if err != nil {
+				t.Fatalf("answer: %v", err)
+			}
+			rep, _, err := rl.opens.OpenReply(raw, id)
+			if err != nil {
+				t.Fatalf("OpenReply: %v", err)
+			}
+			return rep
 		}
-		raw, err := rl.answer(t.Context(), sealed)
-		if err != nil {
-			t.Fatalf("answer: %v", err)
+		for range 3 {
+			if rep := open(); rep.Verdict != Serve {
+				t.Fatalf("verdict = %s, want serve", rep.Verdict)
+			}
 		}
-		rep, _, err := rl.opens.OpenReply(raw, id)
-		if err != nil {
-			t.Fatalf("OpenReply: %v", err)
+		synctest.Wait()
+		if n := runs.Load(); n != 1 {
+			t.Fatalf("the handler ran %d times for one exchange, want 1", n)
 		}
-		return rep
-	}
-	for range 3 {
-		if rep := open(); rep.Verdict != Serve {
-			t.Fatalf("verdict = %s, want serve", rep.Verdict)
+		time.Sleep(pastEveryTimer(rl))
+		synctest.Wait()
+		if n := runs.Load(); n != 1 {
+			t.Errorf("past every timer the handler had run %d times for one exchange, want 1", n)
 		}
-	}
-	time.Sleep(50 * time.Millisecond)
-	if n := runs.Load(); n != 1 {
-		t.Errorf("the handler ran %d times for one exchange, want 1", n)
-	}
+	})
 }
 
 // AN UNSIGNED OPEN RUNS NOTHING: the broker authenticates nobody, and an open
 // is an instruction to run a request as whoever its credential names.
+//
+// IN A BUBBLE, as the repeated open is: whatever the answer started has run by
+// the Wait, and past every timer the relay arms.
 func TestAnOpenTheFleetDidNotSignRunsNothing(t *testing.T) {
 	t.Parallel()
-	var ran atomic.Bool
-	_, holder := fleet(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran.Store(true) }), nil)
-	other, err := signedask.New[openRequest, openReply]("testrelay.open", recordseal.OneKey("k", "another-fleet"))
-	if err != nil {
-		t.Fatalf("signedask.New: %v", err)
-	}
-	sealed, err := other.SealRequest(openRequest{
-		ID: signedask.NewID(), Deadline: time.Now().Add(time.Minute), Kind: kindOpen,
-		Owner: holder.relay.owner, Exchange: "X", Request: &Request{Method: http.MethodGet, URI: "/x"},
+	synctest.Test(t, func(t *testing.T) {
+		var ran atomic.Bool
+		rl := bubbledHolder(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran.Store(true) }))
+		other, err := signedask.New[openRequest, openReply]("testrelay.open", recordseal.OneKey("k", "another-fleet"))
+		if err != nil {
+			t.Fatalf("signedask.New: %v", err)
+		}
+		sealed, err := other.SealRequest(openRequest{
+			ID: signedask.NewID(), Deadline: time.Now().Add(time.Minute), Kind: kindOpen,
+			Owner: rl.owner, Exchange: "X", Request: &Request{Method: http.MethodGet, URI: "/x"},
+		})
+		if err != nil {
+			t.Fatalf("SealRequest: %v", err)
+		}
+		if _, err := rl.answer(t.Context(), sealed); err == nil {
+			t.Error("an open another keyring signed was answered")
+		}
+		synctest.Wait()
+		time.Sleep(pastEveryTimer(rl))
+		synctest.Wait()
+		if ran.Load() {
+			t.Error("an open another keyring signed ran")
+		}
 	})
-	if err != nil {
-		t.Fatalf("SealRequest: %v", err)
-	}
-	if _, err := holder.relay.answer(t.Context(), sealed); err == nil {
-		t.Error("an open another keyring signed was answered")
-	}
-	time.Sleep(20 * time.Millisecond)
-	if ran.Load() {
-		t.Error("an open another keyring signed ran")
-	}
 }
 
 // A HANDLER THAT PANICS BEFORE IT ANSWERED is answered 500, as a server would
@@ -740,32 +804,36 @@ func TestAFramePushedAgainIsWrittenOnce(t *testing.T) {
 
 // THE HOLDER'S HANDLER WAITS once a frame's worth of body is unsent, so a
 // large answer leaves the holder only as fast as its client takes it.
+//
+// IN A BUBBLE: the write is still waiting once the bubble is idle, and past an
+// hour of its clock, rather than after a window of the runner's; and a write
+// that never returns once its frame is sent is the bubble's deadlock, red.
 func TestAHandlerWaitsOnceAFramesWorthIsUnsent(t *testing.T) {
 	t.Parallel()
-	w := newWriter(t.Context())
-	wrote := make(chan int, 1)
-	go func() {
-		n, _ := w.Write(make([]byte, MaxBody+1))
-		wrote <- n
-	}()
-	select {
-	case n := <-wrote:
-		t.Fatalf("a write past a frame's worth returned (%d bytes) with nothing sent", n)
-	case <-time.After(100 * time.Millisecond):
-	}
-	f, ok := w.next(t.Context(), wallTime{}, time.Minute, true)
-	if !ok || len(f.Body) != MaxBody || f.Status != http.StatusOK {
-		t.Fatalf("next = %d bytes, status %d, %v; want a full frame", len(f.Body), f.Status, ok)
-	}
-	w.sent(len(f.Body))
-	select {
-	case n := <-wrote:
-		if n != MaxBody+1 {
+	synctest.Test(t, func(t *testing.T) {
+		w := newWriter(t.Context())
+		wrote := make(chan int, 1)
+		go func() {
+			n, _ := w.Write(make([]byte, MaxBody+1))
+			wrote <- n
+		}()
+		synctest.Wait()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		select {
+		case n := <-wrote:
+			t.Fatalf("a write past a frame's worth returned (%d bytes) with nothing sent", n)
+		default:
+		}
+		f, ok := w.next(t.Context(), wallTime{}, time.Minute, true)
+		if !ok || len(f.Body) != MaxBody || f.Status != http.StatusOK {
+			t.Fatalf("next = %d bytes, status %d, %v; want a full frame", len(f.Body), f.Status, ok)
+		}
+		w.sent(len(f.Body))
+		if n := <-wrote; n != MaxBody+1 {
 			t.Errorf("the write returned %d, want %d", n, MaxBody+1)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("a write still waits once its frame was sent")
-	}
+	})
 }
 
 // answering reports whether the relay is answering exactly n exchanges and

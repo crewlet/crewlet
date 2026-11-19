@@ -502,10 +502,12 @@ func (d *claudeEvents) lost(line string) {
 
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.
-func (d *claudeEvents) Entries() []string { return d.transcript.take() }
+func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end) }
 
 func (d *claudeEvents) Result() sandbox.Result {
-	return sandbox.Result{Transcript: d.transcript.String()}
+	var r sandbox.Result
+	r.Transcript, r.TranscriptElidedLines, r.TranscriptElidedBytes = d.transcript.result()
+	return r
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's

@@ -510,3 +510,37 @@ func TestAnOrdinaryTextNeverDecidesEarly(t *testing.T) {
 		}
 	}
 }
+
+// A STREAM WRITES WHAT SECRETS WRITES ON THE CORPUS TEXT THAT CRASHED IT: in
+// the fourth 8 MiB text of this seed the keys' stage places a password key's
+// value one past its window, inside a key's block, and claims.readsAValue
+// sliced past the window: Write panicked in every piecing, while Secrets of
+// the text did not. TestAKeyWhoseBlanksRunToTheEndNamesNoValue holds the least
+// such text; this one holds the shape as the generator writes it, in 64 KiB
+// writes.
+//
+// Mutation: drop readsAValue's guard of a start past the text, and Write panics.
+func TestAStreamWritesWhatSecretsWritesOnTheTextThatCrashedIt(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 110))
+	var text string
+	for range 4 {
+		text = redact.StreamText(r, 8<<20)
+	}
+	// The span around that window: the whole text streams in 44 s under the
+	// race detector, this in 6, most of it the generator's.
+	text = text[4_730_880:5_398_528]
+	var out bytes.Buffer
+	s := redact.NewStream(&out)
+	for piece := range slices.Chunk([]byte(text), 64<<10) {
+		if _, err := s.Write(piece); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if want := redact.Secrets(text); out.String() != want {
+		t.Fatalf("the stream (%d bytes) wrote %s", len(text), streamParted(out.String(), want))
+	}
+}

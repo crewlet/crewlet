@@ -147,6 +147,38 @@ claude-code:
       - "Agent"
       - "WebFetch"
       - "WebSearch"
+  # ASK CREWLET'S SEARCH RUN: the vendor's web search and nothing else, handed a
+  # query alone. MEASURED on Claude Code 2.1.325: the init event offered
+  # WebSearch only and no MCP server, and the results arrived on the `user`
+  # event's tool_use_result, each search's `content` a list of title and URL.
+  web_search:
+    complete_args:
+      - "-p"
+      - "--output-format"
+      - "stream-json"
+      - "--verbose"
+      - "--no-session-persistence"
+      - "--setting-sources"
+      - ""
+      - "--strict-mcp-config"
+      - "--disable-slash-commands"
+      - "--tools"
+      - "WebSearch"
+      - "--allowedTools"
+      - "WebSearch"
+      - "--disallowedTools"
+      - "Bash"
+      - "Read"
+      - "Write"
+      - "Edit"
+      - "NotebookEdit"
+      - "Agent"
+      - "WebFetch"
+    args: [["--tools", "WebSearch"], ["--strict-mcp-config"], ["--setting-sources", ""]]
+    refuses: ["--mcp-config", "--plugin-dir"]
+    tool: WebSearch
+    format: claude-stream-json
+    note: "--tools WebSearch left the init event's tool list at WebSearch alone and --strict-mcp-config loaded no server; measured on Claude Code 2.1.325"
   tools_off:
     args: [["--tools", ""], ["--strict-mcp-config"]]
     refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]

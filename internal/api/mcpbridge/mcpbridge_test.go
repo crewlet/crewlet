@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
@@ -883,7 +884,6 @@ func TestWhatACallsOwnWorkRecordedRidesTheRecordTheBridgeAnswersInItsPlace(t *te
 			f.session.Surface = f.surface
 			if tc.parks {
 				f.session.Surface = parking{Surface: f.surface, parks: map[string]bool{"delegate": true}}
-				f.session.Caller = actingSeat{f.surface}
 			}
 			sess := dial(t, f.open(t))
 
@@ -1179,6 +1179,44 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	}
 	if b.Live() != 0 {
 		t.Errorf("%d incomplete sessions were registered", b.Live())
+	}
+}
+
+// A RUN WHOSE TOKENS NO SURFACE WOULD REDACT OPENS NO SESSION: a subject
+// holding what internal/redact ends a subject at (a dot in the run id), or
+// running past redact.MaxReach, is unrecognisable by shape, and runtoken
+// refuses to mint it. Both of a job's tokens are minted before anything is
+// filed, so a job whose other token (a mark longer) does not fit is refused
+// whole, leaving nothing live.
+//
+// Mutation: answer a token's refusal with an endpoint, or mint the other token
+// only when it is asked for, and a refused job is handed one, or leaves its
+// session live.
+func TestARunWhoseTokensNoSurfaceWouldRedactOpensNoSession(t *testing.T) {
+	t.Parallel()
+	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://x"})
+	// Mounted, so the run's tokens are the only reason to refuse.
+	_ = b.Handler()
+	session := func(run, launch string) *mcpbridge.Session {
+		return &mcpbridge.Session{RunID: run, Launch: launch, Handle: "dev", Role: "Engineer",
+			Surface: emptySurface()}
+	}
+	if url := b.Open(t.Context(), session("run.1", "job-1")); url != "" || b.Live() != 0 {
+		t.Fatalf("a run id holding a dot opened a session at %q, %d live", url, b.Live())
+	}
+	// The subject a job's own token over run "run-1" carries, and from it
+	// the run id whose own token's subject is exactly as long as redaction
+	// reads, its other token's a mark longer.
+	url := b.Open(t.Context(), session("run-1", "job-1"))
+	parts := strings.Split(url[strings.LastIndexByte(url, '/')+1:], ".")
+	if len(parts) != 5 {
+		t.Fatalf("the job's token %q is no token", url)
+	}
+	live := b.Live()
+	long := session("run-"+strings.Repeat("1", redact.MaxReach-len(parts[2])+1), "job-2")
+	if url := b.Open(t.Context(), long); url != "" || b.Live() != live || b.FreshEndpoint(long) != "" {
+		t.Errorf("a job whose other token runs past what redaction reads opened a session at %q, %d live "+
+			"against %d", url, b.Live(), live)
 	}
 }
 

@@ -59,7 +59,8 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
-import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { FlowTag, PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { badgedFlow, flowBadgeText, flowWhy } from "~/lib/flow.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { andList } from "~/lib/words.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
@@ -102,6 +103,7 @@ import type { ActResult } from "~/protocol/act.ts";
 import type {
   WorkFieldDef,
   WorkFieldValue,
+  WorkFlow,
   WorkItemDetail,
   WorkLink,
   WorkProjectDetail,
@@ -211,6 +213,8 @@ function useItemFields(props: RailProps): Property[] {
       ),
       setBy: by("status"),
     },
+    // WHY IT IS OR IS NOT MOVING, as the engine reads it (ADR-0162).
+    ...(detail.flow ? [{ label: "Flow", value: <FlowValue flow={detail.flow} now={now} /> }] : []),
     {
       label: "Priority",
       // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
@@ -365,15 +369,10 @@ function useItemFields(props: RailProps): Property[] {
           },
         ]
       : []),
-    // WHY IT WAITS, as whoever set the wait said it: plain text, one line. Once
-    // its start has come the reason is what it waited for.
+    // WHY IT WAITS, as whoever set the wait said it: plain text, one line.
+    // Whether the start has come is the engine's flow, never this clock.
     ...(item.wait_reason
-      ? [
-          {
-            label: item.start_at && Date.parse(item.start_at) > now ? "Waits for" : "Waited for",
-            value: <span>{item.wait_reason}</span>,
-          },
-        ]
+      ? [{ label: waitLabel(detail.flow), value: <span>{item.wait_reason}</span> }]
       : []),
     {
       label: "Estimate",
@@ -385,12 +384,29 @@ function useItemFields(props: RailProps): Property[] {
   ];
 }
 
+/** The wait's words, labelled by the flow: still waited for, waited for, or neither known. */
+function waitLabel(flow: WorkFlow | null): string {
+  if (flow?.cause === "start") return "Waits for";
+  return flow?.state === "due" ? "Waited for" : "Wait reason";
+}
+
+/** The rail's flow: its badge, or the ordinary case's words, and why it holds. */
+function FlowValue({ flow, now }: { flow: WorkFlow; now: number }) {
+  const why = flow.cause === "start" ? "" : flowWhy(flow);
+  return (
+    <span className="task-flow">
+      {badgedFlow(flow) ? <FlowTag flow={flow} /> : <span>{flowBadgeText(flow, now)}</span>}
+      {why && <span className="t-caption">{why}</span>}
+    </span>
+  );
+}
+
 /**
- * The four fields a person opens a task to read or change on a phone. Where the
+ * The fields a person opens a task to read or change on a phone. Where the
  * rail cannot stand beside the column they lead it, under the title, so what
  * holds a task never depends on how long its feed has grown.
  */
-const LEAD_FIELDS: ReadonlySet<string> = new Set(["Status", "Priority", "Assignee", "Due"]);
+const LEAD_FIELDS: ReadonlySet<string> = new Set(["Status", "Flow", "Priority", "Assignee", "Due"]);
 
 /** The fields that lead the column where the rail has fallen below it. */
 export function ItemLead(props: RailProps) {
