@@ -27,17 +27,24 @@ func (a *Applier) applyFlow(ctx context.Context, tx *sql.Tx, c applyContext) (in
 			"on subject %s: a writer's bug, since the writer refuses both",
 			c.position, flow.ID, flow.Task, c.subject())
 	}
+	// A BACKFILLED RECORD IS DATED BY ITS PAST: published long after the
+	// change it records, its broker's instant would date the change to the
+	// backfill's run, and every duration read off the rows would be wrong.
+	recorded, seats := c.brokerAt, true
+	if flow.Past != nil {
+		recorded, seats = flow.Past.At, flow.Past.Seats
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_flow
 			(id, task_id, state, cause, since, until, seat, notice, told, backfilled,
-			 log_seq, log_stream, log_generation, created_at, recorded_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 seats_read, log_seq, log_stream, log_generation, created_at, recorded_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		flow.ID, flow.Task, string(flow.State), string(flow.Cause),
 		nullableTime(flow.Since), nullableTime(flow.Until), flow.Seat,
-		string(flow.Notice), flow.Told, boolInt(flow.Backfilled),
+		string(flow.Notice), flow.Told, boolInt(flow.Backfilled), boolInt(seats),
 		c.packed, c.position.Stream, c.position.Generation,
-		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt))
+		store.EncodeTime(c.authored()), store.EncodeTime(recorded))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: record the flow at %s: %w", c.position, err)
 	}

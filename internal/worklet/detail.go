@@ -176,8 +176,10 @@ type TaskDetail struct {
 
 	// FlowHistory is the item's recorded flow (ADR-0162), NEWEST FIRST and
 	// capped as History is, read with it: each change of its flow state and
-	// each notice of one. Working time is the turns' own record
-	// (`work_item_turns`), and a view merges the three by log position.
+	// each notice of one, the backfill's among them. Working time is the
+	// turns' own record (`work_item_turns`), and a view merges the three by
+	// instant: a backfilled change is published long after the past it
+	// records, so its log position orders nothing.
 	FlowHistory []FlowEntry `json:"flow_history,omitempty"`
 
 	// Keys names the tasks this answer's HISTORY points at, id to item key:
@@ -953,8 +955,9 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 }
 
 // FlowEntry is one recorded change of an item's flow, or one notice of it: the
-// record as written, with the instant the broker recorded it and its log
-// position, which orders it among the item's history.
+// record as written, with the instant that dates it (the broker's at the
+// duty's tick, or the past's own on a backfilled change, which its `past`
+// repeats) and its log position.
 type FlowEntry struct {
 	FlowRecord
 
@@ -966,13 +969,14 @@ type FlowEntry struct {
 // tracker_flow_task_idx.
 const taskFlowStatement = `
 		SELECT id, task_id, state, cause, since, until, seat, notice, told, backfilled,
-		       recorded_at, log_seq
+		       seats_read, recorded_at, log_seq
 		FROM tracker_flow
 		WHERE task_id = ?
-		ORDER BY log_seq DESC
+		ORDER BY recorded_at DESC, log_seq DESC
 		LIMIT ?`
 
-// readFlowHistory is an item's recorded flow, NEWEST FIRST and capped.
+// readFlowHistory is an item's recorded flow, NEWEST FIRST by the instant that
+// dates each, and capped.
 func readFlowHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]FlowEntry, error) {
 	rows, err := tx.QueryContext(ctx, taskFlowStatement, taskID, limit)
 	if err != nil {
@@ -983,15 +987,18 @@ func readFlowHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) 
 	for rows.Next() {
 		var e FlowEntry
 		var since, until sql.NullInt64
-		var backfilled int
+		var backfilled, seats int
 		var at, seq int64
 		if err := rows.Scan(&e.ID, &e.Task, &e.State, &e.Cause, &since, &until, &e.Seat,
-			&e.Notice, &e.Told, &backfilled, &at, &seq); err != nil {
+			&e.Notice, &e.Told, &backfilled, &seats, &at, &seq); err != nil {
 			return nil, err
 		}
 		e.Since, e.Until = nullInstantOf(since), nullInstantOf(until)
 		e.Backfilled = backfilled == 1
 		e.At, e.LogSeq = store.DecodeTime(at), uint64(seq)
+		if e.Backfilled {
+			e.Past = &FlowPast{At: e.At, Seats: seats == 1}
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

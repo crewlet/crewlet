@@ -34,6 +34,7 @@ type AdvisorLog interface {
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Reports(ctx context.Context, cursor string, limit int, fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
+	AlarmEpisodes(ctx context.Context, since time.Time, fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error)
 }
 
 // advisorFresh is what every advisor read reads at: this node's copy, which a
@@ -446,7 +447,7 @@ func (s Sources) advisorFinding(ctx context.Context, p Params) (any, error) {
 			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName}
 		}
 		if len(h.Moved) > 0 {
-			if err := json.Unmarshal(h.Moved, &entry.Moved); err != nil {
+			if err = json.Unmarshal(h.Moved, &entry.Moved); err != nil {
 				return nil, fmt.Errorf("queries: finding %s's history does not decode: %w", id, err)
 			}
 		}

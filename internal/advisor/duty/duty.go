@@ -82,8 +82,12 @@ type Observed struct {
 type ModelPass interface {
 	// Assigned reports whether the company assigns the Advisor a model.
 	Assigned() bool
-	// Run is one pass at now: what it found, grounded, and its summary.
-	Run(ctx context.Context, now time.Time, dismissed []advisor.Stored) (ModelRun, error)
+	// Run is one pass at now: what it found, grounded, the explanations it
+	// wrote for live's open findings, and its summary.
+	Run(ctx context.Context, now time.Time, dismissed, live []advisor.Stored) (ModelRun, error)
+	// Summarize is the model's summary of a week's report, checked against
+	// its numbers; nil where none was written.
+	Summarize(ctx context.Context, now time.Time, r advisor.Report) (*string, error)
 }
 
 // ModelRun is how one model pass ended.
@@ -94,6 +98,9 @@ type ModelRun struct {
 	// Concluded reports a pass that read and submitted, so what it did not
 	// list again is no longer its finding.
 	Concluded bool
+	// Explained are the explanations the engine checked, each for the
+	// verdict it was written for.
+	Explained []advisor.Explained
 }
 
 // Log is the advisor log as the duty reads and writes it.
@@ -118,6 +125,9 @@ type Log interface {
 	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
 	// WriteReport writes a week's report, once.
 	WriteReport(ctx context.Context, r advisor.Report) error
+	// Explain writes the model's explanation of a finding's verdict; one
+	// whose verdict moved since is left for the next pass.
+	Explain(ctx context.Context, e advisor.Explained) error
 }
 
 // Request is a person's Run now.
@@ -300,6 +310,15 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 	}
 	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
 		Unread: unread, Tally: tally, Top: advisor.TopOf(live)}
+	// THE MODEL'S SUMMARY, where the company assigns one, from the report
+	// alone: a report is written without it rather than not at all.
+	if d.Model != nil && d.Model.Assigned() {
+		summary, err := d.Model.Summarize(ctx, now, r)
+		if err != nil {
+			log.WarnContext(ctx, "advisor_report_summary_not_written", "week", week, "error", err.Error())
+		}
+		r.Summary = summary
+	}
 	if err := d.Log.WriteReport(ctx, r); err != nil {
 		return fmt.Errorf("write the report of %s: %w", week, err)
 	}
@@ -384,11 +403,21 @@ func (d *Duty) modelPass(ctx context.Context, now time.Time, reading *advisor.Re
 		log.WarnContext(ctx, "advisor_dismissed_unread", "error", err.Error())
 		return nil
 	}
-	pass, err := d.Model.Run(ctx, now, dismissed)
+	live, err := d.Log.Live(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_findings_unread", "error", err.Error())
+		return nil
+	}
+	pass, err := d.Model.Run(ctx, now, dismissed, live)
 	run.Model = pass.Summary
 	if err != nil {
 		log.WarnContext(ctx, "advisor_model_pass_failed", "error", err.Error())
 		return nil
+	}
+	for _, e := range pass.Explained {
+		if err := d.Log.Explain(ctx, e); err != nil {
+			log.WarnContext(ctx, "advisor_explanation_not_recorded", "finding", e.ID, "error", err.Error())
+		}
 	}
 	if pass.Concluded {
 		reading.Groups = append(reading.Groups, advisor.GroupModel)
