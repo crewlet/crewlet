@@ -2210,20 +2210,24 @@ of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read can hold a line of the
 harness's record at its 32 MiB bound, as much again while the buffer gathering
-it grows, and the copy decoding it makes, on the order of 100 MiB (97 MiB
-measured for an OpenCode export at its 32 MiB message, whether a person reads
-it or a relaunch reads it for the calls it holds), and a person's read a
-third more for the entry's whole redaction; a node answers every dashboard tab
-open on it and every REST caller, each with a read of its own. A relaunch's
-reading takes the seats' one slot of the two, so two never run at once, and the
-most a reading and a person's read hold together, of the same OpenCode export,
-measured 193 MiB before that redaction. So each node decodes at most two transcripts at once
-(`TranscriptReadsAtOnce`), about 270 MiB at their worst, whichever socket or
-route asks. A read past them waits for a slot before the session's object is
-opened — an opened object would hold its store's connection while it waited —
-for as long as its caller waits, holding no decoder meanwhile, and a slot frees
-within one bounded read; a caller that leaves first is answered nothing, and
-nothing was opened for it.
+it grows, the copy decoding it makes and the entry's whole redaction: 134 MiB
+measured for a Claude Code line at that bound (97 MiB for an OpenCode export's
+message at it), and up to 93 MiB more where the redaction lengthens the text, so
+227 MiB at worst; a node answers every dashboard tab open on it and every REST
+caller, each with a read of its own. So each node decodes at most two
+transcripts at once (`TranscriptReadsAtOnce`), about 454 MiB live at their
+worst, whichever socket or route asks. The engine sets no `GOMEMLIMIT` and runs
+at Go's default `GOGC`, so two reads of credential-dense text can take the heap
+to about 800 MiB: the cost of redacting each entry whole, which a pod's memory
+limit has to leave room for. A relaunch's reading of a kept session for the
+calls it holds is none of them: one runs at a time, in a slot of its own
+(`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode session's at most
+2 MiB, however long one of its messages runs), so the two reads and a reading
+hold at most 497 MiB. A read past them waits for a slot before the session's
+object is opened — an opened object would hold its store's connection while it
+waited — for as long as its caller waits, holding no decoder meanwhile, and a
+slot frees within one bounded read; a caller that leaves first is answered
+nothing, and nothing was opened for it.
 
 **A node holds one large thread read at a time for its collections and
 takes.** A job's collection reads its main thread, and a capture's take scrubs
@@ -2340,10 +2344,11 @@ tools returned.
 model counts (150 a seat a day). A transcript is decoded on the node holding
 the seat, in one of its two transcript slots, and seats take at most one of
 those two between them, so a node whose seats page transcripts still decodes a
-person's. A relaunch's reading of what a cut-off session holds takes that seats'
-slot too, inside its own fifteen-second wait. A call the object store or the node's other reads hold past two
-minutes is answered unavailable, naming the session's size, and never as a
-session that holds nothing.
+person's. A relaunch's reading of what a cut-off session holds takes none of
+these: it reads in its node's one slot for readings, inside its own
+thirty-second wait. A call the object store or the node's other reads hold
+past two minutes is answered unavailable, naming the session's size, and never
+as a session that holds nothing.
 
 **A read holds nothing.** Reading a session writes no record and holds no
 session, so it keeps none past what the seat's budget and the retention give

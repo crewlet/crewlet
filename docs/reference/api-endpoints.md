@@ -11375,8 +11375,8 @@ again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
 `bounds.line_bytes`, as much again while the buffer gathering it grows, the
-copy decoding it makes and the entry's whole redaction, on the order of 130 MiB,
-so a node decodes at most two transcripts at once, about 270 MiB at their
+copy decoding it makes and the entry's whole redaction, 227 MiB measured at
+worst, so a node decodes at most two transcripts at once, about 454 MiB at their
 worst, whichever socket question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
 slot frees within one bounded read; nothing in the answer says it waited, and a
