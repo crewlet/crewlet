@@ -105,14 +105,11 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   the entry drifts: its health turns to alerting, or its
                                         #   sources come to disagree (default true). At most one
                                         #   wake an entry a day; false wakes nobody.
-assistant: {...}                        # optional, Ask Crewlet; off unless enabled
+assistant: {...}                        # optional, Ask Crewlet; off until a model is assigned
                                         #   (see "Ask Crewlet" below)
-advisor:                                # optional, the setup advisor's analyst; off unless llm
-  analyst:                              #   names a model (see guides/advisor.md, "Found by the analyst")
-    llm: [assistant]                    #   providers.llm keys, held to Ask Crewlet's member rules
-    cadence: daily                      #   daily (default), weekly (Mondays) or off; Run now always runs
-    hour: 6                             #   company-clock hour a scheduled run starts, 0..23 (default 6)
-    max_tokens: 200000                  #   one run's token ceiling, at least 20000 (default 200000)
+advisor:                                # optional, the Advisor's model; its rules run either way
+  model: assistant                      #   a providers.llm key on a harness a helper can run
+                                        #   (see guides/advisor.md, "Found by the Advisor's model")
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
@@ -421,40 +418,22 @@ per-task wall-clock timeout.
 
 ### Ask Crewlet
 
-Ask Crewlet is a drawer in the dashboard that answers a person's questions
+Ask Crewlet is a chat in the dashboard that answers a person's questions
 about the company and prepares changes for them to approve. It has no
 identity of its own: every read is a request made as the signed-in person,
 and nothing is written until that person approves the change it previews. It
-is **off** unless the company turns it on.
+is **off** until the company assigns it a model.
 
 ```yaml
 providers:
   llm:
-    assistant:                          # a dedicated entry, recommended
+    sonnet:                             # any entry the company already has
       harness: claude-code
       model: sonnet
-      timeout_seconds: 90               # one interactive round
-      max_concurrent: 4                 # its own slots, apart from the seats'
-      overrides: { web_tools: denied }  # required for every Ask Crewlet entry
 
 assistant:
-  enabled: true                         # absent or false: off
-  llm: [assistant]                      # providers.llm keys, a fallback chain
-  max_steps: 30                         # model rounds per turn, 1..40
-  turn_timeout_seconds: 900             # longest turn, 30..1200
-  proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
-  retention_days: 30                    # conversation history, 1..365
+  model: sonnet                         # a providers.llm key; absent: off
   token_budget: { day: 200000 }         # per person, optional
-  deliberate:                           # optional: a stronger model for hard questions
-    llm: [assistant-strong]             # held to llm's rules, same budgets
-    decision_briefs: true               # Brief me on this decision uses it too
-  tools:
-    deny: [chat_writes]                 # optional: tool families turned off for everybody
-  deep_work:                            # optional: absent is quick mode only
-    llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
-    timeout_seconds: 1200               # one run's wall clock, 60..1200
-    max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
-    max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
   research:                             # optional: absent reads no web page
     hosts: [developers.cloudflare.com, docs.github.com]
     search: { mcp_server: tavily }      # optional: an mcp_servers entry running tavily-mcp
@@ -462,25 +441,15 @@ assistant:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
-| `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
-| `max_steps` | 30 | The most model rounds one turn may take before its answer, each calling any number of tools: enough to look a route up, read what it touches and propose the change. |
-| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a harness launch of fifteen to twenty-five seconds. |
-| `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
-| `retention_days` | 30 | How long a person's conversations are kept. |
+| `model` | none | The `providers.llm` entry Ask Crewlet runs on. Absent, Ask Crewlet is off. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deliberate.llm` | none | A stronger chain for hard questions, first key first. A person asks for it one question at a time with **Think harder** in the drawer, which is offered only when this is set. Every member is held to `llm`'s rules below, and its rounds are charged to the same budgets. Required when `deliberate` is set. |
-| `deliberate.decision_briefs` | false | **Brief me on this decision** runs on `deliberate.llm` too. |
-| `tools.deny` | none | Tool families Ask Crewlet never offers anybody, each once. It only narrows what a person's own permissions offer, never widens them. `writes` turns off every change it could propose, so it only reads; `generic_changes` the change to any API route; `generic_reads` the read of any API route; `chat_writes`, `atlas_writes` and `agent_controls` (pausing, resuming, steering and answering an agent's run) those writes; `page_changes` a change to the screen the person has open; `deep_work` the escalation into deep work, and so reading images. |
-| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
-| `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
-| `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
-| `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
 | `research.hosts` | none | The hosts Ask Crewlet may read web pages from, through the engine, over `https`: each a host name alone, at most 50. Absent, it reads no web page ([Web research](../guides/assistant.md#web-research)). |
 | `research.search.mcp_server` | none | The `mcp_servers` entry Ask Crewlet searches those hosts through: a shared, enabled entry the curated catalogue recognises as Tavily (`tavily-mcp`), whose `tavily_search` is not blocked. Each API node runs its own instance of it for research alone, never a seat's. Absent, Ask Crewlet only reads pages it is given or finds by address. |
 
-A numeric field left out, or `0`, takes its default; a value outside its range
-is refused naming the field.
+Nothing else about a turn is a setting. A turn takes at most 40 model rounds
+and 20 minutes, a proposed change waits 15 minutes for its owner's approval,
+and a conversation is kept 30 days after its last use
+([Running Ask Crewlet](../guides/assistant.md#budgets-and-limits)).
 
 **What one person may spend.** Every round of a person's turn is charged to the
 company's budget and, where `token_budget` is set, to that person's own, across
@@ -495,35 +464,34 @@ and the company's ceiling is reached first. Beside the
 tokens, a person may have two turns running on a node and start twenty a minute
 across the whole fleet.
 
-**Every model in the chain must reach nothing the person's requests did not
-return.** Each `llm` key must name a `providers.llm` entry that is:
+**The model reaches nothing the person's requests did not return.** Ask Crewlet
+runs the entry as a helper's run, not as a seat does: the engine turns the
+harness's own web tools off whatever the entry says, and the argv every call
+runs leaves the harness no tool of its own, so its one tool source is the
+engine's `crewlet` server serving the person's own requests. A harness with its
+own shell or file reader on the engine host could read whatever the engine user
+can, the engine's own data and keys included; a page the model fetched itself
+is text no authority decision saw, and a fetch is a way out for the person's
+data. A seat on the same entry keeps its web tools.
 
-- on a profile whose run has **no tool of its own, by construction**, so the
-  harness's one tool source is the engine's `crewlet` server serving the person's
-  own requests: its profile declares `local_tools: denied` and a measured
-  `tools_off`, and the argv every Ask Crewlet call runs carries it, with an `mcp`
-  allow list naming the engine's tools alone. A harness with its own shell or file
-  reader on the engine host could read whatever the engine user can, the
-  engine's own data and keys included. Today that is `claude-code` and `pi`;
-  `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
-  not been measured to remove its tools, so both are refused.
-- **`web_tools: denied`**, set on the entry with
-  `overrides: { web_tools: denied }`. A page the model fetched itself is text
-  no authority decision saw, and a fetch is a way out for the person's data.
-  Seats keep their web tools; only the entry that sets this loses them. The
-  harnesses that can deny web are `claude-code`, `codex`, `opencode` and `pi`
-  (see [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host));
-  any other is refused.
+So the model must be an entry whose **harness** can be run that way, judged on
+the argv rather than on the profile's claim: its profile declares
+`local_tools: denied`, a measured web denial and a measured `tools_off`, with
+an `mcp` allow list naming the engine's tools alone. Today that is
+`claude-code` and `pi`; `codex` keeps `apply_patch`, which has no switch,
+`opencode`'s policy has not been measured to remove its tools, and a harness
+with no measured web denial cannot be run without its web tools
+([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)).
+An entry whose own `overrides` bring a tool back on that argv is refused too.
 
-A document that breaks one of these is refused by `crewlet validate` and by
-every `/config` write, each naming the chain member and the entry field to
-change. A stored revision that somehow carries one still applies, so every
-seat keeps running, and Ask Crewlet stays unavailable with that reason
-until the chain is fixed. Run `crewlet llm doctor assistant` before turning
-it on: on the exact argv Ask Crewlet runs it asks the harness to run a shell
-command, to read a file the doctor just wrote and to fetch a page, and reports
-any of the three that succeeded as a problem. Nothing records that run, so the
-chain cannot require it: it is the operator's check to make.
+A document whose model breaks this is refused by `crewlet validate` and by
+every `/config` write, naming `assistant.model` and why. A stored revision
+that somehow carries one still applies, so every seat keeps running, and
+Ask Crewlet stays unavailable with that reason until the model is changed.
+`crewlet llm doctor <key>` probes the helper's run of an assigned entry beside
+the entry's own: it asks the harness to run a shell command, to read a file
+the doctor just wrote and to fetch a page, and reports any of the three that
+succeeded as a problem.
 
 ---
 
@@ -654,8 +622,8 @@ providers:
                                         #   above: every seat's executor runs as its harness's own run,
                                         #   in a box from this catalogue (code-sandbox.md)
     local:
-      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
-                                        #   and deep work's, each removed at teardown
+      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes for a
+                                        #   seat, each removed at teardown
       # image: ""                       # required only where a run is placed in a container
       # runtime: auto                   # auto | docker | podman
       # network: ""                     # the container network; "none" cuts the box off
@@ -1283,8 +1251,8 @@ stream:
                                     #   company's rate. Crossing it refuses
                                     #   the append, and the top of it is kept
                                     #   for gate records. How long a
-                                    #   conversation is kept is the company
-                                    #   document's `assistant.retention_days`
+                                    #   conversation is kept is fixed: thirty
+                                    #   days after its last use
   # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
                                     #   Chatlet message, reaction and membership
                                     #   change goes through (1..256 GiB). UNSET

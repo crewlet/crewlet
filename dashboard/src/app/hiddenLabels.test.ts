@@ -98,11 +98,6 @@ const DECLARED: Declared[] = [
     why: "The chips name the capabilities they show.",
   },
   {
-    where: "routes/settings/AssistantSettings.tsx",
-    element: "ListInput",
-    why: "The setting's row names the list above it.",
-  },
-  {
     where: "routes/settings/FileStorage.tsx",
     element: "Meter",
     why: "The tile's label and figure head the bar.",

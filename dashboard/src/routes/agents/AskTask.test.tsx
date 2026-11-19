@@ -56,10 +56,11 @@ const ADA: ViewerState = {
   configWriter: false,
   configManagedBy: [],
   chatVendors: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantAssigned: null,
+  assistantCanAssign: false,
 };
 
 /** What the engine says the company runs: Crewlet's own, all four. */

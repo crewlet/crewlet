@@ -77,8 +77,7 @@ var omittedInventory = map[string][]string{
 		"Change.new", "Column.detail", "EntityCard.items_more", "EntityCard.items_total",
 		"EntityItem.depth", "ErrorCard.retryable", "ErrorEvent.retry_after_seconds", "Fact.detail",
 		"Fact.mono", "ProposalAnswer.after_seq", "ProposalCard.step_up", "StepEvent.duration_ms",
-		"StepEvent.parent", "TableCard.more", "ViewerAssistant.deliberate",
-		"ViewerAssistant.reads_images",
+		"TableCard.more",
 	},
 	"internal/atlas": {
 		"Claimed.denied", "Edge.suggested", "Entry.not_used_recently", "Entry.review",

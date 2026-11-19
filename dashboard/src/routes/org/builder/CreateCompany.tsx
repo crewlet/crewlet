@@ -488,7 +488,7 @@ export function NextSteps({
             you make it.
           </span>
           <div className="row">
-            <ButtonLink variant="secondary" size="small" href={href(["settings", "advisor"])}>
+            <ButtonLink variant="secondary" size="small" href={href(["advisor"])}>
               Open the advisor
             </ButtonLink>
           </div>

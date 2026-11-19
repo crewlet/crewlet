@@ -49,6 +49,7 @@ var dutyTTLs = map[string]struct {
 	"identityDutyTTL(interval)": {longestIdentityDutyTTL(), true},
 	"setup.LeaseTTL":            {setup.LeaseTTL, true},
 	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
+	"advisorDutyTTL":            {advisorDutyTTL, true},
 	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
 	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
