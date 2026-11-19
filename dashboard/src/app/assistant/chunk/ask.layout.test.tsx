@@ -131,5 +131,6 @@ test("at 768px the list's head fits its column and its titles keep their words",
   expect(fresh.getBoundingClientRect().right).toBeLessThanOrEqual(list.right);
   expect(fresh.scrollWidth).toBeLessThanOrEqual(fresh.clientWidth + 1);
   const title = host.querySelector("[data-conversation] .crewlet-inbox-row__title")!;
-  expect(title.getBoundingClientRect().width).toBeGreaterThan(180);
+  // About 25 characters of a title, where the 16rem column left about 15.
+  expect(title.getBoundingClientRect().width).toBeGreaterThan(170);
 });

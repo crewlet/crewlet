@@ -284,7 +284,7 @@ Stopping changes nothing: a proposal it had prepared is declined.
 The head of the panel has **New conversation**, **Conversations** (your
 recent conversations, with **Rename** and with **Delete** to delete the open
 one for good after you confirm), **Open in full page** and **Close**. Ask
-Crewlet's page lists every conversation, each with **Rename** and **Delete**.
+Crewlet's page lists every conversation, each with a menu of **Rename** and **Delete**.
 One answer runs at a time in a conversation.
 
 A conversation is named from its first question. You can search your

@@ -7,8 +7,8 @@
  * The LIST is the reader's own history: New conversation, a search of the
  * titles, and every conversation newest first under the day it was last used
  * (Today, Yesterday, Previous 7 days, Older), each a row with its title, when
- * it was used, a mark while a turn in it runs or waits on the reader, Rename
- * and Delete. Older ones are read a page at a time.
+ * it was used, a mark while a turn in it runs or waits on the reader, and a
+ * menu of Rename and Delete. Older ones are read a page at a time.
  *
  * The CONVERSATION is the one the drawer draws (`Conversation.tsx`), under a
  * head with its title and its actions (the model, Rename, Delete). The page
@@ -49,6 +49,7 @@ import {
   Input,
   ListDetail,
   ListDetailBack,
+  Menu,
   MessageAction,
   MessageActions,
   Skeleton,
@@ -56,7 +57,13 @@ import {
   announce,
   useScreenBelow,
 } from "@crewlethq/ui";
-import { PencilGlyph, SearchGlyph, SquarePenGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
+import {
+  EllipsisGlyph,
+  PencilGlyph,
+  SearchGlyph,
+  SquarePenGlyph,
+  TrashGlyph,
+} from "@crewlethq/icons/glyphs";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -374,16 +381,35 @@ function HistoryList({
                     onOpen(row.id);
                   }}
                   actions={
+                    // ONE TOOL, A MENU (Rename, Delete): the row keeps room on
+                    // its first line for its tray, so each tool more is a word
+                    // fewer of the title beside it.
                     <MessageActions label={`Actions for ${name}`}>
-                      <MessageAction
-                        label="Rename"
-                        icon={<PencilGlyph />}
-                        onClick={() => onRename(row)}
-                      />
-                      <MessageAction
-                        label="Delete"
-                        icon={<TrashGlyph />}
-                        onClick={() => onDelete(row)}
+                      <Menu
+                        label={`More actions for ${name}`}
+                        align="end"
+                        renderTrigger={(trigger) => (
+                          <MessageAction
+                            {...trigger}
+                            label="More actions"
+                            icon={<EllipsisGlyph size="md" />}
+                          />
+                        )}
+                        items={[
+                          {
+                            key: "rename",
+                            label: "Rename",
+                            icon: <PencilGlyph size="sm" />,
+                            onSelect: () => onRename(row),
+                          },
+                          {
+                            key: "delete",
+                            label: "Delete",
+                            icon: <TrashGlyph size="sm" />,
+                            danger: true,
+                            onSelect: () => onDelete(row),
+                          },
+                        ]}
                       />
                     </MessageActions>
                   }

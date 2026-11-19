@@ -274,7 +274,10 @@ test("Delete asks first, then deletes the conversation from the engine and the l
   await screen.findByText("About Payroll");
   const hiring = await screen.findByText("Hiring plan");
   const row = hiring.closest("li") ?? hiring.parentElement!;
-  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Delete" }));
+  await act(async () => {
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "More actions" }));
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Delete/ }));
   const dialog = await screen.findByRole("alertdialog", { name: "Delete this conversation?" });
   expect(sent.some((r) => (r.init.method ?? "GET") === "DELETE")).toBe(false);
   await act(async () => {
@@ -475,7 +478,10 @@ test("Rename from a row saves on Enter, says a refusal in the engine's words, an
   await screen.findByText("About Payroll");
   const hiring = await screen.findByText("Hiring plan");
   const row = hiring.closest("li") ?? hiring.parentElement!;
-  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Rename" }));
+  await act(async () => {
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "More actions" }));
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Rename/ }));
   const dialog = await screen.findByRole("dialog", { name: "Rename conversation" });
   const field = within(dialog).getByRole("textbox", { name: "Title" });
   expect((field as HTMLInputElement).value).toBe("Hiring plan");
