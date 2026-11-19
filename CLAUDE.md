@@ -68,7 +68,7 @@ A `v*` tag is the only compatibility boundary; a surface no tag has shipped has 
 - **IDs are `uuid.UUID`**, timestamps `time.Time` in UTC, durations `time.Duration`; a config field holding seconds is named `…Seconds` and converted once, at the edge.
 - **Enums are a named string type** with typed constants and a `Valid()` method, so an unknown value off the wire is a value, not a panic.
 - **Concurrency**: a goroutine's lifetime belongs to whoever started it, and every one has a way to stop. Channels for handoff, a mutex for state; `sync.OnceValue` over a `sync.Once` plus a variable. Everything runs under `-race`.
-- **Comments explain WHY, briefly**: the decision, and why the obvious alternative is wrong. A comment block outside a package doc stays within 12 lines (`internal/commentgate`, whose inventory of older code only shrinks). The full argument is written once, in the package doc (or an ADR when it binds more than one package), and the comment points there.
+- **Comments explain WHY, briefly**: the decision, and why the obvious alternative is wrong. A comment block outside a package doc stays within 12 lines (`internal/commentgate`, whose inventory of older code only shrinks). The full argument is written once, in the package doc (within 20 KB) or an ADR when it binds more than one package, and the comment points there.
 
 ## Tech Stack
 - **Go 1.27+, pure Go**: the module pins its toolchain (`GOTOOLCHAIN=auto` fetches it), and `CGO_ENABLED=0` builds every release target. **The standard library first** (`net/http`, `log/slog`, `context`, `encoding/json`): a dependency must earn its place against `std`.

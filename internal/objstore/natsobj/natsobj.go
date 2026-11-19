@@ -228,88 +228,35 @@
 //
 // # What it costs, measured
 //
-// The three-replica figures come from internal/objstore/natsobj/replicated, a
+// `make bench` (BenchmarkBackend, internal/objstore/objstoretest's Bench) at
+// `stream.sync: always`, production's default, on a shared four-vCPU VM. The
+// three-replica figures come from internal/objstore/natsobj/replicated, a
 // package of tests alone: forming a three-member cluster puts a package in the
 // solo half, and this package's whole suite would go with it.
 //
-// `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
-// Bench) at `stream.sync: always`, production's default — on four vCPUs of a
-// KVM Intel Xeon at 2.8 GHz without SHA instructions, Go 1.27.2, nats-server
-// v2.15.0, nats.go v1.54.0, 2026-10-10, two runs on a VM shared with other
-// work. Every read figure is of an object written moments before, read warm,
-// and was taken with a hand ([readAhead]) of eight messages; four, alternated
-// with eight on one machine twice over, read within that machine's noise in
-// every arm below:
-//
-//   - ON A MEMBER'S OWN CLIENT, as a data node of a solo fleet: a 64 KiB put
-//     took 1.9–2.8 ms — every message is fsynced — and larger ones ran at
-//     74–117 MB/s; a whole read ran at 450–740 MB/s from 1 MiB up, and
-//     200–250 MB/s verified ([objstore.Store.Open]), which is this CPU's
-//     SHA-256 rate; eight verified reads at once at 560–590 MB/s together. A
-//     Stat, which is a leader read, ran 10,700–10,800 a second from one
-//     goroutine over one object, 4,800–8,600 across ten thousand, and
-//     15,000–19,000 across them at 32 in flight; a listing named
-//     75,000–94,000 objects a second, at a hundred thousand as at ten
-//     thousand.
-//   - A PAGE IS PAID FOR BY ITS OFFSET: 64 KiB at a random offset of a
-//     128 MiB object took 32–36 ms, the walk of the headers of the 512
-//     messages before it on average, where the S3 backend's one ranged request
-//     took half a millisecond on the node's side. A page deep in a large file
-//     costs that walk again every time it is read.
-//   - THROUGH A LEAF, as a node without `data`: a 64 KiB put took 2.6–2.7 ms
-//     and larger ones ran at 82–105 MB/s; a whole read at 250–360 MB/s, about
-//     half a member's, and 144–226 MB/s verified; eight verified reads at
-//     once at 370–470 MB/s; a page 38–43 ms. A Stat from one goroutine pays
-//     the link's round trip — 2,900–4,200 a second — and 32 in flight recover
-//     it, at 15,000–25,000; a listing named 63,000–92,000 objects a second.
-//   - AT THREE REPLICAS (internal/objstore/natsobj/replicated: three members
-//     on that one machine, each fsyncing its own copy to the one disk, driven
-//     from a follower's client, as two of a three-member fleet's data nodes
-//     reach the bucket): every 128 KiB message is a quorum append, and a
-//     64 KiB put took 4.2–4.9 ms and larger ones ran at 39–80 MB/s, a third
-//     to three quarters of one member's. A whole read from 16 MiB up ran at
-//     218–476 MB/s, and 156–217 verified; eight verified reads at once at
-//     144–180 MB/s together. A small read pays for making its consumer, a
-//     decision of the cluster's, and for the first pulls a cluster drops at
-//     that moment ([quietWait]): of 3,000 64 KiB gets through a follower's
-//     client, from 2 to 124 lost theirs from one run to the next, with the
-//     machine's load — each costing a second, where a one-second heartbeat
-//     made it two — and gets averaged 7.2–7.3 ms in runs that lost 8, where
-//     one that kept its pull took about 4. A Stat is a leader read
-//     across a route — 2,100–2,800 a second from one goroutine, 5,600–23,400
-//     at 32 in flight — and a listing named 80,000–92,000 objects a second.
-//   - THE PUT FIGURES ABOVE ARE THE LIBRARY'S PUT, which [Backend.Put]
-//     replaced. The two measured against each other, interleaved, on one
-//     machine (four vCPUs of an Intel Xeon at 2.1 GHz, 2026-10-18, at
-//     `stream.sync: always`): on a member's own client 64 KiB took
-//     1.64–1.68 ms against 1.58–1.65, 1 MiB ran at 116–140 MB/s against
-//     109–137 and 16 MiB at 146–167 against 161–174; through a leaf 64 KiB
-//     took 2.43–2.61 ms against 2.26–2.73 and 16 MiB ran at 123–137 MB/s
-//     against 120–144; at three replicas 64 KiB took 4.6–5.5 ms against
-//     3.5–4.3 — the quorum round trip the metadata waits for its pieces'
-//     acknowledgements in ([Backend.Put]) — and 16 MiB ran at 55–66 MB/s
-//     against 72–76.
-//   - THE WINDOW SHARED BY A CONNECTION'S PUTS ([memberWindow]) against one
-//     a put, interleaved runs of each on one machine (2026-10-18, `stream.sync:
-//     always`, the machine running other work): on a member's own client,
-//     sixteen either way, a lone 16 MiB put ran at 147–167 MB/s against
-//     132–171 and eight at once at 159–177 MB/s together against 164–183;
-//     through a leaf, four shared against sixteen a put, a lone 16 MiB put
-//     at 122–134 MB/s against 129–153, eight at once at 119–140 against
-//     158, and 64 KiB in 2.2–2.7 ms against 2.0–2.7; at three replicas,
-//     sixteen either way, a lone 16 MiB put at 59–63 MB/s against 62–63,
-//     eight at once at 56–58 against 47–63 together, and 64 KiB in 5.8–6.0
-//     ms against 5.8–6.2 — and sixty-four shared, beside sixteen in a run of
-//     its own, 48–69 MB/s alone against 59–68 and 42–65 eight at once
-//     against 50–62: nothing a member measured bought by a wider one.
-//   - THE PUTS' WINDOW ACROSS A LINK, one message, before downloads shared
-//     it ("What one window costs"), through a leaf, interleaved runs of each
-//     on one machine (2026-10-18, `stream.sync: always`, four vCPUs running
-//     other work; four rounds, a fifth that overlapped another run left out):
-//     one message out ran a lone 16 MiB put at 47–83 MB/s and eight at once
-//     at 56–78 together; two, at 109–125 and 102–122; four, the window the
-//     shipped lease's heartbeat once sized, at 120–139 and 130–135. A 64 KiB
-//     put, one message whatever the window, took 2.3–4.0 ms in all three.
+//   - A member's own client: a 64 KiB put takes about 2 ms, every message
+//     being fsynced, and larger puts run at 74–117 MB/s; a whole read at
+//     450–740 MB/s, 200–250 verified ([objstore.Store.Open]), which is the
+//     CPU's SHA-256 rate. A Stat is a leader read, about 10,000 a second from
+//     one goroutine; a listing names 75,000–94,000 objects a second.
+//   - Through a leaf, reads run at about half a member's, and a Stat from one
+//     goroutine pays the link's round trip, which 32 in flight recover.
+//   - At three replicas every message is a quorum append: puts run at a third
+//     to three quarters of one member's. A small read pays for making its
+//     consumer, a decision of the cluster's, and for the first pulls a cluster
+//     drops at that moment ([quietWait]).
+//   - A PAGE IS PAID FOR BY ITS OFFSET: 64 KiB at a random offset of a 128 MiB
+//     object takes 32–36 ms, the walk of the headers before it, where the S3
+//     backend's one ranged request takes half a millisecond. A page deep in a
+//     large file costs that walk again every time it is read.
+//   - [Backend.Put] matches the library's put on throughput, and costs a
+//     quorum round trip more on a small put at three replicas, which the
+//     metadata waits for its pieces' acknowledgements in.
+//   - A window shared by a connection's puts ([memberWindow]) loses nothing
+//     against one a put, and sixty-four shared bought nothing over sixteen.
+//     Across a link a put's window of one message runs a lone 16 MiB put at
+//     47–83 MB/s, two messages at 109–125, four at 120–139; the link's one
+//     window is four.
 package natsobj
 
 import (

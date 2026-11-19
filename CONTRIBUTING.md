@@ -1130,8 +1130,9 @@ deletes nothing itself.
 - **Comments explain WHY, briefly**: the decision, and why an obvious
   alternative is wrong, within 12 lines outside a package doc. The argument
   behind it is written once, in the package doc (or an ADR when it binds
-  more than one package), and the comment points there.
-  `internal/commentgate` holds the bound, with an inventory of older code
+  more than one package), and the comment points there. A package doc
+  holds the package's decisions within 20 KB.
+  `internal/commentgate` holds both bounds, with an inventory of older code
   that only shrinks.
 - **A flag or number a client receives is sent at zero too**: `omitempty` or
   `omitzero` drops a false or a 0, and the dashboard cannot tell it from a
