@@ -1578,7 +1578,7 @@ it holds, so on a phone the field takes a line of its own and the modes and
 Search the next. A hit's snippet is a cut of a markdown body and is drawn as
 the prose it renders to, without its `**` and `#` (the knowledge search's
 snippets too). The item's **Woke** tab is who one change
-actually reached and under which of eighteen reasons, which is the fact no
+actually reached and under which of nineteen reasons, which is the fact no
 commercial tracker records: all of them can say you were notified and none can
 say why. Both readers were written, tested and swept on a retention horizon
 before either reached a screen.
