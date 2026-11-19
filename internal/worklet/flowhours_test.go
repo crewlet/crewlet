@@ -60,6 +60,11 @@ func TestHowLongWorkStoodInEachStateIsReadOffTheFlowRecord(t *testing.T) {
 			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
+	items, err := r.reader.FlowItems(t.Context(), worklet.FlowHoursQuery{Since: from, Until: from.Add(4 * time.Hour),
+		Level: statelog.ReadStale})
+	if err != nil || len(items) != 1 || items["ada"] != 2 {
+		t.Errorf("items %v (%v), want ada's two", items, err)
+	}
 	if _, err := r.reader.FlowHours(t.Context(), worklet.FlowHoursQuery{Since: from, Until: from.Add(15 * 24 * time.Hour),
 		Level: statelog.ReadStale}); err == nil {
 		t.Error("a window past two weeks was read")

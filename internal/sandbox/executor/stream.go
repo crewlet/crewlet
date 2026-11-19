@@ -281,15 +281,14 @@ func (t *transcriptLines) take() []string {
 }
 
 // redactContext is how much a reading that begins inside a stream reads
-// BEFORE what it shows, never shown ([settledEnd]), so a credential that began
-// earlier is still redacted.
+// BEFORE what it shows, never shown ([settledEnd]), so what decides how its
+// first lines redact is read with them.
 //
-// Every credential shape fits on one line but a private key, whose block runs
-// at most [redact.MaxKeyBlockBytes] past BEGIN; a window opening inside one
-// would show its body with no BEGIN to anchor on (package redact's doc). It is
-// the redaction's own bound, so such a key is read whole and the two cannot
-// drift.
-const redactContext = redact.MaxKeyBlockBytes
+// THE REDACTION'S OWN LOOK-BACK ([redact.LookBack]): a key's block and a
+// password's value below its key are decided by text further back than one
+// line, and the redaction states how far, so the two cannot drift. Its doc
+// names the password's reads that reach further than any look-back.
+const redactContext = redact.LookBack
 
 // streamEnd is the end of a stream a person or model can be shown: at most
 // keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
@@ -298,10 +297,9 @@ const redactContext = redact.MaxKeyBlockBytes
 //
 // SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
 // bytes alone, the end could reach back into the context when redaction shrank
-// what followed, and show a key whose BEGIN came before the read. A read
-// opened inside a line running to the end has no whole line to show, so that
-// line's end past the context is kept on a character, marked, rather than
-// showing nothing.
+// what followed, and be redacted without what decides it. A read opened inside
+// a line running to the end has no line it opens to show, so it shows nothing,
+// and every byte is counted.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	ctx := 0
 	if tail.Before() > 0 {
@@ -318,8 +316,10 @@ func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 //
 // WHAT IS SETTLED ([settledStart]) is shown as the WHOLE text redacts it:
 // redacted alone, a key whose BEGIN is in the context reads as cut off, and a
-// password whose key is there as no password. So only what both redactions agree on is kept, from
-// the line after the last place they part.
+// password whose key is there as no password. So only what both redactions
+// agree on is kept, from the line after the last place they part. A line
+// begun before that is not shown: read from a place that is not its start, it
+// is not read as the whole text reads it.
 func settledEnd(text string, ctx, keep int) (string, int) {
 	from, opensLine := settledStart(text, ctx)
 	part := redact.Secrets(text[from:])
@@ -333,14 +333,8 @@ func settledEnd(text string, ctx, keep int) (string, int) {
 	onLine := start == 0 && opensLine || start > 0 && part[start-1] == '\n'
 	if !onLine {
 		i := strings.IndexByte(part[start:], '\n')
-		if i < 0 || start+i+1 == len(part) {
-			// THE END OF ONE LINE begun before what is settled: kept on a
-			// character and marked, as a line longer than keep is.
-			kept, at := sandbox.KeepEnd(part[start:], keep)
-			if at == 0 {
-				kept = sandbox.KeepEndMark + kept
-			}
-			return kept, from + start + at
+		if i < 0 {
+			return "", from + len(part)
 		}
 		start += i + 1
 	}

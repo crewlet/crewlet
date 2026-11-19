@@ -1137,20 +1137,6 @@ type RunRequest struct {
 	// a control.
 	MCPServers map[string]MCPServer
 
-	// OnlyMCPServers holds the run to MCPServers alone: no server its
-	// harness's own configuration, a repository's or a plugin's declares,
-	// and no connector of the account it signs in with, starts beside them
-	// (Claude Code's --strict-mcp-config).
-	//
-	// The assistant's deep work sets it: it acts for a person, confined on the
-	// engine host, and reaches exactly the tools it is handed. A seat's
-	// executor leaves it false, and its harness starts what it would for a
-	// person running it (the box's, repository's, plugin's and account's
-	// servers) beside the engine's: what those reach is the run's cell's to
-	// bound, not the engine's. A runner whose harness cannot be held to the
-	// servers it is handed refuses a run that sets it.
-	OnlyMCPServers bool
-
 	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a

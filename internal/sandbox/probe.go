@@ -42,10 +42,6 @@ type CellProbe struct {
 
 // ProbeDirect probes the direct cell: a platform the local backend runs on,
 // and a box root it can write.
-//
-// NOT THE HOST CONFINEMENT ([ProbeConfinement]): an executor's direct box is
-// not confined (its harness runs fully permissioned), so probing it here would
-// call a working cell not ready on every host without bubblewrap or Landlock.
 func ProbeDirect(stateDir string) CellProbe {
 	if !localSupported {
 		return CellProbe{Detail: unsupportedReason,

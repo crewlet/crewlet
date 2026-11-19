@@ -205,9 +205,8 @@ func TestADirectBoxMakesACommandsDirectoryOnlyBeneathItsHome(t *testing.T) {
 // A COMMAND STARTS IN ITS BOX'S HOME AND ENTERS ITS WORKING DIRECTORY ITSELF.
 // The engine makes the directory through the home's root and never walks into
 // it by name: the command's own shell does, relative to the home, so the walk
-// is the box's own, in the box's own process. Every confinement starts it where
-// asked, bubblewrap included, which enters the home whatever it is handed, and
-// a name the shell must quote, a quote in it included, is entered whole.
+// is the box's own, in the box's own process, and a name the shell must quote,
+// a quote in it included, is entered whole.
 //
 // Mutation: hand the joined directory to the process rather than to its
 // shell, and the command starts in it with no home behind it to have left;

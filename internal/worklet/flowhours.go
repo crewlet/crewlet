@@ -44,26 +44,76 @@ const MaxFlowHoursWindow = 14 * 24 * time.Hour
 // window, by seat (the item's assignee as each change read it), state and
 // cause, in that order.
 func (r *Reader) FlowHours(ctx context.Context, q FlowHoursQuery) ([]FlowHours, error) {
+	spans, err := r.flowSpans(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return sumFlowHours(spans, q.Since, q.Until), nil
+}
+
+// FlowItems counts, per seat, the items in progress that stood in any flow
+// state for some of the window: the items each seat had to work.
+func (r *Reader) FlowItems(ctx context.Context, q FlowHoursQuery) (map[string]int, error) {
+	spans, err := r.flowSpans(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	items := map[string]map[string]bool{}
+	for i, s := range spans {
+		start, end := s.start, spanEnd(spans, i, q.Until)
+		if start.Before(q.Since) {
+			start = q.Since
+		}
+		if s.seat == "" || !end.After(start) {
+			continue
+		}
+		if items[s.seat] == nil {
+			items[s.seat] = map[string]bool{}
+		}
+		items[s.seat][s.task] = true
+	}
+	out := make(map[string]int, len(items))
+	for seat, tasks := range items {
+		out[seat] = len(tasks)
+	}
+	return out, nil
+}
+
+// flowSpans reads the window's flow changes, each item's oldest first.
+func (r *Reader) flowSpans(ctx context.Context, q FlowHoursQuery) ([]flowSpan, error) {
 	switch {
 	case q.Level == "":
-		return nil, errors.New("worklet: this flow hours read names no level")
+		return nil, errors.New("worklet: this flow read names no level")
 	case q.Since.IsZero() || !q.Until.After(q.Since) || q.Until.Sub(q.Since) > MaxFlowHoursWindow:
 		return nil, invalid("a flow hours window is from before until, at most %s", MaxFlowHoursWindow)
 	}
-	var out []FlowHours
+	var out []flowSpan
 	_, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
 		var err error
-		out, err = readFlowHours(ctx, tx, q.Since, q.Until)
+		out, err = readFlowSpans(ctx, tx, q.Since)
 		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the flow hours: %w", err)
 	}
 	return out, nil
+}
+
+// spanEnd is when spans[i] stopped standing: the item's next change, else when
+// the item left progress, else until.
+func spanEnd(spans []flowSpan, i int, until time.Time) time.Time {
+	s := spans[i]
+	switch {
+	case i+1 < len(spans) && spans[i+1].task == s.task:
+		return spans[i+1].start
+	case !s.left.IsZero() && s.left.Before(until):
+		return s.left
+	}
+	return until
 }
 
 // flowSpan is one change of an item's flow as the window reads it.
@@ -91,8 +141,8 @@ func flowHoursStatement(since time.Time) (string, []any) {
 		[]any{string(StatusInProgress), string(StatusInProgress), store.EncodeTime(since), store.EncodeTime(since)}
 }
 
-// readFlowHours reads the window's flow changes and sums each state's span.
-func readFlowHours(ctx context.Context, tx *sql.Tx, since, until time.Time) ([]FlowHours, error) {
+// readFlowSpans reads the window's flow changes, each item's oldest first.
+func readFlowSpans(ctx context.Context, tx *sql.Tx, since time.Time) ([]flowSpan, error) {
 	statement, args := flowHoursStatement(since)
 	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
@@ -127,7 +177,7 @@ func readFlowHours(ctx context.Context, tx *sql.Tx, since, until time.Time) ([]F
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	return sumFlowHours(spans, since, until), nil
+	return spans, nil
 }
 
 // sumFlowHours sums spans, grouped by task in log order: each change stands
@@ -141,13 +191,7 @@ func sumFlowHours(spans []flowSpan, since, until time.Time) []FlowHours {
 	sums := map[key]*FlowHours{}
 	items := map[key]map[string]bool{}
 	for i, s := range spans {
-		end := until
-		switch {
-		case i+1 < len(spans) && spans[i+1].task == s.task:
-			end = spans[i+1].start
-		case !s.left.IsZero() && s.left.Before(end):
-			end = s.left
-		}
+		end := spanEnd(spans, i, until)
 		start := s.start
 		if start.Before(since) {
 			start = since
