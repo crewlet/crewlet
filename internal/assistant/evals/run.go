@@ -36,15 +36,15 @@ type Options struct {
 // scripted reports whether the cases play their own scripts.
 func (o Options) scripted() bool { return o.Model == nil }
 
-// patience is how long one turn is waited for: a scripted turn answers at
-// once, and a real model's has the assistant's own turn timeout plus the
-// time its last round takes to be recorded.
-func (o Options) patience() time.Duration {
-	if o.scripted() {
-		return 10 * time.Second
-	}
-	return assistant.TurnTimeout + 30*time.Second
-}
+// turnPatience is how long one turn's stream is waited for: the service's own
+// bound on a turn ([assistant.TurnTimeout]), past which it ends the turn
+// itself, and 30 s for the records it writes as it ends, each bounded at 10 s.
+// A scripted turn is held to the same bound, not to a guess at its speed: only
+// its model is scripted, and its tools do their real work on this process's
+// CPU. The first docs search builds the docs index, which takes seconds under
+// -race on a busy runner, so the stream's end is the signal and this is only
+// the service's own promise that it comes.
+const turnPatience = assistant.TurnTimeout + 30*time.Second
 
 // Result is one case's trials.
 type Result struct {
@@ -144,7 +144,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	frames, err := rig.Await(ctx, accepted.TurnID, 0, o.patience())
+	frames, err := rig.Await(ctx, accepted.TurnID, 0, turnPatience)
 	if err != nil {
 		return Trial{}, err
 	}
