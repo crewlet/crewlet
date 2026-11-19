@@ -9,40 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// Auxiliary spend: what the cheap model a seat's `llm_auxiliary` names cost,
-// for the work that is not a phase of a turn — the turn-start memory filter,
-// knowledge query and episode summary, every rewrite a compaction makes, the
-// reflection workers after a turn, the background learning passes, and a
-// person's question answered from the knowledge base.
+// Auxiliary spend: what the cheap model a seat's `llm_auxiliary` names cost for
+// work that is not a phase of a turn (memory filter, compaction, reflection,
+// background learning, a person's knowledge-base question). Those calls reached
+// no event, so spend figures understated them. Not an `agent_phase_completed`
+// with `phase: auxiliary`: that type DRIVES the live seat state, so a late call
+// would reopen an ended turn and clear a held provider stop; this type is read
+// by no state machine.
 //
-// # Why a type of its own
-//
-// Every one of those calls was charged to the token counters and reached no
-// event, so every spend figure built from events — the usage domain, the Spend
-// screen, the live rollup, the turn list, a turn's page and a task's spend —
-// understated what the counters had charged, by exactly this. The readers were
-// written for an `agent_phase_completed` with `phase: auxiliary` that nothing
-// ever published, and publishing one would have been wrong: that type DRIVES
-// the live seat state, so a reflection call stamped after its turn ended
-// reopened the turn on every node and cleared a held provider stop. A record
-// of spend must move no seat, so it is a type no state machine reads.
-//
-// # Coalesced, never one per call
-//
-// A record is the calls of ONE key — stage, seat or person, turn, purpose,
-// model, provider entry and company day — that a node made inside one flush of
-// its ledger (internal/auxspend), so a compaction that made seventy rewrites
-// is one row rather than seventy. ACCOUNTING, NOT A TRANSCRIPT: no prompt and
-// no response is on it. What the memory filter was shown is a debugging
-// question with its own answer, and carrying a compaction's chunks would
-// dwarf the event log for a number.
-//
-// # No `failed` key, deliberately
-//
-// A failed call is COUNTED (FailedCalls), never flagged: the store promotes a
-// top-level `failed: true` into the tag that marks a whole turn failed in the
-// turn list, and the live projection derives a turn's failure from it too — so
-// a memory filter that timed out would have painted a turn that succeeded red.
+// COALESCED: one record per key (stage, seat or person, turn, purpose, model,
+// provider entry, company day) per ledger flush (internal/auxspend). ACCOUNTING,
+// NOT A TRANSCRIPT: no prompt or response. No `failed` key (the store promotes
+// it to the whole-turn-failed tag): failures are COUNTED (FailedCalls).
 
 func init() {
 	events.Register[AuxiliarySpend]()
@@ -230,19 +208,14 @@ type AuxiliarySpend struct {
 	RoleName    string `json:"role,omitempty"`
 
 	// ActorSeat and ActorRole are the PERSON the calls were made for,
-	// set instead of the three above: on [AuxStageOperator], the handle of
-	// the human seat the asking principal acts as (iam.RecordOwner — the
-	// seat a person holds, or the one the directory binds a token to; a
-	// principal bound to none charges the company and names nobody here);
-	// on [AuxStageBackground], the human seat leading a unit whose pass ran
-	// on its chain. Each with its role. A SEAT HANDLE, never an identity
-	// estate person id. NOT `agent_id` and `role`: a person is no agent
-	// seat and has no agent id, and `role` is the label the store's
-	// `agent_role` column is filled from, which every per-seat read prints
-	// as an AGENT seat's name. A person's spend is filed under the person
-	// instead — the live projection (which keys seats by `agent_id` alone)
-	// and the store's spend read both take ActorSeat as the person and
-	// ActorRole as the name.
+	// set instead of the three above: on [AuxStageOperator], the human seat
+	// the asking principal acts as (iam.RecordOwner; a principal bound to none
+	// charges the company and names nobody); on [AuxStageBackground], the human
+	// seat leading the unit whose pass ran. A SEAT HANDLE, never an identity
+	// estate person id. NOT `agent_id` and `role`: a person has no agent id,
+	// and `role` fills the store's `agent_role` column, which every per-seat
+	// read prints as an AGENT seat's name. The live projection (keyed by
+	// `agent_id` alone) and the spend read take ActorSeat as the person.
 	ActorSeat string `json:"actor_seat,omitempty"`
 	ActorRole string `json:"actor_role,omitempty"`
 

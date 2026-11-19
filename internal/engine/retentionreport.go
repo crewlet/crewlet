@@ -13,29 +13,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE RETENTION ANSWER, assembled on whichever node was asked.
-//
-// # Why any node can answer and not just the duty holder
-//
-// The question an operator runs this for is "why is the log not shrinking",
-// and the honest answer has two halves. One is fleet-wide and lives in
-// coordination — the positions, the holds, the backup points and the floor the
-// trim published, which any node can read. The other is about THIS node — its
-// own applier's lag, its snapshot, its disk — and is the half a node cannot
-// answer about a peer.
-//
-// So the report is assembled locally from both, and says whose it is:
-// [statelog.Report.NodeID] is on the document rather than beside it, because a
-// report pasted into a ticket without its author is three per-node facts
-// attributed to a fleet.
-//
-// # What it deliberately does NOT do
-//
-// It runs no trim tick of its own. The blocking term and how long it has been
-// blocking are read from the published floor, because re-deriving them here
-// would be a second opinion about one event — and `blocked_since` cannot be
-// re-derived at all, since it is a property of a series of ticks rather than
-// of any one of them.
+// THE RETENTION ANSWER, assembled on whichever node was asked, not just the duty
+// holder. "Why is the log not shrinking" has two halves: fleet-wide state in
+// coordination (positions, holds, backup points, the published floor), which any
+// node reads, and THIS node's own applier lag, snapshot and disk, which no node
+// can answer for a peer. So the report is assembled locally from both and says
+// whose it is: [statelog.Report.NodeID] is on the document, since a pasted
+// report without its author attributes per-node facts to a fleet. It runs no
+// trim tick: the blocking term and its age are read from the published floor, a
+// second derivation would be a second opinion, and `blocked_since` is a property
+// of a series of ticks and cannot be re-derived.
 
 // Report assembles this node's answer about the state log's retention.
 func (r *retention) Report(ctx context.Context) statelog.Report {
@@ -130,26 +117,18 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.FloorState = statelog.TrimFloorUnreadable
 		}
 		if published && floor.Generation == d.Generation {
-			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
-			// and the report carries both: filled from one, the two
-			// figures were always equal and a blocked domain reported
-			// a floor of zero over a log a purge had already emptied.
+			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW, and
+			// the report carries both: filled from one they were always equal
+			// and a blocked domain reported a floor of zero over an emptied log.
 			//
-			// ONLY A ROW AT THIS DOMAIN'S OWN GENERATION, which is the
-			// rule every reader of the floor follows ([floorFor], the
-			// trim's own [nextFloor]): a row from another generation
-			// is a conclusion about another number space. Just after a
-			// reanchor the published row is the OLD stream's, so its
-			// floor, its terms and its blocking term — and its
-			// `blocked_since`, dated from before the reanchor — were
-			// printed beside the adopted stream's first and last
-			// sequences as though they bounded them, where the trim
-			// has concluded nothing yet about the adopted one, which
-			// is what the empty row says until its first tick at this
-			// generation. A row ABOVE this node's generation is the
-			// fleet's on a stream this node has not adopted; its
-			// numbers compare with nothing this node holds, and a node
-			// on the new generation reports them.
+			// ONLY A ROW AT THIS DOMAIN'S OWN GENERATION, as every reader of
+			// the floor follows ([floorFor], [nextFloor]): another generation's
+			// row concludes about another number space. After a reanchor the
+			// published row is the OLD stream's, and printing its floor, terms
+			// and `blocked_since` beside the adopted stream's sequences would
+			// present them as bounds; the empty row says the trim has concluded
+			// nothing yet. A row ABOVE this node's generation compares with
+			// nothing this node holds; a node on the new generation reports it.
 			d.TrimFloor = floor.Floor
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)
@@ -243,27 +222,17 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 }
 
 // deferral fills one log's held record: the oldest this node's applier retains
-// on it and cannot decode, how long it has been held, and whether holding it
-// past the grace takes this node's copy of the estate out of service.
+// and cannot decode, and how long it has been held.
 //
-// THE MEASURED AGE, from the two facts the copy's judgement itself reads — the applier
-// holding a record it cannot decode NOW, and the position heartbeat's first
-// sighting of it — through the one arithmetic both share
-// ([statelog.DeferredSince.Age]). It stood the grace in for the age once, so a
-// rule firing past the grace compared the grace with itself and could never
-// fire.
-//
-// NOTHING HERE READS COORDINATION: both facts are this process's own memory,
-// so a coordination blip that fails a health read — or the floor, or the
-// register — neither clears a firing alarm nor hides a new one.
-//
-// PER LOG, which is the one arrangement in which the consequence the alarm
-// states is true: a deferral past the grace takes that log's copy out of
-// service and no other's ([stateLog.judgeCopy], ADR-0079), so two logs holding
-// records at once are two different answers. And EVERY log's, whatever it
-// declares about seat admission, so nothing here says whether a log's copy is
-// judged: when one declaration answered both questions, the vectors' and the
-// usage domain's copies escaped the judgement.
+// THE MEASURED AGE, from the two facts the copy's judgement reads (the applier
+// holding an undecodable record NOW, the heartbeat's first sighting of it)
+// through the one arithmetic both share ([statelog.DeferredSince.Age]); the
+// grace never stands in for the age, or a rule past the grace would compare it
+// with itself and never fire. NOTHING HERE READS COORDINATION: both facts are
+// this process's memory, so a blip neither clears a firing alarm nor hides a
+// new one. PER LOG, and EVERY log's whatever it declares about seat admission:
+// a deferral past the grace takes that log's copy out of service only
+// ([stateLog.judgeCopy], ADR-0079).
 func (r *retention) deferral(d *statelog.DomainInputs, running *runningLog,
 	now time.Time) {
 
@@ -281,25 +250,12 @@ func (r *retention) deferral(d *statelog.DomainInputs, running *runningLog,
 // one answer per node the report's node block renders: a node is shown evicted
 // only where EVERY such log holds its tombstone, as of the LATEST of them.
 //
-// # Why the intersection, and why the latest
-//
-// The trim counts nodes per log, so "evicted" on the node block is a claim
-// about all of them at once: a node evicted on the tracker's log and not yet on
-// the pages log is still counted on the pages log and still pins it. Rendered
-// from either log alone — which is what appending every log's rows did, the
-// last one read winning — that node read as evicted, and the COUNTED column
-// said no while one log's applied term waited on it. Until the gesture has
-// reached every log the node is shown as it is on the log still counting it,
-// which is also what the gesture's own answer tells the operator to finish.
-//
-// The window is measured from the latest tombstone because the node stops
-// being counted on every log only once the last of them has aged past it; the
-// earliest would call the eviction effective while one log still counts it.
-// And the latest is taken WHOLE, so the operator it names is the one whose
-// gesture made the eviction the fleet's.
-//
-// No log at all — a report assembled with no identity-claiming domain — is no
-// tombstone.
+// The trim counts nodes per log, so a node evicted on one log and not yet on
+// another is still counted, and pins, the other; shown from either alone it
+// reads evicted while a log's applied term waits on it. The window runs from the
+// LATEST tombstone (the node stops being counted only once the last has aged
+// past it), taken WHOLE so the operator named made the eviction the fleet's. No
+// identity-claiming domain at all is no tombstone.
 func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
 	if len(perLog) == 0 {
 		return nil
@@ -332,18 +288,13 @@ func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
 // openMaintenance is every capacity operation one read found holding the fleet,
 // the oldest first, as the report shows it.
 //
-// EVERY ONE, and the oldest first because it has been holding longest: a window
-// is per log and two can be open at once, each waiting on its own nodes, so
-// one reported alone hid what the other was waiting on. The alarm still takes
-// the oldest ([oldestWindow]): two windows do not stop publishing
-// twice.
-//
-// Read from the register rather than from whatever this node's own coordinator
-// remembers, because an operation is opened by whichever node ran the verb and
-// every other node is merely a PARTICIPANT — which is what makes maintenance
-// an outage rather than an inconvenience, and what makes a per-node memory of
-// it useless. A log whose window the read couldn't answer is not here: it is
-// the report's `maintenance_unread`, beside it.
+// EVERY ONE, oldest first: a window is per log and two can be open at once, each
+// waiting on its own nodes, so one reported alone hid what the other awaited.
+// The alarm still takes the oldest ([oldestWindow]). Read from the register, not
+// this node's coordinator, because whichever node ran the verb opened the
+// operation and every other is merely a PARTICIPANT, so a per-node memory is
+// useless. A log whose window could not be read is the report's
+// `maintenance_unread`, not here.
 func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []statelog.MaintenanceReport {
 	var open []statelog.MaintenanceReport
 	for _, op := range read.open {
@@ -380,24 +331,13 @@ func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []sta
 // for: at `opened`, those with no restart into a maintenance mode recorded
 // ([statelog.BaselineMissing], what the baseline reads); from the baseline to
 // the seal, those whose acknowledgement the seal does not take yet
-// ([statelog.SealOutstanding], the seal's own rule); and once it has sealed,
-// nobody, since the verify and the release wait on no node. At `opened` the
-// seal's reading named every node as owing an acknowledgement bound to the
-// window, which no node writes before the verb runs, so a banner said the
-// window was waiting on the whole fleet while the next step was the
-// operator's. Past it, a reading of its own that counted any acknowledgement
-// of the attempt said nothing was outstanding while the seal still waited on a
-// node in maintenance mode. And read at `sealed` or `confirmed`, the seal's
-// rule judges acknowledgements the seal has already taken against whatever
-// each node has written since: a node restarted again after the seal (into
-// maintenance mode, which a boot refused in service is told to do) was named
-// as outstanding by a window waiting on nobody but its operator.
-//
-// IT IS FORMED ONLY FROM ACKNOWLEDGEMENTS THAT WERE READ: an unreadable
-// register answered the whole participant set, which every surface printed as
-// every node still owing a restart, and "nobody" would have sent somebody to
-// finish an operation still waiting on four nodes. Neither is known, so the
-// report says it couldn't read them ([windowAcks]).
+// ([statelog.SealOutstanding], the seal's own rule); and once sealed, nobody,
+// since the verify and the release wait on no node. The seal's rule alone is
+// wrong elsewhere: at `opened` it names every node though the next step is the
+// operator's, and at `sealed` or `confirmed` it would name a node restarted
+// after the seal. FORMED ONLY FROM ACKNOWLEDGEMENTS THAT WERE READ: an
+// unreadable register answered as everyone or as "nobody" misdirects an
+// operator, so the report says it couldn't read them ([windowAcks]).
 func outstanding(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
 	switch op.Phase {
 	case coord.PhaseSealed, coord.PhaseConfirmed:
@@ -762,7 +702,12 @@ type logCensus struct {
 // expectedAt is the census the log was sized for at the byte ceiling its
 // stream holds (read: whether the report's stream read found it), and false
 // for a log whose census counts readers of its own on a pass that could not
-// read that ceiling ([retention.census]).
+// read that ceiling ([retention.census]). The ceiling is the one the broker
+// enforces, never the Tier A figure this node would CREATE the stream with
+// ([stateLog.specOf]), which an existing stream ignores: a raised
+// `stream.code_log_max_bytes` would grow the census and silence the alarm, a
+// `crewlet retention set-capacity` resize would leave it stale, and unset it is
+// each node's own disk-derived figure, so two nodes would judge one log apart.
 func (c logCensus) expectedAt(holds uint64, read bool, minAge time.Duration) (int, bool) {
 	census := c.census
 	if c.clients != nil {
@@ -774,52 +719,17 @@ func (c logCensus) expectedAt(holds uint64, read bool, minAge time.Duration) (in
 	return census.Expected(), true
 }
 
-// census is each log's census half, keyed by the log's domain: of every log
-// this node applies whose domain has a read index, the barrier records it
-// received over the window and the census it was sized for — evaluated PER LOG
-// by the report ([statelog.DomainInputs.LinearizableReads]), because each log
-// was sized for its own census and is past it on its own. Nil where this
-// process keeps no recorder, which every condition reads as nothing to report.
-//
-// # The rate is the LOG'S, read where it is applied
-//
-// A barrier record is what a linearizable read costs the log, so the census
-// input is the barrier records a log received — and every data node applies
-// every record, while a node without `data` applies none and keeps no recorder,
-// so the count this node's applier took of them is the whole fleet's, not this
-// node's. What this replaced summed the barriers THIS NODE appended,
-// which on a fleet of several serving nodes is only its share of the reads: a
-// three-node fleet exceeding its census threefold read as a company exactly at
-// it, and the alarm could not fire until the company was six times past what
-// its logs were sized for.
-//
-// # The census is per seat, plus the engine's own
-//
-// Declared rather than configured — it is a term in the log's own sizing, so
-// an operator who could set it would be silencing the alarm rather than
-// resizing the deployment it is about — by each domain for its own log in the
-// register ([registration.Reads]), scaled by the company's own seats, plus
-// what the engine's own periodic reads put on the log whatever the seats do,
-// plus the readers the log's own sizing declares that are neither — the code
-// log's git clients ([statelog.Census], [clientBarriers]), counted whatever
-// this node's runtime hosts, since the rate above is the fleet's.
-//
-// WINDOWED, like every alarm input [retention.observed] reads: a count since
-// the process started only grows, and a threshold against it latches.
-//
-// # Sized by the ceiling the stream HOLDS
-//
-// The git clients' term is a share of the log's ceiling, and the ceiling is
-// the one the broker enforces on the stream — read off its configuration in
-// the report's own stream read ([logCensus.expectedAt]) — never the Tier A
-// figure this node would CREATE the stream with ([stateLog.specOf]), which for
-// a stream that exists is applied by nothing: an operator who raised
-// `stream.code_log_max_bytes` and restarted grew that census and silenced the
-// alarm over a log that still held what it always had, and one who resized
-// the log with `crewlet retention set-capacity` left the census at the old
-// figure. Unset, that figure is also each node's own, derived from its free
-// disk, so two nodes judged one log against two censuses. The held ceiling is
-// one number for every node, and the resize is what moves it.
+// census is each log's census half, keyed by domain: the barrier records
+// received over the window and the census it was sized for, evaluated PER LOG
+// ([statelog.DomainInputs.LinearizableReads]). Nil without a recorder.
+// The rate is the LOG'S, read where applied: every data node applies every
+// record and one without `data` applies none, so this applier's count is the
+// fleet's; summing the barriers THIS NODE appended is only its share. The census
+// is declared, not configured (a settable one would silence the alarm instead of
+// resizing): per domain ([registration.Reads]) scaled by seats, plus the engine's
+// periodic reads and the log's declared readers ([statelog.Census],
+// [clientBarriers]). WINDOWED like every [retention.observed] input: a count
+// since start only grows, and a threshold against it latches.
 func (r *retention) census(running []*runningLog) map[string]logCensus {
 	if r.metrics == nil {
 		return nil

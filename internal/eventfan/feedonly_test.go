@@ -12,13 +12,11 @@ import (
 
 // A FEED-ONLY PAGE AND ITS AXIS ARE THE FEED'S ROWS ON EVERY NODE.
 //
-// A restarted node seeds its activity feed with one feed-only page from every
-// node, and the event log's axis, the Live strip and a seat's latest events
-// ask the same filter. Each node leaves the types the feed keeps out of its
-// own page and its own bars, so a peer's accounting rows reach neither — and
-// a related agent's trace siblings, which a second scatter reads by trace id
-// with none of the page's filters, are held to it by the asker as the store's
-// own related-agent read holds them.
+// A restarted node seeds its feed with one feed-only page from every node; the
+// axis, the Live strip and a seat's latest events ask the same filter. Each
+// node leaves feed-excluded types out of its page and bars, so a peer's
+// accounting rows reach neither. A related agent's trace siblings, read by a
+// second scatter with none of the page's filters, are held to it by the asker.
 //
 // Mutations: drop `feed_only` from the wire, and the peer's accounting row is
 // on the page and in a bar; drop the asker's narrowing of the siblings, and

@@ -11,52 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// THIS NODE'S STATUS RECORD: its MCP, model and runner rows and its infra
-// summary, written beside its presence rather than on it (internal/coord's
-// nodestatusrecord.go says why they left the presence).
-//
-// # A loop of its own
-//
-// The rows are read from memory and written on a goroutine of their own, never
-// on the beat: a node whose data path is slow writes its record late, and its
-// presence, which is what keeps it counted and its seats held, is renewed on
-// time whatever the record's write costs.
-//
-// # Written when it moves, and at least every reconcile interval
-//
-// A pass every renew period ([seat.Host.RenewPeriod]) builds the record and
-// writes it when it differs from the one this node last wrote — comparing
-// everything but each model's last answer, which moves on every call and would
-// otherwise write the record on every pass of a busy node — so a sit-out, a
-// failure or a server going down reaches every reader within a renew period,
-// as it did on the presence. And whatever moved, it is written at least every
-// [coord.ReconcileInterval]: four writes inside the bucket's age
-// ([coord.StatusFreshness]), so a live node's record never ages out, and a
-// model's last answer is never staler than that.
-//
-// # Under the presence epoch
-//
-// Each record carries the epoch of the presence this node held when it wrote
-// it, and readers count it only while that presence holds at that epoch. A
-// claim at a new epoch WAKES the loop ([seat.Config].PresenceClaimed), so the
-// record is written as the presence is claimed — at boot, after a lapse, and
-// after a drain the node resumed from — rather than up to a renew period
-// later, during which every reader would count nothing of this node's. A pass
-// that finds the epoch moved writes whatever it last wrote, since every
-// reader stopped counting the record the old epoch named. A node that holds no
-// presence writes nothing: its record would be one no reader counts, under an
-// epoch that is about to move.
-//
-// # Removed at a clean stop, on the stop's one allowance
-//
-// A node that stops says so: its record goes rather than standing until the
-// age passes. The removal is one step of the stop's allowance
-// ([seat.StopStep]), made once the seats are given back, because what falls
-// back when it fails is the bucket's age, and every reader stopped counting the
-// record when the presence went with the drain: running out of the allowance
-// costs no more than not trying ([seat.StopBudget], "Only what lapses"). It
-// removes up to the latest epoch this node asked to write at, never a later
-// incarnation's record ([coord.NodeStatusRecords]).
+// This node's status record (MCP, model and runner rows, infra summary) is
+// written beside its presence (internal/coord's nodestatusrecord.go says why),
+// on a goroutine of its own, never the beat: a slow data path writes it late
+// while the presence renews on time. A pass every renew period
+// ([seat.Host.RenewPeriod]) writes it when it differs from the last written
+// (ignoring each model's last answer, which moves every call), and at least
+// every [coord.ReconcileInterval], four writes inside the bucket's age
+// ([coord.StatusFreshness]). It carries the presence epoch it was written
+// under, counted only while that presence holds it: a new claim wakes the loop,
+// a moved epoch rewrites it, and a node holding no presence writes nothing. A
+// clean stop removes it as a [seat.StopStep], up to the latest epoch it asked
+// to write at, never a later incarnation's ([coord.NodeStatusRecords]).
 
 // statusRecords is this node's status record writer: while it runs, and, once
 // its loop is stopped, until the teardown removes what it wrote.
