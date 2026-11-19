@@ -414,6 +414,7 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
 // a reader's overrun step ([HoldingsReader]), an unread member's discard and
 // the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
 // calls ask marks asked, read by reader off the capture (launchSeq,
