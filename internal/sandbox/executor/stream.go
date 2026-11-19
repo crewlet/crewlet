@@ -144,29 +144,30 @@ func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, 
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		if err != nil && !end {
+		eof := errors.Is(err, io.EOF)
+		if eof && !end {
 			return nil
 		}
 		var stop error
 		if l.over > 0 {
-			l.broken = err == nil
+			l.broken = !eof
 			stop = skipped(l.over)
 			l.over = 0
 		} else if len(l.held) > 0 {
-			l.broken = err == nil
+			l.broken = !eof
 			stop = line(bytes.TrimRight(l.held, "\r\n"))
 		}
 		// A long line's buffer serves the next line only while a read with end
 		// ([readLines]' one read) goes on; otherwise it goes with its line, so
 		// a reader kept between reads holds only a line in transit.
-		if cap(l.held) > lineChunkBytes && (!end || stop != nil || err != nil) {
+		if cap(l.held) > lineChunkBytes && (!end || stop != nil || eof) {
 			l.held = nil
 		}
 		l.held = l.held[:0]
 		switch {
 		case stop != nil:
 			return stop
-		case err != nil:
+		case eof:
 			return nil
 		}
 	}
