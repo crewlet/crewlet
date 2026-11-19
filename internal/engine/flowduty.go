@@ -95,9 +95,13 @@ func (l *flowDutyLoop) pass(ctx context.Context) {
 	if !held {
 		return
 	}
-	if _, err := duty.Tick(ctx, l.now()); err != nil {
+	now := l.now()
+	if _, err := duty.Tick(ctx, now); err != nil {
 		log.WarnContext(ctx, "flow_duty_tick_failed", "error", err.Error())
+		return
 	}
+	// THE PAST AFTER THE PRESENT, one bounded step a tick until it is done.
+	duty.Backfill(ctx, now)
 }
 
 // dutyHere is the duty over this node's tracker, nil while it holds none.
@@ -112,6 +116,7 @@ func (l *flowDutyLoop) dutyHere() *worklet.FlowDuty {
 	duty, err := worklet.NewFlowDuty(worklet.FlowDutyDeps{
 		Reader: n.trackerReader, Writer: n.writer,
 		Chart: flowChart{liveLeads: liveLeads{engine: l.engine}}, NodeID: core.nodeID,
+		Past: seatPast{engine: l.engine},
 	})
 	if err != nil {
 		return nil
