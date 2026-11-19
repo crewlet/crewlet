@@ -11,6 +11,22 @@ import (
 // backslash, `u` and its four hex digits.
 func escapedUnit(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 
+// jsonStretchTexts are JSON texts whose stretches begin and end inside every kind of escape: a line's
+// break, \u and its digits, a `\\`'s second backslash, a surrogate pair's halves, and an escape the
+// text ends inside.
+var jsonStretchTexts = func() []string {
+	u := escapedUnit
+	return []string{
+		`{"command":"cd repo\ngit push origin main","content":"package main\n\nfunc main() {\n\tfmt.Println(1)\n}"}`,
+		`caf` + u('é') + ` ` + u('A') + `bc \` + u('A') + `bc \\\` + u('B') + `x ` + u('é') + u('é') + ` \ngit` +
+			u('é') + ` ` + u('A') + u('é') + ` \` + u('A') + u('é') + ` \n` + u('A') + ` ` + u(' ') + `zz`,
+		`go` + u(0xd835) + u(0xdc00) + `x ` + u(0xd83d) + u(0xde00) + `y ` + u(0xd83d) + `z ` + u(0xdc00) +
+			`w ab` + u(0xd83d) + u(0xd83d) + u(0xde00) + `cd \` + u(0xd835) + u(0xdc00) + `q`,
+		`\\n\\\nab\\\\\tz\\` + u('A') + `q\nn\q x\` + `u12g4 \"ok\" \/sl \b\f\r\tend\` + `u00`,
+		`ab\`,
+	}
+}()
+
 // A JSON TEXT MAY HOLD WHAT ANY STRETCH OF IT READS. A stretch cut from a JSON
 // text — a redaction's own words between its markers — can begin and end
 // anywhere, inside an escape too, and JSON reads it from its first byte: begun
@@ -28,17 +44,7 @@ func escapedUnit(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 // goes red.
 func TestAJSONTextMayHoldWhatAnyStretchOfItReads(t *testing.T) {
 	t.Parallel()
-	u := escapedUnit
-	texts := []string{
-		`{"command":"cd repo\ngit push origin main","content":"package main\n\nfunc main() {\n\tfmt.Println(1)\n}"}`,
-		`caf` + u('é') + ` ` + u('A') + `bc \` + u('A') + `bc \\\` + u('B') + `x ` + u('é') + u('é') + ` \ngit` +
-			u('é') + ` ` + u('A') + u('é') + ` \` + u('A') + u('é') + ` \n` + u('A') + ` ` + u(' ') + `zz`,
-		`go` + u(0xd835) + u(0xdc00) + `x ` + u(0xd83d) + u(0xde00) + `y ` + u(0xd83d) + `z ` + u(0xdc00) +
-			`w ab` + u(0xd83d) + u(0xd83d) + u(0xde00) + `cd \` + u(0xd835) + u(0xdc00) + `q`,
-		`\\n\\\nab\\\\\tz\\` + u('A') + `q\nn\q x\` + `u12g4 \"ok\" \/sl \b\f\r\tend\` + `u00`,
-		`ab\`,
-	}
-	for _, text := range texts {
+	for _, text := range jsonStretchTexts {
 		// EVERY TERM ANY STRETCH READS, each asked once of the whole text.
 		read := map[string]bool{}
 		for from := 0; from < len(text); from++ {
