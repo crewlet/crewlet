@@ -469,7 +469,7 @@ test("an image dropped while the composer is closed is refused with the composer
   expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
 });
 
-test("the history offers Delete only for a conversation with something in it", async () => {
+test("the history offers Rename and Delete only for a conversation with something in it", async () => {
   const sent = engine();
   const answered = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
@@ -487,6 +487,7 @@ test("the history offers Delete only for a conversation with something in it", a
   });
   await waitFor(() => expect(screen.getByText("Your recent conversations")).toBeDefined());
   expect(screen.queryByText("Delete this conversation")).toBeNull();
+  expect(screen.queryByText("Rename this conversation")).toBeNull();
   await act(async () => {
     fireEvent.click(history);
   });
@@ -504,6 +505,11 @@ test("the history offers Delete only for a conversation with something in it", a
   });
   await waitFor(() => expect(screen.getByText("Delete this conversation")).toBeDefined());
   expect(sent.length).toBeGreaterThan(0);
+  // RENAME OPENS ITS DIALOG on the open conversation.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("menuitem", { name: /Rename this conversation/ }));
+  });
+  await screen.findByRole("dialog", { name: "Rename conversation" });
 });
 
 test("an empty conversation opened from the history offers no Delete", async () => {

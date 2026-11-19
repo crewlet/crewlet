@@ -7,12 +7,16 @@
  * The LIST is the reader's own history: New conversation, a search of the
  * titles, and every conversation newest first under the day it was last used
  * (Today, Yesterday, Previous 7 days, Older), each a row with its title, when
- * it was used, a mark while a turn in it runs or waits on the reader, and
- * Delete. Older ones are read a page at a time.
+ * it was used, a mark while a turn in it runs or waits on the reader, Rename
+ * and Delete. Older ones are read a page at a time.
  *
  * The CONVERSATION is the one the drawer draws (`Conversation.tsx`), under a
- * head with its title and its actions. The page attaches no page to a
- * question: it is the conversation, not a screen the conversation is about.
+ * head with its title and its actions (the model, Rename, Delete). The page
+ * attaches no page to a question: it is the conversation, not a screen the
+ * conversation is about.
+ *
+ * A conversation moved or deleted in another tab is told here (`session.ts`):
+ * the list is read again, and the open one is read again or says it was deleted.
  *
  * # One conversation, two places
  *
@@ -52,12 +56,7 @@ import {
   announce,
   useScreenBelow,
 } from "@crewlethq/ui";
-import {
-  MessageSquareGlyph,
-  SearchGlyph,
-  SquarePenGlyph,
-  TrashGlyph,
-} from "@crewlethq/icons/glyphs";
+import { PencilGlyph, SearchGlyph, SquarePenGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -73,11 +72,17 @@ import {
   AskDeleteConfirm,
   AskFoot,
   AskProvider,
+  AskRename,
   AskThread,
   useAskGestures,
 } from "./Conversation.tsx";
 import { HISTORY_QUERY_MAX, grouped, useHistory, type HistoryRow } from "./history.ts";
-import { conversation as conversationNow, newConversation, openConversation } from "./session.ts";
+import {
+  conversation as conversationNow,
+  newConversation,
+  openConversation,
+  useMovedElsewhere,
+} from "./session.ts";
 import { isOpen, openTurn, type ConversationView } from "./turn.ts";
 
 export function AskPage({ conversation }: { conversation?: string | undefined }) {
@@ -103,7 +108,7 @@ export function titleOf(view: Pick<ConversationView, "title" | "turns">): string
 
 function Page({ conversation, deleted }: { conversation: string | undefined; deleted: string }) {
   const nav = useNavigator();
-  const { view, askDelete, resetPage, deletable, composer } = useAskGestures();
+  const { view, askDelete, askRename, resetPage, deletable, composer } = useAskGestures();
   const reading = useAskReading();
   const offline = reading.unavailable !== null;
   // NO MODEL, AND A READER WHO MAY ASSIGN ONE: the picker is the page.
@@ -111,27 +116,28 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
   const chooseModel = reading.unavailable?.reason === "no_model" && viewer.assistantCanAssign;
   const now = useNow();
   const [query, setQuery] = useState("");
-  const [gone, setGone] = useState<string | null>(null);
   // ON ONE PANE, the list is shown once the reader asks for it (Back), and
   // the conversation otherwise: asking is what the page is for.
   const single = useScreenBelow(PHONE_BREAKPOINT);
   const [listing, setListing] = useState(false);
 
   // THE LIST IS READ AGAIN WHEN THE OPEN CONVERSATION MOVES (`history.ts`):
-  // it was made, it was titled, a turn in it ended, or one was deleted.
+  // it was made, it was titled, a turn in it ended, or one was deleted; and
+  // whenever another tab tells of one that moved.
   const ended = view.turns.filter((turn) => !isOpen(turn.phase)).length;
+  const elsewhere = useMovedElsewhere();
   const history = useHistory(
     query,
-    `${view.id ?? ""}\u0000${view.title}\u0000${ended}\u0000${deleted}`,
+    `${view.id ?? ""}\u0000${view.title}\u0000${ended}\u0000${deleted}\u0000${elsewhere}`,
   );
 
   // THE ADDRESS NAMES THE CONVERSATION: it is opened where the store holds
-  // another, and one that cannot be opened (deleted, never this reader's) is
-  // said in place.
+  // another, and is not opened again while it is being read. What came of
+  // the read is the store's to say (`turn.ts`'s `Opening`).
   useEffect(() => {
-    if (!conversation || conversationNow().id === conversation) return;
-    setGone(null);
-    openConversation(conversation).catch(() => setGone(conversation));
+    const held = conversationNow();
+    if (!conversation || held.id === conversation || held.opening?.id === conversation) return;
+    openConversation(conversation).catch(() => {});
   }, [conversation]);
 
   // NONE NAMED: the one this tab was on, else a new one.
@@ -149,8 +155,14 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
-  const shown = gone !== null && gone === conversation;
-  const title = shown ? "Conversation not found" : titleOf(view);
+  const opening = view.opening !== null && view.opening.id === conversation ? view.opening : null;
+  const known = history.rows?.find((row) => row.id === conversation)?.title?.trim() || null;
+  const title =
+    opening === null
+      ? titleOf(view)
+      : opening.state === "missing"
+        ? "Conversation not found"
+        : (known ?? (opening.state === "reading" ? "Opening conversation" : "Conversation"));
   usePageLabels(conversation ? { [conversation]: title } : {});
 
   const startNew = () => {
@@ -201,10 +213,11 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
       <HistoryList
         history={history}
         query={query}
-        open={view.id}
+        open={view.id ?? opening?.id ?? null}
         view={view}
         now={now}
         onOpen={choose}
+        onRename={(row) => askRename(row.id, row.title ?? "")}
         onDelete={(row) => askDelete(row.id)}
       />
     </div>
@@ -224,50 +237,42 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
             <h2 className="ask-page__title">{title}</h2>
             <span className="ask-page__actions">
               <AskModel />
-              {deletable && !shown ? (
-                <IconButton
-                  label="Delete this conversation"
-                  size="header"
-                  variant="ghost"
-                  icon={<TrashGlyph />}
-                  tooltip
-                  onClick={() => askDelete()}
-                />
+              {deletable ? (
+                <>
+                  <IconButton
+                    label="Rename this conversation"
+                    size="header"
+                    variant="ghost"
+                    icon={<PencilGlyph />}
+                    tooltip
+                    onClick={() => askRename()}
+                  />
+                  <IconButton
+                    label="Delete this conversation"
+                    size="header"
+                    variant="ghost"
+                    icon={<TrashGlyph />}
+                    tooltip
+                    onClick={() => askDelete()}
+                  />
+                </>
               ) : null}
             </span>
           </header>
-          {shown ? (
-            <div className="ask-page__none">
-              <EmptyState
-                icon={<MessageSquareGlyph size="lg" />}
-                title="This conversation isn't in your history"
-                description="It may have been deleted, or it is somebody else's. Conversations are kept for 30 days."
-                action={
-                  <Button size="small" variant="secondary" onClick={startNew}>
-                    New conversation
-                  </Button>
-                }
-              />
-            </div>
-          ) : (
-            <>
-              <div
-                className={
-                  offline ? "ask-page__thread ask-page__thread--offline" : "ask-page__thread"
-                }
-              >
-                {chooseModel ? <ChooseAskModel /> : <AskThread />}
-              </div>
-              {offline ? null : (
-                <footer className="ask-page__foot">
-                  <AskFoot />
-                </footer>
-              )}
-            </>
+          <div
+            className={offline ? "ask-page__thread ask-page__thread--offline" : "ask-page__thread"}
+          >
+            {chooseModel ? <ChooseAskModel /> : <AskThread onNew={startNew} />}
+          </div>
+          {offline ? null : (
+            <footer className="ask-page__foot">
+              <AskFoot />
+            </footer>
           )}
         </div>
       </ListDetail>
       <AskDeleteConfirm />
+      <AskRename />
     </section>
   );
 }
@@ -293,6 +298,7 @@ function HistoryList({
   view,
   now,
   onOpen,
+  onRename,
   onDelete,
 }: {
   history: ReturnType<typeof useHistory>;
@@ -301,6 +307,7 @@ function HistoryList({
   view: ConversationView;
   now: number;
   onOpen: (id: string) => void;
+  onRename: (row: HistoryRow) => void;
   onDelete: (row: HistoryRow) => void;
 }) {
   if (history.rows === null) {
@@ -366,6 +373,11 @@ function HistoryList({
                   }}
                   actions={
                     <MessageActions label={`Actions for ${name}`}>
+                      <MessageAction
+                        label="Rename"
+                        icon={<PencilGlyph />}
+                        onClick={() => onRename(row)}
+                      />
                       <MessageAction
                         label="Delete"
                         icon={<TrashGlyph />}

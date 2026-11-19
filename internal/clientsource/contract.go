@@ -642,6 +642,7 @@ var contract = []Entry{
 	{"ASSISTANT_PAGE_SCREEN_PATTERN", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_PAGE_KEY_PATTERN", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_PAGE_TITLE_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
+	{"ASSISTANT_TITLE_MAX_RUNES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_PAGE_VALUE_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_PAGE_ID_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_PAGE_MAP_MAX_KEYS", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},

@@ -10627,8 +10627,10 @@ a.work-cal-chip {
   min-height: 0;
 }
 
+/* THE LIST KEEPS ROOM FOR A READABLE TITLE: at a tablet's 768px a 16rem
+   column cut every title to fifteen characters beside its time. */
 .ask-page__split {
-  --crewlet-list-detail-list: clamp(16rem, 30%, 22rem);
+  --crewlet-list-detail-list: clamp(19rem, 32%, 22rem);
 }
 
 .ask-page__list {
@@ -10649,8 +10651,11 @@ a.work-cal-chip {
   background: var(--color-surface-background);
 }
 
+/* A head the column cannot hold on one line (a larger text size) puts New
+   conversation under the title rather than past the column's divider. */
 .ask-page__list-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
@@ -10726,11 +10731,18 @@ a.work-cal-chip {
   padding: 0 var(--ask-page-pad-x) var(--spacing-3);
 }
 
-.ask-page__none {
+/* A conversation on its way or not opened (Conversation.tsx's AskOpening): a
+   skeleton at the thread's inset, or the reason centred in its place. */
+.ask-opening {
   display: grid;
   flex: 1;
   place-items: center;
-  padding: var(--spacing-6) var(--ask-page-pad-x);
+  padding: var(--spacing-6) var(--spacing-4);
+}
+
+.ask-opening--reading {
+  place-items: start stretch;
+  padding: var(--spacing-4);
 }
 
 /* A helper's model in its page's head (components/HelperModel.tsx): the
