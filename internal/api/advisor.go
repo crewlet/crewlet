@@ -176,7 +176,7 @@ func (a *App) serveAdvisorDecision(w http.ResponseWriter, r *http.Request) {
 		Decision Decision `json:"decision"`
 		Reason   string   `json:"reason"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil || !slices.Contains([]Decision{DecisionSnooze,
+	if err = json.Unmarshal(raw, &body); err != nil || !slices.Contains([]Decision{DecisionSnooze,
 		DecisionDismiss, DecisionReopen, DecisionUseful}, body.Decision) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 			"detail": "send a decision of snooze, dismiss, reopen or useful"})
@@ -204,7 +204,7 @@ func (a *App) serveAdvisorDecision(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.decide(r.Context(), call, row, body.Decision, reason); err != nil {
+	if err = a.decide(r.Context(), call, row, body.Decision, reason); err != nil {
 		refuseDecision(w, r, err)
 		return
 	}
@@ -221,7 +221,7 @@ func (a *App) decide(ctx context.Context, call advisordomain.Call, row advisordo
 	decision Decision, reason advisor.CloseReason) error {
 
 	now := time.Now().UTC()
-	state := advisordomain.State(row.State)
+	state := row.State
 	move := advisordomain.Move{Episode: row.ID}
 	switch decision {
 	case DecisionSnooze:

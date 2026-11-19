@@ -106,6 +106,9 @@ var stallWords = map[Class]said{
 		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
 			"alarm another agent already answers still starts a turn here, and half or more of these " +
 			"changed nothing."},
+	ClassPoolWaits: {"Callers queued for a database connection on a node.",
+		"The node's database pool had no connection free when callers asked, so they waited, and " +
+			"every request, turn and write on that node waited with them."},
 	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
 		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
 			"in a repository whose branch requires no check every merge waits on a person."},
