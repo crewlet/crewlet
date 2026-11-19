@@ -19,14 +19,13 @@ import (
 )
 
 // THE GENERIC API TOOLS: the person's whole API, through their assistant
-// (ADR-0052's parity). Three tools reach every route the API mounts that the
-// person's grant can reach, and are how Ask Crewlet reads every domain:
+// (ADR-0052's parity), and how Ask Crewlet reads every domain:
 // [DescribeAPITool] lists the routes the person may use, by domain or by words,
-// and answers one's documentation from the API reference, so the model looks a
-// route up, not guesses; [ReadAPITool] reads (GET), narrowed to the fields a
-// call selects, then shaped and fenced by [Shape]; [ProposeAPIChangeTool]
-// writes (POST, PUT, PATCH, DELETE), always a proposal previewed from the
-// resource as it is, sent only from the person's approval (ADR-0051).
+// and answers one's documentation from the API reference; [ReadAPITool] reads
+// (GET), narrowed to the fields a call selects, then shaped and fenced by
+// [Shape]; [ProposeAPIChangeTool] writes (POST, PUT, PATCH, DELETE), always a
+// proposal previewed from the resource as it is, sent only from the person's
+// approval (ADR-0051).
 //
 // A call names a route as [RouteTable] holds it ("PATCH /config"), each
 // wildcard's value apart, every value one escaped segment ([at]), a dot
