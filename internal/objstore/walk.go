@@ -8,19 +8,14 @@ import (
 
 // Walking the declared references, and merging the walks into one order.
 //
-// Three passes read the objects the declared tables name, each the tables of
-// the standings it is owed ([Pass]): the collector's audit
-// (internal/objstore/collect), which asks the store about every object a
-// Required table names; the backup (internal/backup), which copies each of
-// those or asks after it; and a store move (internal/objstore/migrate), which
-// copies every object a Required or a Derived table names into the store the
-// fleet moves to. All three read the same declarations in the same keyset
-// pages, and the first two need ONE key order across every table — the audit
-// cuts the order into ranges a store lists at once, and the backup
-// de-duplicates a key two rows name by comparing it with the one before. So
-// the walk, the merge and the page live here, once: the backup's own keyset
-// loop beside the audit's was two implementations of one walk (ADR-0008), and
-// it held every reference twice besides.
+// Three passes read the objects the declared tables name, each the standings
+// it is owed ([Pass]): the collector's audit (internal/objstore/collect), the
+// backup (internal/backup) and a store move (internal/objstore/migrate). All
+// read the same declarations in the same keyset pages, and the first two need
+// ONE key order across every table: the audit cuts it into ranges a store
+// lists at once, and the backup de-duplicates a key two rows name by
+// comparing it with the one before. So the walk, merge and page live here
+// once, not as a second loop per pass (ADR-0008).
 
 // Pass is one of the passes that walk the declared tables' references, and so
 // which standings' tables its walk reads — three columns of [Standing]'s table

@@ -169,15 +169,11 @@ func (r *limitedRig) releases() []types.SeatProviderReleased {
 	return slices.Clone(r.freed)
 }
 
-// A SEAT WHOSE MODEL IS SPENT IS PARKED UNTIL THE LIMIT LIFTS, AND ITS MAIL IS
-// DELIVERED THEN, ONCE AND IN ORDER.
-//
-// The storm this replaces: a turn refused by the limit was NAKed, its
-// redelivery a second later was refused the same way, and with every partition
-// of every seat doing it the model was asked about once a second per seat until
-// the reset, each turn flipping the seat between working, failed and stopped.
-// A notification that arrives while the seat waits joins the queue behind the
-// parked delivery rather than starting a turn of its own.
+// A seat whose model is spent is parked until the limit lifts, and its mail is
+// delivered then, once and in order. A turn refused by the limit must not be
+// NAKed: its redelivery a second later is refused the same way, per partition
+// of every seat. A notification arriving while the seat waits joins the queue
+// behind the parked delivery rather than starting a turn of its own.
 //
 // Mutation: drop the provider stage from the dispatcher, and the refused
 // delivery is NAKed: the hold is never taken and the second notification runs

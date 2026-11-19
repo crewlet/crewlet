@@ -12,24 +12,15 @@ import (
 // EVERY REFUSAL A SEAT IS TOLD TO ACT ON HAS A PRODUCER.
 //
 // The tool surface branches on [ErrTitleTaken], [ErrStaleVersion] and
-// [ErrConflict] and tells the model something different for each — "that page
-// exists, edit it", "re-base and save again", "somebody else is editing this,
-// read it again". The conflict branch matched nothing for as long as the retry
-// lived in the framework and this translation did not know about it: a write
-// that lost sixteen races came back as the generic "did not land", which tells
-// a model to report a failure rather than to re-read and retry.
+// [ErrConflict], telling the model a different thing for each. A conflict
+// never produced came back as the generic "did not land", so a model reports
+// failure instead of re-reading. Over values: the condition is sixteen races.
 //
-// A test over values, because the producing condition is sixteen lost races.
-//
-// NEITHER NAMES THE SUBJECT, in the error or in its sentence: a title's is its
-// container and a DIGEST of the title, which says nothing to the person who
-// typed the title, and a page's is a broker path; the lost race carries the
-// framework's SENTINEL, so a caller reasoning in either vocabulary matches,
-// and not the framework's error, whose text names the subject again. It used
-// to carry both for the log, which any caller printing it would have shown a
-// person. Mutations: wrap the framework's error again, or the subject, and the
-// lost race's row goes red; drop the lost-race arm from Sentence and its
-// sentence does.
+// NEITHER NAMES THE SUBJECT (a title's is a container and a DIGEST, a page's
+// a broker path): the lost race carries the framework's SENTINEL, not its
+// error, whose text names the subject again. Mutations: wrap the framework's
+// error again, or the subject, and the lost race's row goes red; drop the
+// lost-race arm from Sentence and its sentence does.
 func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 	t.Parallel()
 
@@ -99,22 +90,16 @@ func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 
 // A REFUSAL ON THE LOG'S OWN SUBJECTS STAYS IN THE FRAMEWORK'S WORDS.
 //
-// A node's eviction gate, a reanchor's generation and a barrier are published
-// through the same store as a page edit, and were translated alike: two
-// operators contending over one node's gate were told "the page kept changing
-// under this write: <node id>", about an edit nobody was making. A page, a
-// title and a container are what a person edits, and only their refusals are
-// a person's.
+// A node's eviction gate, a reanchor's generation and a barrier share the
+// store with page edits: translated, two operators contending over a node's
+// gate were told "the page kept changing under this write: <node id>".
 //
-// EVERY KIND THE DOMAIN DECLARES IS CLASSED HERE, read from [ObjectKinds]: a
-// kind added without a row is red until somebody says whether a person edits
-// it, because [refusal] translates only the kinds it names and a new kind a
-// person does edit would otherwise answer every lost race in the framework's
-// words, which the tool surface does not branch on.
-//
-// Mutation: translate whatever the subject's kind and the log's own rows go
-// red; translate nothing and the edited rows do; declare an eighth kind and
-// it is named.
+// EVERY KIND THE DOMAIN DECLARES IS CLASSED HERE, from [ObjectKinds]: a kind
+// added without a row is red until somebody says whether a person edits it,
+// as a new person-edited kind would answer lost races in words the tool
+// surface does not branch on. Mutation: translate whatever the kind and the
+// log's own rows go red; translate nothing and the edited rows do; declare an
+// eighth kind and it is named.
 func TestARefusalOnTheLogsOwnSubjectsIsTheFrameworks(t *testing.T) {
 	t.Parallel()
 	// edited is whether a person edits a kind's objects, for every kind.

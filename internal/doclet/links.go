@@ -9,40 +9,15 @@ import (
 
 // # A link to a page is its ID, in one of two grammars
 //
-// A page is ADDRESSED by its id and by nothing else: a title changes on rename,
-// so a link that named one broke the day somebody fixed a heading, and the
-// dashboard's own address for a page (`#/doclet/pages/{id}`) carries the id
-// for exactly that reason. A backlink is therefore a statement that one body
-// carries another page's id in an address, and [Links] recognises exactly two:
-//
-//   - `#/doclet/pages/<uuid>`: the dashboard's address, pasted from its
-//     address bar or composed by a seat from [AddressPrefix];
-//   - `/doclet/pages/<uuid>`: the same page as a path, which is the REST
-//     route and the tail of any deployment URL a person copies
-//     (`https://crewlet.example.com/#/doclet/pages/<uuid>` carries both,
-//     and is one link).
-//
-// A bare uuid in prose is not a link — it is a value somebody quoted — and
-// neither is `CONTAINER/Title`, which is how a seat NAMES a page to get_page
-// and is exactly the address a rename moves. Recognising either would make the
-// backlink list a guess about intent.
-//
-// # Code is not a link
-//
-// A fenced block or an inline code span is an EXAMPLE — a runbook showing the
-// shape of a URL, a snippet of a config — and a page that documents the
-// address grammar would otherwise be "linked from" every page it uses as an
-// illustration. The fences are CommonMark's: three or more backticks or
-// tildes, closed by a fence of the same character at least as long, and an
-// unclosed fence runs to the end of the body, which is what a renderer does
-// with it too.
-//
-// # Percent-encoding
-//
-// An address that crossed a redirect or a chat surface arrives encoded
-// (`%23%2Fdoclet%2Fpages%2F…`), and the id inside it is the same link. Each
-// run of non-space text is matched both as written and decoded, so an encoded
-// address is found and a malformed escape costs nothing but that decoding.
+// A page is addressed by id alone: a title changes on rename. [Links]
+// recognises `#/doclet/pages/<uuid>` (the dashboard's address, [AddressPrefix])
+// and `/doclet/pages/<uuid>` (the REST route and the tail of any deployment URL;
+// both in one URL are one link). A bare uuid or `CONTAINER/Title` is not a link:
+// it is quoted, or a name a rename moves. Fenced blocks and inline code spans
+// are examples, not links; fences are CommonMark's, and an unclosed one runs to
+// the body's end. Each run of non-space text is matched as written and
+// percent-decoded, so an address that crossed a redirect is found and a
+// malformed escape costs only that decoding.
 
 // AddressPrefix is the dashboard's address of a page, before its id.
 //

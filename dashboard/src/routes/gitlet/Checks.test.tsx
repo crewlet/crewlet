@@ -45,7 +45,6 @@ afterEach(() => {
 const OID = "d".repeat(40);
 const BASE = "e".repeat(40);
 const page = { position: CODE_POSITION, level: "stale" };
-const HOUR = 3_600_000;
 const sha = (short: string) => short.padEnd(40, "0");
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
@@ -195,20 +194,27 @@ const tabs = () =>
     .map((r) => r.textContent);
 
 // Mutation: send `until`, or ask the window's ended attempts with no `standing`.
+// The clock is pinned half an hour past a UTC midnight, where a week's edge,
+// the hour rounded up to a whole day, is that midnight itself: the window
+// reaches back seven days and the half hour, which a bound read off the
+// machine's clock refused during that hour of every day.
 test("the section asks where each check stands since the window's start, failing first, with no end", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-18T00:30:00Z"));
   const { asked } = await mountBoard();
   const first = listed(asked)[0]!;
   expect(first.searchParams.get("standing")).toBe("failing");
   expect(first.searchParams.has("until")).toBe(false);
-  const since = Date.parse(first.searchParams.get("since") ?? "");
-  expect(since % HOUR).toBe(0);
-  expect(Date.now() - since).toBeGreaterThanOrEqual(24 * HOUR);
-  expect(Date.now() - since).toBeLessThan(25 * HOUR);
+  // A day: from the hour a day before the clock's hour.
+  expect(first.searchParams.get("since")).toBe("2026-11-17T00:00:00.000Z");
   cleanup();
   const week = await mountBoard("#/gitlet/checks?window=7d");
-  const weekSince = Date.parse(listed(week.asked)[0]!.searchParams.get("since") ?? "");
-  expect(Date.now() - weekSince).toBeGreaterThan(6 * 24 * HOUR);
-  expect(Date.now() - weekSince).toBeLessThanOrEqual(7 * 24 * HOUR);
+  // A week: from seven days before the clock's hour rounded up to a day.
+  expect(listed(week.asked)[0]!.searchParams.get("since")).toBe("2026-11-11T00:00:00.000Z");
+  vi.setSystemTime(new Date("2026-11-18T13:30:00Z"));
+  cleanup();
+  const later = await mountBoard("#/gitlet/checks?window=7d");
+  expect(listed(later.asked)[0]!.searchParams.get("since")).toBe("2026-11-12T00:00:00.000Z");
   cleanup();
   const recent = await mountBoard("#/gitlet/checks?sort=recent");
   expect(listed(recent.asked)[0]!.searchParams.get("standing")).toBe("recent");

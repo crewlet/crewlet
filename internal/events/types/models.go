@@ -52,20 +52,13 @@ func (a ModelAction) Valid() bool { return slices.Contains(ModelActions, a) }
 // `/llm/device-sign-ins/{id}`): who made it, which gesture on which entry, and
 // what became of it, refused ones included.
 //
-// ITS OWN EVENT, not an [OperatorActed]: that one's `tool` names an act
-// catalogue tool, and these are REST verbs with a record of their own, the
-// precedent [BackupRequested] set. And beside the records the write already
-// makes: a credential write's secret rows name who stored them and its
-// re-activation is a revision, but a check, a retry or a sign-in leaves
-// nothing anywhere else, and a refused credential leaves nothing at all.
-//
+// ITS OWN EVENT, not an [OperatorActed] (whose `tool` names an act catalogue
+// tool): these are REST verbs, as [BackupRequested] set the precedent. A check,
+// a retry or a sign-in leaves no other record, a refused credential nothing.
 // NAMES, NEVER A VALUE: a credential call names the variables it tested or
-// sealed, which is what an audit is opened to find, and the value would be the
-// leak.
-//
-// THE NODE IS THE ENVELOPE'S, as a backup's is: the route publishes this from
-// the node that answered, which is the node the queue stamps as the origin,
-// and a payload field under that key is dropped on the way out.
+// sealed; the value would be the leak. THE NODE IS THE ENVELOPE'S, as a
+// backup's: the queue stamps the answering node, and a payload field under
+// that key is dropped.
 type ModelActed struct {
 	// ActorName, ActorKind and OperatorID are who acted, in the three
 	// halves of [OperatorActed.ActorName].

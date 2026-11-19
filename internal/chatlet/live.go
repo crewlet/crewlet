@@ -10,69 +10,42 @@ import (
 
 // THE LIVE SEAM: how a committed record reaches a screen that is already open.
 //
-// # Why the applier is what a socket listens to, and why it is not a wake
+// The applier is what a socket listens to, not the change feed: a wake must
+// outlive a writer dying before the publish, but a frame is worthless to a
+// viewer not looking, so a durable consumer would retain frames for closed
+// screens. The applier says what it wrote AFTER it is durable, and a missed
+// frame refetches exactly: holding 41 and handed 43, a browser asks for 42.
 //
-// A wake is derived by something that OUTLIVES the writer — the change feed,
-// over the committed record — because a wake runs a turn and must survive the
-// node that wrote the record dying between the commit and the publish. That
-// argument does not carry to a BROWSER. A socket frame is worthless to a
-// viewer who is not looking, has no retry that could help after the fact, and
-// is wanted within milliseconds by whoever is looking now; a durable consumer
-// for it would be a second delivery path per node per viewer, retaining frames
-// for screens that closed.
-//
-// So the live path is the cheapest thing that is still honest: the applier
-// says what it wrote, AFTER it is durable, and anything that missed a frame
-// refetches. The transcript's contiguous per-channel sequence is what makes
-// that refetch exact — a browser holding 41 and handed 43 asks for 42 rather
-// than for the room.
-//
-// # Why it accumulates rather than calls
-//
-// [Applier.Apply] runs INSIDE the transaction, and the store's transactions
-// are optimistic: a conflicted one re-runs its body, so anything called from
-// there happens more than once for one record. Everything published here is
-// therefore gathered in Apply and drained in [Applier.Committed], which the
-// framework calls once, after the commit.
+// It accumulates rather than calls: [Applier.Apply] runs INSIDE an optimistic
+// transaction whose conflicted body re-runs, so effects are gathered there and
+// drained in [Applier.Committed], called once, after the commit.
 
 // Observer is what a live surface implements to hear committed chat.
 //
-// ONE METHOD TAKING THE WHOLE BATCH, rather than one call per record: a
-// transaction is what became durable, and a subscriber that fanned out record
-// by record would render a half-applied batch on the way through. The
-// implementation belongs to the API layer — this package knows nothing about
-// sockets, viewers or visibility, and a chat applier that did would be one
-// that could not be tested without one.
+// ONE METHOD TAKING THE WHOLE BATCH: a transaction is what became durable, and
+// record-by-record fan-out would render a half-applied batch. The
+// implementation belongs to the API layer; this package knows nothing of
+// sockets, viewers or visibility.
 //
-// IT MUST NOT BLOCK. It is called on the applier's own goroutine, between one
-// batch's commit and the next batch's transaction, so a slow observer is a log
-// that applies slowly on this node. An implementation that fans out to
-// sockets hands the batch to its own buffer and returns.
+// IT MUST NOT BLOCK: it runs on the applier's own goroutine between one batch's
+// commit and the next's transaction, so a slow observer slows the log on this
+// node. Hand the batch to a buffer and return.
 type Observer interface {
 	Applied(batch []Applied)
 }
 
 // Applied is one record's committed effect, as a live surface needs it.
 //
-// # Why it is a value and not the record
+// A VALUE, NOT THE RECORD: a subscriber needs which room, what happened, who,
+// and for a message which one at which sequence, to tell a frame it can apply
+// from a hole it must refetch. The [MutationRecord] would promote the whole
+// record format to a UI contract nothing could then change. The position is
+// here because a viewer's cursor is a position.
 //
-// A subscriber renders a room. What it needs is which room, what happened,
-// who did it and — for a message — which message at which sequence, so it can
-// tell a frame it can apply from a hole it must refetch. Handing it the
-// [MutationRecord] instead would hand every subscriber the scope alphabet,
-// the version gate and the typed payloads, which is the whole record format
-// promoted to a UI contract that nothing could then change.
-//
-// THE POSITION IS HERE because a viewer's cursor is a position: a screen that
-// reconnects says where it had reached, and a frame it cannot place is a frame
-// it must throw away.
-//
-// IT CROSSES THE FLEET, which is why every field is named on the wire: a node
-// whose own copy is out of service is relayed a sound peer's batches instead
-// of its own applier's (the engine's live relay), so what one node's applier
-// gathered is decoded by another — and a field that did not survive the trip
-// would be a frame rendered without it, on exactly the node nobody vouches
-// for. Additive, like every value that crosses between builds.
+// IT CROSSES THE FLEET, so every field is named on the wire: a node whose own
+// copy is out of service is relayed a sound peer's batches (the engine's live
+// relay), and a field lost in the trip renders a frame without it on the node
+// nobody vouches for. Additive, like every value crossing between builds.
 type Applied struct {
 	// Position is where the record that caused this sits on the log.
 	Position statelog.Position `json:"position"`
@@ -126,18 +99,13 @@ type Applied struct {
 
 // accumulator gathers a transaction's effects and drains them once.
 //
-// # Why it is a map keyed on the packed position
+// A map keyed on the packed position, because the transaction's body RE-RUNS
+// with the same records: an appended slice would carry a contended room's
+// message twice, rendered as the remark said twice. A position is unique per
+// record in a log, so a re-run overwrites its own earlier entry.
 //
-// Because the transaction's body RE-RUNS. The store's transactions are
-// optimistic, so a conflicted one is replayed from the top with the same
-// records in the same order — and an appended slice would then carry a
-// contended room's message twice, which every viewer renders as the same
-// remark said twice. A position is unique per record within a log, so a re-run
-// overwrites its own earlier entry and the batch is the same either way.
-//
-// NOT GUARDED BY A MUTEX, on the framework's own contract: an applier is ONE
-// writer, and Apply and Committed are called from the same goroutine with the
-// commit in between.
+// NOT GUARDED BY A MUTEX, on the framework's contract: an applier is ONE
+// writer, and Apply and Committed run on one goroutine with the commit between.
 type accumulator struct {
 	obs Observer
 	at  map[int64]Applied

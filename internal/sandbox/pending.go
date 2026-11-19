@@ -2091,6 +2091,10 @@ type PendingRun struct {
 	// HeldUntil, up to the hour a vendor's window is benched for.
 	HeldFor   Condition `json:"held_for,omitempty"`
 	HeldUntil time.Time `json:"held_until,omitzero"`
+	// Holds counts the holds releases have put on the run, the current one
+	// last: a lift names the hold it read, so one read before a newer hold
+	// was written clears nothing ([PendingStore.LiftHold]).
+	Holds uint64 `json:"holds,omitempty"`
 
 	// Continues is TRANSIENT, an instruction to [PendingStore.BeginLaunch]:
 	// the job it opens CONTINUES the one before it, which parked on a
@@ -2896,11 +2900,13 @@ type PendingStore interface {
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// LiftHold clears the hold a release put on a run's resume
-	// ([PendingRun.HeldFor]) where it is held for cond, reporting whether
-	// it was: the condition was signalled, and the waiter announces the
-	// job's completion again on its schedule. FALSE IS NOT AN ERROR: the run
-	// is held for something else, is not held, or is gone.
-	LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error)
+	// ([PendingRun.HeldFor]) where it is held for cond and the hold is
+	// still number hold, the one the caller read ([PendingRun.Holds]),
+	// reporting whether it was: the condition was signalled, and the waiter
+	// announces the job's completion again on its schedule. FALSE IS NOT AN
+	// ERROR: the run is held for something else, by a newer hold, not at all,
+	// or is gone.
+	LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error)
 
 	// OweRefusal records on job launch's record that the seat's holder
 	// acknowledged a refused delivery of its completion and owes its re-fire
@@ -4405,6 +4411,12 @@ type BoxRef struct {
 	// for a later relaunch to know whether the job restarted the session
 	// after its brief. Nil where it is not known.
 	Restart *string
+
+	// Continued is the save point of the kept capture the launch handed the
+	// job's run, and that capture's launch ([continuedLaunch.point]): written
+	// onto the job's record by the same attach ([LaunchRecord.Continued]).
+	// Nil where the launch handed none, or one stating no point above zero.
+	Continued *ContinuedPoint
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4957,6 +4969,16 @@ type LaunchRecord struct {
 	// have ([RestartedSince]).
 	BasisRestart *string `json:"basis_restart,omitempty"`
 
+	// Continued is the save point of the kept capture the launch handed its
+	// run, and that capture's launch ([ContinuedPoint]), written with
+	// BasisRestart by the attach that names the job's command, from the same
+	// capture: what a capture of this job no read places is raised to, once
+	// its take names the newest compaction BasisRestart does (savepoint.go).
+	// Nil for a launch that opened its round, the box's copy continued in
+	// place, the conversation's base, a session of the run's own, a kept
+	// capture stating no point or zero, and a record an older build wrote.
+	Continued *ContinuedPoint `json:"continued,omitempty"`
+
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the
 	// workers it delegated to — as the newest of the totals the bridge
@@ -4981,6 +5003,17 @@ type LaunchRecord struct {
 	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
 	// record by the relaunch that replaces it whole, since it is the job's.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ContinuedPoint is the save point of the kept capture a launch handed its run
+// ([SessionCapture.Through]), and that capture's launch ordinal
+// ([LaunchRecord.Continued]). No decision reads the capture's own place, so
+// none is kept. CLOSED, as [ResumedCount] is: a later build adds a key beside
+// it on the record, never a field, so it carries no Extra. A reader takes a
+// LaunchSeq or Through at or below zero for none.
+type ContinuedPoint struct {
+	LaunchSeq int64 `json:"launch_seq"`
+	Through   int   `json:"bridge_through"`
 }
 
 // OmittedCalls is the reads of the round the brief the job's run read counted

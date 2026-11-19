@@ -4,36 +4,16 @@ import "strings"
 
 // How this package reads JSON out of a model's answer.
 //
-// # One ladder, four workers
-//
-// Four passes here ask a model for JSON and have to cope with the answer it
-// actually sends: the persistence classifier, the counterparty profiler, the
-// skill synthesizer and the skill refiner, plus the compaction summary. They
-// had THREE different recovery rules between them — one stripped a code fence
-// and nothing else, one took the span from the first brace to the last and
-// never unfenced, one did neither — so which malformations a worker survived
-// was an accident of which helper its author happened to reach for.
-//
-// That is invisible from any single worker: a pass whose parser does not know
-// about fences declines every fenced answer, and a declined answer is the same
-// observable as a model with nothing to say. The pass just quietly stops
-// producing, at whatever rate that model fences.
-//
-// # The rules, in order
-//
-// A candidate list rather than a single cleaned string, because each step is a
-// GUESS and the earlier ones must not lose to the later. The whole text comes
-// first so a clean answer parses exactly as sent; only what fails falls
-// through.
+// One ladder for every pass that asks a model for JSON, so all survive the same
+// malformations (a parser blind to code fences looks like a model with nothing
+// to say). A candidate list, not one cleaned string: each step is a GUESS and
+// earlier ones must not lose to later, so a clean answer parses as sent:
 //
 //  1. the trimmed text itself
 //  2. with an outer code fence removed
 //  3. the span from the first `{` to the last `}` of (2)
 //
-// Step 3 last because it is the most destructive: it will happily carve a
-// brace pair out of prose that was never JSON, and a caller decides what to do
-// with the result. Steps that produce nothing new are dropped, so the common
-// case is a one-element list and no extra decode.
+// Step 3 is last as the most destructive (it carves braces out of prose).
 
 // modelJSONCandidates is the ordered list of substrings worth trying to decode
 // as the model's intended JSON, best guess first.

@@ -1075,7 +1075,8 @@ const heldTools = "find ls wc sed grep head cksum touch sleep"
 const heldClockWaits = 50
 
 // heldPlainMax is the most plaintext a pack beside a working harness packs
-// ([claudeHeldTar]): the most one reading of an archive yields to a kept
+// ([claudeHeldTar]), and the most an OpenCode pack on demand exports
+// ([openCodePack]): the most one reading of an archive yields to a kept
 // session's scrub, [scrubExpansion] times the bound a kept session's archive is
 // held to (executorkeep.SessionMaxBytes), a quarter of a gibibyte. A session
 // whose files add up past it is refused by the take once packed, so it is not
@@ -1555,9 +1556,10 @@ func (ClaudeCode) Pack(paths Paths, session, staged, dest string, working bool) 
 // own staging directory, and over dest, this save's own place — never the
 // job's capture, which every read of a job that is over takes as its final
 // archive — its digest kept, ending as [ClaudeCode.Pack] does
-// ([Runner.PackSave]).
-func (ClaudeCode) PackSave(paths Paths, session, staged, dest string) string {
-	return claudeOnDemand(paths, session, packAt{staged: staged, dest: dest, working: true})
+// ([Runner.PackSave]). The record refuses no Claude Code save, so it never
+// errs.
+func (ClaudeCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
+	return claudeOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true}), nil
 }
 
 // claudeOnDemand is a pack the engine makes of session, outside the run's own

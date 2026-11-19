@@ -95,6 +95,21 @@
 // table the replicated schema does not hold; the engine's gate holds the log
 // and the table to the registered domain's own, which this package cannot
 // import.
+//
+// # The lock-free rule's arithmetic
+//
+// The collector takes no lock against an upload, so an unnamed object is
+// safe only while its grace outlasts the write that will name it:
+// [objstore.RecordWithin] plus twice [objstore.AssumedClockSkew] (two nodes,
+// each within it of the fleet's clock, the median of the data nodes' that
+// `clock_skew` measures against) must not exceed the collector's grace. And
+// RecordWithin must outlast the slowest upload at the [objstore.MiBPace]
+// floor of the largest object any declaring domain stores (worklet, Gitlet's
+// pack and layer part, artifacts, a sealed executor session). The test here
+// pins both because this is the one place every one of those constants is
+// importable. A retired grace carries the same skew twice over, since the
+// broker member that stamped a retirement need not be the one the sweeping
+// node's clock is measured against.
 package references
 
 import (

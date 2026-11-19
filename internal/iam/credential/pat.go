@@ -18,47 +18,20 @@ import (
 //
 //	cwl_pat_<id>_<position>_<secret>
 //
-// # Three parts, and why each is in the clear or not
-//
-//   - The ID is the credential's own uuid, IN THE CLEAR, so verifying one is a
-//     single keyed read of one row rather than a scan of every verifier the
-//     company holds — which is what a token presented on every request a
-//     pipeline makes has to cost.
-//   - The POSITION is where the mint landed on the identity log, packed, IN THE
-//     CLEAR, and it is what makes an absent row three-valued: a node that has
-//     applied past it and holds no row knows the token is gone (401), and one
-//     below it has simply not seen the mint yet and says so (503) — exactly the
-//     start position a session's bearer carries, for exactly its reason.
-//   - The SECRET is 32 bytes of crypto/rand, hex, and it is the only part that
-//     authenticates anything.
-//
-// # SHA-256 at rest, and why that is not the password rule being broken
-//
-// A password is hashed with argon2id because a person chose it: the space it
-// came from is small enough that a stolen digest is worth grinding against a
-// dictionary, and the memory cost is what makes that grinding expensive. A
-// token minted here is 32 bytes of crypto/rand. There is no dictionary, no
-// pattern and nothing to grind — an attacker holding the digest has 2^256
-// candidates and the only thing argon2id would add is a hundred milliseconds
-// per request, on a credential presented on every request a pipeline makes.
-//
-// So the rule is not "hash secrets with argon2id", it is "spend cost where an
-// attacker has a shortcut" — and against a value this engine minted there is
-// none.
-//
-// # The prefix is deliberate and it is not decoration
-//
-// A token carries a readable prefix so a secret scanner can recognise one in a
-// commit, a log or a paste, and so a person who finds one in a file knows what
-// they are holding. It costs nothing: the entropy is in the secret.
+//   - The ID is the credential's own uuid, IN THE CLEAR: one keyed read, no scan.
+//   - The POSITION is where the mint landed on the identity log, IN THE CLEAR;
+//     it makes an absent row three-valued: a node past it with no row says the
+//     token is gone (401), one below it says it has not seen the mint yet (503).
+//   - The SECRET is 32 bytes of crypto/rand, hex, the only part that
+//     authenticates.
 
 const (
 	// TokenBytes is the entropy in a minted token's secret: 32.
 	TokenBytes = 32
 
-	// TokenPrefix marks a value as this engine's machine token, for a
-	// scanner and for a person who finds one. Underscore-terminated, which
-	// is the convention every scanner's rules already match on.
+	// TokenPrefix marks a value as this engine's machine token, so a secret
+	// scanner recognises one in a commit, log or paste and a person who finds
+	// one knows what it is. Underscore-terminated, as scanner rules match.
 	TokenPrefix = "cwl_pat_"
 
 	// DefaultTokenLifetime is how long a machine token lives when its mint
@@ -114,12 +87,15 @@ func NewTokenSecret() (string, error) {
 // TokenVerifier is what the estate stores for a token: SHA-256 over the prefix,
 // the id and the secret.
 //
-// THE ID IS INSIDE IT, so a verifier copied onto another credential's row —
-// a restore that mixed two artefacts, a hand-edited backup — verifies nothing
-// there. THE PREFIX IS INSIDE IT so a value of another format can never collide
-// with one of these. THE POSITION IS NOT, because it is not known until the
-// mint that stores this has landed — and it authenticates nothing: all it
-// decides is whether an ABSENT row is an answer or a wait.
+// SHA-256 AND NOT ARGON2ID: a password gets argon2id because a person chose it
+// and a stolen digest is worth grinding against a dictionary. A minted token has
+// none; its digest faces 2^256 candidates, and argon2id would add a hundred
+// milliseconds to every request. Spend cost where an attacker has a shortcut.
+//
+// THE ID IS INSIDE IT, so a verifier copied onto another row verifies nothing
+// there. THE PREFIX IS INSIDE IT so another format never collides. THE POSITION
+// IS NOT: unknown until the mint lands, and it authenticates nothing; it only
+// decides whether an ABSENT row is an answer or a wait.
 func TokenVerifier(id, secret string) string {
 	sum := sha256.Sum256([]byte(TokenPrefix + id + "_" + secret))
 	return hex.EncodeToString(sum[:])

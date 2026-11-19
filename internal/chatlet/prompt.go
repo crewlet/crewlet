@@ -11,33 +11,15 @@ import (
 
 // Prompt is what a message asks of the seat it reached.
 //
-// # It REUSES the shared chat prompt rather than forking it
+// It REUSES the shared chat prompt rather than forking it: whether a message
+// addressed this agent is settled once in [notify.ChatPrompt] under this
+// domain's [AddressRule], which this embeds; a copy would drift invisibly. The
+// sender is resolved by handle ([notify.Parties.ByHandle]): it IS a seat.
 //
-// Every chat backend delivers the same KIND of event — somebody said
-// something in a room, a direct conversation or a thread — and the hard part
-// is the same for all of them: deciding whether the message was actually
-// addressed to this agent, and staying silent when it was not. The shared
-// prompt settles that under this domain's own [AddressRule], stating the
-// engine's verdict on an addressed wake and the triage on any other, so it
-// exists once in [notify.ChatPrompt] and this embeds it. A copy tuned "for
-// Chatlet" would be the same guidance drifting in two places, and the
-// drift would be invisible: both halves would keep rendering.
-//
-// # What is genuinely this domain's
-//
-// THE SENDER IS RESOLVED BY HANDLE. A Chatlet sender IS a seat's own identity,
-// not an account somewhere else, so there is nothing to scope by transport
-// and nothing to look up in a namespace — see [notify.Parties.ByHandle],
-// which exists for exactly the first-party sources.
-//
-// THE VERDICT IS READ, NOT RE-DERIVED. Whether somebody is waiting was
-// decided by the routing and stamped on the wake; see [MetaAddressed].
-//
-// IT NAMES ITS OWN TOOLS. The rule that a prompt must not name a tool is
-// about a deployed MCP server, whose tool names the engine cannot know. These
-// are shipped by this build, registered by this build under names this build
-// chose, and present on every seat that can read this notification at all —
-// the same exception [github.com/crewlet/crewlet/internal/worklet.Prompt] and
+// IT NAMES ITS OWN TOOLS: the rule against naming a tool concerns a deployed
+// MCP server, whose names the engine cannot know. These are this build's, on
+// every seat that can read this notification, the exception
+// [github.com/crewlet/crewlet/internal/worklet.Prompt] and
 // [github.com/crewlet/crewlet/internal/doclet.Prompt] state.
 type Prompt struct {
 	notify.ChatPrompt
@@ -95,47 +77,31 @@ func messageAuthor(meta map[string]string, parties notify.Parties) provenance.Au
 // symptom anywhere. The package constant cannot be empty.
 func (Prompt) Source() string { return Source }
 
-// RequiresRecon implements [notify.Prompt]: never, which is the inverse of
-// the vendor rule and deliberate.
+// RequiresRecon implements [notify.Prompt]: never, the inverse of the vendor
+// rule and deliberate. A vendor's thread reply is a pointer (a fragment like
+// "yes"), so the seat must fetch the conversation first. A CHATLET WAKE carries
+// the message WHOLE (not the card's [Notify.Excerpt]), author, room, thread
+// and routing reason, copied at write time from the routing's snapshot.
 //
-// A VENDOR'S THREAD REPLY IS A POINTER. The webhook carries a fragment — "yes",
-// "+1" — and the conversation is somewhere else, so the seat has to go and
-// fetch it before it has any context at all.
+// The flag ALSO suppresses the turn-start personal-memory filtering and episode
+// recall, which a chat turn needs most (what this colleague asked last week).
 //
-// A CHATLET WAKE IS NOT. It carries what was said — the message WHOLE, read from
-// the record's own payload rather than the card's [Notify.Excerpt] — who said
-// it, which room, which thread, and why it reached this seat — every one of
-// them on the record, copied at write time from the snapshot the routing was
-// decided in. The seat can begin reasoning from the trigger.
-//
-// The flag is not cosmetic: it ALSO suppresses the turn-start personal-memory
-// filtering and episode recall. Setting it on a wake that already carries what
-// it means costs the seat its own context for nothing — and a chat turn is the
-// one kind where that context is most of the value, because what this
-// colleague asked last week is exactly what decides how to answer them now.
-//
-// THE THREAD AROUND IT IS READ, NOT CARRIED: the turn-start prefetch hands the
-// seat its thread through [ThreadReader], the way it does every chat
-// surface's, read at the seat's own linearizable level so it includes the
-// message that woke the turn. One mechanism serves every surface, and a thread
-// is never in the prompt twice — a copy on the record beside the prefetch's
-// would double its cost on every round of the turn and let the two disagree.
+// THE THREAD IS READ, NOT CARRIED: the turn-start prefetch hands it over
+// through [ThreadReader], linearizably so it includes the waking message; a
+// copy on the record would cost double every round and could disagree.
 func (Prompt) RequiresRecon(notify.Inbound) bool { return false }
 
 // Addressed implements [notify.Prompt]: the verdict the routing stamped.
 //
-// READ RATHER THAN RE-DERIVED. Whether this wake obliges an answer is a
-// property of the (message, recipient) PAIR — one message addresses one seat
-// and merely informs another — and the parser is the only party that holds
-// both. It evaluated [AddressRule] there and stamped the answer; the working
-// indicator evaluates the same rule over the same metadata. So the gate, the
-// prompt and the indicator are readers of ONE evaluation rather than three
-// evaluations of one rule, which is the difference between agreeing by
-// construction and agreeing by coincidence.
+// READ RATHER THAN RE-DERIVED. Whether a wake obliges an answer is a property
+// of the (message, recipient) PAIR, which only the parser holds. It evaluated
+// [AddressRule] there and stamped the answer; the working indicator evaluates
+// the same rule over the same metadata, so gate, prompt and indicator read ONE
+// evaluation rather than agreeing by coincidence.
 //
-// AN ABSENT STAMP IS "NOT ADDRESSED", which is the conservative half: a seat
-// wrongly told nobody is waiting keeps the freedom to stay silent, while one
-// wrongly told somebody is must post something on every broadcast it observes.
+// AN ABSENT STAMP IS "NOT ADDRESSED", the conservative half: a seat wrongly
+// told nobody is waiting may stay silent, while one wrongly told somebody is
+// must post on every broadcast it observes.
 func (Prompt) Addressed(n notify.Inbound) bool {
 	return n.Metadata[MetaAddressed] == "true"
 }
@@ -175,21 +141,18 @@ func senderLabel(n notify.Inbound, parties notify.Parties) string {
 	return AuthorLabel(handle, AuthorKind(n.Metadata[MetaAuthorKind]), parties)
 }
 
-// AuthorLabel renders a Chatlet author as a colleague, BY HANDLE — the
-// one rendering both the woken message's sender and every line of the thread
-// it is part of ([ThreadReader]) are named by, so one person is never two
-// labels in one prompt.
+// AuthorLabel renders a Chatlet author as a colleague, BY HANDLE: the one
+// rendering for the woken sender and every [ThreadReader] line, so one person
+// is never two labels in one prompt.
 //
-// The author kind is what decides the fallback, for a handle the roster does
-// not resolve. The engine's own narration never resolves — it is nobody — and
-// rendering it as a bare handle invites the agent to reply to a colleague who
-// does not exist. A human author is a person, writing as the seat they hold (a
-// credential acting as itself says nothing in a room at all), so the roster
-// ordinarily names them as the person they are; the person label is what is
-// left when it no longer does — the seat removed from the chart since — and it
-// still says the one thing an agent must not get wrong: nobody answers an
-// agent-to-agent ask there. A credential's label is the same promise for a
-// record that names one, which no write of this build makes.
+// The author kind decides the fallback for a handle the roster does not
+// resolve. The engine's own narration never resolves (it is nobody), and a bare
+// handle invites a reply to a colleague who does not exist. A human writes as
+// the seat they hold, so the roster ordinarily names them; the person label is
+// what is left once the seat is removed from the chart, and it keeps the one
+// thing an agent must not get wrong: nobody answers an agent-to-agent ask
+// there. A credential's label is the same promise for a record naming one,
+// which no write of this build makes.
 func AuthorLabel(handle string, kind AuthorKind, parties notify.Parties) string {
 	if parties != nil && handle != "" {
 		if party, ok := parties.ByHandle(handle); ok {
@@ -218,20 +181,15 @@ func AuthorLabel(handle string, kind AuthorKind, parties notify.Parties) string 
 // whyYou states the routing reason in the recipient's own terms, where the
 // shared verdict does not already state it.
 //
-// THE REASON IS RENDERED rather than left on the metadata, because it is the
-// difference between an ask and an FYI and the seat has to make that
-// distinction in one read. The shared triage teaches how to find an addressee
-// in the TEXT; this says what the ROUTING already concluded, which the text
-// cannot always show — nothing in "we should ship on Friday" says it reached
-// you because nobody else in your unit was listening.
+// THE REASON IS RENDERED, not left on the metadata: it separates an ask from an
+// FYI in one read. The shared triage finds an addressee in the TEXT; this says
+// what the ROUTING concluded, which the text may not show.
 //
-// TWO REASONS ARE THE VERDICT'S OWN and get no line here. A direct
-// conversation and a mention are what the shared prompt's "**Addressed to
-// you:**" line says, read from this domain's own rule, and a line here beside
-// it told the seat one reason twice. Every other reason says what the verdict
-// cannot: that the thread is the seat's own, that a person asked the whole
-// room and how many seats share the question, that the seat answers for a
-// room nobody else answered in, or which kind of news an unaddressed wake is.
+// TWO REASONS ARE THE VERDICT'S OWN and get no line: a direct conversation and
+// a mention are what the shared "**Addressed to you:**" line already says.
+// Every other reason says what the verdict cannot: the thread is the seat's
+// own, the whole room was asked, the seat answers for a room nobody else did,
+// or what kind of news an unaddressed wake is.
 func whyYou(meta map[string]string) string {
 	var line string
 	switch Reason(meta[notify.FollowReasonField]) {
@@ -370,16 +328,14 @@ func handling(meta map[string]string) string {
 // readFirst is what the seat already holds of the conversation, and what it
 // has to go and read.
 //
-// BRANCHED ON THE THREAD, because the two wakes arrive holding different
-// things. A THREAD REPLY'S THREAD IS ALREADY IN THE PROMPT: the turn-start
-// prefetch read it through [ThreadReader] and rendered it under
-// `## The thread so far`, so telling the seat to go and read it spends a round
-// on a second copy of what it holds — and a second copy of one thread in one
-// turn is what retiring the record's own excerpt removed. What is left to read
-// is what that block says it could not give: a thread it could not read, a
-// message it left out, the exact words of the middle it condensed, or the room
-// outside the thread. A TOP-LEVEL MESSAGE opens no thread, so nothing said
-// before it was handed over at all, and reading the room is the only way to it.
+// BRANCHED ON THE THREAD, because the two wakes hold different things. A THREAD
+// REPLY'S THREAD IS ALREADY IN THE PROMPT: the turn-start prefetch read it
+// through [ThreadReader] under `## The thread so far`, so sending the seat to
+// read it spends a round on a second copy. What is left to read is what that
+// block says it could not give: an unreadable thread, a left-out message, the
+// exact words of a condensed middle, or the room outside the thread. A
+// TOP-LEVEL MESSAGE opens no thread, so nothing before it was handed over and
+// reading the room is the only way to it.
 func readFirst(meta map[string]string) string {
 	if meta[notify.ThreadField] != "" {
 		return "\n2. **The thread so far is already in front of you.** It was " +

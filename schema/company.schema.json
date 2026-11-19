@@ -1550,7 +1550,7 @@
           ]
         },
         "save_interval_seconds": {
-          "description": "Shortest time in seconds between saves of a running executor's session (Claude Code runs; default 600, 0 takes it, 300..3600). A seat's saves are paced by their size beyond it, so at the default max_bytes_per_seat a session past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, twice that once the seat has saved for a day.",
+          "description": "Shortest time in seconds between saves of a running executor's session (default 600, 0 takes it, 300..3600). A seat's saves are paced by their size beyond it, so at the default max_bytes_per_seat a session past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, twice that once the seat has saved for a day.",
           "maximum": 3600,
           "minimum": 0,
           "type": [

@@ -74,19 +74,16 @@ import (
 type Record string
 
 // Len is the bytes s takes inside a JSON string as encoding/json writes it,
-// HTML escaping on, the quotes not counted: exactly, for valid UTF-8, and
-// never less than that for a string with invalid bytes in it.
+// HTML escaping on, quotes not counted: exact for valid UTF-8, never less for
+// invalid bytes. THE ENCODER'S OWN RULE, mirrored rune for rune: `"` and `\`
+// and the five control bytes with a short escape (`\b`, `\f`, `\n`, `\r`,
+// `\t`) are two bytes; every other control byte, `<`, `>`, `&`, U+2028 and
+// U+2029 are six (`\u003c`); every other rune is its UTF-8 length.
 //
-// THE ENCODER'S OWN RULE, mirrored rune for rune: `"` and `\` and the five
-// control bytes with a short escape (`\b`, `\f`, `\n`, `\r`, `\t`) are two
-// bytes; every other control byte, `<`, `>`, `&`, U+2028 and U+2029 are six
-// (`\u003c`, `\u2028`); every other rune is its UTF-8 length.
-//
-// AN INVALID BYTE IS COUNTED SIX, the most the encoder writes for one: it
-// writes `\ufffd` for some and the three bytes of U+FFFD for others, by
-// context, so no per-byte rule is exact, and a bound needs one that is never
-// short. A payload with invalid bytes in it is therefore measured a few bytes
-// long, the safe direction. A test holds both halves to json.Marshal.
+// AN INVALID BYTE IS COUNTED SIX, the most the encoder writes for one (six
+// bytes for some, U+FFFD's three for others, by context): a bound needs a rule
+// never short, so such a payload is measured a few bytes long. A test holds
+// both halves to json.Marshal.
 func Len(s string) int {
 	n := 0
 	for i := 0; i < len(s); {
@@ -180,18 +177,13 @@ const markerDigestAt = ", digest "
 // value it did not keep ([Record.LeftOut]), whatever the record: a string that
 // is exactly "(", a size as [Size] states it, " not kept on ", a record's
 // name, ", digest ", eight lowercase hex digits and ")". A reader comparing
-// two calls' arguments reads such a value as one that may have been anything,
-// since the marker names a value it does not show; a value a model wrote in
-// that shape reads so too, which only ever reads two calls alike, the safe
-// side for such a reader.
+// two calls' arguments reads it as a value that may have been anything; a
+// model-written value in that shape reads so too, the safe side.
 //
-// ANY RECORD'S NAME, never a list of the names this tree writes: a name is its
-// caller's, and a marker under a name the list missed would be compared as the
-// text it is, which reads apart two calls whose left-out values may have been
-// one. The size is held to what [Size] writes and the digest to what LeftOut
-// writes, so a parenthesis a model wrote is not taken for a marker by its
-// shape alone. One format, unchanged since the package was written, so every
-// marker any build of this tree wrote is recognised.
+// ANY RECORD'S NAME, never a list: a name is its caller's, and a marker under
+// a missed name would be compared as text, reading apart two calls whose
+// left-out values may have been one. Size and digest are held to what [Size]
+// and LeftOut write, so a model's parenthesis is not taken for a marker.
 func IsLeftOut(v any) bool {
 	s, ok := v.(string)
 	if !ok {
@@ -350,26 +342,17 @@ func runeCost(s string, i int) (step, cost int) {
 	return size, size
 }
 
-// Args is a call's arguments — the JSON text the engine records them as
-// (internal/tools.RecordArgs: one object, keys sorted, `<` `>` `&` as
-// themselves) — within budget bytes as a JSON string value. text where it
-// fits; otherwise the same object with the values the record cannot keep left
-// out ([Record.LeftOut]), and whole the size of text. Zero whole is the
-// arguments kept whole: text as it is, or as the engine spells it where only
-// that spelling fits.
-//
-// LEAVES FIRST, LARGEST FIRST: a string, a number, a boolean or a null at any
-// depth is a leaf, and leaving out the largest leaves first keeps every short
-// value — the ids, keys, paths and names that say what the call was about —
-// beside the bodies that are left out. Only where every leaf larger than its
-// marker is out and the text still does not fit are containers left out,
-// largest first; and only past that does the whole object become
-// {"not_kept": marker}, which is also what text that is not one JSON object
-// becomes. A value no larger than its marker is never left out: the marker
-// would not save a byte.
-//
-// Deterministic: the same arguments always keep the same form, ties broken in
-// the order the text holds its values.
+// Args is a call's arguments (the JSON text internal/tools.RecordArgs writes:
+// one object, keys sorted, `<` `>` `&` as themselves) within budget bytes as a
+// JSON string value: text where it fits, else the same object with the values
+// the record cannot keep left out ([Record.LeftOut]), and whole the size of
+// text. Zero whole is the arguments kept whole, as given or as the engine
+// spells them where only that fits. LEAVES FIRST, LARGEST FIRST, which keeps
+// every short value (ids, keys, paths, names). Only once every leaf larger
+// than its marker is out and the text still does not fit are containers left
+// out, largest first; past that the whole object becomes {"not_kept": marker},
+// as does text that is not one JSON object. A value no larger than its marker
+// is never left out. Deterministic: ties break in the text's order.
 func (r Record) Args(text string, budget int) (kept string, whole int) {
 	if Quoted(text) <= budget {
 		return text, 0

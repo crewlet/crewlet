@@ -322,19 +322,14 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 					}
 				}
 				patch, kind, changed := s.patchOf(actor, &head, save, at)
-				// PATCHED OR NOT, THE HEAD IS THE ANSWER, and it is taken
-				// BEFORE the no-op return. patchOf mutates the page it was
-				// handed, so this one value is what the apply will produce
-				// on a change and what the page already says on a no-op —
-				// and a caller told its write landed reads the page out of
-				// that answer. Assigned below the check instead, an
-				// idempotent save reported success carrying an empty id,
-				// title and version, which a tool serializes verbatim.
+				// PATCHED OR NOT, THE HEAD IS THE ANSWER, taken BEFORE the
+				// no-op return: patchOf mutates head, so it is what the
+				// apply will produce on a change and what the page says on
+				// a no-op. Assigned below the check, an idempotent save
+				// reported success with an empty id, title and version.
 				//
-				// THE REVISION IS TAKEN HERE FOR THE SAME REASON, and from
-				// the same statement: on a no-op it is the only number
-				// there will ever be, because no record lands to produce a
-				// position.
+				// THE REVISION IS TAKEN HERE TOO: on a no-op it is the only
+				// number there will be, as no record lands.
 				out, read = head, revision
 				if !changed {
 					// A NO-OP IS A SUCCESS, not an error: an update that
@@ -368,21 +363,18 @@ type renameAsk struct {
 	Quiet bool
 }
 
-// Rename puts a page at a title, and there are TWO records behind that one
-// gesture because there are two different things to contend for.
+// Rename puts a page at a title, through TWO records because there are two
+// things to contend for.
 //
 // WHEN THE ADDRESS MOVES it is arbitrated on the NEW title, create-only: the
-// address is what two writers fight over, and two fresh uuids never would. It
-// stamps the head's `scoped_through` and never its `version`, so the row's
-// broker expectation still matches its subject's last message and cannot be
-// poisoned into permanent unwritability; a read barrier compares the MAX of
-// the two.
+// address is what two writers fight over. It stamps the head's `scoped_through`
+// and never its `version`, so the row's broker expectation still matches its
+// subject's last message and cannot be poisoned into permanent unwritability;
+// a read barrier compares the MAX of the two.
 //
 // WHEN ONLY THE CAPITALISATION OR THE SPACING MOVES the address does not, and
-// the record goes to [Store.retitle] instead. That is not a special case
-// smuggled past the rule — it is the rule: the title subject is the same
-// subject this page already holds, so there is nothing there to contend for,
-// and the only row the write touches is the page's own.
+// the record goes to [Store.retitle]: the title subject is the one this page
+// already holds, so nothing contends and the write touches only the page's row.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title string, quiet bool) (Written, error) {
 
@@ -473,36 +465,15 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 
 // retitle changes a page's DISPLAYED title without moving its address.
 //
-// # Why this is a write at all, and not the no-op it used to be
+// A write because the DISPLAYED `pages_heads.title`, which every reader, link
+// and wake renders, changes though `title_norm` does not: "Runbook" ->
+// "RUNBOOK". It arbitrates on the PAGE, not the title subject this page
+// already holds, where a create-only append loses to its own claim.
 //
-// `pages_titles` holds the NORMALISED title and `pages_heads.title_norm` is
-// byte-identical either side of this record — but `pages_heads.title` is not.
-// That column is the DISPLAYED title, kept beside the normalised one precisely
-// because "a link is resolved by the second and rendered from the first"
-// (migration 0005), so "Runbook" -> "RUNBOOK" changes a real field that every
-// reader, every link and every wake renders. Answering `applied` while
-// discarding it reported a change that did not happen.
-//
-// # Why it arbitrates on the PAGE
-//
-// The address does not move, so the title subject this would otherwise take is
-// the one THIS PAGE ALREADY HOLDS: a create-only append there loses to its own
-// claim and is reported as a name somebody else took. And the record writes
-// exactly one row — the page's head — which is the domain's own rule for which
-// subject a write belongs on: a body save, a label, a watch, a comment, a trash
-// and a restore all contend for the page, and so does this. A title record that
-// touched no title row would be an address record about no address.
-//
-// # What the page's subject cannot arbitrate, and what covers it
-//
-// A concurrent rename that MOVES the address contends on the NEW title's
-// subject, which this record never touches, so the broker cannot order the two
-// for us. The record therefore STATES the title it was decided against and the
-// applier writes only while the row still holds that address — deterministically
-// on every node, so a retitle that lost the race writes nothing everywhere
-// rather than parking the page at a name it holds no claim to. The decision
-// below refuses the same shape one step earlier, where it can still be reported
-// to the caller instead of silently skipped.
+// The page's subject cannot order a concurrent rename that MOVES the address,
+// so the record STATES the title it was decided against and the applier writes
+// only while the row still holds that address. The decision refuses the same
+// shape earlier, where the caller can be told.
 func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	opID string, at time.Time, quiet bool) (Written, error) {
 
@@ -533,15 +504,10 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 					// same address, so there is nothing left to write.
 					//
 					// RETURNED AS AN EMPTY DECISION so the framework's
-					// own no-op arm answers it, rather than a result
-					// spelled out here. That arm reports FOUR fields —
-					// `applied`, the op id, the decision's version and
-					// the round count — and the literal this replaces
-					// set two of them, which was harmless only because
-					// [Store.decide] happens never to set
-					// Decision.Version on any path. A second copy of a
-					// contract, correct by coincidence, is the shape
-					// that breaks the day the coincidence ends.
+					// no-op arm answers it, not a result spelled out
+					// here: that arm reports four fields (`applied`, op
+					// id, decision version, round count), and a second
+					// copy of the contract breaks the day it drifts.
 					return statelog.Decision{}, nil
 				}
 				if NormalizeTitle(current.Title) != NormalizeTitle(title) {
@@ -729,40 +695,15 @@ func statusScope(op OpKind, container string) ScopeSet {
 // EnsureContainer creates a space if it is not there, or updates its settings,
 // from the configuration activated at activatedAt.
 //
-// THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, not whether the call
-// succeeded. This runs on every boot for every unit's space, so the ordinary
-// outcome is that the row already says what the chart says — and a caller
-// that could not tell that from a create would log "applied" on every restart
-// for a company nobody had edited.
-//
-// # Stamped with the activation, and never walked back
-//
-// A container's name and purpose are the chart's, and every node applies one
-// activation separately — at its reconcile tick and again at every boot. So
-// the settings carry the ACTIVATION they came from
-// ([configplane.ActivationStamp]), and a write whose activation is OLDER than
-// the one the row already holds decides nothing: a node applying a revision
-// the fleet has since replaced leaves the newer names alone, where it used to
-// rewrite every container back to its own. One at the SAME activation with the
-// same settings decides nothing either, which is what makes the call free
-// after the first node; one at the same activation with DIFFERENT settings is
-// written, because that is a row an equal-epoch race left wrong and the
-// activation that is actually current is what sets it right. The ACTIVATION's
-// instant and never the applying node's own clock, for the reason
-// [worklet.Writer.ApplyChart] gives. A zero instant is refused
-// ([ErrNoActivation]): there is no honest default, and a caller holding no
-// activation has no chart to derive from.
-//
-// A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
-// because a row left at the older stamp is open to any activation between the
-// two.
-//
-// A FRESH OPERATION PER CALL, on the reasoning [worklet.Writer.ApplyChart]
-// gives for its own: this is a reconcile decided from the row, so a second
-// call — on another node, at the next boot, after a lost acknowledgement —
-// finds its value there, and N nodes racing one activation are settled by the
-// broker's arbitration. An outcome that is `unknown` is an error, because the
-// next apply is what retries it and the caller is the one that says so.
+// THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN: this runs on every boot, so
+// the usual outcome is a row already right, which a caller must tell from a
+// create. Settings carry their ACTIVATION ([configplane.ActivationStamp]), its
+// instant, never the node's clock ([worklet.Writer.ApplyChart] says why). An
+// OLDER activation than the row's decides nothing, nor the SAME with the same
+// settings; the same with DIFFERENT settings, or a LATER one over unchanged
+// settings (a re-stamp), is written. A zero instant is [ErrNoActivation]. The
+// operation is FRESH PER CALL, as ApplyChart's; `unknown` is an error, as the
+// next apply retries it.
 func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	key, name, purpose string) (Container, bool, error) {
 
@@ -897,20 +838,13 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 			kinds[ChangeLabels] = true
 		}
 	}
-	// THE MUTATOR REPORTS WHAT IT MOVED, on [subscribeMentions]'s shape and
-	// for a harder reason: the sizes of the two sets cannot answer this.
-	// MUTED IS NOT A SUBSET OF WATCHERS — a `watch: false` from somebody
-	// who never followed the page adds them to Muted alone — so their
-	// later `watch: true` takes one handle OUT of Muted and puts one INTO
-	// Watchers, and the total is exactly where it started. (An unwatch by
-	// an ACTUAL watcher is the easy half: the handle stays in Watchers and
-	// the mute is added beside it, so the total moves.) The clause that
-	// used to cover the gap ("the mute now disagrees with what was asked")
-	// is false by construction after applyWatch has run, so it covered
-	// nothing and fired only for an operator, who has no seat: a `watch:
-	// false` from the operator surface published a record and woke every
-	// watcher for a change to nobody's subscription — see
-	// [Actor.subscriber].
+	// THE MUTATOR REPORTS WHAT IT MOVED, as [subscribeMentions] does, because
+	// set sizes cannot answer this: MUTED IS NOT A SUBSET OF WATCHERS (a
+	// `watch: false` from a non-follower adds to Muted alone), so their later
+	// `watch: true` takes a handle OUT of Muted and INTO Watchers and the
+	// total is unchanged. An operator has no seat ([Actor.subscriber]), so
+	// its `watch: false` must move nothing, not publish a record and wake
+	// every watcher for nobody's subscription.
 	if save.Watch != nil && applyWatch(head, actor.subscriber(), *save.Watch) {
 		patch.Watchers = head.Watchers
 		patch.Muted = head.Muted
@@ -1001,13 +935,11 @@ func watcherSet(author string, extra []string) []string {
 // also its history of who cared: somebody who unwatches and is later mentioned
 // should not be re-subscribed silently.
 //
-// IT ANSWERS ITS OWN QUESTION rather than leaving the caller to compare the
-// sets afterwards, because the comparison is not one a caller can make
-// cheaply or safely: [slicesSort] runs in place and the append above it may
-// keep the head's backing array, so a slice saved before the call can be
-// reordered underneath whoever held it. An EMPTY HANDLE moves nothing and says
-// so — an operator write names no seat ([Actor.subscriber]), and there is no
-// subscription to change on behalf of a credential.
+// IT ANSWERS ITS OWN QUESTION because a caller cannot safely compare the sets
+// afterwards: [slicesSort] runs in place and the append may keep the head's
+// backing array, so a slice saved before the call can be reordered under its
+// holder. An EMPTY HANDLE moves nothing and says so: an operator names no seat
+// ([Actor.subscriber]).
 func applyWatch(page *Page, handle string, watch bool) bool {
 	if handle == "" {
 		return false
