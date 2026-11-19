@@ -100,21 +100,18 @@ type Result struct {
 	Pending  map[integration.Kind]error
 }
 
-// Run migrates the fleet's company, every integration it can, in the one order
-// that is safe: read the vendors for the integrations left to migrate, plan
-// from the stored document, seal every credential the plan moves under its
-// engine name, record the accounts the engine made before the ledger and the
-// seats that shared a company credential, and only then write the revision
-// that marks each migrated integration, held to the revision planned on.
-// Every step is idempotent, so a run that stops part way is finished by the
-// next, and a document with nothing left to migrate returns at once.
+// Run migrates the fleet's company, every integration it can, in the one safe
+// order: read the vendors, plan from the stored document, seal every credential
+// the plan moves under its engine name, record the accounts the engine made
+// before the ledger and the seats that shared a company credential, and only
+// then write the revision marking each migrated integration, held to the
+// revision planned on. Every step is idempotent, so a stopped run is resumed.
 //
-// THE VALUES ARE MOVED AND THE LEDGER SEEDED BEFORE THE REVISION, never after:
-// the revision is what opens an integration's gate, and a pass let through
-// before the seat's credential is sealed, or before its account is recorded,
-// would mint a second credential or create a second account. Done first, the
-// old names still hold their values and the gate is still shut, so a run that
-// stops between the two leaves the company running exactly as before.
+// Values are moved and the ledger seeded before the revision, never after: the
+// revision opens an integration's gate, and a pass let through before the
+// credential is sealed or the account recorded would mint a second one. Done
+// first, the gate is shut and the old names hold their values, so a run
+// stopping between leaves the company as before.
 func Run(ctx context.Context, d Deps) (Result, error) {
 	now := d.Now
 	if now == nil {

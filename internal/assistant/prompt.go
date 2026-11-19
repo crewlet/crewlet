@@ -16,29 +16,17 @@ import (
 )
 
 // THE PROMPT, assembled in cache-friendly order: what is the same for every
-// turn first, what is the same for this person today next, and what changes
-// with every question last, so a vendor's prompt cache answers the longest
-// prefix it can (ADR-0045).
-//
+// turn first, for this person today next, what changes with every question
+// last, so a vendor's prompt cache answers the longest prefix (ADR-0045).
 //  1. Identity and rules ([identityRules]), stamped [PromptVersion].
 //  2. [provenance.StandingInstruction], the one sentence about fences.
 //  3. The company: its name, its clock's zone and today on it (ADR-0018).
-//  4. The person: their name and seat, the apps they hold, the writes they
-//     may propose, and the sentence that a list may be filtered by access.
-//  5. The conversation so far: its last [HistoryMessages] messages, each card
-//     as a one-line summary and never a raw tool answer.
+//  4. The person: name, seat, apps held, writes they may propose.
+//  5. The last [HistoryMessages] messages, each card a one-line summary.
 //  6. The question, after the page context fenced under the turn's boundary
 //     (source `page_context`, trust colleague: a screen's labels are names
-//     other people chose), or nothing about the page when the person removed
-//     it.
-//
-// The tool catalogue and the response contract follow, rendered by the
-// model's backend from the tools the surface offers (internal/providers/llm).
-//
-// THE PAGE CONTEXT IS IN THE QUESTION'S MESSAGE, not in the system prompt
-// before the conversation: it changes with every question, and anywhere
-// earlier it would invalidate every cached byte of the conversation after it
-// on every turn.
+//     other people chose). It is not in the system prompt: it changes every
+//     question and would invalidate every cached byte after it.
 
 // identityRules is the assistant's standing instruction. A reworded sentence
 // is a behaviour change, and takes a new [PromptVersion].

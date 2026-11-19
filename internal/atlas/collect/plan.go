@@ -220,21 +220,17 @@ type Plan struct {
 }
 
 // Decide diffs one complete read against every live claim the log holds in
-// the source's voice, and advances the source's standing. PURE: the same
-// inputs give the same plan, so a pass cut off before it published is
-// re-planned alike by the next.
+// the source's voice, and advances its standing. PURE: a pass cut off before
+// it published is re-planned alike by the next.
 //
-// An entry the read lists is recorded whole and at once: a slot the read no
-// longer holds on it is a change the vendor reported, never a skipped row. An
-// entry the read does not list is a miss, retired only once a complete read
-// at least [RetireAfter] after the first miss misses it too; one the read
-// lists again is no longer missed. An entry already retired by this voice is
-// neither re-retired nor missed.
+// An entry the read lists is recorded whole: a slot it no longer holds is a
+// change the vendor reported, never a skipped row. An entry the read omits is
+// a miss, retired only once a complete read at least [RetireAfter] after the
+// first miss omits it too; one listed again is no longer missed.
 //
 // A claim from a part the read was refused ([Read.Unread]) is carried as the
-// log holds it: it is neither withdrawn nor missed, and a miss it already had
-// is kept, never advanced. An entry the voice never said exists is released
-// rather than retired: its slots are withdrawn, and nothing is denied.
+// log holds it, and an existing miss is kept, never advanced. An entry the
+// voice never said exists is released, not retired: its slots are withdrawn.
 func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	now = now.UTC()
 	held := group(live)

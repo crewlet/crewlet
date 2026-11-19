@@ -16,30 +16,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A FILE COPIED FROM THE ADOPTED BRAND ([FileSpec.Brand]).
+// A FILE COPIED FROM THE ADOPTED BRAND ([FileSpec.Brand]): its logos and faces
+// are snapshot rows naming objects (ADR-0048), and a version needs them as files
+// of ITS OWN, so the pipeline COPIES them: read back through the store's
+// verifying reader, stored as an object this run produced under its
+// reservation (an object is never shared between two rows, ADR-0026).
 //
-// The company's adopted brand keeps its logos and faces as rows of its own
-// snapshot, each naming an object (ADR-0048). A version that shows the logo or
-// sets a slide in the brand's typeface needs those bytes as a file of ITS OWN:
-// a deck's image and face are files of the version, and an agent's page may
-// carry the logo as an image. So the pipeline COPIES them: the snapshot's
-// object is read back through the store's verifying reader and stored again as
-// an object this run produced, under the run's own reservation, exactly as a
-// copied CDN file is. The version never names the adoption's object, because
-// one object is never shared between two rows (ADR-0026), and a later
-// adoption (or a clear) changes nothing in a version already published.
-//
-// WHICH ADOPTION: the one current when the run reads it, at the linearizable
-// level a seat's own reads take, so a copy made right after an administrator
-// adopted is a copy of what they adopted. A slot the adoption does not hold,
-// the generated stylesheet (which the artifact origin links, and no version
-// carries), and a path whose type is not the file's are refused by name.
-//
-// A FACE AS A WHOLE (`font.heading`, `font.body`) COPIES ITS REGULAR FILE
-// ([FaceFile]): a version names a face by one file, as a deck's index does, so
-// the slot a person reads in the brand is the file a slide is set in. Each file
-// of an uploaded family is also its own slot ([brandformat.FontFileSlot]) for
-// the rare page that wants another weight.
+// WHICH ADOPTION: the one current when the run reads it, linearizably. A slot
+// the adoption lacks, the generated stylesheet and a wrongly typed path are
+// refused by name. A FACE AS A WHOLE (`font.heading`, `font.body`) COPIES ITS
+// REGULAR FILE ([FaceFile]); each family file is also its own slot
+// ([brandformat.FontFileSlot]).
 
 // brandRead is the level the adoption is read at for a copy: a seat reads
 // linearizable, and a copy is made of the brand the seat just read.

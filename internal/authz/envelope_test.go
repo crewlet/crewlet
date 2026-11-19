@@ -14,17 +14,15 @@ import (
 
 // A TOKEN REFUSED FOR WANT OF A PERSON IS TOLD SO, NOT TO ASK FOR A GRANT.
 //
-// The `unauthorized` envelope's message says the credential lacks the access
-// the request needs, and a machine token on a verb that needs a person present
-// was answered exactly that, beside an empty grants list: its owner may hold
-// admin, and no permission on the token would admit it. A sentence of its own
-// as `detail` then contradicted the `message` beside it, so the refusal is a
-// code of its own whose ONE sentence says so, and it carries no second one.
-// The CONTROL is a refusal for a missing permission, which the `unauthorized`
-// code's sentence for that reason describes — compared with the envelope's own
-// sentence for the same refusal rather than with words, which belong to
-// internal/api/httpjson. Mutation: answer the token's refusal `unauthorized`
-// and its message is the permission's.
+// The `unauthorized` envelope's message says the credential lacks access, and
+// a machine token on a verb needing a person present would get exactly that
+// beside an empty grants list (its owner may hold admin; no permission on the
+// token would admit it). So the refusal is a code of its own whose ONE
+// sentence says so, with no second `detail` contradicting the `message`. The
+// CONTROL is a missing-permission refusal, compared with the envelope's own
+// sentence rather than words, which belong to internal/api/httpjson.
+// Mutation: answer the token's refusal `unauthorized` and its message is the
+// permission's.
 func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

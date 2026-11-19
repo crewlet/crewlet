@@ -6,6 +6,13 @@
 // be reconciled against a separate phase's calls. With one loop there is no
 // prediction, and the question is asked of the turn's own record instead:
 // internal/agent/turn.
+//
+// # Resolution
+//
+// Which provider entries a seat's phase runs on is ONE resolution, [Resolve],
+// and [ResolveWithSource] is the same walk also naming the level that decided
+// it, so a page showing where a job lands reads the engine's answer, never a
+// copy of its precedence.
 package phase
 
 // Phase names one pass of the turn engine.
@@ -58,18 +65,14 @@ func (d Decision) String() string { return string(d) }
 // ReviewDecisions are the decisions a REVIEWER may submit, which is not every
 // decision this package defines.
 //
-// [Skipped] is deliberately absent: a skip is the ENGINE's own reading of a
-// round nobody was waiting on, taken before the reviewer is called at all, so
-// a reviewer reaching it would mean the turn ran after deciding not to.
+// [Skipped] is absent: a skip is the engine's own reading of a round nobody
+// was waiting on, taken before the reviewer is called, so a reviewer reaching
+// it would mean the turn ran after deciding not to.
 //
-// ONE LIST, TWO READERS, because it was two independent spellings of the same
-// three names: the submission schema's `enum` and the decoder's validation.
-// They are one edit apart from disagreeing in the direction nothing catches —
-// a schema that OFFERS a value the decoder REFUSES bounces a model that did
-// exactly what it was told, and the model cannot see that the two lists
-// differ. The decoder already read the constants rather than their spelling,
-// which is the half that catches a RENAME; this is the half that catches an
-// ADDITION, and only one of the two had ever been the problem.
+// One list serves the submission schema's `enum` and the decoder's validation:
+// two spellings could disagree unnoticed, and a schema offering a value the
+// decoder refuses bounces a model that did as told, which cannot see the
+// lists differ.
 func ReviewDecisions() []Decision {
 	// Returned fresh, never a package-level slice: a shared backing array is
 	// one caller's append away from rewriting everybody else's list.

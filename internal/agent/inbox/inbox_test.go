@@ -241,18 +241,15 @@ func TestAnOpenQuestionOffersTheDeliveryOnTheOrdinaryPath(t *testing.T) {
 
 // A HELD SEAT HOLDS AND DEFERS, AND REPUBLISHES NOTHING.
 //
-// It used to PARK: requeue the delivery onto the inbox it came from and ack
-// it. Nothing stopped the consumer, so the copy was the next thing it fetched,
-// and every message waiting on a seat an executor held went round that loop
-// for the length of its run. What reaches here now raced the sandbox hold the
-// coordinator keeps on a busy seat, or found it refused: the hold is named so
-// the dispatcher asks for it again, the delivery is deferred so it keeps its
-// place at the head, and the deferral is noted so the seat host's next renew
-// lifts the quiesce — leaving the hold as the one thing that stops it.
+// A park would requeue the delivery onto the inbox it came from, and the
+// never-stopped consumer would fetch the copy at once, looping every message
+// for the length of the run. What reaches here raced the coordinator's sandbox
+// hold or found it refused: the hold is named so the dispatcher asks again, the
+// delivery is deferred to keep its place at the head, and the deferral is noted
+// so the next renew lifts the quiesce, leaving the hold as the one stop.
 //
 // AND NOTHING IS OFFERED, even with another of the seat's runs waiting for a
-// person: the held seat receives nothing, and the answer is offered first
-// when the run stops holding it.
+// person: the answer is offered first when the run stops holding the seat.
 func TestAHeldSeatHoldsAndDefersAndRepublishesNothing(t *testing.T) {
 	t.Parallel()
 	c := healthy()

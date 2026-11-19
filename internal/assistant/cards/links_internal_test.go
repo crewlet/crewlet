@@ -13,11 +13,10 @@ import (
 //
 // DERIVED FROM THE TABLE, every screen of it: one whose address takes an
 // opaque value ({id}, {turn_id}, {handle} or {unit}) carries a noun and is
-// named by it, unless its {id} is a key a person reads as well (a task's), and
-// one that takes a key ({KEY}, {CONTAINER}) is named by the key. A screen the
-// table gains is held the day it lands, never only once somebody lists it
-// here. Mutation: drop the chat screen's noun, or fall back to the first path
-// value again, and this fails.
+// named by it, unless its {id} is a key a person reads too (a task's), and one
+// that takes a key ({KEY}, {CONTAINER}) is named by the key. A screen the table
+// gains is held the day it lands. Mutation: drop the chat screen's noun, or
+// fall back to the first path value, and this fails.
 func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 	t.Parallel()
 	const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"

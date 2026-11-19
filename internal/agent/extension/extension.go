@@ -14,6 +14,13 @@
 // and by a judge that says extend while asking for nothing — is pure policy,
 // and it is the part that is easy to get wrong and impossible to exercise
 // through a live model. It is a value type here, so it is tested directly.
+//
+// # Fences
+//
+// The judge reads the turn's ask with its fences moved off the turn's token
+// onto one minted for its call ([Request.Boundary]), and the reason it gives
+// is defused under the turn's token in [Nudge], because a judge echoes what it
+// read (ADR-0040).
 package extension
 
 import (
@@ -213,24 +220,18 @@ func (p Policy) Grant(d Decision, used int) int {
 	return min(want, step)
 }
 
-// FinishHint is the closing line of the nudge, and it is phase-specific
-// because the phases END differently: onboarding exits by calling
-// `mark_onboarded`, and a phase told the wrong way to finish spends its
-// granted rounds trying to leave through a door it does not have, which is
-// the exact failure the extension was granted to avoid.
+// FinishHint is the closing line of the nudge, phase-specific because phases
+// END differently: onboarding exits by calling `mark_onboarded`, and a phase
+// told the wrong way to finish wastes its granted rounds.
 //
-// NOT A FALLBACK CASE, and the difference is not cosmetic. Told to stop
-// calling tools, an extended onboarding pass never reaches mark_onboarded —
-// so the marker is never stamped, the seat stays un-onboarded, and the pass
-// re-runs on every turn that seat ever takes. A silent, permanent, per-turn
-// cost, caused by one missing case.
+// Not a fallback case: told to stop calling tools, an extended onboarding pass
+// never reaches mark_onboarded, so the seat stays un-onboarded and the pass
+// re-runs on every turn it takes, a silent permanent per-turn cost.
 //
-// ONBOARDING IS EVERY PHASE A NUDGE CAN REACH (see the package doc). Any
-// other phase answers "" — a worker in particular runs its own loop with no
-// extension, and the hint this once gave it ("stop calling tools and return a
-// plain-text summary") was the opposite of its contract, which is to finish
-// by calling `submit_result`. A hint for a phase no nudge reaches is a
-// sentence nothing tests against a run.
+// Onboarding is every phase a nudge can reach (see the package doc). Any other
+// phase answers "": a worker runs its own loop with no extension and finishes
+// by calling `submit_result`, so a "stop calling tools" hint would contradict
+// its contract, and nothing tests a hint for a phase no nudge reaches.
 func FinishHint(ph phase.Phase) string {
 	if ph == phase.Onboarding {
 		return "If you cannot finish in this window, call `" + toolname.MarkOnboarded + "` " +

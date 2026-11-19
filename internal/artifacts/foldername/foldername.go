@@ -18,30 +18,16 @@ import (
 )
 
 // A FOLDER NAME IS A PATH SEGMENT AND A LINE OF TEXT A PERSON READS, so its
-// grammar is decided once, here, and every surface (the HTTP routes, the agent
-// tools, the dashboard's form, the writer that forms the record) asks
-// [Check] rather than restating a rule.
-//
-//   - It is NFC, trimmed of leading and trailing white space, and 1 to
-//     [artifacts.MaxFolderNameBytes] UTF-8 bytes after both.
-//   - It carries no `/`: the agents address a folder by a path of names, and a
-//     name that held the separator would be two segments to one reader and one
-//     to another.
-//   - It carries no control character (C0, C1), no format character (the
-//     bidirectional overrides and isolates, the zero-width joiners and spaces,
-//     the byte-order mark, the soft hyphen, the tag characters) and no line or
-//     paragraph separator. Each draws as nothing, or reorders what is drawn
-//     around it, so two names that look identical could be two folders, and a
-//     name could show one path while naming another.
-//   - It is not `.` or `..`, which every reader of a path takes as "here" and
-//     "the parent".
-//
-// THE KEY IS WHAT UNIQUENESS IS DECIDED ON. Two siblings may not share a
-// [Key]: the name case-folded (Unicode full case folding, so
-// "Straße" and "STRASSE" collide as a reader expects) and normalised to NFC
-// again. The WRITER computes it and the record carries it, and the applier
-// compares carried keys and never folds, so a Unicode table change in a later
-// Go release cannot make two nodes disagree about a record they both applied.
+// grammar is decided once, here: every surface asks [Check]. A name is NFC,
+// trimmed, 1 to [artifacts.MaxFolderNameBytes] UTF-8 bytes, and carries no
+// `/` (agents address a folder by a path of names), no `.` or `..`, no control,
+// separator or format character (bidi overrides, zero-width joiners, BOM, soft
+// hyphen, tags): each draws as nothing or reorders its surroundings, so two
+// look-alikes could be two folders and a name could show one path while naming
+// another. THE KEY IS WHAT UNIQUENESS IS DECIDED ON: the name case-folded
+// (full Unicode folding, so "Straße" and "STRASSE" collide) and NFC again. The
+// WRITER computes it and the record carries it; the applier never folds, so a
+// Unicode table change in a later Go release cannot split two nodes.
 
 // ErrInvalid reports a folder name outside the grammar, naming the rule and the
 // fix. The artifacts writer wraps it in its own ErrInvalid, which is the

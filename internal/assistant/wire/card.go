@@ -512,15 +512,14 @@ func (p *ProposalCard) validate() error {
 // things the person has to do, ranked, each with the one press that deals
 // with it.
 //
-// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the
-// number of rows ([BriefCard.Verdict]), so no writer can put "nothing needs
-// you" beside a row that needs them. The first row is the recommendation: a
-// separate next step would say it again.
+// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the number
+// of rows ([BriefCard.Verdict]), so no writer can put "nothing needs you"
+// beside a row that needs them. The first row is the recommendation.
 //
 // THE MODEL WRITES THE WORDS, THE ENGINE EVERYTHING ELSE. Each row's record is
-// one this turn read and resolved for the person, its address is the link
-// table's, its danger tone is a fact the engine read, and an action can only
-// open that address or ask a question. A brief never writes.
+// one this turn read for the person, its address is the link table's, its
+// danger tone is a fact the engine read, and an action can only open that
+// address or ask a question. A brief never writes.
 type BriefCard struct {
 	// Scope is what the brief covers: the page, or the one record it has
 	// open.

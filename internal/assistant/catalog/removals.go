@@ -12,27 +12,16 @@ import (
 
 // A REPLACE NEVER REMOVES BY OMISSION (ADR-0055).
 //
-// A route that replaces the whole object at its address ([Route.Replaces])
-// removes every field its body leaves out. A model rebuilding a unit to add
-// one seat could leave out the unit's project and space, and the card drew
-// that as two struck-through rows under twenty rows of the new seat: a person
-// approving "add a seat" removed them without meaning to. So a removal is a
-// decision the call states, never a side effect of what it forgot:
+// A route that replaces the whole object ([Route.Replaces]) removes every
+// field its body leaves out, so a model adding one seat could drop a unit's
+// project unseen. A removal is a decision the call states, never a side effect:
+//   - The preview lists every field the body would remove or empty ([removalsOf]).
+//   - Each must be named in `removes`, else the step is refused before any card
+//     ([undeclaredRemoval]), as is a named path that is not removed.
+//   - A declared removal leads the card ([Preview.Removes]).
 //
-//   - The preview compares the body with the representation it read and
-//     lists every field the body would remove or empty ([removalsOf]).
-//   - Each one must be named in the call's `removes`; one that is not refuses
-//     the step before any card, in plain words, so the model either keeps the
-//     field or the person's request is what removes it ([undeclaredRemoval]).
-//     A named path the change does not remove is refused too, so the card
-//     never warns of a removal that will not happen.
-//   - A declared removal leads the card as its own warning ([Preview.Removes]),
-//     ahead of every other row.
-//
-// The digest binds it without a field of its own: the removals are a function
-// of the body, which the request digest binds, and of the representation the
-// source revision names, which the approval re-reads. The `removes` argument
-// only admits the call; what the card warns of is computed, never echoed.
+// The digest needs no field: removals follow from the body (digest-bound) and
+// the source revision (re-read at approval). `removes` only admits the call.
 
 // RemovesArgument is the one argument a write takes that it never sends: what
 // the call says it removes from what it replaces (the generic change's paths,

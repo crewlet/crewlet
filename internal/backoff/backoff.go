@@ -23,25 +23,15 @@ import (
 // Doubling returns base doubled once per attempt after the first, capped at
 // ceiling.
 //
-// attempt counts from 1, and anything below 1 is the first attempt rather
-// than an instant retry: a caller that has not counted yet must not be handed
-// a zero wait.
+// attempt counts from 1; below 1 is the first attempt, never a zero wait.
 //
-// DOUBLED IN A LOOP THAT EXITS AT THE CEILING rather than computed as
-// base<<(attempt-1), and the difference is not style. An attempt count
-// accumulates for as long as a dependency stays down (or arrives off the wire,
-// where it is whatever a peer sent), and the closed form overflows
-// time.Duration well before that count becomes unreasonable. An overflowed
-// duration is NEGATIVE, which every caller reads as "already due", so the
-// longest wait in the system would turn into a request every tick against
-// the dependency least likely to answer differently. Exiting at the ceiling
-// also bounds the loop without a magic iteration cap: it runs
-// log2(ceiling/base) times however large attempt grows.
+// DOUBLED IN A LOOP THAT EXITS AT THE CEILING rather than base<<(attempt-1):
+// the attempt count grows while a dependency stays down (or arrives off the
+// wire), and the closed form overflows time.Duration to a NEGATIVE value, which
+// every caller reads as "already due". The loop runs log2(ceiling/base) times.
 //
 // A ceiling at or below base is the ceiling. A base that is not positive is
-// also the ceiling, because doubling zero is zero for ever and a retry loop
-// handed that would spin; the long wait is the safe reading of a nonsense
-// argument.
+// also the ceiling: doubling zero is zero and a retry loop would spin.
 func Doubling(attempt int, base, ceiling time.Duration) time.Duration {
 	if base <= 0 || base >= ceiling {
 		return ceiling

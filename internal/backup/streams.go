@@ -21,54 +21,16 @@ import (
 
 // Snapshotting the stream estate, and why it is the wire API.
 //
-// Everything a fleet agrees on lives in JetStream: the agent mailboxes, the
-// engine's own streams, and every coordination bucket — leases, the
-// activation pointer, the completion ledger, the budget counters, the sealed
-// credentials. On the default topology that broker is EMBEDDED in the engine
-// and binds no socket at all (`DontListen`), so the `nats` CLI cannot reach
-// it: there is no address to give it. Nothing outside this process can back
-// this estate up.
-//
-// Inside the process the options are narrower than they look. The vendored
-// nats.go has no snapshot call on either JetStream API — the whole module has
-// no Snapshot or Restore method — and jsm.go, which does, is not a dependency
-// here. The server's own snapshot is a method on an unexported type reachable
-// only through unexported lookups; the two exported "Snapshot" methods on
-// *server.Server are RAFT metadata snapshots, produce no bytes, and refuse
-// outright on a solo node.
-//
-// What is left is the thing the `nats` CLI itself uses: the JetStream API on
-// the wire, over the connection this process already holds. The request and
-// response types are the server's own — imported rather than restated, so a
-// protocol change is a compile error instead of a JSON field that silently
-// stops matching.
-//
-// # The protocol, since it is not obvious from the types
-//
-// A snapshot is a request naming a subject the server should deliver to, then
-// a stream of chunk messages on that subject. Two things are easy to get
-// wrong and both are silent:
-//
-//   - EVERY CHUNK MUST BE ANSWERED. The chunk's reply subject is a flow
-//     control credit, not an acknowledgement anybody reads. A receiver that
-//     does not reply stalls the server, which gives up after its own timeout
-//     and aborts the transfer — so a backup that forgets this succeeds on
-//     small streams and truncates large ones.
-//   - THE TERMINATOR IS AN EMPTY MESSAGE, and it carries the verdict in its
-//     status header: 204 for a complete snapshot, 408 or 500 for one the
-//     server abandoned. A receiver that stops at the empty message without
-//     reading that header writes a truncated file and reports success.
-//
-// And one that is easy to get wrong the other way, because it looks like a
-// failure of the node: A CONSUMER THAT ENDS WHILE ITS STREAM IS COPIED
-// ABANDONS THE COPY. The server copies a stream's consumers before its
-// messages, from a list it takes as the snapshot starts, and gives the whole
-// snapshot up (500) when one of them has ended by the time it reads that
-// consumer's state. A working engine ends consumers all the time — every
-// listing of a coordination bucket is an ephemeral consumer that lives as long
-// as the listing, and a removed seat's mailbox ends with it — so that is a race
-// the copy loses at a rate set by load, and the stream is snapshotted again
-// (see [snapshotStream]).
+// The default broker is EMBEDDED and binds no socket, so the `nats` CLI cannot
+// reach it, and nats.go has no snapshot call (the server's exported "Snapshot"
+// methods are RAFT metadata). So this speaks the JetStream API on the wire over
+// the connection this process holds, with the server's own types so a protocol
+// change is a compile error. Silent when wrong: EVERY CHUNK MUST BE ANSWERED
+// (its reply is a flow-control credit; else large streams truncate); THE
+// TERMINATOR IS AN EMPTY MESSAGE whose status header is the verdict (204 done,
+// 408 or 500 abandoned). A CONSUMER THAT ENDS MID-COPY ABANDONS THE COPY (500),
+// which a working engine causes constantly, so the stream is snapshotted again
+// ([snapshotStream]).
 
 // snapshotChunkSize is what the server is asked to send per chunk.
 //
@@ -159,25 +121,14 @@ type StreamArtifact struct {
 // stream named last — the object store's own bucket on `nats` — after every
 // other.
 //
-// EVERY STREAM, ENUMERATED RATHER THAN LISTED. The engine's own five are
-// known here, but a namespace stream is created on first publish to it
-// (CREWLET_NS_*) and a coordination bucket is a stream whose name depends on
-// a configurable prefix — so a hardcoded list would silently omit whatever a
-// deployment actually has. What is backed up is what is there.
+// EVERY STREAM, ENUMERATED: namespace streams and bucket names are not fixed.
 //
-// THE OBJECT STREAM AFTER EVERY LOG, as a rule rather than an accident of
-// sorting (`CREWLET_` happens to sort before `OBJ_`). A restore replays each
-// log to the last sequence its snapshot captured, and an object is uploaded
-// before the record naming it is written, so every object a record of a log's
-// snapshot names was in the bucket before the object stream's snapshot began —
-// which is what lets the backup count an object the store holds after the
-// snapshots as one the object stream's snapshot carries ([objectPass.finish]).
-// Snapshotted first, the bucket would miss every file written while the logs'
-// snapshots ran.
-//
-// The snapshots land in a subdirectory of root, and each artifact's File is
-// relative to root rather than to that subdirectory, because that is the path
-// a restore reading the manifest has to join.
+// THE OBJECT STREAM AFTER EVERY LOG, by rule, not sorting. An object is
+// uploaded before the record naming it, so every object a log snapshot names
+// was in the bucket before the object snapshot began, which lets the backup
+// count one the store holds afterwards as carried ([objectPass.finish]). Taken
+// first, the bucket would miss files written while the logs' snapshots ran.
+// Each File is relative to root, the path a restore joins.
 func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, last string) ([]StreamArtifact, error) {
 	js, err := api.Client(nc)
 	if err != nil {
@@ -207,18 +158,14 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, la
 
 // streamNames lists every stream, sorted.
 //
-// Sorted so a manifest diffs cleanly between two backups of the same
-// deployment, whatever order a listing comes back in: an operator comparing
-// yesterday's manifest with today's should see what changed rather than a
-// reshuffle.
+// Sorted so two manifests of one deployment diff without a reshuffle.
 //
 // FROM THE METADATA LEADER, each page asked again while nobody answers it
-// ([jsapi.Meta.StreamNames]): only it answers, so a member that still
-// believes in a leader the group has just lost drops the request without a
-// word, and the client's lister held its one request for five seconds and
-// failed the backup over a reply nobody would send. And every stream that
-// exists throughout the listing is in it, so no stream is left out of a
-// backup because another was deleted while the listing ran.
+// ([jsapi.Meta.StreamNames]): only it answers, and a member that still
+// believes in a lost leader drops the request silently, which failed the
+// backup after the client lister's five seconds. Every stream that exists
+// throughout the listing is in it, so none is left out because another was
+// deleted meanwhile.
 func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) {
 	meta, err := jsapi.NewMeta(js)
 	if err != nil {
@@ -238,19 +185,14 @@ func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) 
 // snapshotStream writes one stream's snapshot under root, taking it again
 // while the server abandons it over a consumer that ended under the copy.
 //
-// WHAT THE SERVER LOST IS THE RACE, NOT THE STREAM. It copies the consumers it
-// listed as the snapshot started and gives the whole snapshot up when one of
-// them has ended by the time it reads that consumer's state (see the file
-// doc), and a consumer that has ended holds nothing a restore could want — so
-// another snapshot, taken now, is exactly what the lost one would have been: a
-// copy of the stream at one moment. Answered as a failure, it failed the
-// backup of a node with nothing wrong with it, at a rate set by how busy the
-// node was ([snapshotAttempts] has the measurement).
+// WHAT THE SERVER LOST IS THE RACE, NOT THE STREAM (see the file doc): an
+// ended consumer holds nothing a restore could want, so another snapshot taken
+// now is what the lost one would have been. Failing the backup instead failed
+// healthy nodes at a rate set by load ([snapshotAttempts]).
 //
-// ASKED, NOT ASSUMED: the abandonment is read as that race only when the
-// consumer the server names is one it no longer holds ([endedUnder]). A
-// consumer that is still there and could not be read, and every other way a
-// snapshot fails, fails the backup as it always did.
+// ASKED, NOT ASSUMED: the abandonment is that race only when the consumer the
+// server names is one it no longer holds ([endedUnder]). A consumer still there
+// that could not be read, and every other failure, fails the backup.
 func snapshotStream(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, api jsapi.API,
 	name, root string,
 ) (StreamArtifact, error) {

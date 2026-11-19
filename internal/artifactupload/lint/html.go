@@ -80,25 +80,12 @@ const maxWarnings = 10
 // every allowlisted CDN reference to the version's own copy, derives the
 // page's script policy, and WARNS on what is legal and wrong.
 //
-// # Why every script carries the nonce
-//
-// The artifact origin answers each document with a fresh nonce and
-// 'strict-dynamic', so the page's own scripts run and anything they create
-// runs, while a script a viewer's datastore row injects (an <img onerror> in
-// a value written into the page) carries no nonce and does not. A script
-// element WITH the nonce runs from wherever its source points, which is why
-// every remote script source is copied in or refused here: the linter, not
+// The origin answers each document with a fresh nonce and 'strict-dynamic', so
+// the page's scripts and what they create run, while a script a viewer's
+// datastore row injects (an <img onerror> in a written value) carries no nonce
+// and does not. A script WITH the nonce runs from wherever its source points,
+// so every remote script source is copied in or refused here: the linter, not
 // the policy, keeps a page's scripts its own.
-//
-// # Why it parses once and verifies once
-//
-// The file is tokenized by the standard HTML tokenizer, decisions are taken
-// on the attributes as it decodes them, and the rewrite replaces only the
-// bytes it must, leaving the rest of the page as the author wrote it. The
-// result is then tokenized again and every script element in it checked:
-// carrying the placeholder as the nonce a browser reads, and pointing at no
-// other origin. A page that fails that is refused ([CodeUnparseable]), never
-// answered with a script the linter did not account for.
 func HTML(path string, src []byte, opts Options) (Page, error) {
 	l := &linter{
 		fs: &findings{path: path}, path: path, opts: opts, hashes: map[string]bool{},
@@ -440,7 +427,9 @@ func (l *linter) scriptText(text []byte, line int) {
 // what the rewrite promised: the placeholder as the nonce a browser reads, a
 // source on the version's own origin, and an import map naming no module on
 // another. want is how many scripts the rewrite counted; the placeholder must
-// occur exactly once for each.
+// occur exactly once for each. The rewrite replaces only the bytes it must, and
+// a page failing this check is refused ([CodeUnparseable]), never answered
+// with a script the linter did not account for.
 func verify(out []byte, want int) error {
 	if n := bytes.Count(out, []byte(artifacts.NoncePlaceholder)); n != want {
 		return fmt.Errorf("the placeholder occurs %d times for %d scripts", n, want)

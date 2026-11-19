@@ -101,22 +101,16 @@ func (r Revision) String() string { return string(r.Kind) + ":" + r.ID + "@" + r
 
 // Precondition is the conditional request a write bound to r is sent under:
 // THE ONE RULE from what a preview read to the headers the route judges.
+//   - A charter's and an entity's version is its read's strong entity tag,
+//     sent as a quoted If-Match, so the route refuses a change made between
+//     the approval's re-read and the write.
+//   - A create's is the absence its read found, sent as `If-None-Match: *`
+//     ([exec.AnyRepresentation]); the route refuses it once something holds
+//     the path (`412 entity_exists`).
+//   - Every other kind's travels in the write's arguments (a task's if_match,
+//     a page's base_version) or is the re-read's alone: none is sent.
 //
-//   - A charter's and an entity's version is the strong entity tag their read
-//     answered, so the write carries it as If-Match, quoted, and the route
-//     refuses a change made in the moments between the approval's re-read and
-//     the write, which the re-read alone cannot.
-//   - A create's is the absence its read found, so the write carries
-//     `If-None-Match: *` ([exec.AnyRepresentation]), and the route refuses it
-//     once something holds the path (`412 entity_exists` at a `/config`
-//     entity), rather than replacing what another write put there.
-//   - Every other kind's precondition travels in the write's own arguments (a
-//     task's if_match, a page's base_version), or is the re-read's alone (a
-//     resource's version field, a chat room's settings and members, a chat
-//     message's position), and the request carries none.
-//
-// Never both: at an address with no representation the two describe two
-// different resources (the API's `conflicting_preconditions`).
+// Never both (the API's `conflicting_preconditions`).
 func (r Revision) Precondition() (ifMatch, ifNoneMatch string) {
 	switch {
 	case r.Version == "":

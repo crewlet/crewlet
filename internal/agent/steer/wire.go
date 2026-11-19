@@ -9,64 +9,35 @@ import (
 
 // The wire a note crosses to reach the node running its turn.
 //
-// # Why a scatter, and why only one node answers
+// A scatter, answered by one node: the request lands on whichever node serves
+// the dashboard, and a turn with no executor yet runs on whichever holds its
+// seat. So the note is scattered on the queue's ephemeral request verb and only
+// the node whose box the turn id names answers; silence is a node the turn is
+// not on, not an error. Ephemeral because a durable note would outlive its
+// turn; the asker says `unknown`, not a delivery nobody made.
 //
-// The person's request lands on whichever node serves their dashboard, and a
-// turn that has not launched its executor yet runs on whichever node holds
-// its seat — which nothing on the first node knows without asking. So the note
-// is SCATTERED on the queue's ephemeral request verb to every node, and the one
-// node whose box the turn id names is the one that answers. Every other node
-// answers nothing, which is what a scatter's "a server that did not answer"
-// means: it is not an error to be reported, it is a node this turn is not on.
-//
-// ONLY A TURN WITH NO RUN RECORD YET. From its executor's launch on, a turn's
-// notes wait on the run's record in the coordination store, which every node
-// reads: the asking node files the note there itself, and asks nobody. The one
-// node that still answers for such a turn is the one that ran its first segment
-// and handed its box to the record — for a note that read "no record" a moment
-// before the launch wrote one — and the node that ran the segment that ended
-// the turn, for a while, so a note racing the end is told `closed`.
-//
-// Ephemeral rather than a durable publish because a note is only worth
-// anything to a turn that is running NOW. A durable note outlives the turn it
-// was written for and would have to be discarded by somebody; a scatter that
-// nobody answers leaves nothing behind, and the asker says so — `unknown`, not
-// a delivery nobody made.
-//
-// # Signed, because a note is an instruction
-//
-// The running node offers a note to the turn AS THE PERSON IT NAMES, and it
-// does so on the asking node's word: who may steer a turn is decided where
-// the person's request landed, against the seat a probe named, and the
-// running node decides nothing about it. So a note anything the fleet's
-// broker admitted could write — its admission vouches for a connection,
-// never a message (ADR-0094) — would put words in front of a running agent
-// under anybody's name. Every request and every reply is therefore a channel
-// of internal/signedask's ([Channel]), signed under the fleet keyring in
-// domains of its own and bound by an id and a deadline ([Request.Binding])
-// that the answer names ([Reply.Answers]). A request the fleet did not sign,
-// one past its deadline and one whose id the node has taken already are
-// answered by nobody — the asker hears what it hears from a node the turn is
-// not on — and one signed under a key the running node does not hold is
-// answered [Reply.Unverified], so the person is told the note was not taken
-// rather than that nobody knows, and the operator reads in both nodes' logs
-// which keys the running one holds.
-//
-// # Evolution
-//
-// Additive only, [WireVersion] stamped on both halves — still 1: the status set
-// grew [StatusSpent], which an older asker reads as a status it does not know
-// and reports as `unknown`, a value and never a decode error. Two builds share
-// this wire during a rolling upgrade; an unknown field is ignored and an
-// unknown [Status] is a value the asker refuses to act on.
+// Only a turn with no run record yet: from its executor's launch on, notes wait
+// on the run's record in the coordination store. The first segment's node, and
+// the ending one for a while, still answer a note racing either (`closed`).
 
-// WireVersion is the shape this build writes.
+// WireVersion is the shape this build writes. Additive only, on both halves,
+// still 1: an older asker reads [StatusSpent] as an unknown status
+// (`unknown`), never a decode error, across a rolling upgrade; unknown fields
+// are ignored.
 const WireVersion = 1
 
 // Channel is the steer wire's name among the fleet's signed channels, and so
 // the stem of the two key domains a note and its answer are signed under —
 // its own, so no estate envelope, broker request or state-log record verifies
 // as one.
+//
+// Signed because a note is an instruction offered AS THE PERSON IT NAMES, on
+// the asking node's word. A broker's admission vouches for a connection, never
+// a message (ADR-0094), so every request and reply is bound by an id and
+// deadline ([Request.Binding]) the answer names ([Reply.Answers]). An unsigned,
+// expired or replayed request is answered by nobody; one signed under a key
+// the running node lacks is [Reply.Unverified], so the person hears the note
+// was not taken.
 const Channel = "seat.steer"
 
 // Request asks the node running a turn to hand it one note.

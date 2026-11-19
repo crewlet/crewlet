@@ -8,20 +8,16 @@ import (
 
 // ---- colour and contrast -------------------------------------------------- //
 //
-// CONTRAST IS JUDGED ON WHAT A PAGE PAINTS, so on the EFFECTIVE colours: every
-// role the kit leaves out takes the value the artifact kit paints in its place
-// ([Fallbacks]), and a pair whose two sides a reader never sees together is not
-// measured. Dark mode keeps the theme's own text (the kit restyles only the
-// light mode's), so the dark pair measures that text, not a brand role; and the
-// label on the accent is whichever of black and white contrasts more, as the
-// kit's `--color-text-on-accent` picks it.
+// CONTRAST IS JUDGED ON WHAT A PAGE PAINTS, so on the EFFECTIVE colours: a role
+// the kit leaves out takes the artifact kit's value ([Fallbacks]), and a pair a
+// reader never sees together is not measured. Dark mode keeps the theme's own
+// text, so the dark pair measures that; the label on the accent is whichever of
+// black and white contrasts more, as the kit's `--color-text-on-accent` picks.
 //
 // THE MATHS IS WCAG 2's, exactly as @crewlethq/tokens' `contrast()` does it
-// (the 0.04045 linearisation threshold, the 0.05 flare, the ratio compared
-// unrounded), so the Brand page's badges, which call that function on the
-// same fallbacks (the dashboard contract's BRAND_COLOR_FALLBACKS and
-// BRAND_CONTRAST_PAIRS, gated to [Fallbacks] and [ContrastPairs]), and the
-// adoption's refusal agree to the last digit.
+// (0.04045 threshold, 0.05 flare, ratio unrounded), so the Brand page's badges
+// (BRAND_COLOR_FALLBACKS and BRAND_CONTRAST_PAIRS, gated to [Fallbacks] and
+// [ContrastPairs]) and the adoption's refusal agree to the last digit.
 
 // The pseudo-roles a [ContrastPair] may name beside the colour roles.
 const (

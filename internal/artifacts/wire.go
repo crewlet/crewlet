@@ -112,16 +112,13 @@ func (p TicketPurpose) Valid() bool { return p == "" || p == TicketPurposePrevie
 // PreviewCapabilities are the only capabilities a preview's frame is granted:
 // what drawing the page needs, its asset store's pictures, its datastore READ
 // and a newcomer's state, and nothing that names the viewer or shows the
-// room. All of it is answered by the dashboard's preview host: the datastore
-// with reads (a document, a page, a query, the schema, a subscription once),
-// refusing every write, so a page draws its real content and can change none
-// of it, and the engine decides every read again as the reader; the state as
-// somebody opening the page for the first time holds it, empty and kept by
-// the host for the frame's life, so a page that remembers a viewer's choice
-// draws as a first visit does. The reader's own state is never read for a
-// preview and nothing a preview sets reaches the engine. A page that kept
-// state was once granted none, and since such a page cannot tell a state it
-// is refused from one it has, the gallery drew its kind's picture instead.
+// room. The dashboard's preview host answers all of it: the datastore with
+// reads only, refusing every write, so a page draws its real content and can
+// change none of it (the engine decides every read again as the reader); the
+// state as a first visit holds it, empty and kept by the host for the frame's
+// life. The reader's own state is never read for a preview and nothing a
+// preview sets reaches the engine. A page that kept state must be granted it,
+// since it cannot tell a refused state from one it has.
 var PreviewCapabilities = []Capability{CapabilityAssets, CapabilityDB, CapabilityState}
 
 // OriginMode is how the artifact origin isolates one artifact.

@@ -67,20 +67,15 @@ type Policy struct {
 }
 
 // Absent is a PUT route's answer to an address that holds nothing, DECLARED
-// WHERE THE ROUTE IS MOUNTED so the handler that decides it and every reader
-// of the route table say the same thing.
+// WHERE THE ROUTE IS MOUNTED so its handler and every reader of the route
+// table agree.
 //
-// The reader it exists for is the Dashboard Assistant's preview of a generic
-// change (internal/assistant/catalog): a PUT whose read found nothing is
-// proposed as a create only where the route creates, and refused at once,
-// with the route's own sentence about where one is added, where it does not.
-// Learned only from the write, the difference was a proposal the person
-// approved and the API then refused, every time: `PUT /config/roles/{id}`
-// never adds a seat, which has a place in the chart its path cannot name.
-//
-// The alternative, asking the route itself with `dry_run=true`, would put a
-// PUT on a read grant, whose whole guarantee is that it sends nothing but GET
-// and HEAD (ADR-0050); a route that ignored the flag would then write.
+// Its reader is the Dashboard Assistant's preview (internal/assistant/catalog):
+// a PUT whose read found nothing is proposed as a create only where the route
+// creates, else refused with the route's sentence about where one is added;
+// learned only from the write, the person would approve what the API refuses.
+// Asking with `dry_run=true` instead would put a PUT on a read grant (GET and
+// HEAD only, ADR-0050); a route ignoring the flag would write.
 type Absent struct {
 	// Creates says a write there creates what it names, sent create-only
 	// (`If-None-Match: *`) by a caller that must not replace one a racer
@@ -178,17 +173,14 @@ func (p Policy) Reading() Policy {
 // (ADR-0055).
 //
 // DECLARED WHERE THE ROUTE IS MOUNTED, beside [Absent], for the same reader:
-// the Dashboard Assistant's preview of a generic change runs the route's own
-// check before it draws a card, so a body the route would refuse (a field it
-// does not know, a document the company would not validate) is told to the
-// model at once, never found by the person after they approved and confirmed
-// it was them. A route that says nothing is never asked, because only a route
-// that reads the flag stores nothing for it.
+// the assistant's preview runs the route's own check before drawing a card,
+// so a body the route would refuse is told to the model at once, not found
+// after the person approved. A route that says nothing is never asked: only
+// one that reads the flag stores nothing for it.
 //
-// A CHECK IS DECIDED AS THE WRITE, at the read's proof ([IsCheck]): the same
-// verb, class, app and assistant column, without the step-up, because it
-// changes nothing. So the person's assistant checks exactly what the person's
-// own session could.
+// A CHECK IS DECIDED AS THE WRITE, at the read's proof ([IsCheck]): same
+// verb, class, app and assistant column, without the step-up, since it
+// changes nothing.
 func (p Policy) Checked() Policy {
 	p.DryRun = true
 	return p
@@ -301,16 +293,13 @@ type Guard func(r *http.Request, p Policy) Decision
 // the request context — the principal internal/api's guard resolved — and its
 // lead relations from chart.
 //
-// ONE FUNCTION RATHER THAN A COPY PER SURFACE. Four surfaces wrote this body
-// for themselves, and the one clause each had to get right is the one that
-// is easy to drop: a caller this node could not RESOLVE is decided UNKNOWN,
-// never as the zero principal. Decided as the zero principal it is a 403
-// naming a grant the caller may very well hold, on every request, for as
-// long as the identity estate is unreadable.
+// ONE FUNCTION RATHER THAN A COPY PER SURFACE: the clause easy to drop is
+// that a caller this node could not RESOLVE is decided UNKNOWN, never as the
+// zero principal, which is a 403 naming a grant the caller may hold, on every
+// request while the identity estate is unreadable.
 //
-// A surface whose rules ask no relation — the deployment's own controls, the
-// company document, the credential store — passes [NoChart], which says so
-// where a nil would look like an omission.
+// A surface whose rules ask no relation passes [NoChart], which says so where
+// a nil would look like an omission.
 func ContextGuard(chart Chart) Guard {
 	return func(r *http.Request, p Policy) Decision {
 		principal, how := iam.From(r.Context())
@@ -348,18 +337,13 @@ type decidedAtKey struct{}
 // decided at, which every [Router] route stamps on the request before its
 // guard runs, or the current time for a context no route decided.
 //
-// ONE INSTANT FOR EVERY CHECK OF ONE REQUEST. A handler decides more than its
-// route did — a verb only the body names ([Admit]), every part of a
-// configuration write once the document is built — and each of those asked
-// for a recent proof at its own `time.Now()`. A proof the route accepted could
-// lapse while the body was read, and the handler then refused, as stale, the
-// request the route had just admitted on it: an administrator was told on
-// every part of their write that they needed admin. The request is one
-// gesture, so it is judged at one instant.
+// ONE INSTANT FOR EVERY CHECK OF ONE REQUEST: a handler decides more than its
+// route did ([Admit], each part of a configuration write), and each at its
+// own `time.Now()` could find stale a proof the route accepted.
 //
 // FOR A DECISION ABOUT THE REQUEST ITSELF, never one made later on its
-// behalf: an open socket's watch is decided again whenever a credential moves,
-// at that moment, and is not a check of the handshake.
+// behalf: an open socket's watch is decided again whenever a credential
+// moves, at that moment.
 func DecidedAt(ctx context.Context) time.Time {
 	if at, ok := RouteInstant(ctx); ok {
 		return at
@@ -502,41 +486,17 @@ func (t *Router) Refusing(render Refusal) *Router {
 const RetryUndecidedSeconds = 2
 
 // EnvelopeRefusal is the rendering every surface that states no wording of its
-// own gets: the engine's refusal envelope, the same one every other JSON
-// surface answers with.
+// own gets: the engine's refusal envelope, NOT [net/http.Error]'s `text/plain`
+// (unreadable to clients, and its 503 lacks `Retry-After`).
 //
-// NOT [net/http.Error], which is what it was. That writes `text/plain` and
-// `nosniff` — the pairing that stops a strict client parsing the answer at
-// all — and a sentence rather than a code, so the /iam surface refused a
-// request in a shape no client of the rest of this API could read: no `error`
-// to branch on, no grant to name, and a 503 with no `Retry-After`, which a
-// client cannot tell from a node that is down for good.
-//
-//   - UNKNOWN IS NOT A REFUSAL. This node could not decide — it is behind, or
-//     it holds no company yet — so it is `503 unavailable` with a
-//     `Retry-After`, never a 403 that sends somebody to ask for an authority
-//     they already hold. See the package doc.
-//   - A REFUSAL is a 403 in the code [RefusalFields] gives it: `unauthorized`
-//     carrying the rule's reason and the grants that would have admitted the
-//     caller; `step_up_required` for a stale proof — the code the sign-in
-//     surface already answers for the same fact, so a client learns ONE
-//     spelling — carrying the window it needs, which a client can clear
-//     without asking anybody; and `token_refused` for a machine token on a
-//     verb that needs a person present, since the `unauthorized` code's
-//     sentence is about a grant the credential lacks and no grant on a token
-//     would admit it. It was that code with a sentence of its own as
-//     `detail`, so the envelope's `message` and its `detail` contradicted
-//     each other.
-//   - THE DASHBOARD ASSISTANT on a verb of the human-only list is `403
-//     unauthorized` with the `assist_refused` reason, and its `detail` is the
-//     sentence the list gives that verb's family ([AssistNeverSentence]): the
-//     assistant's model reads it to tell the person why it stays with them
-//     and where they do it, while the card they read says the reason's own
-//     sentence, since a route's `detail` is the model's alone.
-//   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
-//     nothing beside it ([Decision.NotFound]), the same mapping's answer: no
-//     reason and no grants, the answer a surface gives for an id nothing
-//     holds, so the refusal cannot say whether the artifact exists.
+//   - UNKNOWN IS NOT A REFUSAL: `503 unavailable` with a `Retry-After`, never
+//     a 403 sending somebody after an authority they hold (package doc).
+//   - A REFUSAL is a 403 in the code [RefusalFields] gives it.
+//   - THE DASHBOARD ASSISTANT on a human-only verb: `unauthorized` with the
+//     `assist_refused` reason and, as `detail`, the verb family's sentence
+//     ([AssistNeverSentence]) for the model; the card says the reason's own.
+//   - NO RELATION to an artifact ([Decision.NotFound]): `404 not_found`, as
+//     for an id nothing holds, so it cannot say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decision) {
 	if d.Unknown() {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
@@ -658,41 +618,14 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 //
 // # It is OUTSIDE the mux, and it has to be
 //
-// A gate is worth exactly as much as the agreement between what it matched
-// and what a reader thinks it matched: `/worklet/items/../config` reaches
-// ServeMux as one pattern and reads to a person as another.
-//
-// The obvious home is the per-route wrapper, beside the decision it protects,
-// and that home does not work — which this package's own test is what showed.
-// ServeMux cleans a literal `..`, `.` or `//` and answers a 307 ITSELF,
-// before it matches, so a check inside any handler never sees that path at
-// all: every such case came back 307 with the route's guard never entered. So this is the one
-// authority concern that belongs in the OUTER middleware, and it earns that
-// place by the same rule the principal resolution does — it needs no route
-// identity, and `r.Pattern` is empty out there anyway.
-//
-// REFUSED RATHER THAN REDIRECTED. ServeMux's own answer is a redirect, which
-// every client follows, so the request arrives a second time with the
-// decision still unmade and a reader of the access log sees the clean path
-// alone. A surface that means to be strict about what it matched has to stop
-// the first one.
-//
-// BOTH SPELLINGS OF THE PATH ARE CHECKED, because two readers of one request
-// read different ones. The escaped check catches `/worklet/items/../config` as it
-// was sent. The decoded check catches `/worklet/items/%2e%2e/config`, whose
-// escaped form is already clean — and which ServeMux does NOT redirect
-// (measured on go1.27): it MATCHES on the escaped path, segment by segment, so
-// `/worklet/items/%2e%2e` reaches the `{key}` route with a key of `..`. What
-// makes that a hole is everything that decides OUTSIDE the mux on the DECODED
-// `r.URL.Path`: the cross-site write check's exemption list
-// (`auth.Unguarded`) and the drain gate both read `/webhooks/%2e%2e/config`
-// as `/webhooks/../config`, a path under an exempt prefix, while the mux
-// routes it by segments that name something else.
-// A decision made on one spelling and a dispatch made on the other are two
-// readers disagreeing about one request, which is the thing this refuses.
-//
-// IN THE ENVELOPE, like every other refusal on this API, rather than
-// [net/http.Error]'s `text/plain`.
+// ServeMux answers a 307 ITSELF for a literal `..`, `.` or `//` before it
+// matches, so no handler's check sees that path. REFUSED, NOT REDIRECTED: a
+// redirect arrives with the decision unmade. BOTH SPELLINGS ARE CHECKED: the
+// decoded one catches `/worklet/items/%2e%2e/config`, whose escaped form is
+// clean and which ServeMux matches by segment (key `..`); what decides
+// OUTSIDE the mux on the decoded `r.URL.Path` (`auth.Unguarded`, the drain
+// gate) reads `/webhooks/../config`, an exempt prefix: two readers
+// disagreeing about one request.
 func CanonicalPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, decoded := r.URL.EscapedPath(), r.URL.Path

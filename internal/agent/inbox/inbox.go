@@ -136,16 +136,12 @@ type Conditions struct {
 	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped
 	// to ask a person something and is waiting for the reply.
 	//
-	// THE OPPOSITE OF THE FIELD ABOVE, not a synonym for it: a run parked on
-	// a question gives the seat back precisely so the answer can arrive on
-	// its inbox, so this is true exactly when that one is not — and the
-	// reply, when it comes, is an ordinary message on an ordinary seat with
-	// nothing about it that says what it answers.
-	//
-	// Both were one field called AwaitingSandbox, which named this question
-	// and held that one. The match guarded by it therefore ran only while
-	// the seat was HELD, which is the one state a parked run is never in, so
-	// no answer to a clarification ever reached the run that asked.
+	// The opposite of the field above, not a synonym: a run parked on a
+	// question gives the seat back so the answer can arrive on its inbox, so
+	// this is true exactly when that one is not. The reply is an ordinary
+	// message on an ordinary seat, with nothing that says what it answers. A
+	// match guarded by the held field would never run, since a parked run
+	// never holds the seat.
 	SandboxAwaitsAnswer bool
 
 	// AdmitsTriggers is the config posture: false when this node cannot
@@ -186,39 +182,18 @@ type Screening struct {
 	// read the ledger about) and for the park (the list to requeue).
 	Events []*events.Event
 
-	// OfferAsSandboxAnswer says this delivery must be offered to the
-	// sandbox's answer match BEFORE the action above is carried out: one of
-	// the seat's detached runs may be waiting on a person's reply that this
-	// very delivery carries.
+	// OfferAsSandboxAnswer says this delivery must be offered to the sandbox's
+	// answer match BEFORE the action above is carried out: a detached run may
+	// be waiting on a reply it carries. A flag beside the action because
+	// whether it IS the answer is a store read this package cannot make. Only
+	// a free seat's proceed carries it: a defer consumes nothing, so the
+	// delivery is still there to offer (see sandbox.SeatHold); named, not
+	// inferred from Reason, which is log prose.
 	//
-	// ORTHOGONAL TO THE ACTION, which is why it is a flag beside it rather
-	// than an action of its own. Nothing here can tell whether the delivery
-	// IS the answer — that is a store read, and this package reaches no
-	// store — so what a screening states is the pair: offer it, and if the
-	// offer does not claim it, do this. Only the ordinary proceed a free
-	// seat makes while one of its runs waits for a reply carries it. A
-	// defer does not, and does not need to: it consumes nothing and stops
-	// the consumer, so the delivery is still there to be offered when the
-	// condition clears — and a seat a run HOLDS is one such condition: its
-	// inbox is held, a person's answer to another of its runs waits there
-	// with the rest of its mail, and it is offered the moment the run stops
-	// holding the seat (see sandbox.SeatHold for why the held seat offers
-	// nothing).
-	//
-	// Named rather than inferred from Reason, which is prose for a log: a
-	// caller matching on the sentence would break silently the first time
-	// it was reworded, and the failure mode is a clarification answer
-	// requeued for ever behind the question it answers.
-	//
-	// IT SAYS OFFER IT, NEVER THAT THE OFFER IS FREE. On the proceed path
-	// an offer that is not claimed hands the delivery back, which spends
-	// one of the message's deliveries — so the caller stops offering once
-	// what is left has to be kept for the ordinary route, and it is the
-	// caller that knows the count because it holds the queue's own
-	// delivery headroom. See sandbox.AnswerDeliveryReserve. Nothing about
-	// that decision belongs here: this package reaches no store and no
-	// transport, and a flag stating one screening's opinion of a broker's
-	// budget would be the same false claim it corrects.
+	// It says offer it, never that the offer is free: an unclaimed offer spends
+	// one of the message's deliveries, so the caller, which holds the queue's
+	// headroom, stops offering once the rest must be kept for the ordinary
+	// route (sandbox.AnswerDeliveryReserve).
 	OfferAsSandboxAnswer bool
 
 	// NoteDeferred asks the seat host to record that this consumer stopped,
@@ -242,101 +217,60 @@ func (s Screening) Result() queue.Result {
 	return queue.Ack()
 }
 
-// Screen runs every guard that must precede the completion-ledger read.
+// Screen runs every guard that must precede the completion-ledger read, in the
+// order of its cases (which say why each sits where it does). The ledger read
+// comes after ALL of them, so a parked partition is never marked done, and
+// before coalescing ([Route]).
 //
-// The order, and why each stage is where it is:
-//
-//  1. SAME-ID DEDUPE, before any parking branch. At-least-once delivery — and
-//     the requeue machinery's own republish edges, a publish that timed out
-//     client-side but landed, a partial requeue followed by a partition NAK —
-//     can put two copies of one event in a single drain. Identical ids mean
-//     identical payloads by construction, so dropping the extras is the one
-//     always-safe dedupe. It must run FIRST because the parking branches
-//     REPUBLISH: deduping after them meant every park pushed the duplicates
-//     back onto the topic, so copies multiplied across shed and sandbox cycles
-//     instead of holding steady.
-//
-//  2. OWNERSHIP. This node consumes the seat only while it holds the lease.
-//     Defers rather than requeues, for the reason on ActionDefer.
-//
-//  3. A PERSON'S PAUSE — first whether it can be known at all, then whether
-//     it holds. A node that has not yet read the fleet's pauses DEFERS: it
-//     cannot say whether somebody stopped this seat, and a turn it runs cannot
-//     be taken back. A paused seat is held and parked, like stage 4, under its
-//     own hold, which the resume lifts. Before the turn engine, because a
-//     person's decision is the one of the two a later apply cannot undo: a
-//     seat paused and held for want of a model must still be held when the
-//     model arrives. Normally the hold is already on the inbox before anything
-//     reaches here — the node's pause watch takes it the moment the pause
-//     lands — so this stage is the race between a delivery in flight and that
-//     watch, closed from the delivery's side.
-//
-//  4. NO TURN ENGINE. Pause the topic first so the requeued copies buffer,
-//     then park. Consuming and dropping them would lose the work outright;
-//     requeuing without the pause loops them at whatever rate the broker will
-//     serve. The pause is the caller's to release, when a model arrives.
-//
-//  5. SEAT HELD BY AN EXECUTOR. Hold and defer. The coordinator holds the
-//     seat's inbox for as long as a run holds the seat, so what reaches here
-//     raced that hold or found it refused: the hold is asked for again and
-//     the delivery waits at the head of the inbox, held, until the run stops
-//     holding the seat. A park would republish it onto the very inbox it
-//     came from, which the consumer — never stopped — fetched again at once.
-//
-//  6. CONFIG POSTURE. Defer. This sits AFTER the sandbox branch deliberately:
-//     a seat mid-sandbox is already held there, so its mail reaching a
-//     shedding node behaves exactly as it does on a healthy one.
-//     Requeue would be wrong twice over — a shed releases this node's seats and
-//     a release is fenced, so republishing reorders the conversation for the
-//     successor; and the copy lands back on a topic this node is still attached
-//     to, so a failed release means it comes straight back and is shed again,
-//     forever. Deferring cannot spin: the consumer stops after the first one.
-//
-// There is NO re-entrancy stage, and its absence is a decision rather than an
-// omission. The hazard is real where a publish to a seat's own inbox from
-// inside its running turn dispatches inline on the same task, so handling it
-// waits on the turn from within the turn. Every queue backend here forecloses
-// that structurally — the pull loops fetch again only
-// after a handler returns, and the in-process twin defers a nested drain to the
-// loop already running rather than starting a second one — so the condition
-// cannot arise and a guard for it would be a branch no delivery can reach.
-// queuetest's Reentrancy group pins that property on every backend, which is
-// where a change that brought the hazard back would fail.
-//
-// The completion-ledger read comes after ALL of these — so a parked partition
-// is never marked done — and before coalescing, so recorded constituents drop
-// out and only the remainder merges. See [Route].
-//
-// The sandbox ANSWER OFFER is not a stage, and deliberately: it decides
-// nothing about the delivery's disposition, it only says the disposition is
-// conditional on a store read the caller makes. So it rides as a flag on the
-// two outcomes that consume a delivery — see [Screening.OfferAsSandboxAnswer]
-// — and leaves the order above exactly as it was.
+// There is no re-entrancy stage, by decision: every queue backend fetches again
+// only after a handler returns and the in-process twin defers a nested drain,
+// so a publish to a seat's own inbox from inside its turn cannot dispatch
+// inline, and queuetest's Reentrancy group pins that. The sandbox answer offer
+// is no stage either: it is a flag ([Screening.OfferAsSandboxAnswer]).
 func Screen(c Conditions, evs []*events.Event) Screening {
+	// Same-id dedupe runs FIRST: at-least-once delivery and the requeue
+	// machinery's republish edges can put two copies of one event in a drain,
+	// identical by construction. The parking cases REPUBLISH, so deduping after
+	// them would multiply the copies across shed and sandbox cycles.
 	evs = dedupe(evs)
 	if len(evs) == 0 {
 		return Screening{Action: ActionDrop, Reason: "empty"}
 	}
 	switch {
 	case !c.Owned:
+		// Defers rather than requeues, for the reason on ActionDefer.
 		return Screening{Action: ActionDefer, Cause: queue.DeferSeatMoved,
 			Reason: "seat is not owned here", NoteDeferred: true}
 	case c.PauseUnknown:
+		// A node that has not read the fleet's pauses cannot say whether
+		// somebody stopped this seat, and a turn it runs cannot be taken back.
 		return Screening{
 			Action: ActionDefer, Cause: queue.DeferPauseUnread, NoteDeferred: true,
 			Reason: "this node has not yet read whether the seat is paused",
 		}
 	case c.Paused:
+		// Before the turn engine: a person's decision is the one a later apply
+		// cannot undo, so a seat paused and held for want of a model must still
+		// be held when the model arrives. The node's pause watch normally holds
+		// the inbox first; this closes the race with a delivery in flight.
 		return Screening{
 			Action: ActionPauseAndPark, Hold: HoldSeatPaused, Events: evs,
 			Reason: "a person paused this seat",
 		}
 	case !c.TurnEngineReady:
+		// Pause the topic first so requeued copies buffer, then park: dropping
+		// them loses the work, requeuing without the pause loops them at the
+		// broker's rate. The caller releases the pause when a model arrives.
 		return Screening{
 			Action: ActionPauseAndPark, Hold: HoldNoTurnEngine, Events: evs,
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
 	case c.SeatHeldBySandbox:
+		// Hold and defer: what reaches here raced the coordinator's hold or found
+		// it refused, so the hold is asked for again and the delivery waits at
+		// the head of the inbox. A park would republish it onto the very inbox
+		// it came from, fetched again at once.
+		//
 		// NOT OFFERED as an answer, even when the seat's executor on another
 		// turn waits for a person: the held seat receives nothing, and that
 		// answer waits on the inbox with the rest of its mail — offered
@@ -346,6 +280,11 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 			Cause: queue.DeferExecutorHolds, Reason: "the seat's executor holds it from its box",
 		}
 	case !c.AdmitsTriggers:
+		// After the sandbox case, deliberately: a seat mid-sandbox is already
+		// held there. Defer, never requeue: a shed's release is fenced, so
+		// republishing reorders the conversation for the successor, and the copy
+		// lands on a topic this node still attaches to and is shed again for
+		// ever. Deferring cannot spin: the consumer stops after the first one.
 		return Screening{Action: ActionDefer, Cause: queue.DeferShedding,
 			Reason: "config posture refuses new work", NoteDeferred: true}
 	}
@@ -435,21 +374,17 @@ func WorkKeyFor(evs []*events.Event, ledgered func(string) bool) string {
 }
 
 // WorkSinceFor is when the unit of work [WorkKeyFor] names BEGAN: the earliest
-// instant any event the key is derived from was created, and the zero instant
-// exactly when the key is empty.
+// creation of any event the key derives from, zero exactly when the key is empty.
 //
-// THE SAME CONSTITUENTS AS THE KEY, filtered by the same predicate, because the
-// two are one identity: every operation id a turn derives from the key carries
-// this instant as its mint time, and the state log will not decide again an
-// operation minted before its node adopted a donated snapshot. A redelivery
-// hands over the very same events, so it reproduces the instant exactly as it
-// reproduces the key — which no instant of the dispatch itself could do.
+// Same constituents and predicate as the key, being one identity: every
+// operation id derived from the key carries this instant as its mint time, and
+// the state log will not decide again an operation minted before its node
+// adopted a donated snapshot. A redelivery reproduces it, as the key.
 //
-// The EARLIEST rather than any other, because the instant is read as a lower
-// bound on when the work could first have written anything: an operation that
-// looks older than it is is answered `unknown` on a node that adopted since,
-// while one that looks younger is decided again. An event carrying no
-// timestamp is read as the zero instant for the same reason.
+// The earliest, read as a lower bound on when the work could first have
+// written anything: one that looks older than it is is answered `unknown` on a
+// node that adopted since, one that looks younger is decided again. No
+// timestamp reads as the zero instant likewise.
 func WorkSinceFor(evs []*events.Event, ledgered func(string) bool) time.Time {
 	var since time.Time
 	first := true

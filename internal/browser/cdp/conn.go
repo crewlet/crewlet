@@ -14,37 +14,17 @@ import (
 )
 
 // ReadLimit is the largest message a connection reads whole, 32 MiB. A larger
-// one ends nothing but what it is for. It is read through and let go of as it
-// streams past, kept only as far as routing it needs — the id or the method
-// Chromium writes first, and the session it writes last — and then an answer
-// that large fails its own call with [ErrMessageTooBig], an event that large
-// ends its own session with it when a listener of that session asked for it,
-// and any other is dropped, as an event no listener asked for always is. The
-// connection and its other sessions go on: a page can provoke such a message
-// at will — a console line or a call of a binding, once its session has
-// enabled Runtime, or a document whose accessibility tree is long — and so
-// what it provokes ends at most its own session. The browser's own session
-// ([Conn.Browser]), which no target owns, ends only with its connection, so an
-// event past ReadLimit that one of its listeners asked for ends the
-// connection. A page can provoke one there too: a request paused by a gate on
-// the browser's session carries the request's body, so a POST of tens of
-// megabytes passes ReadLimit (on Chromium 157, measured on 2026-11-11, a POST
-// of 40 MiB was paused as an event of 97.9 MB), and ends its whole browser. A
-// caller that must not let a page do that listens for such events on the
-// page's own session rather than the browser's.
-//
-// 32 MiB is what the largest answer the browser asks for by design needs: a
-// screenshot, which its screenshot tool holds to 2,000 pixels on its long edge
-// at its source (crewlet/crewlet#804), is at worst a 16 MB PNG, about 21.3 MiB
-// once base64 has carried it, and 32 MiB is that and half again. Nothing holds
-// every other answer under it: an accessibility tree has no bound at its
-// source, since Accessibility.getFullAXTree's depth bounds how deep the tree
-// goes and never how many nodes come back (on Chromium 157, measured on
-// 2026-11-11, a table of 4,000 rows of six cells answered 26.8 MiB and one of
-// 6,000 rows passed this limit), so a caller that asks for one, or listens for
-// an event a page can make as large, holds it below ReadLimit itself or meets
-// ErrMessageTooBig. The websocket library's own limit, 32 KiB by default, is
-// lifted: a message past ReadLimit is read through, never refused.
+// one is read through as it streams past and ends only what it is for
+// (routeOversized): so a page can provoke one (a console line, a binding call,
+// a long accessibility tree) and end at most its own session. The browser's
+// session ([Conn.Browser]) ends only with its connection, so there a listened-for
+// event past it ends the connection: a request paused by a gate carries its
+// body (Chromium 157: a 40 MiB POST was a 97.9 MB event), so a caller that must
+// not let a page do that listens on the page's own session. 32 MiB is the
+// screenshot tool's worst case (2,000 px, a 16 MB PNG, 21.3 MiB base64) and half
+// again; nothing holds other answers under it (a 6,000-row table's AX tree
+// passed it), so callers keep them below ReadLimit or meet [ErrMessageTooBig].
+// The websocket library's own 32 KiB limit is lifted.
 const ReadLimit = 32 << 20
 
 // envelopeBytes is how much of a message past ReadLimit the reader keeps to
@@ -284,19 +264,16 @@ func newConn(ctx context.Context, t transport, log *slog.Logger) *Conn {
 func (c *Conn) Browser() *Session { return c.browser }
 
 // Session is the attached session id names, as the connection holds it: every
-// one Chromium announced with Target.attachedToTarget, which the connection
-// registers before it delivers the announcement, from that announcement until
-// Chromium detaches it. Chromium announces a session before it answers the
-// Target.attachToTarget that made it, so the session that answer names is
-// held by the time the answer is read. A session that ended otherwise — its
-// target crashed, or an event or a backlog of its passed a bound — is handed
-// back as it is, ended, until then.
+// one announced with Target.attachedToTarget, registered before the
+// announcement is delivered, until Chromium detaches it. Chromium announces a
+// session before it answers the Target.attachToTarget that made it, so that
+// answer's session is held by the time it is read. One that ended otherwise
+// (crash, an event or backlog past a bound) is handed back, ended, until then.
 //
-// An id the connection holds no session of — one Chromium detached, which the
-// connection forgets, or one never attached on it — is a session that has
-// ended already, with a [*DetachedError] saying so, and its calls fail at once
-// and send nothing; nothing registers it, since nothing would ever end it. On
-// a connection that has ended it is a session that ended with the connection.
+// An id the connection holds no session of (detached and forgotten, or never
+// attached) is a session already ended, with a [*DetachedError], whose calls
+// fail at once and send nothing; nothing registers it, as nothing would end it.
+// On an ended connection it ended with the connection.
 func (c *Conn) Session(id SessionID) *Session {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -438,21 +415,13 @@ func (c *Conn) route(msg []byte) bool {
 }
 
 // routeOversized ends what a message past ReadLimit is for, and nothing else:
-// the call an answer that large answers fails with ErrMessageTooBig, and the
-// session an event that large belongs to ends with it if a listener of that
-// session asked for the event — which it can no longer be handed, and which a
-// listener must not silently miss — while an event no listener asked for is
-// dropped, as one of any size is. The browser's own session ends only with its
-// connection (Conn.Browser), so an event of its that a listener asked for ends
-// the connection. Each is said at DEBUG by its id or method, its session and
-// its size, never by anything of the rest. A message whose start names neither
-// an id nor a method is no CDP message, and ends the connection as a whole one
-// would; Chromium writes one or the other first in every message it sends.
-//
-// The events the connection reads itself — a target attached or detached, a
-// session detached, a target crashed — carry ids, a reason, a status and a
-// target's address and title, never anything near ReadLimit, so none of them
-// is ever read through here unapplied.
+// the call an answer that large answers fails with ErrMessageTooBig; the
+// session of an event that large ends with it if a listener asked for it (which
+// must not silently miss it), else the event is dropped; the browser's session
+// ends only with its connection, so there the connection ends. Each is said at
+// DEBUG by its id or method, session and size, never by the rest. A message
+// naming neither an id nor a method is no CDP message and ends the connection.
+// The events the connection reads itself are never near ReadLimit.
 func (c *Conn) routeOversized(o *oversized) bool {
 	h := readHead(o.head)
 	session := h.session
@@ -565,24 +534,14 @@ func readHead(b []byte) head {
 }
 
 // tailSession is the session a message's end names: Chromium appends a child
-// session's id to every message it sends for it, as the object's last member,
-// and a message of the browser's own session has none. So a message ending in
-// a top-level `"sessionId":"<id>"` member is that session's, and any other
-// end — an object or an array closing the last member, as every member of the
-// browser's own messages does — is the browser's.
-//
-// It reads that member back from the end, past any blanks: the object's '}',
-// the id's closing quote and its opening one, the ':' before the id, the name
-// "sessionId" before the ':', and the ',' or '{' before the name. No quote
-// inside a string passes for one of the member's, so no value or name that
-// merely ends as the member does is read as it: inside a string a quote is
-// escaped, so the byte before it is a backslash, and what is read before each
-// of the member's quotes never is — the ':' and the name before the id's
-// opening quote, the name's last letter before its closing quote, the ',' or
-// '{' before its opening one — while the id's closing quote, the last byte
-// but blanks before the '}', ends a string in any message that parses. An id
-// holding a backslash would have to be unescaped to name a session, which no
-// id Chromium makes needs, so it names none.
+// session's id as the object's last member, and the browser's own messages
+// have none: a message ending in a top-level `"sessionId":"<id>"` member is
+// that session's, any other end the browser's. It reads that member back from
+// the end, past blanks: '}', the id's quotes, ':', the name, and the ',' or '{'
+// before it. No quote inside a string passes for one of the member's: there a
+// quote is escaped, so the byte before it is a backslash, which is never what
+// precedes each of the member's quotes. An id holding a backslash would need
+// unescaping, which no id Chromium makes does, so it names none.
 func tailSession(b []byte) SessionID {
 	i := lastToken(b, len(b))
 	if i < 0 || b[i] != '}' {

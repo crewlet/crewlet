@@ -25,20 +25,15 @@ import (
 // WHAT AN AGENT MAY DO AT ONE INTEGRATION, CHANGED THE WAY ITS AGENTS TAB DOES.
 //
 // ONE SEAT, ONE LANE, ONE WRITE PATH. The change is the request the tab's Save
-// sends (`PUT /setup/integrations/{kind}/access`), decided by the same verb
-// (`setup.access.write`), with the same step-up, the same raise rule for an
-// administration role (`setup.access.raise`) and the same conditional write, so
-// an approved change is the person's own Save. The preview reads the tab as it
-// is now and asks the route's own check for the plan, which is the sync's own
-// function: the card shows what the engine will do at the vendor, step by step,
-// before anybody approves it.
+// sends (`PUT /setup/integrations/{kind}/access`), under the same verb
+// (`setup.access.write`), step-up, raise rule (`setup.access.raise`) and
+// conditional write, so an approval is the person's own Save. The card shows
+// the route's own plan, the sync's function: what the engine will do at the
+// vendor, step by step.
 //
-// IT NEVER TAKES A VARIABLE NAME. The agent's credential is sealed under the
-// name the engine derives for it, so the call carries on or off, the vendor's
-// level, its permissions and its scope, and nothing else. The incident this
-// exists for was a generic change that pointed an agent's credential at a
-// company variable; the document's own rules now refuse that, and this tool
-// leaves no field to try it with.
+// IT NEVER TAKES A VARIABLE NAME. The credential is sealed under the name the
+// engine derives, so the call carries only on or off, level, permissions and
+// scope: no field to point a credential at a company variable.
 
 // The Agents tab's two routes.
 const (
