@@ -75,8 +75,10 @@ type advisorNode struct {
 	log *memAdvisor
 }
 
-func (n advisorNode) AdvisorLog() (api.AdvisorReads, api.AdvisorWrites, bool) { return n.log, n.log, true }
-func (advisorNode) AdvisorClaim() func(context.Context) (bool, error)        { return nil }
+func (n advisorNode) AdvisorLog() (api.AdvisorReads, api.AdvisorWrites, bool) {
+	return n.log, n.log, true
+}
+func (advisorNode) AdvisorClaim() func(context.Context) (bool, error) { return nil }
 
 // A NODE WHOSE RUNTIME REACHES THE ADVISOR LOG SERVES THE ADVISOR AND RUNS ITS
 // DUTY: its questions answer, and its duty records a run once the app starts.
