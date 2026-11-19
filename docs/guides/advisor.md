@@ -121,7 +121,7 @@ And one is yours to fix, read from the pull requests your work waited on: **pull
 
 ## Work that stalls where nothing else says so
 
-Six more are read from the week's records, each the owner's (`costs`), each with its numbers and records, and the fix the engine can build where one exists. They are read with no model call, as every finding above is.
+Seven more are read from the week's records, each the owner's (`costs`), each with its numbers and records, and the fix the engine can build where one exists. They are read with no model call, as every finding above is.
 
 | Finding | Listed when (last 7 days, or now) | The fix |
 |---|---|---|
@@ -131,6 +131,7 @@ Six more are read from the week's records, each the owner's (`costs`), each with
 | Open work waits on one item (`work.bottleneck`), one per item | An open item an agent holds, or nobody does, that 5 or more open items wait on, directly or through each other. | Open the item: move it first, or take off the waits that need not be there. |
 | Agent work that needs no decision waits behind a person (`work.held_by_person`), one per item | An item a person holds (it is theirs, or a question on it waits on their answer) that 3 or more items agents hold, with no question of their own open, wait on. The item names it and how many open questions hold it. | Open the item: answer what it waits on, or take the wait off the work behind it. |
 | Merges a delegate allowed went to a person because the branch requires no check (`merge.no_required_checks`), one per repository | 3 or more merges into one repository that a [delegate](delegated-decisions.md) allowed were put to a person because its branch requires no check, so nothing shows the change passed CI. Each request is counted once, however many delegates answered it. | On GitHub, the repository's branch settings: run CI on its pull requests and require that check, or name the check in the rule's `required_checks`. On Gitlet, open `code.repos` and require a check on the protected branch. |
+| An agent was woken on the engine's alarms for turns that changed nothing (`wake.alarm_noop`), one per agent | Two or more agents hold the health grant (`health_tools`), so an alarm wakes each of them, and this one's alarm-woken turns numbered 10 or more, half or more of them committing nothing. The agent whose alarm turns changed the most keeps the watch and is never listed, nor is a company's only watcher: an alarm that fires too often is a finding of its own. The item says how many alarm turns, how many changed nothing, and what they spent. | Take the health grant off this agent (`health_tools: false`); the agent whose alarm turns changed the most keeps it and still wakes on every alarm. The finding is fixed once the grant is off, and is checked over the next 7 days. |
 
 If a server cannot read the week's budget refusals or its merge decisions, the answer's `unread` names `budget_stops` or `merges`, and their findings are left out.
 
