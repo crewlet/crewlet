@@ -252,14 +252,6 @@ type saver interface {
 	PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error)
 }
 
-// mcpHolder is a harness that can be held to the MCP servers a run hands it,
-// starting none its own configuration, a repository's or a plugin's declares
-// ([sandbox.RunRequest.OnlyMCPServers]). Only Claude Code's runner is one, as
-// the one run that asks (the assistant's deep work) runs on Claude Code alone;
-// such a run on another harness is refused rather than started on every server
-// its configuration adds up to.
-type mcpHolder interface{ HoldsToItsMCPServers() bool }
-
 // sessionTotals is a harness whose result, on a run that continues a session,
 // may state the session's spend rather than the run's: from the release
 // TotalsRestored names, a continued session starts from the totals the job
@@ -566,11 +558,6 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseCarried(req); err != nil {
 		return sandbox.RunHandle{}, err
-	}
-	if h, ok := r.harness.(mcpHolder); req.OnlyMCPServers && (!ok || !h.HoldsToItsMCPServers()) {
-		return sandbox.RunHandle{}, fmt.Errorf("executor: %s starts the MCP servers its own "+
-			"configuration declares, and this run asks to be held to the ones it is handed",
-			r.harness.Name())
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
