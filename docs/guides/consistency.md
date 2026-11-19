@@ -315,7 +315,7 @@ Twelve of the fourteen state logs grant it; the vectors and the usage log do not
 | Chat (`CREWLET_CHAT_LOG`) | Yes | Likewise. A barrier is a record of its own on the log, apart from every room, so it contends with no message and no room's state. |
 | The executor log (`CREWLET_EXECUTOR_LOG`) | Yes | Likewise: the turn that continues a conversation reads the conversation's head at this level, so a node that has not applied the previous turn's end, published by another node, waits for it rather than continuing an older session. |
 | The access log (`CREWLET_ACCESS_LOG`) | Yes | A turn's dispatch reads what its seat was last told at `linearizable`: the seat's previous turn may have been told on another node, and a copy that has not applied it would tell the same change twice. An audit page reads at the caller's level. |
-| The atlas log (`CREWLET_ATLAS_LOG`) | Yes | Likewise. No surface in this release asks for it: a person's edit decides from the entry's version in its own snapshot, where the broker arbitrates what a stale copy decided, and every read of the atlas is at its caller's level, `session` by default. Its declared read rate is zero (below). |
+| The atlas log (`CREWLET_ATLAS_LOG`) | Yes | Likewise: an agent's and the operator's atlas tools read it at the seat surface's `linearizable`. A person's edit decides from the entry's version in its own snapshot, where the broker arbitrates what a stale copy decided, and the dashboard reads at `session`. |
 | The advisor log (`CREWLET_ADVISOR_LOG`) | Yes | Likewise. No surface in this release asks for it: the Advisor's duty decides each write from the finding key's version in its own snapshot, where the broker arbitrates what a stale copy decided, and every read of the Advisor is at its caller's level, `session` by default. Its declared read rate is zero (below). |
 | Gitlet (`CREWLET_CODE_LOG`) | Yes | Likewise: every answer a person's git is given that names a ref is read at `linearizable`, and the REST reads under `/gitlet/` take the level as the other estate reads do (see [Which surface reads at which level](#which-surface-reads-at-which-level)). |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
@@ -330,9 +330,9 @@ neither or both. It used to be a switch, where a log that grants no
 An entry with a barrier also states **how often it is read that way**: the
 linearizable reads a day each agent seat puts on its log — 125 on the
 tracker's, the knowledge base's, the artifacts log's, the artifact
-datastore's and Gitlet's, 120 on chat's, 150 on the executor log's, none on the identity
-estate's, Ask Crewlet's, the atlas log's or the advisor log's — and a boot refuses a
-barrier stated without it. That figure is
+datastore's and Gitlet's, 120 on chat's, 150 on the executor log's, 60 on the access
+log's, 30 on the atlas log's, none on the identity estate's, Ask Crewlet's or the
+advisor log's — and a boot refuses a barrier stated without it. That figure is
 the log's census, which [`census_drift`](../reference/alarms.md) holds it to,
 and a term in the log's ceiling; see [Retention § The storage
 forecast](retention.md#the-storage-forecast).
