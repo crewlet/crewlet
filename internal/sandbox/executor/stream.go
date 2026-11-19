@@ -205,8 +205,8 @@ const redactContext = redact.LookBack
 // SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
 // bytes alone, the end could reach back into the context when redaction shrank
 // what followed, and be redacted without what decides it. A read opened inside
-// a line running to the end has no whole line to show, so that line's end past
-// the context is kept on a character, marked, rather than showing nothing.
+// a line running to the end has no line it opens to show, so it shows nothing,
+// and every byte is counted.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	ctx := 0
 	if tail.Before() > 0 {
@@ -223,8 +223,10 @@ func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 //
 // WHAT IS SETTLED ([settledStart]) is shown as the WHOLE text redacts it:
 // redacted alone, a key whose BEGIN is in the context reads as cut off, and a
-// password whose key is there as no password. So only what both redactions agree on is kept, from
-// the line after the last place they part.
+// password whose key is there as no password. So only what both redactions
+// agree on is kept, from the line after the last place they part. A line
+// begun before that is not shown: read from a place that is not its start, it
+// is not read as the whole text reads it.
 func settledEnd(text string, ctx, keep int) (string, int) {
 	from, opensLine := settledStart(text, ctx)
 	part := redact.Secrets(text[from:])
@@ -238,14 +240,8 @@ func settledEnd(text string, ctx, keep int) (string, int) {
 	onLine := start == 0 && opensLine || start > 0 && part[start-1] == '\n'
 	if !onLine {
 		i := strings.IndexByte(part[start:], '\n')
-		if i < 0 || start+i+1 == len(part) {
-			// THE END OF ONE LINE begun before what is settled: kept on a
-			// character and marked, as a line longer than keep is.
-			kept, at := sandbox.KeepEnd(part[start:], keep)
-			if at == 0 {
-				kept = sandbox.KeepEndMark + kept
-			}
-			return kept, from + start + at
+		if i < 0 {
+			return "", from + len(part)
 		}
 		start += i + 1
 	}

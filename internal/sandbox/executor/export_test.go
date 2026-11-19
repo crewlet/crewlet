@@ -41,6 +41,9 @@ const PackReleaseFloor = packReleaseFloor
 // with it.
 const RedactContext = redactContext
 
+// HumanSize is a byte count as the notes a run's failure writes say it.
+func HumanSize(n int64) string { return humanSize(n) }
+
 // StatedSizeGrain is what the size an entry states of a text a read redacted
 // only the opening of is rounded up to.
 const StatedSizeGrain = statedSizeGrain

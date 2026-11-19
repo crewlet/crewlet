@@ -72,8 +72,13 @@ func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 }
 
 // THE WINDOW STARTS ON A LINE past the context, and everything before it is
-// counted; a line longer than the window, or one a read began inside, keeps
-// its end on a character, marked.
+// counted; a line the stream opens that is longer than the window keeps its
+// end on a character, marked, and a line a read began inside, running to the
+// stream's end, is not shown at all, since only a line read from its start
+// redacts as the whole stream does.
+//
+// Mutation: keep the end of a line begun before the settled start, and the
+// last case shows it.
 func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	t.Parallel()
 	const keep = 1000
@@ -98,13 +103,13 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 		t.Errorf("a line longer than the window = %q; want its end, marked, on a character", got)
 	}
 
-	one := strings.Repeat("x", 3*redactContext)
-	tail = sandbox.FileTail{Data: []byte(one[len(one)-read:]), Size: int64(len(one))}
-	got, unread = streamEnd(tail, keep)
-	kept, marked = strings.CutPrefix(got, "…")
-	if !marked || len(kept) != keep || unread != int64(len(one)-keep) {
-		t.Errorf("a line a read began inside = %d bytes, marked %v, %d unread; want its last %d bytes, "+
-			"marked, and the rest counted", len(kept), marked, unread, keep)
+	for _, one := range []string{strings.Repeat("x", 3*redactContext), strings.Repeat("x", 3*redactContext) + "\n"} {
+		tail = sandbox.FileTail{Data: []byte(one[len(one)-read:]), Size: int64(len(one))}
+		got, unread = streamEnd(tail, keep)
+		if got != "" || unread != int64(len(one)) {
+			t.Errorf("a line a read began inside = %d bytes opening %.20q, %d unread; want none of it "+
+				"shown, and all %d bytes counted", len(got), got, unread, len(one))
+		}
 	}
 }
 
