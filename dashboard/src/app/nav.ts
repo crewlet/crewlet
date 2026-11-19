@@ -86,6 +86,7 @@ export type Workspace =
   | "inbox"
   | "me"
   | "ask"
+  | "advisor"
   | "company"
   | "brand"
   | "org"
@@ -550,6 +551,36 @@ export const WORKSPACES: WorkspaceRow[] = [
     // ask is the engine's answer (`viewer.assistant`), which the page draws in
     // place rather than a lock on the row, so the row never hides a reason.
     sections: [],
+  },
+  {
+    key: "advisor",
+    label: "Advisor",
+    icon: "list-checks",
+    path: ["advisor"],
+    hint: "What the Advisor's checks found worth changing, with the change that fixes each",
+    keywords: ["findings", "insights", "recommendations", "bottlenecks", "go-live", "health"],
+    chord: "v",
+    place: "you",
+    renderer: "tabs",
+    // ADMIN'S: its findings name the company's setup, seats and records, and
+    // every fix is a change only an administrator makes.
+    grants: ["admin"],
+    sections: [
+      {
+        key: "advisor-findings",
+        label: "Findings",
+        icon: "list-checks",
+        path: ["advisor"],
+        hint: "What is worth changing now, most costly first",
+      },
+      {
+        key: "advisor-history",
+        label: "History",
+        icon: "rotate-ccw-clock",
+        path: ["advisor", "history"],
+        hint: "What was found and closed, and why it closed",
+      },
+    ],
   },
   {
     // THE COMPANY'S PRINCIPLES: its mission, its vision and the standing
@@ -1239,18 +1270,6 @@ export const WORKSPACES: WorkspaceRow[] = [
         group: "Runtime",
         // ADMIN'S: the caps are read from the company document, which only
         // an admin reads.
-        grants: ["admin"],
-      },
-      {
-        // WHAT THE SETUP COSTS AND THE CHANGE THAT FIXES IT: read off the
-        // company document, so an admin's as the document is.
-        key: "advisor",
-        label: "Advisor",
-        icon: "list-checks",
-        path: ["settings", "advisor"],
-        hint: "What the company's setup costs it, and the change that fixes each",
-        keywords: ["setup", "findings", "recommendations", "go-live", "health"],
-        group: "Runtime",
         grants: ["admin"],
       },
       {

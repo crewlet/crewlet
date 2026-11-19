@@ -106,6 +106,11 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
     why: "the keyed write every REST gesture is answered through: its path is the request's, the identity directory's a literal under `/iam` at the dialog that sends it and an artifact's and a folder's built in `lib/artifacts/api.ts` under `/artifacts` and `/artifact-folders`, each under its own entry and read there as a keyed request",
   },
   {
+    path: "routes/advisor/apply.ts",
+    call: "rest.request",
+    why: "a fix's send and its dry run: the path is the one the engine's re-check built for the change (a `/config` entity or a route of the engine's own table), each under its own entry",
+  },
+  {
     path: "protocol/configWrite.ts",
     call: "rest.request",
     why: "the configuration transport's send: its path is the request's, `/config` or a lead's unit at `/config/units/{key}` (`routes/org/builder/model/transport.ts`), both under the `/config` entry",

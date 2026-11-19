@@ -11,7 +11,7 @@
 import { useMemo } from "react";
 import { splitPutOff, usePutOff } from "./putOff.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
-import type { AdvisorFinding, AdvisorNotice } from "~/protocol/advisor.ts";
+import type { AdvisorNoticesAnswer } from "~/protocol/advisorFindings.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
@@ -26,9 +26,8 @@ import type { AtlasReviewItem } from "~/contract/atlas.ts";
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
 
-/** No notice or finding: a reader the advisor does not answer, or an answer not in yet. */
-const NO_NOTICES: readonly AdvisorNotice[] = [];
-const NO_FINDINGS: readonly AdvisorFinding[] = [];
+/** No notice: a reader the Advisor does not answer, or an answer not in yet. */
+const NO_NOTICES: AdvisorNoticesAnswer["notices"] = [];
 
 /** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
 const NO_SETUP_UNREAD: readonly string[] = [];
@@ -131,16 +130,16 @@ function useAttentionQueue(): Attention[] {
     enabled: readsMcp,
   });
   const mcpAlarms = readsMcp && mcp?.reading === "admin" ? mcp.alarms : NO_MCP_ALARMS;
-  // THE PLATFORM NOTICES, asked of the same administrator on the advisor's own
-  // poll: what blocks the setup and the alarms that have stood, nothing else.
-  const { data: advisor } = useQuery("advisor", undefined, {
+  // THE PLATFORM NOTICES, asked of the same administrator on the Advisor's own
+  // poll: what blocks the setup and the alarms that have stood, each finding's
+  // notice with the finding's words and fix, and what the Advisor could not
+  // read.
+  const { data: advisor } = useQuery("advisor_notices", undefined, {
     pollMs: ADVISOR_POLL_MS,
     enabled: readsMcp,
   });
-  // READ, NEVER TRUSTED AS TYPED: an engine that answers no advisor, or one
-  // older than the notices, raises nothing here.
+  // READ, NEVER TRUSTED AS TYPED: an answer not in this shape raises nothing.
   const notices = readsMcp && Array.isArray(advisor?.notices) ? advisor.notices : NO_NOTICES;
-  const findings = readsMcp && Array.isArray(advisor?.findings) ? advisor.findings : NO_FINDINGS;
   const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
   const readsDrift = useReadsAtlasDrift();
   const { data: drift } = useQuery("atlas_review", MY_DRIFT, {
@@ -161,7 +160,6 @@ function useAttentionQueue(): Attention[] {
         nameOf,
         mcpAlarms,
         notices,
-        findings,
         setupUnread,
         atlasDrift,
       }),
@@ -176,7 +174,6 @@ function useAttentionQueue(): Attention[] {
       nameOf,
       mcpAlarms,
       notices,
-      findings,
       setupUnread,
       atlasDrift,
     ],

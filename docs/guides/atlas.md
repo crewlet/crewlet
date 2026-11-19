@@ -385,7 +385,7 @@ document ([The owning agent is woken when its entry
 drifts](../concepts/atlas.md#the-owning-agent-is-woken-when-its-entry-drifts)).
 
 **What has waited too long reaches the Setup Advisor.** A disagreement nobody
-has decided in 7 days is listed in [Settings › Advisor](advisor.md#what-the-atlas-shows)
+has decided in 7 days is listed on the [Advisor](advisor.md#what-the-atlas-shows) page
 with the entries it is on, beside a service nobody owns, an owner that left the
 chart, a service open to the internet that nothing watches, and a source that
 stopped reading. Each is fixed from there or from the entry's own page: both

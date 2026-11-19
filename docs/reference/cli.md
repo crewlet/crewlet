@@ -2379,7 +2379,7 @@ integrations' last check reported, and the patterns the engine read in its last
 a client of [`GET /advisor/findings`](api-endpoints.md), and the token in
 `CREWLET_API_TOKEN` takes `admin`.
 
-Each row is a class of finding, as the Advisor's page folds them: its number,
+Each row is a class of finding: its number,
 its **severity** (`blocks`, `costs`, `note`), its **actor** (`owner` for a change
 you send, `engine` for a pattern the engine is reducing), its **class**, every
 **subject** it is raised for, and each subject's **evidence** as counts,
