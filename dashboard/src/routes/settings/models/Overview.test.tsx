@@ -135,7 +135,32 @@ test("the Dashboard Assistant is a use, for an admin and a member alike", () => 
     mount(company({ admin }));
     const uses = row("assistant").querySelector(".models-uses");
     expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Ask Crewlet");
-    expect(tile("Models")).toContain("1 not used by any seat or Ask Crewlet");
+    expect(tile("Models")).toContain("1 not used by any seat, Ask Crewlet or the Advisor");
+    cleanup();
+  }
+});
+
+// THE ADVISOR IS A USE LIKE ASK CREWLET: the model it explains with reads as
+// used by it, and is not counted among those nothing runs on.
+test("the Advisor's model is a use, for an admin and a member alike", () => {
+  for (const admin of [true, false]) {
+    const data = company({ admin });
+    const advised: ModelsData = {
+      ...data,
+      models: data.models.map((m) =>
+        m.key === "spare"
+          ? {
+              ...m,
+              uses: { ...m.uses, advisor: true },
+              entry: { ...m.entry, used_by: [{ advisor: "findings", position: 0 }] },
+            }
+          : m,
+      ),
+    };
+    mount(advised);
+    const uses = row("spare").querySelector(".models-uses");
+    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Advisor");
+    expect(tile("Models")).toContain("every one in use");
     cleanup();
   }
 });

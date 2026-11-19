@@ -21,7 +21,12 @@ import type {
   ModelUse,
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
-import { assistantOf, modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
+import {
+  advisorOf,
+  assistantOf,
+  modelViews,
+  type ModelsData,
+} from "~/routes/settings/models/data.ts";
 import { withDerived } from "~/test/org.ts";
 import { SERVED_LOOK } from "~/test/org.ts";
 
@@ -201,6 +206,7 @@ export function modelsData({
     nodes: answer.nodes,
     node: answer.node,
     assistant: assistant ?? assistantOf(admin ? doc : null, models),
+    advisor: advisorOf(admin ? doc : null, models),
     loading: false,
     error: null,
     failed: null,

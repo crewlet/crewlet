@@ -6,8 +6,8 @@
  * # Anatomy
  *
  * The HEAD says when every check last ran ("All checks ran 4 minutes ago"), offers
- * Run now, and names the model its explanations run on (an
- * administrator's is the picker, `components/HelperModel.tsx`).
+ * Run now, and names the model its explanations run on, with a link to
+ * Settings › Models, the one place it is chosen ([AdvisorModelLine]).
  *
  * FINDINGS, the first tab: the go-live check while anything blocks the
  * company, then what the owner can change, most costly first (Blocks, Costs,
@@ -51,7 +51,7 @@ import type {
 } from "~/protocol/advisorFindings.ts";
 import type { AdvisorSeverity } from "~/protocol/advisor.ts";
 import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked, weekMoved, weekWords } from "./words.ts";
-import { AdvisorModel } from "./AdvisorModel.tsx";
+import { useHelperModel } from "~/components/HelperModel.tsx";
 
 /** The Advisor page's tabs, as its address names them. */
 export type AdvisorSection = "findings" | "reports" | "history";
@@ -78,6 +78,7 @@ function RunHead({ onEnded }: { onEnded: () => void }) {
   const running = run?.status === "running";
   const now = useNow();
   const toast = useToast();
+  const model = useHelperModel("advisor").current;
   // A RUN THIS PAGE STARTED is followed until it ends, then the findings are
   // read again for what it found.
   const ended = started && run !== null && !running && run.ended_at !== null;
@@ -116,9 +117,26 @@ function RunHead({ onEnded }: { onEnded: () => void }) {
         >
           {running ? "Running" : "Run now"}
         </Button>
-        <AdvisorModel />
+        <AdvisorModelLine current={model} />
       </div>
     </div>
+  );
+}
+
+/**
+ * The model the Advisor explains its findings with, or that it has none, and
+ * the way to Settings › Models, where it is chosen as a model's use. Without
+ * a model its checks still run; only the explanations and the weekly
+ * summary wait for one.
+ */
+export function AdvisorModelLine({ current }: { current: string | null }) {
+  return (
+    <Text as="span" variant="caption" tone="secondary">
+      {current ? `Explains with ${current}. ` : "No model explains its findings. "}
+      <Link href={href(["settings", "models"])} size="caption">
+        {current ? "Model settings" : "Choose one in Model settings"}
+      </Link>
+    </Text>
   );
 }
 

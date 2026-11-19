@@ -43,10 +43,15 @@ type RemovalAt struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
+	Advisor   string `json:"advisor,omitempty"`
 }
 
 // AssistantChat is the one assistant target a [RemovalAt] can name.
 const AssistantChat = "chat"
+
+// AdvisorFindings is the one Advisor target a [RemovalAt] can name: the model
+// it explains its findings with.
+const AdvisorFindings = "findings"
 
 // Repoint is what one reference to the removed entry becomes: To replaces the
 // entry in the field's chain where it stood, and nil removes it, a chain left
@@ -95,6 +100,7 @@ var jobWords = map[config.ProviderJob]string{
 	config.JobAuxiliary: "memory and summaries",
 	config.JobJudge:     "onboarding checks",
 	config.JobAssistant: "Ask Crewlet's chat",
+	config.JobAdvisor:   "the Advisor's findings",
 }
 
 // phaseJobs is the job each phase's chain is resolved for, the phases a
@@ -113,8 +119,11 @@ var phaseJobs = []struct {
 
 // addressOf is where a reference is answered.
 func addressOf(ref config.ProviderReference) RemovalAt {
-	if ref.Job == config.JobAssistant {
+	switch ref.Job {
+	case config.JobAssistant:
 		return RemovalAt{Assistant: AssistantChat}
+	case config.JobAdvisor:
+		return RemovalAt{Advisor: AdvisorFindings}
 	}
 	return RemovalAt{Seat: ref.Seat, Job: string(ref.Job)}
 }
@@ -152,17 +161,25 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 	}
 	for i, r := range req.Repoint {
 		seat := r.At.Seat != "" || r.At.Job != ""
+		helpers := 0
+		if r.At.Assistant != "" {
+			helpers++
+		}
+		if r.At.Advisor != "" {
+			helpers++
+		}
+		job := config.ProviderJob(r.At.Job)
 		switch {
-		case seat && r.At.Assistant != "":
-			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and "+
-				"Ask Crewlet: address one", i)
-		case seat && (r.At.Seat == "" || !config.ProviderJob(r.At.Job).Valid() ||
-			config.ProviderJob(r.At.Job) == config.JobAssistant):
+		case (seat && helpers > 0) || helpers > 1:
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names more than one of "+
+				"a seat, Ask Crewlet and the Advisor: address one", i)
+		case seat && (r.At.Seat == "" || !job.Valid() ||
+			job == config.JobAssistant || job == config.JobAdvisor):
 			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs a seat and its job, "+
 				"one of executor, review, subagent, auxiliary or judge", i)
-		case !seat && r.At.Assistant != AssistantChat:
-			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job} or "+
-				"{assistant: chat}", i)
+		case !seat && r.At.Assistant != AssistantChat && r.At.Advisor != AdvisorFindings:
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job}, "+
+				"{assistant: chat} or {advisor: findings}", i)
 		}
 	}
 	return req, summary, nil
@@ -269,6 +286,9 @@ func describeAt(at RemovalAt) string {
 	if at.Assistant != "" {
 		return "Ask Crewlet's " + strings.ReplaceAll(at.Assistant, "_", " ")
 	}
+	if at.Advisor != "" {
+		return "the Advisor's " + at.Advisor
+	}
 	return at.Seat + "'s " + jobWords[config.ProviderJob(at.Job)]
 }
 
@@ -294,6 +314,15 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 		c.Assistant.Model = ""
 		if to != nil {
 			c.Assistant.Model = *to
+		}
+		return
+	}
+	// THE ADVISOR'S MODEL moves with the removal, or is cleared: its checks
+	// run with no model.
+	if ref.Job == config.JobAdvisor {
+		c.Advisor.Model = ""
+		if to != nil {
+			c.Advisor.Model = *to
 		}
 		return
 	}

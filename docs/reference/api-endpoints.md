@@ -2596,7 +2596,8 @@ config write.
   "repoint": [
     {"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
     {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
-    {"at": {"assistant": "chat"}, "to": "aux"}
+    {"at": {"assistant": "chat"}, "to": "aux"},
+    {"at": {"advisor": "findings"}, "to": null}
   ]
 }
 ```
@@ -2609,7 +2610,10 @@ config write.
   each key once; `to` naming the entry being removed is refused at the field
   (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field,
   so the job resolves as an unset one does. `{"assistant": "chat"}` with `null`
-  clears `assistant.model`, which turns Ask Crewlet off in the same revision.
+  clears `assistant.model`, which turns Ask Crewlet off in the same revision;
+  `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's
+  checks run with no model. An `at` names one place: a seat and its job, Ask
+  Crewlet or the Advisor.
 - The entry leaves `providers.llm` and `providers.llm_order`.
 - The **whole document** is validated with the admission rules, so an executor
   job moved to a harness that cannot run one, or an Ask Crewlet model on a harness
@@ -3021,8 +3025,8 @@ knows".
 - `used_by` is the engine's own resolution of every agent seat's jobs
   (`position` 0 runs the job, more is a fallback; `written` is whether the seat
   wrote the field; `source` the level that decided it: `seat`, `executor`,
-  `default-entry`, `first-entry`), and `{"assistant": "chat", "position": 0}`
-  for Ask Crewlet.
+  `default-entry`, `first-entry`), `{"assistant": "chat", "position": 0}`
+  for Ask Crewlet and `{"advisor": "findings", "position": 0}` for the Advisor.
 - `limits` is the sign-in's vendor limit windows, the newest report of each
   across live nodes: `window` (`session`, `weekly`, `model`, `unknown`),
   `hours` (0 where unsaid), `model` (a model window's family), `state` (`ok`,
