@@ -24,6 +24,8 @@ func init() {
 	events.Register[SeatResumed]()
 	events.Register[AgentTurnStopped]()
 	events.Register[AgentTurnSteered]()
+	events.Register[SeatPlaced]()
+	events.Register[SeatReleased]()
 }
 
 // SeatPaused records that a person paused a seat: it takes no new work until
@@ -331,4 +333,57 @@ func (e AgentTurnSteered) SummaryFor(actor string) string {
 	default:
 		return lead(actor, "was sent a note from "+e.SteeredBy)
 	}
+}
+
+// SeatPlaced records that a node took a seat: it runs on OnNode from Since,
+// the tenure's start on the lease store's clock, under Epoch, until a
+// [SeatReleased] of the same epoch, or until a later epoch's tenure begins
+// (the node stopped without saying so). With [SeatReleased] it is how long no
+// node held the seat, which nothing else keeps.
+type SeatPlaced struct {
+	Agent       string    `json:"agent_id"`
+	AgentHandle string    `json:"agent_handle"`
+	RoleName    string    `json:"role"`
+	OnNode      string    `json:"on_node"`
+	Epoch       int64     `json:"epoch"`
+	Since       time.Time `json:"since"`
+}
+
+// EventType is the "seat_placed" wire type.
+func (SeatPlaced) EventType() string { return "seat_placed" }
+
+// Role is the placed seat.
+func (e SeatPlaced) Role() string { return e.RoleName }
+
+// AgentID is the placed seat's instance.
+func (e SeatPlaced) AgentID() string { return e.Agent }
+
+// SummaryFor names the node the seat runs on.
+func (e SeatPlaced) SummaryFor(actor string) string {
+	return lead(actor, "now runs on "+e.OnNode)
+}
+
+// SeatReleased records that a node gave a seat up, or lost it: the tenure of
+// Epoch on OnNode ended, for Reason (the seat host's release reason).
+type SeatReleased struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	OnNode      string `json:"on_node"`
+	Epoch       int64  `json:"epoch"`
+	Reason      string `json:"reason"`
+}
+
+// EventType is the "seat_released" wire type.
+func (SeatReleased) EventType() string { return "seat_released" }
+
+// Role is the released seat.
+func (e SeatReleased) Role() string { return e.RoleName }
+
+// AgentID is the released seat's instance.
+func (e SeatReleased) AgentID() string { return e.Agent }
+
+// SummaryFor names the node that let the seat go, and why.
+func (e SeatReleased) SummaryFor(actor string) string {
+	return lead(actor, "stopped running on "+e.OnNode+": "+e.Reason)
 }

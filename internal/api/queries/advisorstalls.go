@@ -3,7 +3,6 @@ package queries
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,30 +20,26 @@ import (
 // A fleet that did not answer whole, or a week past the bound, is an error: the source is then
 // unread, never read in part as though whole.
 func (s Sources) weekOf(ctx context.Context, now time.Time, eventType string, failed *bool) ([]store.EventRecord, error) {
-	if s.Events == nil {
-		return nil, errors.New("queries: this node reads no event log")
-	}
-	q := store.ListQuery{Type: eventType, Failed: failed, Since: now.Add(-advisor.Window), Until: now,
-		Limit: failedRunsPage, At: now}
+	return s.spanOf(ctx, now.Add(-advisor.Window), now, eventType, failed)
+}
+
+// spanOf is every record of eventType in [since, until], newest first, read a
+// page at a time; past the bound, or a node that did not answer, is an error.
+// A read that need not hold the records folds them instead ([Sources.eachOf]).
+func (s Sources) spanOf(ctx context.Context, since, until time.Time, eventType string,
+	failed *bool) ([]store.EventRecord, error) {
+	stream := s.streamOf(since, until, eventType, failed)
+	stream.maxPages = maxFailedRunPages
 	var rows []store.EventRecord
-	for page := 0; ; page++ {
-		if page == maxFailedRunPages {
-			return nil, fmt.Errorf("queries: the week holds more than %d %s records",
-				failedRunsPage*maxFailedRunPages, eventType)
-		}
-		listing, coverage, err := s.Events.List(ctx, q)
-		if err != nil {
-			return nil, fmt.Errorf("queries: list the week's %s records: %w", eventType, err)
-		}
-		if !coverage.Complete {
-			return nil, fmt.Errorf("queries: not every node answered for its %s records", eventType)
-		}
-		rows = append(rows, listing.Rows...)
-		if !listing.More || len(listing.Rows) == 0 {
+	for {
+		rec, ok, err := stream.next(ctx)
+		switch {
+		case err != nil:
+			return nil, err
+		case !ok:
 			return rows, nil
 		}
-		oldest := listing.Rows[len(listing.Rows)-1]
-		q.Before = &store.Cursor{Time: oldest.Time, ID: oldest.ID}
+		rows = append(rows, rec)
 	}
 }
 
@@ -100,7 +95,12 @@ func (s Sources) memoryCeiling(ctx context.Context, id string) (int64, error) {
 // When its window resets is in the record's payload alone, so it is read once per stop: a
 // refusal inside a window already read is that stop's.
 func (s Sources) budgetStops(ctx context.Context, now time.Time) ([]advisor.BudgetStop, error) {
-	rows, err := s.weekOf(ctx, now, types.BudgetExhausted{}.EventType(), nil)
+	return s.budgetStopsIn(ctx, now.Add(-advisor.Window), now)
+}
+
+// budgetStopsIn is [Sources.budgetStops] over [since, until].
+func (s Sources) budgetStopsIn(ctx context.Context, since, until time.Time) ([]advisor.BudgetStop, error) {
+	rows, err := s.spanOf(ctx, since, until, types.BudgetExhausted{}.EventType(), nil)
 	if err != nil {
 		return nil, err
 	}

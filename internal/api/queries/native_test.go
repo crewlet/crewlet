@@ -29,6 +29,8 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	flowHours     []worklet.FlowHours
+	pickups       []time.Duration
 	patterns      worklet.WorkPatterns
 	places        map[string]worklet.TurnPlace
 	placesAsked   []string
@@ -116,6 +118,21 @@ func (s *stubWork) EntryWork(_ context.Context, q worklet.EntryWorkQuery, _ time
 	s.entryReads++
 	s.entryQuery = q
 	return s.entryWork, s.err
+}
+
+func (s *stubWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return s.flowHours, nil
+}
+
+func (s *stubWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (s *stubWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	if s.pickups == nil {
+		return []time.Duration{}, nil
+	}
+	return s.pickups, nil
 }
 
 func (s *stubWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {

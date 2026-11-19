@@ -365,15 +365,14 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
-// TWO, BY WHAT ONE READ CAN HOLD: a value read whole at up to 32 MiB
-// ([TranscriptBounds.LineBytes]) with its buffer's growth and decoded copy (97
-// MiB measured of an OpenCode export), and its redaction, a third more
-// ([entryOpening]): about 133 MiB, so about 270 MiB for two. Nothing else
-// bounds it: a node serves every tab open on it. One slot would queue every
-// reader behind the longest archive. A seat's read for words, and a relaunch's
-// [Runner.ReadHoldings] (97 MiB OpenCode's, 43 MiB at most Claude Code's), take
-// the seats' one slot ([SeatTranscriptReadsAtOnce]); a collection's pass
-// neither. A read past them waits holding no decoder or opened object.
+// TWO, BY WHAT ONE READ HOLDS at the 32 MiB line bound, measured: a Claude
+// Code line's decode 134 MiB live (an OpenCode message's 97) and its whole
+// redaction ([entryOpening]) up to 93 MiB more, so 227 MiB, 454 MiB for two;
+// at the default GOGC the engine runs at (it sets no GOMEMLIMIT) a dense read's
+// heap peaks near 400 MiB, two near 800. That is whole-entry redaction's cost,
+// which a streamed redaction of each entry replaces. One slot would queue every
+// reader behind the longest archive. A seat's read takes the seats' one slot
+// ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,
@@ -387,12 +386,7 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: one slot is always a person's while a seat
-// reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait,
-// so two holdings readings never run at once (a reading and a person's read of
-// one OpenCode export held 193 MiB live together). On two dedicated cores an
-// ordinary archive reads in 72 to 88 ms (BenchmarkAReadingAtItsBounds), 255 MiB
-// of ordinary lines in 3.1 to 3.2 s, the slowest at its bounds 21.4 to 22.6 s;
-// OpenCode's, on two cores, in 54 ms and 7.9 s.
+// reads.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at
@@ -1421,8 +1415,9 @@ type openCodeState struct {
 // openCodeKeys is what one decode of an object of an export saw of its keys
 // ([eachKeyInPlace]): which names of the decode's own set it met (seen, a bit
 // a name), whether it met a name outside that set (other), and whether it met
-// one of them twice (twice). The person reader reads none of it; a holdings
-// reading holds a message and a part to their sets by it.
+// one of them twice (twice). The person reader reads none of it; the one
+// export walk keeps the same facts of each frame ([scanExport]), by which a
+// holdings reading holds a message and a part to their sets.
 type openCodeKeys struct {
 	seen         uint32
 	other, twice bool
@@ -1432,15 +1427,24 @@ type openCodeKeys struct {
 // it is none of them.
 func (k *openCodeKeys) see(names map[string]int, name []byte) int {
 	i, ok := names[string(name)]
+	if !ok {
+		i = -1
+	}
+	k.note(i)
+	return i
+}
+
+// note notes a name by its index in the decode's set, -1 where it is none of
+// them: the export walk's facts ([scanExport]) and the decode's alike.
+func (k *openCodeKeys) note(i int) {
 	switch {
-	case !ok:
+	case i < 0:
 		k.other = true
-		return -1
+		return
 	case k.seen&(1<<i) != 0:
 		k.twice = true
 	}
 	k.seen |= 1 << i
-	return i
 }
 
 // has reports whether the decode met the name of index i.
@@ -1620,11 +1624,11 @@ func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reade
 	return fmt.Errorf("%w: %w", errNotExport, err)
 }
 
-// openCodeVisitor is what the export walk ([walkOpenCodeExport]) hands what it
-// reads to, as it reads it: a person's transcript ([openCodePerson]), or a
-// holdings reading ([openCodeHoldingsWalk]). Each value it is handed is a
-// sub-slice of the walk's buffer, valid only until it returns, and an error it
-// answers ends the walk.
+// openCodeVisitor is what the decode walk ([walkOpenCodeExport]) hands what it
+// reads to, as it reads it: a person's transcript ([openCodePerson]), its one
+// reader, a holdings reading being a visitor of the one export walk
+// ([scanExport]). Each value it is handed is a sub-slice of the walk's
+// buffer, valid only until it returns, and an error it answers ends the walk.
 type openCodeVisitor interface {
 	// topKey is a top-level key but `messages`, its value held to the bound.
 	topKey(name string, value json.RawMessage) error
@@ -1718,7 +1722,8 @@ func (p openCodePerson) notMessage() error {
 // The names a message of an export is decoded by ([openCodeMessageWire]),
 // each its index in [openCodeMessageNames]: those a person's transcript reads,
 // the message's id, and every other name of an assistant step's, which a
-// holdings reading holds a step to.
+// holdings reading holds a step to on the one export walk, whose message frame
+// is this set ([exportFrameNames]).
 const (
 	msgID = iota
 	msgType
@@ -1784,7 +1789,7 @@ func decodeOpenCodeMessage(raw json.RawMessage) openCodeMessageWire {
 // field's zero value, a time that is no object as none, and the rest of the
 // message as written. Its tokens, its error and when a step settled are left
 // as none: a person's transcript reads none of them, and the context a session
-// carries reads them off the export itself ([exportMessageAt]).
+// carries reads them off the export itself ([exportMeter]).
 func (w openCodeMessageWire) message() openCodeMessage {
 	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
 		Status: looseString(w.Status), Summary: looseString(w.Summary)}

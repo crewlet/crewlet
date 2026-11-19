@@ -2357,6 +2357,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
 		SeatDone: e.releaseSeat,
+		// WHICH NODE HELD THE SEAT WHEN (seatplacement.go).
+		SeatPlaced: func(ctx context.Context, s placement.Seat, lease coord.Lease) {
+			e.publishSeatPlacement(ctx, s, seatPlaced(nodeID, lease))
+		},
+		SeatReleased: func(ctx context.Context, s placement.Seat, lease coord.Lease, reason seat.ReleaseReason) {
+			e.publishSeatPlacement(ctx, s, seatReleased(nodeID, lease, reason))
+		},
 		// A seat that starts admitting turns re-checks at once what was
 		// refused for want of one: an answer whose resume the seat's
 		// preparation inherited waits on exactly this, not on the next

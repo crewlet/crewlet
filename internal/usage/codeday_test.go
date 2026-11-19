@@ -55,8 +55,14 @@ func TestASeatsCodeDayIsStampedByWhatItCounts(t *testing.T) {
 	if v, err := stamp(ledgered); err != nil || v != 7 {
 		t.Errorf("a seat's day carrying its turn ledger is stamped %d (%v), want 7", v, err)
 	}
-	if usage.RecordVersion != 7 {
-		t.Errorf("this build reads version %d, want 7", usage.RecordVersion)
+	busy := seatRecord("node-a", "2026-09-23", "seat-1", "m")
+	busyMS := int64(90_000)
+	busy.Turns.BusyMS = &busyMS
+	if v, err := stamp(busy); err != nil || v != 8 {
+		t.Errorf("a seat's day carrying its busy time is stamped %d (%v), want 8", v, err)
+	}
+	if usage.RecordVersion != 8 {
+		t.Errorf("this build reads version %d, want 8", usage.RecordVersion)
 	}
 
 	person := usage.Record{RecordEnvelope: usage.RecordEnvelope{Writer: "node-a",

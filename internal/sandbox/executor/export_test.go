@@ -37,8 +37,12 @@ func Clocked(r *Runner, now func() time.Time) *Runner {
 const PackReleaseFloor = packReleaseFloor
 
 // RedactContext is how much more than it keeps a read from the error stream's
-// end takes, so a credential that began before what is kept is still redacted.
+// end takes, never shown, so what decides how the end it keeps redacts is read
+// with it.
 const RedactContext = redactContext
+
+// HumanSize is a byte count as the notes a run's failure writes say it.
+func HumanSize(n int64) string { return humanSize(n) }
 
 // UnreadNote is the line standing where the error stream's first unread bytes
 // were left out of what was shown.
@@ -204,6 +208,10 @@ func TranscriptReadsHeld() int { return len(transcriptReads) }
 // slots reads hold now.
 func SeatTranscriptReadsHeld() int { return len(seatTranscriptReads) }
 
+// HoldingsReadsHeld is how many of the readings' [HoldingsReadsAtOnce] slots
+// are held.
+func HoldingsReadsHeld() int { return len(holdingsReads) }
+
 // The Crewlet trailers' keys, for the cases that read a commit's trailers.
 const (
 	SeatTrailer     = seatTrailer
@@ -268,7 +276,7 @@ func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, 
 func FollowedNames(first string, rest ...string) int {
 	d := &openCodeEvents{}
 	d.Line([]byte(first))
-	_ = d.Entries()
+	_ = d.Entries(false)
 	for _, line := range rest {
 		d.Line([]byte(line))
 	}

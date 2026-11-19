@@ -20,19 +20,27 @@ func CheckChange(c *config.Company, ch Change) error {
 	if err := json.Unmarshal(raw, copied); err != nil {
 		return err
 	}
-	if ch.Entity != EntityRoles {
+	var entity any
+	switch ch.Entity {
+	case EntityRoles:
+		for r := range copied.EachRole() {
+			if r.Seat().Handle() == ch.ID {
+				entity = r
+			}
+		}
+	case EntityUnits:
+		for u := range copied.EachUnit() {
+			if u.ID == ch.ID {
+				entity = u
+			}
+		}
+	default:
 		return fmt.Errorf("advisor: a change to %s is not checked here", ch.Entity)
 	}
-	var role *config.Role
-	for r := range copied.EachRole() {
-		if r.Seat().Handle() == ch.ID {
-			role = r
-		}
+	if entity == nil {
+		return fmt.Errorf("advisor: no %s %q to change", ch.Entity, ch.ID)
 	}
-	if role == nil {
-		return fmt.Errorf("advisor: no seat %q to change", ch.ID)
-	}
-	if err := applyTo(role, ch); err != nil {
+	if err := applyTo(entity, ch); err != nil {
 		return err
 	}
 	before := len(config.Problems(c.ValidateAdmission()))

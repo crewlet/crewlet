@@ -182,6 +182,14 @@ type Config struct {
 	// state belongs to the store rather than to this process.
 	SeatDone func(ctx context.Context, seat placement.Seat)
 
+	// SeatPlaced runs once an acquired seat is established here, with the
+	// lease of its tenure, and SeatReleased once a release's teardown is
+	// proven, with the lease that ended and why: together, which node held
+	// the seat when, so the time no node held it can be read back. Nil does
+	// nothing; neither fails the claim or the release.
+	SeatPlaced   func(ctx context.Context, seat placement.Seat, lease coord.Lease)
+	SeatReleased func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason seat.ReleaseReason)
+
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
 
@@ -635,7 +643,10 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 
 // OnEstablished passes on that an acquired seat now admits turns — see
 // [Config.SeatAdmitted].
-func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Lease) {
+func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, lease coord.Lease) {
+	if n.cfg.SeatPlaced != nil {
+		n.cfg.SeatPlaced(ctx, s, lease)
+	}
 	if n.cfg.SeatAdmitted != nil {
 		n.cfg.SeatAdmitted(ctx, s)
 	}
@@ -668,7 +679,7 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 // Reporting an error means the teardown could NOT be proven, and the seat
 // host keeps the lease in response: a seat this process may still be
 // consuming must not be handed to a peer.
-func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, reason seat.ReleaseReason) error {
+func (n *Node) OnRelease(ctx context.Context, s placement.Seat, lease coord.Lease, reason seat.ReleaseReason) error {
 	handle := s.Handle
 	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
@@ -690,6 +701,9 @@ func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, r
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
 		n.cfg.SeatDone(ctx, s)
+	}
+	if n.cfg.SeatReleased != nil {
+		n.cfg.SeatReleased(ctx, s, lease, reason)
 	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil

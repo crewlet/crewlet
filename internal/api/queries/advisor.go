@@ -223,12 +223,17 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_schedule_skips_unreadable", "error", err.Error())
 		ev.SkipsUnread = true
 	}
+	// THE STAFFING CLASSES' EXACT READS, a week and two, over whole days.
+	for _, read := range []struct {
+		days int
+		into **advisor.Staffing
+	}{{advisor.AddSeatDays, &ev.StaffingWeek}, {advisor.RemoveSeatDays, &ev.StaffingFortnight}} {
+		if *read.into, err = s.advisorStaffing(ctx, company, now, read.days); err != nil {
+			log.WarnContext(ctx, "advisor_staffing_unreadable", "days", read.days, "error", err.Error())
+			ev.StaffingUnread, *read.into = true, nil
+		}
+	}
 	return ev
-}
-
-// flowReads is the tracker's read of how long work stood in each flow state.
-type flowReads interface {
-	FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
 }
 
 // flowHours is how long each seat's items in progress stood in each flow state
@@ -241,11 +246,7 @@ func (s Sources) flowHours(ctx context.Context, now time.Time) ([]worklet.FlowHo
 	case !kept:
 		return nil, nil
 	}
-	reads, ok := s.Work.(flowReads)
-	if !ok {
-		return nil, errors.New("queries: this node reads no flow record")
-	}
-	return reads.FlowHours(ctx, worklet.FlowHoursQuery{Since: now.Add(-advisor.Window), Until: now,
+	return s.Work.FlowHours(ctx, worklet.FlowHoursQuery{Since: now.Add(-advisor.Window), Until: now,
 		Level: statelog.ReadStale})
 }
 

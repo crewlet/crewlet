@@ -22,11 +22,6 @@ import (
 // ([runWriteBackWriter]).
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
-	// THE LANDLOCK HELPER IS THE ENGINE'S OWN BINARY, re-executed; in this
-	// suite the binary is the test's, so it answers the helper's command.
-	if len(os.Args) > 1 && os.Args[1] == sandbox.ConfineCommand {
-		os.Exit(sandbox.ConfineMain(os.Args[2:]))
-	}
 	if dir := os.Getenv(writeBackWriterEnv); dir != "" {
 		runWriteBackWriter(dir)
 		os.Exit(0)

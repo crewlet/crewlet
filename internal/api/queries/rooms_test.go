@@ -280,6 +280,18 @@ func (emptyChat) Reach(_ context.Context, _ chatlet.Actor, channelID, _ string,
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
 
+func (emptyWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (emptyWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (emptyWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
+
 func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
 	return worklet.Answer{}, nil
 }

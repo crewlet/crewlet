@@ -67,7 +67,7 @@ const (
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
 		       duration_hist, last_ended_at, reads_elided, tools_elided,
 		       changes_opened, reviews_given, findings_received, checks_failed, ejections,
-		       ledger_elided, refusals_elided, ledger_untallied
+		       ledger_elided, refusals_elided, ledger_untallied, busy_ms
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -142,13 +142,14 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				hist    string
 				lastEnd int64
 				code    CodeDay
+				busy    sql.NullInt64
 			)
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
 				&rec.ToolsElided, &code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived,
 				&code.ChecksFailed, &code.Ejections, &rec.LedgerElided, &rec.RefusalsElided,
-				&rec.LedgerUntallied); {
+				&rec.LedgerUntallied, &busy); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -161,6 +162,9 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			}
 			if lastEnd != 0 {
 				turns.LastEndedAt = store.DecodeTime(lastEnd)
+			}
+			if busy.Valid {
+				turns.BusyMS = &busy.Int64
 			}
 			rec.Turns = &turns
 			var err error
@@ -525,10 +529,23 @@ func joinTurns(d, a *Turns) *Turns {
 	t.SentBack = max(d.SentBack, a.SentBack)
 	t.FirstPass = t.Reviewed - max(d.Reviewed-d.FirstPass, a.Reviewed-a.FirstPass)
 	t.Durations = d.Durations.Join(a.Durations)
+	t.BusyMS = joinBusy(d.BusyMS, a.BusyMS)
 	if a.LastEndedAt.After(d.LastEndedAt) {
 		t.LastEndedAt = a.LastEndedAt
 	}
 	return &t
+}
+
+// joinBusy is the larger busy time of two values of one day, as the turns
+// that ended only grow; one a record did not measure yields to the other.
+func joinBusy(d, a *int64) *int64 {
+	switch {
+	case d == nil:
+		return a
+	case a == nil || *d >= *a:
+		return d
+	}
+	return a
 }
 
 // cellKey is a spend cell's identity within its record.
