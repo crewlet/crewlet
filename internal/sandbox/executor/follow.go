@@ -21,8 +21,7 @@ import (
 // [liveWindow]; its ORIGIN names that place and the account, so two owners
 // derive the same text, and beginning again (the stream outran [liveBacklog]
 // or shrank, or the transcript spoke) names another. The error stream reads
-// redaction context before that place ([rawStream.leads]); the event stream's
-// reading begins on an event's line and reads nothing before it.
+// redaction context before that place ([rawStream.leads]).
 
 // liveWindow is how much of a stream's END a reading begins from. An event's
 // size is dominated by what it echoes (a tool's output, twice on Claude Code's
