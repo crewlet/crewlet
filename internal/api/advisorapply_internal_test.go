@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,5 +267,34 @@ func TestAFixThatNoLongerBuildsIsNotApplicable(t *testing.T) {
 	out, err = rc.recheck(t.Context(), "f-1", 0, person)
 	if err != nil || out.Outcome != advisor.RecheckNotApplicable || log.row.State != advisordomain.StateRetired {
 		t.Fatalf("a change that breaks a rule answered %+v (%v), state %s, want not applicable", out, err, log.row.State)
+	}
+}
+
+// A FINDING APPLIED IN ANOTHER WINDOW IS SAID IN WORDS: a re-check, or a
+// report that a change was sent, on a finding that is no longer open answers
+// 409 with what became of it (applied, when, and until when its effect is
+// checked), never the log's own sentence for a refused move. Mutation: pass
+// the refusal through, and the person reads "cannot make that move".
+func TestAFindingAppliedInAnotherWindowIsSaidInWords(t *testing.T) {
+	t.Parallel()
+	log := newApplyLog(t, capFinding(60))
+	log.row.State = advisordomain.StateApplied
+	log.row.AppliedAt, log.row.EffectDueAt = applyAt.Add(-time.Minute), applyAt.Add(29*time.Minute)
+	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(60))}, &applyConfig{})
+	_, err := rc.recheck(t.Context(), "f-1", 0, person)
+	rec := httptest.NewRecorder()
+	refuseApply(rec, httptest.NewRequest(http.MethodPost, "/advisor/findings/f-1/recheck", nil), err)
+	var body map[string]any
+	if jerr := json.Unmarshal(rec.Body.Bytes(), &body); jerr != nil {
+		t.Fatal(jerr)
+	}
+	detail, _ := body["detail"].(string)
+	if rec.Code != http.StatusConflict || body["outcome"] != "applied" || body["state"] != "applied" ||
+		body["applied_at"] == nil || body["effect_due_at"] == nil || strings.Contains(detail, "cannot make that move") ||
+		!strings.Contains(detail, "applied already") {
+		t.Errorf("the re-check of an applied finding answered %d %v", rec.Code, body)
+	}
+	if err := rc.applied(t.Context(), "f-1", "any", person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a report on an applied finding answered %v, want it said as no longer open", err)
 	}
 }
