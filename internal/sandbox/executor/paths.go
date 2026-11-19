@@ -362,38 +362,37 @@
 // 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
-// flight at once: one per seat collecting on this node and up to the box
-// host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
-// worst, 341 MiB, and one per take. A take at its base holds at most 13 MiB,
-// its scrub's base and its meter's at once, each measured apart (one case a
-// process on a dedicated two-core slot, read as above, the most of nine runs)
-// and summed, each with its benchmark's own heap, so the sum over-counts. The
+// flight at once: one per seat collecting on this node and up to the box host's
+// boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its worst,
+// 341 MiB, and one per take. A take at its base holds at most 11 MiB, its
+// scrub's base and its meter's at once, each measured apart (one case a process
+// on a dedicated two-core slot, read as above, the most of nine runs) and
+// summed, each with its benchmark's own heap, so the sum over-counts. The
 // scrub, streaming each text through redact's stages, each holding its window,
-// 9 to 10 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string
-// and a text file each at [scrubPieceBaseBytes], the line's and the string's
-// of bytes the decode triples, both readings, its meter beside it; 0.23 s,
-// its heap peaking at 21 to 22 MiB at the default GOGC). The meter, 3 MiB
+// 7 to 8 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
+// a text file each at [scrubPieceBaseBytes], the line's and the string's of
+// bytes the decode triples, both readings, its meter beside it; 0.12 to 0.14 s,
+// its heap peaking at 15 to 16 MiB at the default GOGC). The meter, 3 MiB
 // (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
 // verbatim, so a string decodes to three bytes a byte, its facts at the base
 // and the strings a charge covers decoded beside them; 2 MiB on a record line,
-// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past
-// the scrub's base, so the two never meet on one line, but the scrub may read
-// on at its base while the meter is still on it. So every take holds one of
-// [SessionTakesAtOnce] (26), a pool of its own sized so the takes at their
-// base hold 338 MiB at most, within those 341.
+// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past the
+// scrub's base, so the two never meet on one line, but the scrub may read on at
+// its base while the meter is still on it. So every take holds one of
+// [SessionTakesAtOnce] (31), a pool of its own sized so the takes at their base
+// hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 31 to 48 MiB over twelve runs, the most as the build
-// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base, each piece
-// of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
-// 7.1 to 7.5 s loaded, its heap peaking at 65 to 87 MiB at the default GOGC,
-// 146 MiB loaded, against the pass's 62 MiB). Shared with
+// under the same slot, 31 to 33 MiB over five runs
+// (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
+// bytes, 3.7 to 4.4 s on two cores, its heap peaking at 41 to 65 MiB at the
+// default GOGC, against the pass's 62 MiB). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
 // transcript reads of up to about 22 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
 // turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 133 + 48 = 314 MiB beside the
+// process's thread readers then hold at worst 2 x 133 + 43 = 309 MiB beside the
 // base tier. One waiter behind a pass over ordinary lines at the bound (2.6 to
 // 2.8 s with the count and the next request's estimate, 5.7 s loaded) is
 // through in 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded,
@@ -606,8 +605,8 @@
 // which never estimates, in 23.5 to 25.3 s against the 21.4 to 22.6 above, so
 // it ran about a tenth slower than when those were taken. The take's meter,
 // which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds,
-// likewise): 1.64 to 1.70 s against 10.4 to 10.7 s on ordinary lines, 2.02 to
-// 2.16 s against 26.7 to 28.1 s on results of text blocks.
+// likewise): 1.61 to 1.75 s against 10.7 to 10.8 s on ordinary lines, 2.19 to
+// 2.22 s against 26.1 to 27.0 s on results of text blocks.
 //
 // # A run's harness session, carried between boxes
 //
@@ -869,18 +868,19 @@
 // plan, which a real session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
-// On two efficiency cores of a laptop shared with other work:
+// On two cores of the build machine, two runs:
 //
-//	one string to the bound:   40.6 s a scrub, held 18.6 MiB (256 MiB from 28 MiB)
-//	a million short lines:     19.9 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          21.7 s a scrub, held 25.5 MiB (256 MiB from 0.5 MiB)
+//	one string to the bound:   39.6 to 39.8 s a scrub, held 32.6 MiB (256 MiB from 28 MiB)
+//	a million short lines:     40.6 to 41.2 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          31.1 to 31.2 s a scrub, held 32.4 MiB (256 MiB from 0.5 MiB)
 //
 // Against SessionScrubWait, two minutes for the whole take's scrub with the
 // archive's two readings out of a box at its floor pace of a mebibyte a second
 // among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
 // for the scrub's own work where the two do not overlap), each arm fits, the
-// string the closest, since its first reading redacts it twice (as JSON and as
-// text, side by side) and its second once.
+// short lines the closest; the string redacts each byte three times, twice in
+// its first reading (as JSON and as text, side by side), holding two streams'
+// windows whole.
 //
 // # A definition the scrub renamed is cut out of its line
 //
