@@ -406,12 +406,9 @@ func writeAt(t *testing.T, n *dataNode, batch *events.Event, at time.Time) {
 // A STATELESS NODE'S DELIVERY REACHES A DATA NODE, FILED AS A DELIVERY.
 //
 // The Mattermost socket runs on every node, and a node without `data` keeps no
-// event log: a delivery row written straight into its own store vanished with
-// its scratch database, which is why the socket PUBLISHES its record. Through
-// custody that record crosses the wire inside a batch and is filed by the data
-// node keeping it — under the delivery's label, with the bytes that arrived,
-// tagged with who it was for and where it came in — exactly as the node that
-// published it would have filed it.
+// event log, so the socket PUBLISHES its record. Through custody it crosses the
+// wire inside a batch and is filed by the data node keeping it (delivery label,
+// arrived bytes, recipient and channel) exactly as the publisher would have.
 //
 // Mutation: file the record under its event type in observe.Record, and the
 // row reads `inbound_delivery` rather than what the socket called it; leave
@@ -502,16 +499,12 @@ func unsettledIDs(t *testing.T, n *dataNode) []string {
 // A BATCH WHOSE KEEPER CANNOT BE DECIDED IS STEPPED OVER, and every batch written
 // after it is settled in the same pass.
 //
-// The fleet's record of who keeps a batch can be one nothing reads — written
-// into the bucket by something that is not this engine, reshaped by a later
-// build, corrupted — and the store says so definitely. The pass lists the
-// oldest first, and it used to stop at that answer: every batch behind the
-// record stayed unsettled on every pass and every boot until the record's
-// batch aged past the event log's retention — a batch this node keeps counted
-// in none of its days for a month, and a copy another node keeps held here
-// beside it. Here the record is the oldest, and behind it are a batch this
-// node claimed before a crash, one another node keeps, and one nobody has
-// claimed.
+// The fleet's record of who keeps a batch can be one nothing reads (written by
+// something else, reshaped by a later build, corrupted), and the store says so
+// definitely. The pass lists oldest first; stopping there left every batch
+// behind it unsettled on every pass and boot until retention. Here the record
+// is the oldest, behind it a batch this node claimed before a crash, one
+// another node keeps, and one nobody has claimed.
 //
 // Mutation: stop the pass on every claim error in Reconcile, and it settles
 // nothing.

@@ -77,18 +77,12 @@ func next(t *testing.T, p *jsapi.Pulls) jsapi.Event {
 // A PULL WHOSE BYTES RUN OUT EXACTLY ENDS WITH NO STATUS, AND IS REPORTED
 // ENDED.
 //
-// The server counts a delivery against a pull's byte bound as the subject, the
-// reply, the header block and the payload, and a delivery that leaves nothing
-// of the bound is its last for the pull: it sends no status after it. A reader
-// that waited for a status there would wait out the pull's whole expiry for
-// nothing, so the delivery itself is reported as the end. A pull with no byte
-// bound ends the same way at its count's last delivery; one whose count runs
-// out with bytes to spare ends at the `409 Batch Completed` that follows its
-// last delivery, never at the delivery. Here a pull bounded at exactly the
-// first two messages' bytes, as a consumer of the same shape counted them, is
-// ended at the second; the next pull's first word is the third message,
-// so no status of the first came after its end; and that pull, its count of
-// one filled with bytes to spare, ends at its Batch Completed.
+// A delivery that leaves nothing of a pull's byte bound (counted as subject,
+// reply, headers and payload) is its last and no status follows, so the
+// delivery itself is reported as the end, not waited out to the expiry. A pull
+// with no byte bound ends so at its count's last delivery; one whose count runs
+// out with bytes to spare ends at the `409 Batch Completed`. Here a pull
+// bounded at exactly two messages' bytes ends at the second.
 //
 // Mutation: never report a delivery as the end of a bounded pull, and the
 // second message reads as one more to come.
@@ -250,14 +244,12 @@ func TestAPullIsAskedOnOneInboxForItsWholeRead(t *testing.T) {
 
 // READY HANDS OVER WHAT THE INBOX ALREADY HOLDS, AND WAITS FOR NOTHING.
 //
-// A reader whose own request held it from its inbox until its clock ran out
-// hears what arrived meanwhile before it calls the consumer silent, and a
-// context already over cannot ask that of Next, which fails at once whatever
-// the inbox holds. Here a heartbeat is put on the pulls' inbox (the inbox
-// read off the pull the broker held) and fenced behind a flush of the same
-// connection: Ready hands it over as the heartbeat it is, then answers that
-// the inbox holds nothing, at once, where Next on a context already over
-// would have answered the context.
+// A reader whose own request held it until its clock ran out hears what
+// arrived meanwhile before it calls the consumer silent, and Next on a context
+// already over fails at once whatever the inbox holds. Here a heartbeat is put
+// on the pulls' inbox (read off the pull the broker held) and fenced behind a
+// flush of the same connection: Ready hands it over, then answers at once that
+// the inbox holds nothing, where Next would have answered the context.
 //
 // Mutation: answer Ready from Next on a context already over, and the
 // heartbeat is never handed over.
@@ -327,15 +319,12 @@ func TestDeliveringIsArrivalWithoutBase64(t *testing.T) {
 // A PULL THE SERVER WOULD REFUSE IS REFUSED BY NAME, BEFORE IT IS SENT.
 //
 // A pull with no expiry stands on the server for good, and one whose heartbeat
-// is more than half its expiry the server answers with `400 Bad Request -
-// heartbeat value too large`; each is refused here, naming what is wrong, with
-// NOTHING SENT — a refused pull that went out anyway would leave that `400` on
-// the reader's one inbox, read as the end of whichever pull it asked next.
-// Here five such pulls are refused, each naming its field, and then one with a
-// heartbeat of exactly half its expiry, which the server takes, is asked: it
-// is the ONLY pull to reach the broker before a marker published after it on
-// the same connection, and answered, it is held and heartbeated until it
-// expires, never refused.
+// is over half its expiry gets `400 Bad Request - heartbeat value too large`;
+// each is refused here, naming the field, with NOTHING SENT: that `400` would
+// land on the reader's one inbox as the end of its next pull. Five are refused,
+// then one with a heartbeat of exactly half its expiry, which the server takes:
+// it is the ONLY pull to reach the broker before a later marker, and is never
+// refused.
 //
 // Mutation: send the pull before its checks, and five more reach the broker,
 // the first of them a refusal on the inbox.

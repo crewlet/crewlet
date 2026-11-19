@@ -23,21 +23,13 @@ const ProfilerSource = "counterparty_profiler"
 //
 // # It runs where the persist decider does not
 //
-// The decider is gated on a SETTLED turn, because a fact learned from work
-// the agent is about to reattempt may be contradicted by the reattempt.
-// Observing a counterparty is not that kind of fact: who spoke to this seat,
-// and how they write, does not depend on whether the seat finished the job.
-// So this runs on a self_iterate round too, and the interaction counter it
-// moves is what makes "seen daily" and "seen once" distinguishable.
+// The decider waits for a SETTLED turn, since a reattempt may contradict it;
+// who spoke to this seat does not depend on that, so this runs on a
+// self_iterate round too.
 //
-// # An empty patch is a real observation
-//
-// The model is asked what it learned that is not already on file, and the
-// common answer is nothing. That still records the interaction: the store
-// separates LastUpdatedAt (every observation) from LastCorroboratedAt (only
-// a non-empty patch), and a counterparty seen constantly whose traits have
-// stopped moving is a different fact from one not seen at all — which is
-// exactly what the turn-start prefetch demotes on.
+// An empty patch is a real observation: "nothing new" still records the
+// interaction. LastUpdatedAt moves on every observation, LastCorroboratedAt
+// only on a non-empty patch, and the turn-start prefetch demotes on the gap.
 type Profiler struct {
 	models       Models
 	counterparts *Counterparties

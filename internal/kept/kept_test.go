@@ -276,17 +276,15 @@ func TestManySmallValuesGiveWayAsAContainerAndAShapeAsAWhole(t *testing.T) {
 // A VALUE A RECORD LEFT OUT IS KNOWN AS LEFT OUT, WHATEVER THE RECORD. A
 // reader comparing two calls' arguments reads a marker as a value that may
 // have been anything (internal/agent/runner's readAlike), so every marker
-// LeftOut writes, under each record's name the tree writes and at every unit
-// Size states, and every marker Args leaves in a tree, a leaf's and a
-// container's, is recognised; and so are arguments kept as nothing but their
-// marker, in Args' form and in the one notKept spells by hand. Text that is no
-// marker is not: a marker with text around it, a digest of another length or
-// case, a size Size never writes, a parenthesis with neither, a number, nil;
-// nor is an object holding the marker beside another key.
+// LeftOut writes, under each record's name and at every unit Size states, and
+// every marker Args leaves in a tree, leaf or container, is recognised, as are
+// arguments kept as nothing but their marker (Args' form and notKept's). Text
+// that is no marker is not: one with text around it, a digest of another
+// length or case, a size Size never writes, a number, nil, or an object
+// holding the marker beside another key.
 //
-// Mutation: accept any parenthesised text, accept one record's name only, or
-// read an object holding not_kept beside another key as not kept, and a case
-// goes red.
+// Mutation: accept any parenthesised text or one record's name only, or read
+// an object holding not_kept beside another key as not kept, and a case fails.
 func TestAValueARecordLeftOutIsKnownAsLeftOut(t *testing.T) {
 	t.Parallel()
 	for _, record := range []kept.Record{run, "the turn's record", "this record"} {

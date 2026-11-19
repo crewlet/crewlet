@@ -18,24 +18,17 @@ import (
 )
 
 // A DIAL NO ATTEMPT CAN COMPLETE IS NOT ASKED AGAIN, and every other failure to
-// connect is. An address the dialer cannot parse — a port past 65535, an IPv6
-// zone holding a `]`, too many colons, a bracket inside a name — and a
-// connection asked of port 0 are final at their first attempt; a connection
-// refused on a closed port, a network the node cannot reach, a timeout, a
-// resolver that could not answer yet and an address the resolver's answer left
-// none of for the network are asked again, as the SDK asks every failure to
-// send.
-//
-// Each error is the DIALER'S OWN where the dialer can make it, wrapped as the
-// SDK hands a failed send to the retryer (a *smithyhttp.RequestSendError
-// around the HTTP client's *url.Error), and judged by the retryer the client
-// itself was built with: so a Go that rewords one of the dialer's errors fails
-// here rather than leaving such a dial asked again for a minute.
-//
+// connect is. An unparsable address (port past 65535, IPv6 zone holding a `]`,
+// too many colons, a bracket inside a name) and port 0 are final at the first
+// attempt; a refused closed port, an unreachable network, a timeout, a
+// resolver not yet answering and an answer with no address for the network are
+// asked again, as the SDK asks every failure to send. Errors are the dialer's
+// own, wrapped as the SDK wraps a failed send and judged by the client's own
+// retryer, so a Go that rewords one fails here.
 // Mutation: drop unreachableByConstruction from the retryables, and every
 // final case is asked again; read every *net.AddrError as final, and "no
 // suitable address found" is no longer asked again; drop the port-0 rule, and
-// the dial to port 0 is asked again.
+// port 0 is asked again.
 func TestADialNoAttemptCanCompleteIsNotAskedAgain(t *testing.T) {
 	t.Parallel()
 	retryer := s3obj.ClientRetryer(openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{}))

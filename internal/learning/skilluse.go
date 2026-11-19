@@ -13,30 +13,16 @@ const SkillUseSource = "skill_use"
 
 // SkillUse records that a turn was offered this seat's synthesized skills.
 //
-// # Without it the curator eventually archives everything
+// Without it the curator archives everything: a skill's staleness clock is
+// its last-used stamp alone (stale after 30 days unused, archived after 90),
+// so skills shown on every turn but never reported would age out in a quarter.
 //
-// A skill's staleness clock is its last-used stamp, and nothing else moves
-// it. The curator marks a skill stale after 30 days unused and archives it
-// after 90 — so a company whose skills are read on every single turn, and
-// never reported, watches its whole catalogue age out over a quarter while
-// the prefetch is putting it in front of a model the entire time. That is
-// not a slow degradation an operator notices; the menu simply gets shorter.
+// Offered is used: a skill rendered into the prompt is in the catalogue, and
+// keying on the load would age out every skill whose menu line was enough.
 //
-// # Offered is used, and that is the honest reading
-//
-// The stamp answers "is this skill still earning its place in the
-// catalogue". A skill rendered into the prompt IS in the catalogue and IS
-// what the seat is being asked to work from — whether the model then loaded
-// the body is a question about that turn, not about the skill's currency.
-// Keying on the load would age out every skill whose menu line was enough,
-// which is the well-written ones.
-//
-// # It is cheap, which is why it is its own worker
-//
-// One bounded UPDATE per offered skill and no model call: it must not sit
-// behind the classifier's auxiliary call, and it must not be gated on the
-// classifier's settled-turn rule — a skill offered to a self_iterate round
-// was offered.
+// It is its own worker because it is one bounded UPDATE per offered skill, no
+// model call: it must not sit behind the classifier's auxiliary call or its
+// settled-turn rule, since a skill offered to a self_iterate round was offered.
 type SkillUse struct {
 	skills *Skills
 	now    func() time.Time

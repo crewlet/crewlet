@@ -11,56 +11,16 @@ import (
 
 // The per-node turn concurrency gate.
 //
-// # What it bounds, and what already bounds itself
+// A seat is already serial (a durable mailbox, one batch at a time), but how
+// many seats run at once is the placement policy's fair share, not a statement
+// about the host. This knob bounds it. It is per node (Tier A): a fleet's
+// ceiling is N x this value, sized against the machine an operator owns.
 //
-// A seat's mailbox is a durable subscription and its handler runs one batch
-// at a time, so a SEAT is already serial. What is not bounded is how many
-// seats run at once: that number is the placement policy's answer to "what is
-// this node's fair share", which is arithmetic over the company's seat count
-// and the live node count — not a statement about the host this process is
-// running on. A node handed forty seats will open forty simultaneous model
-// round-trips and their tool loops, and nothing in the config could say
-// otherwise. This is the knob that can.
-//
-// # Per node, which is what makes it Tier A
-//
-// A fleet's ceiling is N × this value. That is deliberate and it is the one
-// knob a fleet changes the meaning of: it is sized against the machine, and
-// the machine is what an operator owns. Putting it in the company config
-// would ask a founder to reason about the hosts their engine happens to run
-// on today.
-//
-// # Why a turn waits rather than being refused
-//
-// A refusal would send the trigger back to the broker to be redelivered on
-// the broker's schedule, which for a chat message a person is waiting on
-// turns a busy moment into a visible stall. Waiting keeps the delivery in
-// this process, where it starts the instant a slot frees.
-//
-// The one exception is a DRAIN. There the wait is exactly wrong: the node is
-// leaving, the slot it is waiting for is being handed to a peer, and a turn
-// that started mid-drain runs a full multi-minute execute → review turn
-// after the operator asked the process to stop. So a drain closes the gate
-// and every waiter leaves immediately, deferring its delivery — which is
-// unacked, so the successor gets it rather than the broker's redelivery
-// timer. Turns already past the gate are untouched and run to completion:
-// they have called a model and may have fired side effects, and abandoning
-// that work buys a faster deploy by throwing away what was nearly done.
-//
-// # Why closing is reversible
-//
-// A gate that latched shut would leave a node that drained and then stayed
-// holding seats, attached to their mailboxes and refusing every turn — the
-// same permanently-deaf seat OnAdmission exists to prevent, one layer up. So
-// closing swaps the channel rather than latching, and [Node.ResumeClaiming]
-// swaps a fresh one back in.
-//
-// THAT NODE DOES NOT EXIST IN THIS TREE. The reversibility was written for the
-// posture path — a node shedding on config divergence and converging back —
-// and that path gates ADMISSION instead, so [Node.ResumeClaiming] has no
-// production caller and every drain that happens is a shutdown. The property
-// is kept because it is free and the alternative fails silently; it is not
-// evidence that something reverses a drain.
+// A turn waits rather than being refused: a refusal sends the trigger back to
+// the broker's redelivery schedule, a visible stall for a waiting person. A
+// DRAIN is the exception: the gate closes and waiters leave at once, leaving
+// their deliveries unacked for the successor. Turns past the gate run to
+// completion, having called a model and possibly fired side effects.
 type gate struct {
 	// slots is the semaphore. A buffered channel rather than a
 	// sync.Cond, because the wait has to select against two other things
@@ -70,9 +30,11 @@ type gate struct {
 
 	// closed is the barrier: an open channel while the node serves, closed
 	// while it drains, and REPLACED with a fresh open one when it resumes.
-	// A channel rather than a flag because a waiter is parked in a select,
-	// and a flag it would have to poll is a flag it never reads. Swapping
-	// rather than reopening because a closed channel cannot be reopened.
+	// A channel rather than a flag because a waiter is parked in a select.
+	// Swapped because a closed channel cannot be reopened, which keeps
+	// [Node.ResumeClaiming] possible. It has no production caller (every drain
+	// is a shutdown); the reversibility is kept because it is free and a latch
+	// would fail silently, not because anything reverses a drain.
 	mu     sync.Mutex
 	closed chan struct{}
 
@@ -96,20 +58,12 @@ type gate struct {
 // DefaultMaxConcurrent is how many turns one process runs at once when
 // `node.max_concurrent` says nothing.
 //
-// It lives here, in the layer that enforces it, so the config field and the
-// gate can never disagree about what unset means — the same arrangement
-// coordination.lease_ttl_seconds has with seat.SeatLeaseTTL.
-//
-// Sized so it does not change the behaviour of any company that runs on one
-// node today, while still bounding the pathological case. A turn's cost here
-// is one model round-trip and its tool loop — a few megabytes, nothing like
-// the 200-400 MB a harness subprocess holds, which is why this is far above
-// that provider's own max_concurrent of 4. The seat count of a single-node
-// company is the number that matters: the example company runs a handful of
-// seats, a large one runs tens, and a node holding more than 32 seats is one
-// that wanted a second node. Past it the excess turns wait rather than opening
-// a hundred simultaneous completions against a provider that will rate-limit
-// them anyway.
+// It lives in the layer that enforces it so the config field and the gate
+// cannot disagree about what unset means. A turn costs one model round-trip
+// and its tool loop (megabytes, not the 200-400 MB of a harness subprocess), so
+// this sits far above that provider's own max_concurrent of 4. A node holding
+// more than 32 seats wanted a second node; past it the excess turns wait rather
+// than open a hundred completions a provider would rate-limit anyway.
 const DefaultMaxConcurrent = 32
 
 // newGate builds a gate of the given size. A size below 1 is NEVER a
