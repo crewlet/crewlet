@@ -356,8 +356,8 @@ func render(w io.Writer, toolchain component, modules []component) error {
 		"The crewlet binary is built with the Go toolchain and links the Go modules\n"+
 		"listed below. Each section reproduces that component's own license and\n"+
 		"notice files, unmodified, including those kept beside the packages the\n"+
-		"binary links from it. Crewlet itself is licensed under the MIT License\n"+
-		"in LICENSE. The dashboard the binary embeds lists its own bundled\n"+
+		"binary links from it. Crewlet itself is licensed under the PolyForm\n"+
+		"Shield License 1.0.0 in LICENSE. The dashboard the binary embeds lists its own bundled\n"+
 		"dependencies, fonts and icons in dashboard/THIRD_PARTY_NOTICES.txt beside\n"+
 		"this file, and a running engine serves the same file at\n"+
 		"/static/dashboard/THIRD_PARTY_NOTICES.txt.\n")

@@ -1133,6 +1133,14 @@ deletes nothing itself.
   more than one package), and the comment points there.
   `internal/commentgate` holds the bound, with an inventory of older code
   that only shrinks.
+- **A flag or number a client receives is sent at zero too**: `omitempty` or
+  `omitzero` drops a false or a 0, and the dashboard cannot tell it from a
+  key nobody sent. Drop the option and declare the dashboard's member
+  required, or, where a missing key and the zero are one value to every
+  reader, say why after the field:
+  `//wiregate:absent-is-false <reason>` (`absent-is-zero` on a number).
+  `internal/wiregate` holds it, and the dashboard's wire types to declaring
+  each as it is sent, with an inventory of older code that only shrinks.
 - **A field holding words somebody else wrote is declared on the field**, as a
   credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
   (words at length: a body, a comment, a message, an excerpt) or
@@ -2127,9 +2135,11 @@ Signed-off-by: Jane Developer <jane@example.com>
 That line is not decoration and it is not an authorship credit. It is your
 certification of the [Developer Certificate of Origin](DCO) — the file at the
 root of this repository — over that commit: that you wrote the change, or that
-it came from work you have the right to submit under the MIT licence this
-project ships under, and that you understand the commit and your sign-off are
-published permanently. Read it once; it is 34 lines.
+it came from work you have the right to submit under the licence this project
+ships under (the
+[PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0),
+whose text is in [LICENSE](LICENSE)), and that you understand the commit and
+your sign-off are published permanently. Read it once; it is 34 lines.
 
 Because the DCO covers relayed work as well as your own (clauses (b) and (c)),
 a commit may carry more than one sign-off and the trailer need not name the

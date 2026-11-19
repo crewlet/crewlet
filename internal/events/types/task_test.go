@@ -36,12 +36,12 @@ func TestAFiresLabelNamesItsScheduleNotItsID(t *testing.T) {
 			Schedule: "weekly-report", Description: "Summarise the week's merged PRs.",
 		}
 	}
-	first, second := fire("2026-09-21T09:00:00Z").SummaryFor("swe"), fire("2026-09-28T09:00:00Z").SummaryFor("swe")
+	first, second := fire("2026-09-21T09:00:00Z").PhraseFor("swe").Text, fire("2026-09-28T09:00:00Z").PhraseFor("swe").Text
 	if want := "swe was assigned scheduled work weekly-report"; first != want || second != want {
 		t.Fatalf("labels = %q, %q; want both %q", first, second, want)
 	}
 	// With no schedule there is nothing a seat could look the id up as.
-	if got := (TaskAssigned{TaskID: "T-42"}).SummaryFor("swe"); got != "swe was assigned a task" {
+	if got := (TaskAssigned{TaskID: "T-42"}).PhraseFor("swe").Text; got != "swe was assigned a task" {
 		t.Fatalf("a fire with no schedule is labelled %q", got)
 	}
 }

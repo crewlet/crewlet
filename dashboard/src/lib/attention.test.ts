@@ -455,7 +455,10 @@ describe("what it surfaces", () => {
         notices: [
           SETUP_NOTICE,
           alarmNotice("backup_age"),
-          { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "task:t-1" } },
+          {
+            class: "conversation.held",
+            subject: { kind: "seat", seat: "dev", name: "work:task:t-1" },
+          },
         ],
         findings: [SETUP_BLOCKER],
         engine: healthFrame({ configured: false }),
@@ -1034,14 +1037,14 @@ test("a held conversation is a row that opens its item", () => {
       notices: [
         {
           class: "conversation.held",
-          subject: { kind: "seat", seat: "dev", name: "task:t-1" },
+          subject: { kind: "seat", seat: "dev", name: "work:task:t-1" },
           since: "2026-01-01T10:00:00Z",
         },
         { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "chat:room/1" } },
       ],
     }),
   );
-  const item = queue.find((a) => a.id === "held-dev-task:t-1");
+  const item = queue.find((a) => a.id === "held-dev-work:task:t-1");
   expect(item?.title).toBe("Held by the engine: its context did not fit its models");
   expect(item?.path).toEqual(["worklet", "t-1"]);
   expect(item?.who).toBe("dev");

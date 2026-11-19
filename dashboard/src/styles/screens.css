@@ -2418,6 +2418,7 @@ a.prof-row:hover {
    the time and one line, the actor then what happened, taking every pixel
    the time leaves. The event log itself is the kit's grid (`EventGrid`). */
 .feed-row {
+  position: relative;
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr);
   gap: var(--spacing-3);
@@ -2431,6 +2432,22 @@ a.prof-row:hover {
 }
 .feed-row:last-child {
   border-bottom: none;
+}
+/* THE ROW OPENS ITS EVENT through the time's link, stretched over the row, and
+   a reference its line names stands above that, so it opens its own page. */
+.feed-row__open {
+  color: inherit;
+  text-decoration: none;
+  outline: none;
+}
+.feed-row__open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.feed-what a {
+  position: relative;
+  z-index: 1;
 }
 .feed-row:hover {
   background: var(--color-surface-hover);
@@ -7321,8 +7338,22 @@ a.work-cal-chip {
   color: inherit;
   text-decoration: none;
 }
-a.live-row:hover {
+.live-row--linked {
+  position: relative;
+}
+.live-row--linked:hover {
   background: var(--color-surface-hover);
+}
+/* THE ROW OPENS ITS TURN through this link, stretched over it; a reference the
+   trigger names stands above it, so it opens its own page. */
+.live-row__open {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+.live-body a {
+  position: relative;
+  z-index: 1;
 }
 /* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
    on the widest screen, and Live's is wide on a smaller one. */

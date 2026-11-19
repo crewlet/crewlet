@@ -1,6 +1,11 @@
 package types
 
-import "github.com/crewlet/crewlet/internal/events"
+import (
+	"cmp"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
+)
 
 func init() {
 	events.Register[ScheduledTaskFired]()
@@ -68,7 +73,7 @@ type ScheduledTaskFired struct {
 // EventType is the "scheduled_task_fired" wire type.
 func (ScheduledTaskFired) EventType() string { return "scheduled_task_fired" }
 
-// Summary names the seat the run was dispatched to, falling back to the
+// PhraseFor names the seat the run was dispatched to, falling back to the
 // scope's NAME and then to its id: a unit schedule fires once per runner, so
 // the handle is what tells two dispatches of the same tick apart.
 //
@@ -76,18 +81,21 @@ func (ScheduledTaskFired) EventType() string { return "scheduled_task_fired" }
 // scope's id is a uuid. The id is the last resort rather than the first for
 // the same reason it is still there at all: an event written by a build that
 // carried no name must still say which schedule fired.
-func (e ScheduledTaskFired) Summary() string {
-	who := e.TargetHandle
-	if who == "" {
-		who = e.ScopeName
+func (e ScheduledTaskFired) PhraseFor(string) named.Line {
+	who := named.SeatRef(e.TargetHandle, e.TargetHandle)
+	if e.TargetHandle == "" {
+		who = named.Ref{Text: cmp.Or(e.ScopeName, e.ScopeID)}
 	}
-	if who == "" {
-		who = e.ScopeID
-	}
+	line := named.Words("Scheduled '").Name(e.schedule()).Words("' ")
 	if e.RequestedBy != "" {
-		return "Scheduled '" + e.ScheduleName + "' run now for " + who + ", asked by " + e.RequestedBy
+		return line.Words("run now for ").Name(who).Words(", asked by " + e.RequestedBy)
 	}
-	return "Scheduled '" + e.ScheduleName + "' fired for " + who
+	return line.Words("fired for ").Name(who)
+}
+
+// schedule names the schedule that fired, spelled as its name.
+func (e ScheduledTaskFired) schedule() named.Ref {
+	return named.ScheduleRef(string(e.ScopeType), e.ScopeID, e.ScheduleName, e.ScheduleName)
 }
 
 // ScheduledFireSuperseded records a fire that reached its seat and was not
@@ -134,9 +142,10 @@ const ScheduleOutcomeSuperseded = "skipped_superseded"
 // EventType is the "scheduled_fire_superseded" wire type.
 func (ScheduledFireSuperseded) EventType() string { return "scheduled_fire_superseded" }
 
-// Summary names the schedule and the seat, which is what tells two skipped
+// PhraseFor names the schedule and the seat, which is what tells two skipped
 // fires of a unit schedule apart.
-func (e ScheduledFireSuperseded) Summary() string {
-	return "Scheduled '" + e.ScheduleName + "' skipped a missed fire for " +
-		e.TargetHandle + ": a later fire ran in its place"
+func (e ScheduledFireSuperseded) PhraseFor(string) named.Line {
+	schedule := named.ScheduleRef(string(e.ScopeType), e.ScopeID, e.ScheduleName, e.ScheduleName)
+	return named.Words("Scheduled '").Name(schedule).Words("' skipped a missed fire for ").
+		Name(named.SeatRef(e.TargetHandle, e.TargetHandle)).Words(": a later fire ran in its place")
 }

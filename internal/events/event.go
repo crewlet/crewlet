@@ -42,6 +42,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -237,6 +238,12 @@ type (
 	// chain reaches it.
 	ActorSummarizer interface{ SummaryFor(actor string) string }
 
+	// Phraser provides the actor-led summary together with what it names
+	// (package named): a payload whose line names an object a person can
+	// open implements this INSTEAD of SummaryFor or Summary, so the line
+	// and its references come from one sentence and cannot drift.
+	Phraser interface{ PhraseFor(actor string) named.Line }
+
 	// Actorer names the actor outright, overriding the chain — for events
 	// whose actor is neither the role nor the publisher, such as an
 	// inbound notification's human sender.
@@ -253,6 +260,11 @@ type (
 // Summary is the human-readable "who did what" line the dashboard shows in
 // its trace view.
 func (e *Event) Summary() string {
+	if p, ok := e.Data.(Phraser); ok {
+		if out := p.PhraseFor(e.Actor()).Text; out != "" {
+			return out
+		}
+	}
 	if s, ok := e.Data.(ActorSummarizer); ok {
 		if out := s.SummaryFor(e.Actor()); out != "" {
 			return out
@@ -264,6 +276,15 @@ func (e *Event) Summary() string {
 		}
 	}
 	return titleWords(strings.ReplaceAll(e.Type, "_", " "))
+}
+
+// References is what [Event.Summary] names, in the order it names them: nil
+// for a payload that names nothing a person can open.
+func (e *Event) References() []named.Ref {
+	if p, ok := e.Data.(Phraser); ok {
+		return p.PhraseFor(e.Actor()).Refs
+	}
+	return nil
 }
 
 // titleWords upper-cases the first letter of each space-separated word.

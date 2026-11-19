@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // The runtime audit: what a PERSON did to the company through a running node,
@@ -190,14 +191,14 @@ func (OperatorActed) EventType() string { return "operator_acted" }
 // Actor is the author, which is who the records the call wrote name.
 func (e OperatorActed) Actor() string { return e.ActorName }
 
-// SummaryFor names the verb, the repository a git push was made to, and what
+// PhraseFor names the verb, the repository a git push was made to, and what
 // became of it.
-func (e OperatorActed) SummaryFor(actor string) string {
-	verb := "ran " + e.Tool
+func (e OperatorActed) PhraseFor(actor string) named.Line {
+	verb := named.Words("ran " + e.Tool)
 	if e.Repo != "" {
-		verb += " on " + e.Repo
+		verb = verb.Words(" on ").Name(named.Repo(e.Repo))
 	}
-	return lead(actor, verb+": "+outcomeWords(e.Outcome, e.Refusal))
+	return leadLine(actor, verb.Words(": "+outcomeWords(e.Outcome, e.Refusal)))
 }
 
 // NewOperatorActed builds the audit record for one call, with [Failed]
@@ -231,11 +232,11 @@ func (OwnRecordMarked) EventType() string { return "own_record_marked" }
 // takes no name can act for.
 func (e OwnRecordMarked) Actor() string { return e.ActorName }
 
-// SummaryFor says it was the actor's own bookkeeping, through which tool, and
-// what became of it.
-func (e OwnRecordMarked) SummaryFor(actor string) string {
-	return lead(actor, "kept their own bookkeeping ("+e.Tool+"): "+
-		outcomeWords(e.Outcome, e.Refusal))
+// PhraseFor says it was the actor's own bookkeeping, through which tool, and
+// what became of it. Its own, shadowing the embedded record's.
+func (e OwnRecordMarked) PhraseFor(actor string) named.Line {
+	return leadLine(actor, named.Words("kept their own bookkeeping ("+e.Tool+"): "+
+		outcomeWords(e.Outcome, e.Refusal)))
 }
 
 // NewOwnRecordMarked builds the audit record of one call that kept the

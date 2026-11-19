@@ -40,6 +40,7 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { AgentRow, EventRecord } from "~/protocol/index.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
 import { PHASE_RECORD_TYPES } from "~/protocol/index.ts";
 
 /** What an id that resolves to nothing means, on the page and in the rail. */
@@ -247,7 +248,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           kind="Event"
           icon="chart-no-axes-gantt"
           identifier={data.id}
-          title={name}
+          title={<EngineLine text={name} refs={data.refs} />}
           status={eventStatus(data)}
           facts={eventFacts(data, now, handle)}
         />
@@ -396,7 +397,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           kind="Event"
           icon="chart-no-axes-gantt"
           identifier={data.id}
-          title={eventTitle(data)}
+          title={<EngineLine text={eventTitle(data)} refs={data.refs} />}
           status={eventStatus(data)}
           facts={eventFacts(data, now, handle)}
         />
