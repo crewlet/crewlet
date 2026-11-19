@@ -401,15 +401,9 @@ func TestASeatFilterDoesNotMatchASeatlessRow(t *testing.T) {
 // identity split exists for.
 //
 // A turn that fails without reaching outside the engine is NAK'd and
-// redelivered, so one trigger legitimately runs again — and a turn id used to
-// be the work key, which a redelivery reproduces. Both attempts therefore
-// landed in one `GROUP BY turn_id` bucket: `failed` was MAX over the two, so a
-// turn that failed on auth and then succeeded read as permanently failed; the
-// tokens were the sum of an attempt that spent nothing and one that spent
-// 327k; and the models were concatenated. The operator's screen said one turn
-// had done all of it.
-//
-// See ADR-0017.
+// redelivered, so one trigger runs again with the same work key. Keyed on it,
+// both attempts shared one `GROUP BY turn_id` bucket: `failed` was MAX over the
+// two, tokens summed and models concatenated. See ADR-0017.
 func TestTwoRunsOfOneWorkKeyAreTwoRowsWithTheirOwnOutcome(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -518,17 +512,13 @@ func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.T
 
 // A TURN THAT DIED WITHOUT A FAILED PHASE IS STILL A FAILED TURN.
 //
-// Four event types ARE a failure by their very type and carry no `failed`
-// field for the writer to stamp a tag from: llm_unavailable,
-// budget_exhausted, turn.guard_breach and executor_failed. They are
-// exactly what a turn that died BEFORE completing a phase leaves behind —
-// a seat refused at the budget gate, a chain whose every model was down, a
-// breached guard — so the turns list answered "not failed" for the one turn
-// an operator opens the list to find, and `Failed: &yes` never returned it.
+// Four event types ARE a failure by type and carry no `failed` field to stamp
+// a tag from: llm_unavailable, budget_exhausted, turn.guard_breach and
+// executor_failed. They are what a turn that died BEFORE completing a phase
+// leaves behind, so without them `Failed: &yes` never returned it.
 //
-// Driven off [types.FailureEventNames] rather than a list spelled here: the
-// catalogue is the one place the rule lives, and a copy is how this stops
-// covering a type somebody adds to it.
+// Driven off [types.FailureEventNames], not a copied list, which would stop
+// covering a type somebody adds.
 func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -697,14 +687,12 @@ func TestATurnThatBeganBeforeTheWindowIsNotInIt(t *testing.T) {
 
 // A PINNED WINDOW IS FLOORED AT ITS OWN INSTANT, page and share alike.
 //
-// A fleet cuts the turns window on the asker's clock and sends the instant with
-// it ([store.TurnQuery.At]), and by the time a peer reads, that instant is in
-// the peer's past. The read floored the window and every share at its own
-// clock's history horizon instead, so a turn that began between the asker's
-// horizon and the reader's was missing from the reader's page — and from the
-// share that asked for it by id. The turn here began a minute above the pinned
-// horizon: below the clock's, and still on disk, since retention keeps a day
-// past the floor.
+// A fleet cuts the turns window on the asker's clock and sends the instant
+// ([store.TurnQuery.At]), which is in the peer's past by the time it reads.
+// Flooring at the reader's own history horizon lost a turn that began between
+// the two horizons, from the page and from the share by id. The turn here
+// began a minute above the pinned horizon: below the clock's, still on disk
+// (retention keeps a day past the floor).
 //
 // Mutation: read `now()` in [store.EventLog.TurnPartials] rather than the
 // query's instant, and the page lists nothing and the share is empty.
@@ -790,13 +778,11 @@ func TestATurnReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
 // A LOG SAYS WHICH NAMED TURNS ITS PAGE LISTS, by the page's own window and
 // turn-level filters and by neither its cursor nor its size.
 //
-// A fleet asks it beside a turn's shares: a turn resumed across nodes is
-// selected by each node on its own half, so the node that holds the half where
-// the turn began may not list it at all — a clean half of a turn that failed
-// later — and the fleet pages a turn by the start a node's page DOES reach.
-// The answer is the page's statement with the names added: a turn that began
-// before the window is not listed, one the filters reject is not, and a cursor
-// below every turn or a page of one changes nothing.
+// A turn resumed across nodes is selected on each node's own half, so the node
+// holding the half where it began may not list it (a clean half of a later
+// failure). The answer is the page's statement with the names added: a turn
+// before the window or rejected by the filters is not listed; a cursor or page
+// size changes nothing.
 //
 // Mutation: answer the share's turns rather than the page's, and the turn that
 // began before the window and the ones the filters reject are listed; apply

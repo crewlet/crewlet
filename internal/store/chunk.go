@@ -3,25 +3,13 @@ package store
 // RowsPerInsert is how many rows a multi-row INSERT may carry when each row
 // binds columns parameters.
 //
-// # Why the bound is probed rather than assumed
+// The bound is probed, not assumed: it is the engine's, not the dialect's
+// (SQLite's moved from 999 to 32 766), so [Capabilities.MaxVariables] is
+// measured against the live driver at open.
 //
-// A statement's parameters are bounded by the engine, and the number is the
-// engine's rather than the dialect's: SQLite's default has been 32 766 since
-// 3.32 and was 999 before it, and an engine in this family may pick a third.
-// [Capabilities.MaxVariables] is measured against the live driver at open,
-// which is the only way to be right on all of them.
-//
-// # Why chunking at all
-//
-// The tables an applier fills — a closure, exploded child rows, dependency
-// edges, a candidate fan-out — take many rows per record, and one INSERT per
-// row is one round trip and one plan per row. A multi-row INSERT is one of
-// each for the whole chunk, and it is the difference the drain benchmark
-// measures.
-//
-// A row that binds no parameters at all takes the whole batch in one
-// statement, and columns below zero is treated the same way: there is nothing
-// to bound.
+// Chunking because one INSERT per row is a round trip and a plan per row (the
+// drain benchmark measures it). A row binding no parameters (columns <= 0)
+// takes the whole batch in one statement.
 func RowsPerInsert(maxVariables, columns int) int {
 	if columns <= 0 {
 		return maxBatchRows
@@ -43,20 +31,14 @@ func RowsPerInsert(maxVariables, columns int) int {
 
 // maxBatchRows caps a chunk regardless of how many parameters would fit.
 //
-// A statement's TEXT grows with its rows — each is a "(?,?,…)" group the
-// engine parses — so a wide-open chunk of a two-column table builds a
-// six-figure statement to save round trips that were never the cost. It also
-// bounds the memory one chunk holds while it is being assembled. 1 000 rows
-// is where the round-trip saving has already flattened: it is 1/1000th of the
-// per-row overhead, and the next order of magnitude buys a further 0.09 %.
+// A statement's TEXT grows with its rows (a "(?,?,…)" group each), so a
+// wide-open chunk builds a six-figure statement to save round trips that were
+// never the cost, and holds more memory while assembled. At 1 000 rows the
+// round-trip saving has flattened: the next order of magnitude buys 0.09 %.
 //
-// ON THE DRIVER PINNED HERE IT IS WHAT BINDS, at every width an applier uses:
-// [Capabilities.MaxVariables] reports the probe's own 32 766 ceiling, so the
-// divisor allows 4 680 rows at seven columns and 10 922 at three, and this
-// caps both at 1 000. Without it a two-column insert would chunk at 16 383
-// rows. (The probe reported 2 000 until it was found to be measuring the
-// result-set width rather than the parameter limit, and this cap was inert
-// at every width but two columns or fewer while it did.)
+// ON THE PINNED DRIVER IT IS WHAT BINDS, at every width an applier uses:
+// [Capabilities.MaxVariables] reports the probe's 32 766 ceiling, which alone
+// would allow 4 680 rows at seven columns and 16 383 at two.
 const maxBatchRows = 1000
 
 // Chunks splits n rows into contiguous [start, end) ranges of at most

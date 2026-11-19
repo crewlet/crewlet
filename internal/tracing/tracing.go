@@ -16,6 +16,11 @@
 // no collector a deployment whose stored events have no usable ids. That is
 // the state this package was written to end.
 //
+// The provider must also exist before [Configure] runs: OTel's built-in default
+// is a no-op that passes the parent's span context through, so this package's
+// init installs a working one (see init). Conversion between OTel's context
+// carrier and the event envelope's three ids lives in span.go only.
+//
 // # Why the environment configures it and Tier A does not — ADR-0010
 //
 // The same call `internal/sandbox/otel.go` already made and wrote down: the
@@ -122,19 +127,14 @@ const (
 //
 // # The two variables mean different things, and conflating them doubles the path
 //
-// The OTLP spec is explicit: OTEL_EXPORTER_OTLP_ENDPOINT is a BASE and the
-// exporter appends the signal path to it, while
-// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is the full URL and is used as given.
-// The SDK's WithEndpointURL implements the second meaning only — handed a
-// path-less base it targets "/" rather than "/v1/traces" — so the base has to
-// be completed here.
+// Per the OTLP spec OTEL_EXPORTER_OTLP_ENDPOINT is a BASE the exporter appends
+// the signal path to, while OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is the full URL,
+// used as given. The SDK's WithEndpointURL implements only the second (a
+// path-less base targets "/"), so the base is completed here.
 //
-// This is the same rule [sandbox.OtelReceiver] already follows when it
-// forwards (it appends "/v1/"+signal to the trimmed upstream), which is what
-// keeps one setting correct for both halves. It is also why the deployment
-// guide's example had to change: it told operators to set the BASE variable
-// to a URL ending in /v1/traces, which the receiver turned into
-// /v1/traces/v1/traces at the collector.
+// [sandbox.OtelReceiver] follows the same rule when it forwards (appending
+// "/v1/"+signal), keeping one setting correct for both halves; a BASE ending
+// in /v1/traces would become /v1/traces/v1/traces.
 func tracesEndpoint(opts Options) string {
 	if signal := opts.env(TracesEndpointVar); signal != "" {
 		return signal
@@ -172,22 +172,18 @@ const exportTimeout = 5 * time.Second
 // short of anything a supervisor's SIGKILL timer would notice.
 const flushGrace = 8 * time.Second
 
-// A REAL PROVIDER FROM THE START, installed by this package's own init for
-// exactly the reason internal/logging's init installs os.Stderr: the default
-// must be the working one, not a state a caller has to remember to leave.
+// A REAL PROVIDER FROM THE START, as internal/logging's init installs
+// os.Stderr: the default must be the working one.
 //
-// This is not tidiness. OTel's built-in default TracerProvider is a no-op that
-// returns a NON-RECORDING span carrying the PARENT's span context straight
-// through — so with nothing installed, Start mints no new span id and
-// [TraceOf] hands back the id of the span above it. That is precisely the bug
-// this whole change removes (a turn publishing its trigger's span id as its
-// own), and it would have come back silently in every process that did not
-// call [Configure] — the e2e gate caught it doing exactly that.
+// OTel's built-in default is a no-op returning a NON-RECORDING span that
+// carries the PARENT's span context through, so with nothing installed Start
+// mints no span id and [TraceOf] returns the span above's id (a turn
+// publishing its trigger's span id as its own) in every process that never
+// calls [Configure].
 //
-// The default exports nothing and starts no goroutines: a TracerProvider with
-// no span processor has nothing to flush and nothing to stop, so it is safe to
-// install in a package init and safe never to shut down. [Configure] replaces
-// it with the configured one.
+// This one exports nothing and starts no goroutines: a provider with no span
+// processor has nothing to flush, so it is safe in init and never shut down.
+// [Configure] replaces it.
 func init() {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
@@ -238,18 +234,15 @@ func (o Options) env(name string) string {
 // Configure builds the TracerProvider, installs it and the W3C propagator
 // globally, and returns the flush the process must run before it exits.
 //
-// It never fails the boot for a telemetry reason it can survive: an
-// unreachable collector is not detected here (the exporter connects lazily and
-// retries), and an unparseable sampler ratio WARNS and falls back, on the same
-// never-fail-on-a-typo rule the log level follows. It DOES return an error for
-// a malformed endpoint, because that is a value the operator typed that can
-// never work, and silently exporting nowhere is how a promise like this stops
-// being true without anyone noticing.
+// It never fails the boot for a survivable telemetry reason: an unreachable
+// collector is not detected (the exporter connects lazily and retries), and an
+// unparseable sampler ratio WARNS and falls back. It DOES return an error for
+// a malformed endpoint, a typed value that can never work: silently exporting
+// nowhere would break the promise unnoticed.
 //
-// WHEN IT DOES RETURN AN ERROR IT CHANGES NOTHING. Both providers are built
-// before either is installed, so a failure leaves the process tracing through
-// the provider it already had — this package's init guarantees there is a
-// working one — and leaves nothing running behind it. See the commit below.
+// ON ERROR IT CHANGES NOTHING. Both providers are built before either is
+// installed, so the process keeps the provider it had (this package's init
+// guarantees one) and nothing runs behind it. See the commit below.
 func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// The propagator is installed whether or not anything exports: it is
 	// what makes an inbound `traceparent` join an existing trace, and what
@@ -302,23 +295,12 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// BUILT HERE, INSTALLED AT THE COMMIT BELOW, because everything between
 	// the two can still fail.
 	//
-	// A provider installed before the metrics half runs is one this
-	// function has already published to every span site in the process by
-	// the time it hands back an error — and the caller, holding no
-	// [Shutdown], has no way to flush or stop it. The batch processor's
-	// goroutine and the OTLP exporter's connection start at CONSTRUCTION
-	// rather than at installation, so that is a live exporter belonging to
-	// a boot that failed.
-	//
-	// Installing first and putting the previous provider back on the error
-	// path is the other repair, and it is worse: what it would restore is
-	// whatever the last Configure's [Shutdown] already terminated, and a
-	// terminated sdktrace.TracerProvider hands out NO-OP tracers — which
-	// pass the parent's span context straight through, which is exactly the
-	// bug this package's own init exists to keep out of the process (see
-	// there). Never installing leaves the working provider that is already
-	// there and leaves no window in which the global is something
-	// mid-teardown.
+	// Installed early, the provider would reach every span site while a
+	// failing Configure returns no [Shutdown] to stop it, and its batch
+	// goroutine and exporter start at CONSTRUCTION. Restoring the previous
+	// provider on error is worse: the last [Shutdown] may have terminated it,
+	// and a terminated one hands out NO-OP tracers that pass the parent's span
+	// context through (see this package's init).
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 
 	// THE METER PROVIDER, on the same terms and for the same reason: it is
@@ -369,18 +351,13 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 // cause back unchanged.
 //
 // Nothing is installed until [Configure] commits, so there is no global to put
-// back — but a built provider is already RUNNING: the batch processor's
-// goroutine and the exporter's connection start when the provider is
-// constructed, not when it is installed. Dropping the pointer on an error path
-// therefore leaves an exporter alive, on a timer, inside a process that holds
-// no handle to flush or stop it.
+// back, but a built provider is already RUNNING: the batch goroutine and the
+// exporter's connection start at construction. Dropping the pointer would
+// leave an exporter alive on a timer with no handle to stop it.
 //
-// The cause is returned alone. What an operator has to act on is the value
-// they typed; a flush that failed while stopping a provider which recorded
-// nothing and which nobody will ever read is not a second thing to fix, and
-// joining the two would put two telemetry errors in front of the one that
-// matters. It is logged rather than dropped, because a teardown that fails in
-// silence is how a leak stops being visible.
+// The cause is returned alone: the operator must act on the value they typed,
+// and joining a failed flush of a provider nobody reads would bury it. The
+// flush error is logged, not dropped, so a failing teardown stays visible.
 func abandon(ctx context.Context, tp *sdktrace.TracerProvider, cause error) error {
 	if err := shutdownTracer(ctx, tp); err != nil {
 		log.WarnContext(ctx, "trace_provider_abandoned_unflushed", "error", err)
@@ -476,17 +453,14 @@ func resourceFor(opts Options) (*resource.Resource, error) {
 // sampler is ALWAYS parent-based, and the ratio only decides what happens at a
 // root.
 //
-// A trace that starts at a webhook and continues through a queue must not be
-// half-sampled: an unsampled parent with sampled children is a broken tree at
-// the collector, and this engine's traces cross processes routinely. So a
-// remote decision is always honoured and the ratio governs the roots this node
-// mints.
+// Traces cross processes routinely, and an unsampled parent with sampled
+// children is a broken tree at the collector. So a remote decision is always
+// honoured and the ratio governs the roots this node mints.
 //
-// An unparseable or out-of-range ratio WARNS and falls back to always-on,
-// rather than refusing to boot — the same rule `-log-level` follows, and for
-// the same reason: a typo in a telemetry knob must never be why a company will
-// not start. Falling back to always-on rather than off is deliberate: the
-// failure an operator can see is better than the one they cannot.
+// An unparseable or out-of-range ratio WARNS and falls back to always-on
+// rather than refusing to boot (as `-log-level` does): a telemetry typo must
+// not stop a company starting, and the failure an operator can see beats the
+// one they cannot.
 func sampler(opts Options) sdktrace.Sampler {
 	raw := opts.env(SamplerArgVar)
 	if raw == "" {

@@ -6,6 +6,63 @@
 // registers, and tools an MCP server serves — and records WHICH at
 // registration, because that is the only frame that knows and the last that
 // can say.
+//
+// # A call is made in its turn
+//
+// A seat's call hands its turn to the tool that asks for it, and only through
+// [Invoke] (ADR-0059): a [SeatCallable] cannot run without one
+// (CallForTurn), and a [TurnBound] (the builtin gate, for every builtin that
+// is not seat-scoped) is told it (CallInTurn) to bind the requester ceiling
+// and answers as a plain Call outside any turn.
+//
+// # Refusals carry their class
+//
+// A first-party refusal carries its class ([Refusal], defined in mcp) as its
+// CAUSE: [Classify] states it beneath the error that decided it, [RefusalOf]
+// reads it back and [UnknownOf] asks whether a write may have landed. There is
+// no class field beside the cause, which could tell one caller two stories;
+// the sentence is prompt text tuned for a model, which a person's surface
+// cannot parse. An MCP server's failure stays unclassified: the engine will
+// not guess a class from prose it did not write.
+//
+// One rule picks the class for every domain, by what the refusal is ABOUT and
+// what would make the same request land. The request itself (an argument
+// outside its grammar, a value past a limit of its own, an argument naming
+// ANOTHER object that cannot take part) is invalid. A COLLISION (a name,
+// title, label, address or id the call gives an object that ANOTHER object
+// already holds), and a create of what is already there, is exists, its
+// sentence naming the holder. The object the call is about, or the container
+// it writes into, absent is not_found. That object in a STATE that refuses the
+// gesture until somebody changes it (archived, trashed, or its contents at
+// their cap), like a lost race, is conflict. A limit the vocabulary names a
+// class for (quota_exceeded, inbox_full, reassignment_budget, notes_full,
+// notes_spent, budget_exhausted) is that class. agent/builtin's
+// TestEveryDomainRefusalIsClassed holds every domain sentinel to its row's
+// meaning and, where its NAME says one (…Taken, …Clash, …Exists, …Full), to
+// that meaning's class; TestEveryFirstPartyRefusalIsClassified walks the
+// source for a failed result that forgot (the surface's own recorded Call and
+// the loop's ToolResult included), since the surface refuses an
+// unknown, unoffered or guarded call before any tool runs.
+//
+// A call that LANDED carries its caveats on [Result].Caveats (internal/caveat)
+// beside the model's words, never rendered, for the surface that answers a
+// person.
+//
+// # MCP tools on the entry
+//
+// What a tool's MCP server is FOR ([Entry].ServerDescription) is stamped at
+// registration from [Registry.DescribeServers] (each apply's revision, carried
+// by Clone) and kept ON THE ENTRY, so every
+// cut of a snapshot, a worker's grant rebuilt entry by entry included, keeps
+// it; [Snapshot].Discoverable prints it beside the server's name. A tool at
+// Needs approval is marked on its entry ([Entry].NeedsApproval) and the
+// SURFACE is the one place such a call is decided (ADR-0077): an executor's
+// hands it to its Holder, which records the run's question; a surface without
+// one refuses it forbidden; only [Surface.RunApproved], the call a person
+// approved, runs it. [Surface.AsksFirst] says whether a call MAY ask a person
+// first (Needs approval, or a definition a change can hold, [Entry].Unreviewed,
+// ADR-0078), so the entry a bridged call's run writes before it runs keeps no
+// digest of a call that may be held.
 package tools
 
 import (
@@ -92,18 +149,15 @@ var (
 
 // The tool-origin grammar: who put a tool in front of the agents.
 //
-// Recorded AT REGISTRATION because it cannot be recovered afterwards. A tool
-// an MCP server serves is structurally identical to one the engine ships —
-// same name, same schema, same call signature. With nothing recorded, the
-// operator surface called both "builtin", and a tool missing because its
-// server failed to start read as a missing builtin, which sends someone to
-// debug the wrong subsystem.
+// Recorded AT REGISTRATION because it cannot be recovered afterwards: an MCP
+// tool is structurally identical to a builtin (name, schema, call signature),
+// and a tool missing because its server failed to start would read as a
+// missing builtin, sending someone to debug the wrong subsystem.
 //
 // TWO registrants, and mcp/origin.go says why there are not four.
 //
-// These strings are a CONTRACT with that surface, which groups on them.
-// Re-exported rather than redefined: one definition, in the package this one
-// already depends on for Callable, Result and Annotations.
+// These strings are a CONTRACT with the operator surface, which groups on
+// them. Re-exported rather than redefined: one definition, in mcp.
 const (
 	// OriginBuiltin marks a tool the engine itself ships.
 	OriginBuiltin = mcp.OriginBuiltin
@@ -132,31 +186,14 @@ type Entry struct {
 	// Surface is a FIRST-PARTY declaration that calling this tool can put
 	// something in front of somebody outside this turn, and names WHERE.
 	//
-	// A NAME RATHER THAN A BOOLEAN, because "did this turn reach anybody"
-	// was never the operational question — "did the party who is waiting
-	// get told" is. A boolean answers the first, and a seat woken by a
-	// Mattermost DM could satisfy it by writing a work item: the founder
-	// was asked to wait, the tracker got a row, and the turn closed having
-	// answered nobody who was listening. The surface is what makes the two
-	// questions distinguishable.
-	//
-	// Empty means the tool delivers nowhere. For an MCP-served tool this
-	// field is unset and the surface is its SERVER — see [deliverySurface].
-	//
-	// A first-party declaration at all because the gate used to key on
-	// ORIGIN — a tool delivered if an MCP server served it — and that was a
-	// proxy for the real question, correct only while every shared surface
-	// was somebody else's product. Worklet breaks the proxy:
-	// commenting on a work item reaches the person who asked, and it is a
-	// builtin.
-	//
-	// Deriving it from Annotations instead was considered and refused. The
-	// classifier reads a write as ReadOnly==No && OpenWorld!=No, which is
-	// exactly the shape of reflect_and_persist — so a derived rule would
-	// let a turn satisfy "did this reach anybody" by writing its own
-	// diary, and a2a_ask (OpenWorld:Yes) would count although the engine
-	// itself carries that answer back. A positive value set at registration
-	// is the only form that says what it means.
+	// A NAME RATHER THAN A BOOLEAN: the question is "did the party who is
+	// waiting get told", not "did this turn reach anybody". Empty means the
+	// tool delivers nowhere; for an MCP tool it is unset and the surface is
+	// its SERVER ([deliverySurface]). First-party because keying on ORIGIN
+	// fails for a builtin that reaches the asker (a work-item comment). Not
+	// derived from Annotations: a write (ReadOnly==No && OpenWorld!=No) is
+	// also reflect_and_persist, a turn's own diary, and a2a_ask would count
+	// though the engine carries its answer back.
 	Surface string
 
 	// ServerDescription is what the operator says this tool's MCP server is
@@ -248,17 +285,15 @@ func NewRegistry() *Registry {
 
 // Clone returns an independent registry holding the same entries.
 //
-// A SEAT'S SURFACE STARTS AS THE COMPANY'S, and then diverges: every seat sees
-// the builtins and the shared MCP servers, and only its own per-role children
-// on top. One flat registry cannot express that, and the failure is not
-// cosmetic — a `shared: false` server is a template that gives each role its
-// own child holding that role's credentials, and two children of one template
-// publish the SAME tool names. In one registry the second shadows the first,
-// so every seat would call whichever won, acting under another seat's identity
-// in the tracker or the chat backend, invisibly. See internal/mcp/instance.go.
+// A SEAT'S SURFACE STARTS AS THE COMPANY'S, then diverges: every seat sees the
+// builtins and shared MCP servers plus only its own per-role children. A flat
+// registry cannot express that: a `shared: false` server is a template giving
+// each role a child with that role's credentials, and two children publish the
+// SAME tool names, so in one registry the second shadows the first and every
+// seat would act under another seat's identity, invisibly. See
+// internal/mcp/instance.go.
 //
-// The entries are copied, not the tools: a Callable is shared by reference,
-// which is what makes a clone per seat cheap rather than a duplicate surface.
+// The entries are copied, not the tools: a Callable is shared by reference.
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -496,24 +531,15 @@ func (r *Registry) MCPNames() []string {
 // Deliveries maps every tool whose successful call can put something in front
 // of somebody outside this turn to the SURFACE it puts it on.
 //
-// TWO KINDS, one question. An MCP-served tool delivers unless its own
-// annotations POSITIVELY say it is a read — the fail-closed direction, because
-// treating unannotated as read would exempt most of a fresh server — and it
-// delivers to its own SERVER, which is the name an inbound notification from
-// that vendor reports itself under. A first-party tool delivers only when it
-// was registered with [DeliversTo], because the engine ships its own tools and
-// knows which of them reach anybody and where: a Worklet work-item comment
-// reaches the tracker, a diary write reaches nobody.
+// TWO KINDS, one question. An MCP-served tool delivers unless its annotations
+// POSITIVELY say it is a read (fail closed), to its own SERVER, the name an
+// inbound notification from that vendor reports itself under. A first-party
+// tool delivers only when registered with [DeliversTo]: a work-item comment
+// reaches the tracker, a diary write nobody.
 //
-// This replaced an origin test. The rule "a delivery only ever comes from an
-// MCP server" was true of a company whose every shared surface was a vendor's,
-// and false the moment the tracker moved in-process: a seat that answered
-// its assignment in Worklet was judged to have reached nobody and looped to
-// failure.
-// Widening it to a flat set of NAMES then bought the opposite error: every
-// deliverable satisfied every obligation, so the tracker write that fixed the
-// first incident discharged a Mattermost DM in the second. A name and a
-// destination are what answer both.
+// Not an origin test (a seat answering in in-process Worklet looped to
+// failure), nor a flat set of NAMES (a tracker write would discharge a
+// Mattermost DM): a name and a destination answer both.
 func (r *Registry) Deliveries() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -560,15 +586,12 @@ func deliverySurface(e Entry) string {
 // write, its server's or an operator's, so the fence counts its call a write
 // though nothing says it is one.
 //
-// A HINT MARKS A WRITE when it is `read_only: false`, or `destructive: true`:
-// a tool that may destroy what it changes changes something. `destructive:
-// false` alone marks neither, and [mcp.WritesToSharedSurface] reads no write
-// in it either: it says only that whatever the tool changes it does not
-// destroy, and a tool that only reads may carry it. [mcp.RiskOf] reads it as a
-// write that only adds, as the specification's default for an absent
-// `read_only` would, because it asks how much a call may change and errs
-// toward more; this asks whether a turn may be told it wrote, and one that
-// only searched, told so, argues with the correction.
+// A HINT MARKS A WRITE when it is `read_only: false`, or `destructive: true`.
+// `destructive: false` alone marks neither: it says only that whatever the
+// tool changes it does not destroy, and a read-only tool may carry it.
+// [mcp.RiskOf] reads it as a write that only adds, since it asks how much a
+// call may change and errs toward more; this asks whether a turn may be told
+// it wrote, and one that only searched, told so, argues with the correction.
 func presumedWrite(e Entry) bool {
 	_, fromMCP := e.FromMCP()
 	return fromMCP && e.Annotations.ReadOnly == mcp.Unknown && e.Annotations.Destructive != mcp.Yes
@@ -594,17 +617,14 @@ func (r *Registry) KnownReads() []string {
 // KnownOpenWorld returns the names POSITIVELY annotated open-world: the tools
 // whose own annotations say they reach entities outside this process.
 //
-// The same positive rule as KnownReads, for the same reason and in the
-// opposite direction. Unknown is not open-world, so this OVER-reports nothing
-// and UNDER-reports a server that annotates nothing — which is the correct
-// asymmetry for its caller: it answers "can we PROVE this left the engine",
-// and a caller that acts on a false positive here would discard work that
-// never went anywhere.
+// The same positive rule as KnownReads, in the opposite direction. Unknown is
+// not open-world, so this OVER-reports nothing and UNDER-reports a server that
+// annotates nothing: the right asymmetry for "can we PROVE this left the
+// engine", where a false positive would discard work that never went anywhere.
 //
-// It is deliberately not [mcp.WritesToSharedSurface]. That function answers a
-// different question with a different default — `ReadOnly == No` and an
-// unknown OpenWorld reads true, so an agent's own diary note counts as a write
-// to a shared surface. Right for the sub-agent guard it serves, wrong here.
+// Deliberately not [mcp.WritesToSharedSurface], whose default differs:
+// `ReadOnly == No` and an unknown OpenWorld reads true, so an agent's own diary
+// note counts. Right for the sub-agent guard it serves, wrong here.
 func (r *Registry) KnownOpenWorld() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -645,30 +665,15 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // Discoverable renders what a phase can reach but does not yet hold: every
 // first-party tool of the snapshot that active does not name, by name and
 // description, and every MCP server with a tool active does not name, by name
-// and what the operator says it is for ([Entry.ServerDescription]), in
-// registration order, or "" when there is nothing to discover.
+// and [Entry.ServerDescription], in registration order, or "" when none.
+// ONLY WHAT IS NOT ACTIVE: an active tool's definition already reaches the
+// model with every request, so a copy in the system prompt is the same words
+// paid twice. MCP servers are named rather than expanded: a server publishes
+// dozens of tools, and discovery being a tool call keeps the prompt prefix
+// stable while a catalogue changes. A server's description says which to look
+// in; a name like `internal` says nothing.
 //
-// ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — as a tool of the harness's `crewlet` MCP
-// server, over the tool bridge to the executor's run in its box and over its
-// phase's tool session for every phase on this host — and a second copy of its
-// description in the system prompt is the same words paid for twice. On the
-// executor, which holds every first-party tool from its launch, that copy was
-// most of its system prompt. What is left is what the model can learn
-// nowhere else: that a server exists, and that a tool it does not hold yet
-// does.
-//
-// MCP servers are named rather than expanded because a real server publishes
-// dozens of tools and a model shown all of them decides against a wall of
-// text. Discovery is a tool call — which is also what keeps the prompt prefix
-// stable while a server's catalogue changes underneath. A server's description
-// is the one line that tells a model which server to look in before it spends
-// a call listing one: a name like `internal` says nothing about what is behind
-// it.
-//
-// OVER A SNAPSHOT, so a phase is shown the universe its own surface was built
-// from: a tool its snapshot leaves out is one it cannot activate, and a
-// catalogue read off the whole registry listed it anyway.
+// OVER A SNAPSHOT: a tool its snapshot leaves out cannot be activated.
 func (s Snapshot) Discoverable(active []string) string {
 	held := make(map[string]bool, len(active))
 	for _, name := range active {

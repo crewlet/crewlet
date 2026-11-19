@@ -183,18 +183,15 @@ func keptByTheStandbyAt(t *testing.T, rig *coordRig, writes *sessionWrites, keep
 // A READ STANDING BY KEEPS THE SESSION WHERE THE READ HOLDING THE PLACE FAILS.
 // A stop's read and a collection's of one job take its session at once: the
 // stop's holds the capture's place, and the collection's, finding that
-// capture begun, takes the session too and stands by for it. Then the read
-// holding the place fails — its scrub refuses its archive, its seal fails, its
-// upload is refused, or its node stops before it uploads — and while it stands
-// refused the turn's end waits, for the standby. The standby's keep then takes
-// the place after it and keeps its own session there: one upload, one record,
-// the standby's, and nothing left in flight or on the node's disk.
+// capture begun, stands by for it. Then the read holding the place fails (its
+// scrub refuses its archive, its seal fails, its upload is refused, or its
+// node stops before it uploads) and the turn's end waits for the standby,
+// whose keep takes the place after it: one upload, one record, the standby's,
+// and nothing left in flight or on the node's disk.
 //
-// Mutation: stand down where another read's capture is found begun, as a read
-// once did, and nothing is kept; have the turn's end's wait pass over a read
-// standing by, and the end would not wait for it; carry no standby on the
-// place-holder's refusal, and the standby finds itself withdrawn and keeps
-// nothing.
+// Mutation: stand down where another read's capture is found begun; have the
+// turn's end's wait pass over a read standing by; carry no standby on the
+// place-holder's refusal, so the standby is withdrawn and keeps nothing.
 func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceFails(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -286,17 +283,15 @@ func (s *settledBegun) SettleBegun(ctx context.Context, turnID string, capture S
 // A READ STANDING BY KEEPS THE SESSION WHERE THE READ HOLDING THE PLACE STOPPED
 // MID-KEEP. The read holding the capture's place was node-a's, which stopped
 // with its capture still begun: its taker lease lapsed, and the turn's row on
-// the executor log names no capture of its. The read standing by, waiting for
-// that capture, settles it from the log as every wait settles one whose taker
-// is gone — refused, its taker stopped — rather than wait out what a capture
-// can take, and keeps its own session in the next place.
+// the executor log names no capture of its. The standby settles that capture
+// from the log (refused, its taker stopped) rather than wait out what a
+// capture can take, and keeps its own session in the next place.
 //
-// IN A SYNCTEST BUBBLE, the wait's reads of the row a tick apart on the
-// bubble's clock, so a standby that waited such a capture out would run out
-// its own budget there, and the case fail on its own assertions.
+// IN A SYNCTEST BUBBLE, a standby that waited such a capture out would run out
+// its own budget on the bubble's clock, and the case fail on its assertions.
 //
 // Mutation: have the standby's wait pass over a capture whose taker is gone,
-// and it waits for as long as that capture could take, and keeps nothing.
+// and it waits as long as that capture could take, and keeps nothing.
 func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceStopped(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -543,19 +538,17 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 }
 
 // A TURN'S END WAITS FOR A STANDBY'S TAKEOVER AND ITS KEEP. The read holding the
-// place keeps for as long as a capture can live and is refused at the end of
-// it; only then does the read standing by for it take the place after it, and
-// its keep of its own session there takes as long as a keep can. The turn's
-// end, a loss's whose box is gone, waits for all of it: once the standby's
-// capture lands it records the end with that capture kept, nothing named
-// unkept and the turn not gone on past it.
+// place keeps as long as a capture can live and is refused at the end of it;
+// only then does the standby take the place after it, and its keep takes as
+// long as a keep can. The turn's end, a loss's whose box is gone, waits for
+// all of it, then records the end with the standby's capture kept, nothing
+// named unkept and the turn not gone on past it.
 //
-// IN A SYNCTEST BUBBLE, so the end's wait and the two keeps run on the bubble's
-// clock, which only their own waits advance.
+// IN A SYNCTEST BUBBLE, so the waits run on the bubble's clock.
 //
 // Mutation: hold the end's wait to one capture's life from its own start, and
-// it gives up on the standby's keep and records the end ahead of it, naming
-// the standby's capture begun and never finished.
+// it records the end ahead of the standby's keep, naming its capture begun and
+// never finished.
 func TestATurnsEndWaitsForAStandbysTakeoverAndKeep(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1043,20 +1036,16 @@ func (s *unansweredReadBack) readBack() (began, cut time.Time) {
 
 // A TAKEOVER LEFT UNANSWERED READS ITS ROW WITHIN A CHANGE OF IT: a record's
 // budget and this node's crossing of the row at its bound
-// ([Coordinator.rowContext]). The store made the standby's takeover and never
-// said so, then told it its standby was no longer there to withdraw, and never
-// answered the read of the row that would say whether the place is its own.
-// That read is a step of the takeover's life, which every reader of a begun
-// capture holds to a bound, and the keep's context has no deadline before its
-// budget starts, after it: held to that context alone, it waited for as long
-// as the store did not answer, the place begun and the keep behind it held
-// with it. Here the read is cut exactly that room after it began, and the keep
-// ends keeping nothing, as where the row could not be read. Exact, in a
-// bubble.
+// ([Coordinator.rowContext]). The store made the standby's takeover without
+// saying so, then never answered the read of the row that says whether the
+// place is its own. Every reader of a begun capture holds that read to a
+// bound, and the keep's context has no deadline before its budget starts, so
+// held to it alone the read waited as long as the store stayed silent. Here
+// it is cut exactly that room after it began (exact, in a bubble).
 //
-// Mutation: read the row under the keep's context alone, and the keep is still
-// waiting a minute past the read's room; give the read more room than one
-// change of the row, and it is cut late.
+// Mutation: read the row under the keep's context alone, and the keep waits
+// a minute past the read's room; give the read more room than one change of
+// the row, and it is cut late.
 func TestATakeoverLeftUnansweredReadsItsRowWithinAChangeOfIt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1208,14 +1197,12 @@ func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 // A READ STANDING BY TAKES OVER A CAPTURE BEGUN PAST WHAT ANY NODE'S CLOCK READS
 // A CAPTURE AS ABLE TO TAKE. The read holding the place is node-a's, whose
 // taker lease still holds, and its capture has stood begun longer than any
-// node's clock reads a capture as able to take ([SessionCaptureBudget]): it
-// will come to nothing a standby could wait for. The standby takes the place after it and
-// keeps its own session there, rather than wait out its own time and keep
-// nothing.
+// node's clock reads a capture as able to take ([SessionCaptureBudget]), so
+// the standby takes the place after it and keeps its own session there,
+// rather than wait out its own time and keep nothing.
 //
-// IN A SYNCTEST BUBBLE, so a standby that waited for such a capture would run
-// out its own budget on the bubble's clock, and the case fail on its own
-// assertions.
+// IN A SYNCTEST BUBBLE, so a standby that waited would run out its own budget
+// on the bubble's clock.
 //
 // Mutation: wait for a begun capture however long it has stood, and the
 // standby's wait runs out and it keeps nothing.

@@ -107,17 +107,15 @@ func withImages(in Invocation, res Result) Result {
 // call is THE ONE PLACE a tool's own call is made, telling the tool who is
 // calling when it asks.
 //
-// THE SEAT COMES FROM THE CALLER, never from the arguments. A tool that acts
-// for a seat (asking a colleague, marking an onboarding step, writing to a
-// diary) must not be able to be pointed at another one by a model that
-// spelled a different handle in its arguments. A phase's surface is built per
-// turn by the runner, which is the frame that knows.
+// THE SEAT COMES FROM THE CALLER, never from the arguments: a tool that acts
+// for a seat (asking a colleague, writing a diary) must not be pointable at
+// another by a model that spelled a different handle. A phase's surface is
+// built per turn by the runner, the frame that knows.
 //
-// An OPTIONAL interface rather than a parameter on Callable, because Callable
-// is the MCP tool contract as well: an MCP server has no notion of a turn, and
-// widening the signature would put a turn-shaped argument on every bridged
-// tool to be ignored. This way the two kinds of tool coexist under one
-// registry, and the one that needs the fact asks for it.
+// An OPTIONAL interface rather than a parameter on Callable, the MCP tool
+// contract too: an MCP server has no notion of a turn, and widening the
+// signature would put a turn-shaped argument on every bridged tool. Both kinds
+// coexist under one registry; the tool that needs the fact asks for it.
 func call(ctx context.Context, in Invocation) (Result, error) {
 	if t, ok := in.Tool.(SeatCallable); ok && in.AsSeat {
 		return t.CallForTurn(ctx, in.Turn, in.Args.Map())
