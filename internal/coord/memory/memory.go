@@ -123,6 +123,9 @@ type claim struct {
 	id       uint64
 	owner    string
 	protocol int
+	// meta is what the new tenure is written with, computed as the claim was
+	// decided, from the row it replaces.
+	meta map[string]any
 }
 
 func (r *record) live(now time.Time) bool { return r.expiresAt.After(now) }
@@ -171,6 +174,15 @@ func (r *record) lease() coord.Lease {
 	}
 }
 
+// copied is the row as a caller may keep it: its meta copied, for lease's
+// reason, and no claim, which is the store's own.
+func (r *record) copied() *record {
+	out := *r
+	out.meta = copyMeta(r.meta)
+	out.claiming = nil
+	return &out
+}
+
 // Advance moves the store's clock forward. It is the coordtest.Advancer hook:
 // the contract suite lapses a lease by outlasting its TTL, and this is how it
 // does that without sleeping.
@@ -210,9 +222,51 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 		return nil, "", err
 	}
 	opts.Meta = wire
-	lease, refused, pending, err := b.decide(resource, opts)
+	c, err := b.tryAcquire(ctx, resource, opts, keptMeta(opts.Meta))
+	return c.lease, c.refused, err
+}
+
+// metaRule is the meta a claim writes, computed under the lock from the row it
+// replaces: prior, nil where there is none, and held, whether prior is the
+// claiming owner's live tenure, which the claim keeps.
+type metaRule func(prior *record, held bool) (map[string]any, error)
+
+// keptMeta is TryAcquire's rule for the meta a claim writes: the caller's, or,
+// where it hands none, the row's own. A renew that forgets a node's profile
+// must not un-label it, which peers read as matching no placement.
+func keptMeta(meta map[string]any) metaRule {
+	return func(prior *record, _ bool) (map[string]any, error) {
+		if len(meta) == 0 && prior != nil {
+			return prior.meta, nil
+		}
+		return meta, nil
+	}
+}
+
+// claimed is what [Backend.tryAcquire] decided: the contract's answer, and what
+// a typed claim reads beside it.
+type claimed struct {
+	lease   *coord.Lease
+	refused coord.Refusal
+
+	// fresh reports that a grant began a new tenure rather than keeping the
+	// owner's live one.
+	fresh bool
+
+	// refuser is the row a coord.RefusedHeld was decided on as it stood, and now
+	// the store's clock it was judged at.
+	refuser record
+	now     time.Time
+}
+
+// tryAcquire is [Backend.TryAcquire] past its checks of the caller's own
+// arguments, with the meta a claim writes computed by metaOf.
+func (b *Backend) tryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions,
+	metaOf metaRule) (claimed, error) {
+
+	c, pending, err := b.decide(resource, opts, metaOf)
 	if err != nil || pending == nil {
-		return lease, refused, err
+		return c, err
 	}
 	// THE MARKER IS GIVEN BACK ON EVERY EXIT, a counter that panics
 	// included: left set, it held the resource against every claimant, its
@@ -222,12 +276,12 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 	defer b.giveBack(resource, pending)
 	// THE ONE STEP OUTSIDE THE LOCK: see the package doc.
 	epoch, err := b.next(ctx, resource)
-	lease, err = b.commit(resource, opts, pending, epoch, err)
+	lease, err := b.commit(resource, opts, pending, epoch, err)
 	if err != nil {
-		return nil, "", err
+		return claimed{}, err
 	}
 	log.DebugContext(ctx, "lease_acquired", "resource", resource, "owner", opts.Owner, "epoch", lease.Epoch)
-	return lease, "", nil
+	return claimed{lease: lease, fresh: true}, nil
 }
 
 // next mints resource's next token from [Backend.Epochs], or from this
@@ -256,8 +310,9 @@ func (b *Backend) next(ctx context.Context, resource string) (int64, error) {
 // decide is a claim's first half, under the lock: a refusal, a renew of a
 // lease the owner still holds (which keeps its token and is the whole answer),
 // or a CLAIM set on the record, for [Backend.commit] to finish once a new
-// token is minted.
-func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, *claim, error) {
+// token is minted. metaOf computes what either grant writes, before anything
+// is written.
+func (b *Backend) decide(resource string, opts coord.AcquireOptions, metaOf metaRule) (claimed, *claim, error) {
 	protocol := opts.EffectiveProtocol()
 
 	b.mu.Lock()
@@ -273,14 +328,14 @@ func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lea
 		// whatever the gate would say: a claim that cannot write has
 		// nothing for a gate to stop. First, so the twin gives the reason
 		// the KV backend gives (see coord.RefusedHeld).
-		return nil, coord.RefusedHeld, nil, nil
+		return claimed{refused: coord.RefusedHeld, refuser: *row.copied(), now: now}, nil, nil
 	}
 	if row != nil && row.claiming != nil {
 		// THIS OWNER is already minting a token for it, on another call.
 		// Neither a grant nor a refusal is true yet, so it is the third
 		// answer, as the KV store gives an owner whose sibling claim is
 		// one round trip from committing.
-		return nil, "", nil, fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight,
+		return claimed{}, nil, fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight,
 			resource, opts.Owner)
 	}
 
@@ -293,18 +348,23 @@ func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lea
 	if !opts.Ungated {
 		for _, r := range b.rows {
 			if held, ok := r.gated(now); ok && held < protocol {
-				return nil, coord.RefusedProtocol, nil, nil
+				return claimed{refused: coord.RefusedProtocol}, nil, nil
 			}
 		}
 	}
 
-	if row != nil && row.live(now) {
+	held := row != nil && row.live(now)
+	meta, err := claimMeta(resource, metaOf, row, held)
+	if err != nil {
+		return claimed{}, nil, err
+	}
+	if held {
 		// An unbroken same-owner hold keeps its epoch: nothing was ever
 		// unowned, so the holder's in-flight work stayed covered. This
 		// branch is also the renew path — a claim doubles as one.
-		b.write(row, opts, now)
+		b.write(row, opts, meta, now)
 		lease := row.lease()
-		return &lease, "", nil, nil
+		return claimed{lease: &lease}, nil, nil
 	}
 
 	// Unclaimed, a takeover, or this same owner re-claiming after its own
@@ -315,8 +375,22 @@ func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lea
 		b.rows[resource] = row
 	}
 	b.claims++
-	row.claiming = &claim{id: b.claims, owner: opts.Owner, protocol: protocol}
-	return nil, "", row.claiming, nil
+	row.claiming = &claim{id: b.claims, owner: opts.Owner, protocol: protocol, meta: meta}
+	return claimed{}, row.claiming, nil
+}
+
+// claimMeta is what metaOf answers for a claim of resource over prior, held to
+// what a lease carries and put through the wire, as TryAcquire holds and puts
+// a caller's own meta at the door: whoever computed it, it is what is written.
+func claimMeta(resource string, metaOf metaRule, prior *record, held bool) (map[string]any, error) {
+	meta, err := metaOf(prior, held)
+	if err != nil {
+		return nil, err
+	}
+	if err = coord.HoldLeaseMeta(resource, meta); err != nil {
+		return nil, err
+	}
+	return wireCopy(meta)
 }
 
 // commit is a claim's second half: it gives the record back when no token
@@ -347,7 +421,7 @@ func (b *Backend) commit(resource string, opts coord.AcquireOptions, pending *cl
 	// A new token is a new tenure, so it gets its own start.
 	now := b.now()
 	row.epoch, row.acquiredAt = epoch, now
-	b.write(row, opts, now)
+	b.write(row, opts, pending.meta, now)
 	lease := row.lease()
 	return &lease, nil
 }
@@ -362,8 +436,9 @@ func (b *Backend) giveBack(resource string, pending *claim) {
 	}
 }
 
-// write sets what every grant sets, a renew's included.
-func (b *Backend) write(row *record, opts coord.AcquireOptions, now time.Time) {
+// write sets what every grant sets, a renew's included: meta is what the
+// claim's metaOf computed ([keptMeta] for TryAcquire's).
+func (b *Backend) write(row *record, opts coord.AcquireOptions, meta map[string]any, now time.Time) {
 	row.owner = opts.Owner
 	row.expiresAt = now.Add(opts.TTL)
 	row.protocol = opts.EffectiveProtocol()
@@ -372,13 +447,7 @@ func (b *Backend) write(row *record, opts coord.AcquireOptions, now time.Time) {
 	if opts.Preferred != "" {
 		row.preferred = opts.Preferred
 	}
-	// An empty payload keeps what is there — a rule about the PAYLOAD, not
-	// about which resource carries it. A renew that forgets to re-send a
-	// node's profile must not silently un-label it mid-flight, which peers
-	// would read as a node matching no placement at all.
-	if len(opts.Meta) > 0 {
-		row.meta = copyMeta(opts.Meta)
-	}
+	row.meta = copyMeta(meta)
 	b.wrote(row)
 }
 
@@ -390,7 +459,12 @@ func (b *Backend) Renew(ctx context.Context, resource, owner string, epoch int64
 	if err := validateTTL(resource, owner, ttl); err != nil {
 		return false, err
 	}
+	return b.renew(resource, owner, epoch, ttl) != nil, nil
+}
 
+// renew is [Backend.Renew] past its checks, answering the row as renewed, or
+// nil where the lease is definitively not the caller's.
+func (b *Backend) renew(resource, owner string, epoch int64, ttl time.Duration) *record {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
@@ -400,11 +474,11 @@ func (b *Backend) Renew(ctx context.Context, resource, owner string, epoch int64
 	// the lapse opened. Renewing across it would silently re-cover work
 	// that ran unprotected.
 	if row == nil || row.owner != owner || row.epoch != epoch || !row.live(now) {
-		return false, nil
+		return nil
 	}
 	row.expiresAt = now.Add(ttl)
 	b.wrote(row)
-	return true, nil
+	return row.copied()
 }
 
 // Release gives up a lease, predicated on owner AND epoch.
@@ -415,14 +489,22 @@ func (b *Backend) Release(ctx context.Context, resource, owner string, epoch int
 	if err := validate(resource, owner); err != nil {
 		return false, err
 	}
-	if !b.release(resource, owner, epoch) {
-		return false, nil
+	released, err := b.release(resource, owner, epoch, nil)
+	if err != nil || released == nil {
+		return false, err
 	}
 	log.DebugContext(ctx, "lease_released", "resource", resource, "owner", owner, "epoch", epoch)
 	return true, nil
 }
 
-func (b *Backend) release(resource, owner string, epoch int64) bool {
+// releaseMark edits a row's meta as a release is about to clear its owner,
+// keeping the keys it does not set; an error leaves the row as it was.
+type releaseMark func(row *record) error
+
+// release gives up a lease under the lock, mark, where set, editing the row
+// first, and answers the row as released, or nil where the lease was not the
+// caller's to give up.
+func (b *Backend) release(resource, owner string, epoch int64, mark releaseMark) (*record, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	row := b.rows[resource]
@@ -436,7 +518,12 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 	// answered true here while the KV backend answered false, and no case
 	// sent the operation that would have shown it.
 	if row == nil || row.owner != owner || row.epoch != epoch || !row.live(b.now()) {
-		return false
+		return nil, nil
+	}
+	if mark != nil {
+		if err := mark(row); err != nil {
+			return nil, err
+		}
 	}
 	// Expire in place, never delete. The epoch counter has to be monotonic
 	// for the lifetime of the RESOURCE, not of a record — and expiring
@@ -445,7 +532,7 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 	row.owner = ""
 	row.expiresAt = b.now()
 	b.wrote(row)
-	return true
+	return row.copied(), nil
 }
 
 // Get reads a resource's live lease, or nil when nothing holds it.

@@ -933,14 +933,59 @@ func (s *Store) laneOf(class coord.Class) *lane {
 // TryAcquire claims resource for the owner, or reports that someone else holds
 // it.
 func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+	c, err := s.tryAcquire(ctx, resource, opts, keptMeta(opts.Meta), nil)
+	return c.lease, c.refused, err
+}
+
+// metaRule is the Meta a claim writes, computed in its round from the record it
+// is about to replace: prior, nil where there is none, and held, whether prior
+// is the claiming owner's live tenure, which the claim keeps.
+type metaRule func(prior *entry, held bool) (map[string]any, error)
+
+// tombMark edits the tombstone a release or a claim's give-back leaves over prior,
+// before the one write that leaves it: its Meta, keeping the keys it does not set.
+type tombMark func(prior entry, tomb *leaseValue) error
+
+// keptMeta is TryAcquire's rule for the Meta a claim writes: the caller's, or,
+// where it hands none, the prior record's. A renew that forgets a node's profile
+// must not un-label it, which peers read as matching no placement.
+func keptMeta(meta map[string]any) metaRule {
+	return func(prior *entry, _ bool) (map[string]any, error) {
+		if len(meta) == 0 && prior != nil {
+			return prior.value.Meta, nil
+		}
+		return meta, nil
+	}
+}
+
+// claimed is what [Store.tryAcquire] decided: the contract's answer, and what a
+// typed claim reads beside it with no second round trip.
+type claimed struct {
+	lease   *coord.Lease
+	refused coord.Refusal
+
+	// fresh reports that a grant began a new tenure rather than keeping the
+	// owner's live one.
+	fresh bool
+
+	// refuser is the record a coord.RefusedHeld was decided on, and the clock it
+	// was judged on; mine is nil where the read-back found none.
+	refuser snapshot
+}
+
+// tryAcquire is [Store.TryAcquire] with the Meta a claim writes computed by
+// metaOf, and with mark editing the tombstone a failed claim gives back.
+func (s *Store) tryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions,
+	metaOf metaRule, mark tombMark) (claimed, error) {
+
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, opts.Owner, opts.TTL); err != nil {
-		return nil, "", err
+		return claimed{}, err
 	}
 	// A Meta past what a lease carries is refused before anything is sent, as
 	// the twin does: a definite answer, which [unavailable] passes unmarked.
 	if err := coord.HoldLeaseMeta(resource, opts.Meta); err != nil {
-		return nil, "", err
+		return claimed{}, err
 	}
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
@@ -954,20 +999,20 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// without reading, and a record that moved refuses the write.
 		snap, err := s.claimSnapshot(ctx, l, resource, opts.Owner, attempt == 0)
 		if err != nil {
-			return nil, "", err
+			return claimed{}, err
 		}
 
 		mine := snap.mine
 		held := false
 		if mine != nil {
 			if held, err = s.held(ctx, *mine, snap.clock); err != nil {
-				return nil, "", err
+				return claimed{}, err
 			}
 		}
 		if held && mine.value.Owner != opts.Owner {
 			// A PEER HOLDS IT (coord.RefusedHeld) whatever the gate says, so no gate
 			// is judged and a sweep over peers' seats never starts the gate view.
-			return nil, coord.RefusedHeld, nil
+			return claimed{refused: coord.RefusedHeld, refuser: snap}, nil
 		}
 		// The gate, fleet-wide (coord.ProtocolGateCounts): the disagreement is
 		// about what HOLDING A SEAT means, not about this resource. It only looks
@@ -975,10 +1020,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		if !opts.Ungated {
 			blocked, gateErr := s.gate.blocked(ctx, protocol)
 			if gateErr != nil {
-				return nil, "", gateErr
+				return claimed{}, gateErr
 			}
 			if blocked {
-				return nil, coord.RefusedProtocol, nil
+				return claimed{refused: coord.RefusedProtocol}, nil
 			}
 		}
 		sibling = held && mine.value.Epoch == claimingEpoch
@@ -996,19 +1041,18 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			TTLNanos:  int64(opts.TTL),
 			Protocol:  protocol,
 			Preferred: opts.Preferred,
-			Meta:      opts.Meta,
 		}
-		if mine != nil {
-			// An empty payload keeps what is there: a renew that forgets a node's
-			// profile must not un-label it, which peers read as matching no
-			// placement. Likewise a claim naming no node keeps the last DELIBERATE
-			// placement hint.
-			if len(opts.Meta) == 0 {
-				value.Meta = mine.value.Meta
-			}
-			if opts.Preferred == "" {
-				value.Preferred = mine.value.Preferred
-			}
+		if mine != nil && opts.Preferred == "" {
+			// A claim naming no node keeps the last DELIBERATE placement hint.
+			value.Preferred = mine.value.Preferred
+		}
+		// The bound holds what is written, whoever computed it: refused before
+		// this round writes anything, as at the top.
+		if value.Meta, err = metaOf(mine, held); err != nil {
+			return claimed{}, err
+		}
+		if err = coord.HoldLeaseMeta(resource, value.Meta); err != nil {
+			return claimed{}, err
 		}
 
 		if held {
@@ -1020,13 +1064,13 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// The hint moved within the tenure: pin it on the epoch record FIRST,
 				// so that bucket is never behind (PreferredResources reads only it).
 				if err = s.counter.pin(ctx, coord.CounterResource(resource), opts.Preferred); err != nil {
-					return nil, "", err
+					return claimed{}, err
 				}
 			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			data, err := encodeValue(value)
 			if err != nil {
-				return nil, "", err
+				return claimed{}, err
 			}
 			// Update at the read revision is the fencing CAS: it fails if
 			// anything at all wrote the record since we read it.
@@ -1035,7 +1079,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 					continue
 				}
-				return nil, "", unavailable("renew lease "+resource, err)
+				return claimed{}, unavailable("renew lease "+resource, err)
 			}
 			return s.settle(ctx, l, resource, value, opts, protocol, false)
 		}
@@ -1057,7 +1101,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		claiming.Claim = uuid.NewString()
 		claimData, err := encodeValue(claiming)
 		if err != nil {
-			return nil, "", err
+			return claimed{}, err
 		}
 		var rev uint64
 		if mine == nil {
@@ -1066,8 +1110,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 					continue
 				}
 				err = unavailable("create lease "+resource, err)
-				s.abandon(ctx, l, resource, claiming, mine, err)
-				return nil, "", err
+				s.abandon(ctx, l, resource, claiming, mine, mark, err)
+				return claimed{}, err
 			}
 		} else {
 			if rev, err = l.kv.Update(ctx, key, claimData, mine.revision); err != nil {
@@ -1075,8 +1119,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 					continue
 				}
 				err = unavailable("claim lease "+resource, err)
-				s.abandon(ctx, l, resource, claiming, mine, err)
-				return nil, "", err
+				s.abandon(ctx, l, resource, claiming, mine, mark, err)
+				return claimed{}, err
 			}
 		}
 
@@ -1089,8 +1133,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		if err != nil {
 			// No token was minted; the claiming record goes back, or a read the
 			// caller gave up on would hold the resource against its owner for a TTL.
-			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, "", err
+			s.abandon(ctx, l, resource, claiming, mine, mark, err)
+			return claimed{}, err
 		}
 		if taken {
 			continue
@@ -1108,15 +1152,15 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		if err != nil {
 			// A counter value taken is a harmless gap; the claiming record left
 			// behind would hold the resource for its TTL.
-			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, "", err
+			s.abandon(ctx, l, resource, claiming, mine, mark, err)
+			return claimed{}, err
 		}
 		value.Epoch = epoch
 		value.Preferred = hint
 		data, err := encodeValue(value)
 		if err != nil {
-			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, "", err
+			s.abandon(ctx, l, resource, claiming, mine, mark, err)
+			return claimed{}, err
 		}
 		if _, err := l.kv.Update(ctx, key, data, rev); err != nil {
 			// Our claiming record lapsed and was taken; the minted token is a
@@ -1128,17 +1172,17 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// claimless record and the next claim renews it; if not, the claiming
 			// record goes back.
 			err = unavailable("commit lease "+resource, err)
-			s.abandon(ctx, l, resource, claiming, mine, err)
-			return nil, "", err
+			s.abandon(ctx, l, resource, claiming, mine, mark, err)
+			return claimed{}, err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
 	if sibling {
 		// THE LAST ROUND MET THIS OWNER'S OWN CLAIM STILL MINTING: the
 		// unknown arm, named for what it is (see coord.ErrClaimInFlight).
-		return nil, "", fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight, resource, opts.Owner)
+		return claimed{}, fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight, resource, opts.Owner)
 	}
-	return nil, "", contended("TryAcquire", resource)
+	return claimed{}, contended("TryAcquire", resource)
 }
 
 // claimedAt is the store's timestamp on revision rev of resource's record,
@@ -1170,34 +1214,34 @@ func (s *Store) settle(
 	opts coord.AcquireOptions,
 	protocol int,
 	fresh bool,
-) (*coord.Lease, coord.Refusal, error) {
+) (claimed, error) {
 	snap, err := s.readForClaim(ctx, l, resource)
 	if err != nil {
-		return nil, "", err
+		return claimed{}, err
 	}
 	mine := snap.mine
 	if mine == nil || mine.value.Owner != want.Owner || mine.value.Epoch != want.Epoch {
 		// Superseded between write and read-back (only with a TTL that lapses
 		// inside a round trip): by the time we looked, it was not ours.
-		return nil, coord.RefusedHeld, nil
+		return claimed{refused: coord.RefusedHeld, refuser: snap}, nil
 	}
 	if !opts.Ungated {
 		blocked, err := s.gate.blocked(ctx, protocol)
 		if err != nil {
-			return nil, "", err
+			return claimed{}, err
 		}
 		if blocked {
 			if err := s.yield(ctx, resource, want, protocol, fresh); err != nil {
-				return nil, "", err
+				return claimed{}, err
 			}
-			return nil, coord.RefusedProtocol, nil
+			return claimed{refused: coord.RefusedProtocol}, nil
 		}
 	}
 	// THE READ-BACK IS WHAT IS KNOWN, never the value written: it is the
 	// leader's newest, so a sibling's renewal that landed in between is the
 	// revision the next renewal writes at.
 	s.known.remember(l, resource, mine.revision, mine.value)
-	return mine.lease(), "", nil
+	return claimed{lease: mine.lease(), fresh: fresh}, nil
 }
 
 // claimSnapshot is what a claim's round decides on: on the first round, the
@@ -1241,13 +1285,14 @@ func (s *Store) yield(ctx context.Context, resource string, want leaseValue, pro
 // claim, and where the claiming write has not landed yet (a cancelled
 // caller's request can land after the give-back looked) it writes against
 // that write's own expectation, so the late write is refused. A refused
-// give-back leaves the record to lapse on its TTL, and says so.
+// give-back leaves the record to lapse on its TTL, and says so. mark is the
+// claim's, nil for TryAcquire's.
 func (s *Store) abandon(ctx context.Context, l *lane, resource string, claiming leaseValue,
-	over *entry, cause error) {
+	over *entry, mark tombMark, cause error) {
 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.js.Options().DefaultTimeout)
 	defer cancel()
-	gaveBack, err := s.giveBack(ctx, l, resource, claiming, over)
+	gaveBack, err := s.giveBack(ctx, l, resource, claiming, over, mark)
 	switch {
 	case err != nil:
 		log.WarnContext(ctx, "coord_kv_claim_abandon_failed", "resource", resource,
@@ -1265,9 +1310,10 @@ func (s *Store) abandon(ctx context.Context, l *lane, resource string, claiming 
 // expected (no live record for a create, the same revision for a takeover);
 // it reports whether it wrote. over is the record the claiming write was made
 // over, nil for a create. Each write is at the revision read, so a record
-// that moved in between is read again.
+// that moved in between is read again. mark, where set, edits the tombstone
+// written over a record that is there.
 func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming leaseValue,
-	over *entry) (bool, error) {
+	over *entry, mark tombMark) (bool, error) {
 
 	key := encodeResource(resource)
 	for range casAttempts {
@@ -1293,6 +1339,11 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 		}
 		tomb.Owner, tomb.Claim = "", ""
 		tomb.TTLNanos = int64(l.maxTTL)
+		if mark != nil && e != nil {
+			if err = mark(*e, &tomb); err != nil {
+				return false, err
+			}
+		}
 		data, err := encodeValue(tomb)
 		if err != nil {
 			return false, err
@@ -1326,42 +1377,56 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 // one write at its revision decides; otherwise, or once that write loses its
 // comparison, it reads the record and decides.
 func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {
+	w, err := s.renew(ctx, resource, owner, epoch, ttl)
+	return w != nil, err
+}
+
+// writtenRecord is a record a write of this store left: its value and the revision
+// the broker gave it.
+type writtenRecord struct {
+	revision uint64
+	value    leaseValue
+}
+
+// renew is [Store.Renew], answering the record it wrote, or nil where the
+// lease is definitively not the caller's.
+func (s *Store) renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (*writtenRecord, error) {
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, owner, ttl); err != nil {
-		return false, err
+		return nil, err
 	}
 	key := encodeResource(resource)
 
 	if known, ok := s.known.lookup(l, resource, owner); ok && known.value.Epoch == epoch {
-		if renewed, decided, err := s.renewKnown(ctx, l, key, known, ttl); decided {
-			return renewed, err
+		if w, decided, err := s.renewKnown(ctx, l, key, known, ttl); decided {
+			return w, err
 		}
 	}
 
 	for range casAttempts {
 		e, err := s.readOne(ctx, l, resource)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		// A lapsed lease is NOT renewable: only a re-acquire, minting a new
 		// epoch, fences the gap. Owner AND epoch, because a zombie heartbeat
 		// from before the gap carries the same owner.
 		if e == nil || e.value.Owner != owner || e.value.Epoch != epoch {
 			s.known.forgetTenure(resource, owner, epoch)
-			return false, nil
+			return nil, nil
 		}
 		live, err := s.tenure(ctx, *e, s.newClock())
 		if err != nil || !live {
 			if err == nil {
 				s.known.forgetTenure(resource, owner, epoch)
 			}
-			return false, err
+			return nil, err
 		}
 		value := e.value
 		value.TTLNanos = int64(ttl)
 		data, err := encodeValue(value)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		rev, err := l.kv.Update(ctx, key, data, e.revision)
 		if err != nil {
@@ -1371,26 +1436,26 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
-			return false, unavailable("renew "+resource, err)
+			return nil, unavailable("renew "+resource, err)
 		}
 		s.known.remember(l, resource, rev, value)
-		return true, nil
+		return &writtenRecord{revision: rev, value: value}, nil
 	}
-	return false, contended("Renew", resource)
+	return nil, contended("Renew", resource)
 }
 
 // renewKnown renews the record this store last wrote ([knownRecords]) with one
-// write at its revision. decided is false when that write lost its comparison
-// (the record moved, which says nothing about who holds it), so the caller
-// reads and decides; any other failure is unknown.
+// write at its revision, answering the record it wrote. decided is false when
+// that write lost its comparison (the record moved, which says nothing about
+// who holds it), so the caller reads and decides; any other failure is unknown.
 func (s *Store) renewKnown(ctx context.Context, l *lane, key string, known entry,
-	ttl time.Duration) (renewed, decided bool, err error) {
+	ttl time.Duration) (w *writtenRecord, decided bool, err error) {
 
 	value := known.value
 	value.TTLNanos = int64(ttl)
 	data, err := encodeValue(value)
 	if err != nil {
-		return false, true, err
+		return nil, true, err
 	}
 	if s.beforeKnownWrite != nil {
 		s.beforeKnownWrite(known.resource)
@@ -1399,14 +1464,14 @@ func (s *Store) renewKnown(ctx context.Context, l *lane, key string, known entry
 	switch {
 	case err == nil:
 		s.known.remember(l, known.resource, rev, value)
-		return true, true, nil
+		return &writtenRecord{revision: rev, value: value}, true, nil
 	case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
 		s.known.forgetAt(known.resource, known.revision)
-		return false, false, nil
+		return nil, false, nil
 	default:
 		// It may have landed, at a revision nobody told us.
 		s.known.forgetAt(known.resource, known.revision)
-		return false, true, unavailable("renew "+known.resource, err)
+		return nil, true, unavailable("renew "+known.resource, err)
 	}
 }
 
@@ -1415,8 +1480,16 @@ func (s *Store) renewKnown(ctx context.Context, l *lane, key string, known entry
 // deleting the key, and never touches the epochs bucket: the counter must be
 // monotonic for the RESOURCE's lifetime, not a record's.
 func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
+	w, err := s.release(ctx, resource, owner, epoch, nil)
+	return w != nil, err
+}
+
+// release is [Store.Release] with mark, where set, editing the tombstone before
+// its write, answering the tombstone it wrote, or nil where the lease was not
+// the caller's to give up.
+func (s *Store) release(ctx context.Context, resource, owner string, epoch int64, mark tombMark) (*writtenRecord, error) {
 	if err := validate(resource, owner); err != nil {
-		return false, err
+		return nil, err
 	}
 	l := s.laneFor(resource)
 	key := encodeResource(resource)
@@ -1426,16 +1499,16 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 	for range casAttempts {
 		e, err := s.readOne(ctx, l, resource)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		// Unqualified, a departing owner or a straggler from the previous
 		// tenure would clear its SUCCESSOR's live lease mid-turn.
 		if e == nil || e.value.Owner != owner || e.value.Epoch != epoch {
-			return false, nil
+			return nil, nil
 		}
 		live, err := s.tenure(ctx, *e, s.newClock())
 		if err != nil || !live {
-			return false, err
+			return nil, err
 		}
 		tomb := e.value
 		tomb.Owner = ""
@@ -1443,20 +1516,26 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 		// is unheld; MaxAge reaps it), and the kept hint and epoch keep a
 		// just-released resource's placement.
 		tomb.TTLNanos = int64(l.maxTTL)
+		if mark != nil {
+			if err = mark(*e, &tomb); err != nil {
+				return nil, err
+			}
+		}
 		data, err := encodeValue(tomb)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		if _, err := l.kv.Update(ctx, key, data, e.revision); err != nil {
+		rev, err := l.kv.Update(ctx, key, data, e.revision)
+		if err != nil {
 			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 				continue
 			}
-			return false, unavailable("release "+resource, err)
+			return nil, unavailable("release "+resource, err)
 		}
 		log.DebugContext(ctx, "coord_kv_lease_released", "resource", resource, "owner", owner, "epoch", epoch)
-		return true, nil
+		return &writtenRecord{revision: rev, value: tomb}, nil
 	}
-	return false, contended("Release", resource)
+	return nil, contended("Release", resource)
 }
 
 // Get reads a resource's live lease, or nil when nothing holds it. A lapsed or

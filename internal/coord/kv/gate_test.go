@@ -261,10 +261,10 @@ func TestTheProtocolReCheckGivesBackOnlyANewClaim(t *testing.T) {
 			}
 
 			want := leaseValue{Resource: seat, Owner: "new:1", Epoch: lease.Epoch}
-			got, refused, err := s.settle(ctx, s.leases, seat, want, opts, newerProtocol, tc.fresh)
-			if err != nil || got != nil || refused != coord.RefusedProtocol {
+			got, err := s.settle(ctx, s.leases, seat, want, opts, newerProtocol, tc.fresh)
+			if err != nil || got.lease != nil || got.refused != coord.RefusedProtocol {
 				t.Fatalf("settle beside a lower-protocol node = (%v, %q, %v), want a refusal %q",
-					got, refused, err, coord.RefusedProtocol)
+					got.lease, got.refused, err, coord.RefusedProtocol)
 			}
 			current, err := s.Get(ctx, seat)
 			if err != nil {
