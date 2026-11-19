@@ -6,7 +6,7 @@
 
 **Run an AI agent company.**
 
-Crewlet is a source-available Go engine for orchestrating hierarchically organized
+Crewlet is an open-source Go engine for orchestrating hierarchically organized
 AI agent companies. You describe a company in YAML — mission, org chart, roles,
 policies, integrations — and Crewlet runs it: one persistent agent per seat,
 planning and executing real work in chat, your issue tracker, and your code host,
@@ -14,7 +14,7 @@ learning from what it did, and escalating to the humans in the org chart when st
 
 [![Release](https://img.shields.io/github/v/release/crewlet/crewlet?style=flat-square&color=7c56ff&label=release)](https://github.com/crewlet/crewlet/releases)
 [![CI](https://github.com/crewlet/crewlet/actions/workflows/ci.yml/badge.svg)](https://github.com/crewlet/crewlet/actions/workflows/ci.yml)
-[![License: PolyForm Shield License 1.0.0](https://img.shields.io/badge/license-PolyForm%20Shield%20License%201.0.0-7c56ff?style=flat-square)](https://polyformproject.org/licenses/shield/1.0.0)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-7c56ff?style=flat-square)](LICENSE)
 [![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-7c56ff?style=flat-square)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-read-7c56ff?style=flat-square)](docs/index.md)
 
@@ -399,14 +399,9 @@ Security issues: please report them privately — see [SECURITY.md](SECURITY.md)
 
 ## License
 
-Crewlet is source-available under the
-[PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0),
-whose full text is in [LICENSE](LICENSE): you may use, modify and self-host it
-for any purpose except providing a product that competes with Crewlet or with
-any product Crewlet provides using it.
-
-Versions published before the move to the PolyForm Shield License remain
-available under the MIT License they were released under.
+Crewlet is open source under the [Apache License 2.0](LICENSE). Its attribution
+notice is in [NOTICE](NOTICE), which a redistribution carries along with the
+license.
 
 The dashboard's glyphs are [Lucide](https://lucide.dev) (ISC, Feather-derived)
 via `@crewlethq/icons`, and its typefaces are Geist and Geist Mono (OFL) via

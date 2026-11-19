@@ -128,7 +128,7 @@ cosign verify-blob checksums.txt \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-Each archive holds the `crewlet` binary, `LICENSE`, `README.md` and the
+Each archive holds the `crewlet` binary, `LICENSE`, `NOTICE`, `README.md` and the
 third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
 toolchain and every Go module the binary links, and
 `dashboard/THIRD_PARTY_NOTICES.txt` for the embedded dashboard: its npm

@@ -182,6 +182,8 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// AND WHAT IT NO LONGER COVERS IS GONE: a notice still naming Inter,
 	// JetBrains Mono or Material Symbols was written from a file the build no
 	// longer reads, so the step appending the real ones is not running either.
+	// Each is found by its own name, never by its license's, which a package
+	// the bundle still carries may share.
 	notices, err := os.ReadFile(filepath.Join(served, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
@@ -206,7 +208,6 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	for _, gone := range []string{
 		"The Inter Project Authors",
 		"The JetBrains Mono Project Authors",
-		"Apache License",
 		"Material Symbols",
 	} {
 		if err == nil && bytes.Contains(notices, []byte(gone)) {

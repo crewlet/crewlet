@@ -142,13 +142,14 @@ archives:
     # tar.gz everywhere. The zip override existed for Windows and went with
     # it; linux and darwin both want a tarball.
     formats: [tar.gz]
-    # Both notices files, beside LICENSE: the Go modules and toolchain the
+    # Both notices files, beside LICENSE and NOTICE: the Go modules and toolchain the
     # binary links at the archive root, and the dashboard's bundled packages,
     # fonts and icon paths under dashboard/. The second is the file the binary
     # also serves; it is taken from the committed bundle, which CI keeps equal
     # to what the dashboard source builds.
     files:
       - LICENSE
+      - NOTICE
       - README.md
       - src: build/notices/THIRD_PARTY_NOTICES.txt
         strip_parent: true
@@ -252,6 +253,7 @@ dockers_v2:
     # what this list names.
     extra_files:
       - LICENSE
+      - NOTICE
       - build/notices/THIRD_PARTY_NOTICES.txt
       - static/dashboard/THIRD_PARTY_NOTICES.txt
       - scripts/git-pin.env
@@ -262,7 +264,7 @@ dockers_v2:
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
-      org.opencontainers.image.licenses: LicenseRef-PolyForm-Shield-1.0.0
+      org.opencontainers.image.licenses: Apache-2.0
 
 # Keyless Sigstore signing over every image pushed above, BY DIGEST — the same
 # identity and the same short-lived certificate as the checksum signature,

@@ -1175,7 +1175,7 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 # carries, which neither way goreleaser runs can do, so the build is written
 # out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
 # the -X stamp) and staged in the layout its dockers_v2 stages: each binary
-# under its platform, beside the license, both notices files and the git pin
+# under its platform, beside the license and its NOTICE, both notices files and the git pin
 # and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's git stage
 # builds from — the files .goreleaser.yaml's extra_files names. A change to the
 # release build is a change to both files.
@@ -1199,7 +1199,7 @@ image-context: ## stage the engine image's build context, stamped VERSION (ci: m
 	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
 	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
 	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
-	cp LICENSE $(IMAGE_CONTEXT)/LICENSE
+	cp LICENSE NOTICE $(IMAGE_CONTEXT)/
 	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
 	cp scripts/git-pin.env scripts/git.sh $(IMAGE_CONTEXT)/scripts/
 	@host=$$($(GO) env GOHOSTOS)/$$($(GO) env GOHOSTARCH); \
