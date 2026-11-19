@@ -70,6 +70,24 @@ const minScrubBytes = 8
 // two bounds make together, raised by raising this with the budget.
 const scrubExpansion = 8
 
+// keptGzipLevel is the level the scrub writes a kept archive at.
+//
+// SEVEN, the lowest of Go's compress/flate levels that entropy-codes base64:
+// at one to six it stores an image's or a PDF's base64 as it is, a kept
+// archive 1.31 times what the box's gzip packed, which the take admits and
+// the seal refuses. Seven keeps it within 1% of the box's (the package doc's
+// "The scrub writes what the box packed, no larger" has the measurements).
+const keptGzipLevel = 7
+
+// newKeptGzip is the gzip writer a kept archive is written through.
+func newKeptGzip(dst io.Writer) (*gzip.Writer, error) {
+	zw, err := gzip.NewWriterLevel(dst, keptGzipLevel)
+	if err != nil {
+		return nil, fmt.Errorf("executor: opening the kept archive's gzip at level %d: %w", keptGzipLevel, err)
+	}
+	return zw, nil
+}
+
 // scrubPieceBaseBytes is the longest piece the scrub reads before it holds the
 // large slot: 256 KiB, four times the census's p99 line (the package doc's "A
 // collection's read of a thread"), so an ordinary line, string or file never
@@ -203,7 +221,7 @@ const (
 	rewriteHeldBytes = scannerHeldBytes + textWholeBytes + jsonscan.MaxDepth*rewriteFrameBytes
 	// archiveHeldBytes is the archive's own readers and writers, the gzip
 	// writer's compressor the largest: flate's hash chains and window, under
-	// a mebibyte at the default level, beside gzip's reader, tar's reader
+	// a mebibyte at [keptGzipLevel], beside gzip's reader, tar's reader
 	// and writer and the buffers of the readers and writers above them.
 	archiveHeldBytes = 2 << 20
 	// planBlockBytes is the room of the [bitList] blocks being filled beyond
@@ -758,7 +776,10 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	if err != nil {
 		return fmt.Errorf("executor: opening the session's export again to write it: %w", err)
 	}
-	zw := gzip.NewWriter(dst)
+	zw, err := newKeptGzip(dst)
+	if err != nil {
+		return err
+	}
 	written := &counted{w: zw}
 	err = rewriteExport(again, written, s, b)
 	var fault *jsonscan.Error
@@ -817,7 +838,10 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	if err != nil {
 		return fmt.Errorf("executor: opening the session's archive again to write it: %w", err)
 	}
-	zw := gzip.NewWriter(dst)
+	zw, err := newKeptGzip(dst)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(zw)
 	err = eachMember(again, b, func(h *tar.Header, body io.Reader) error {
 		kind, ok := plan.members.takeByte()

@@ -897,3 +897,92 @@ func TestAPlansBitsAreReadBackAsTheyWereWritten(t *testing.T) {
 		t.Error("the stream reads past what was written")
 	}
 }
+
+// THE SCRUB WRITES A SESSION'S MEDIA NO LARGER THAN ITS BOX PACKED IT: a Claude
+// Code line holding a PDF's base64 twice and an OpenCode export holding an
+// image's data URI, each packed as a box packs it (level 9 standing in for GNU
+// gzip, which codes base64 as it does), are kept within 1% of the box's
+// archive, since the take and the seal hold the two to one bound (the package
+// doc's "The scrub writes what the box packed, no larger").
+//
+// Mutation: write the kept archive at any level from one to six
+// (gzip.NewWriter's is six) and each case is kept about 1.31 times the box's.
+func TestTheScrubWritesASessionsMediaNoLargerThanItsBoxPackedIt(t *testing.T) {
+	t.Parallel()
+	data := base64Run(rand.New(rand.NewPCG(1170, 6)), 512<<10)
+	s := newScrubber([]string{longValue})
+	line := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",` +
+		`"content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` +
+		data + `"}}]}]},"toolUseResult":{"type":"pdf","file":{"filePath":"/w/a.pdf","base64":"` + data + `"}}}` + "\n"
+	doc := `{"info":{"id":"ses_1"},"messages":[{"info":{"id":"msg_1","role":"user"},"parts":[{"type":"file",` +
+		`"mime":"image/png","url":"data:image/png;base64,` + data + `"}]}]}`
+	cases := []struct {
+		name  string
+		plain int
+		box   []byte
+		scrub func(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
+			b scrubBounds) error
+	}{
+		{"a Claude Code transcript", len(line), boxTarOf(t, "projects/p/s.jsonl", line), scrubTar},
+		{"an OpenCode export", len(doc), boxGzipOf(t, doc), scrubDocument},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if 5*len(c.box) > 4*c.plain {
+				t.Fatalf("the box's archive is %d bytes of %d: it did not code the base64, so it measures nothing",
+					len(c.box), c.plain)
+			}
+			var out bytes.Buffer
+			if err := c.scrub(bytes.NewReader(c.box), reopenOf(c.box), &out, s, testBounds); err != nil {
+				t.Fatalf("the session was refused: %v", err)
+			}
+			if 100*out.Len() > 101*len(c.box) {
+				t.Errorf("the session was kept as %d bytes, %.2f times the %d its box packed: past the "+
+					"bound the take admitted it under", out.Len(), float64(out.Len())/float64(len(c.box)), len(c.box))
+			}
+		})
+	}
+}
+
+// boxTarOf is a gzipped tar of one file, packed as a box's GNU gzip packs it.
+func boxTarOf(t *testing.T, name, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)),
+		Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(tw, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// boxGzipOf is text gzipped as a box's GNU gzip packs it.
+func boxGzipOf(t *testing.T, text string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(zw, text); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}

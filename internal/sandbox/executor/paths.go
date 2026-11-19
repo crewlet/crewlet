@@ -882,6 +882,28 @@
 // string the closest, since its first reading redacts it twice (as JSON and as
 // text, side by side) and its second once.
 //
+// # The scrub writes what the box packed, no larger
+//
+// The take holds the box's archive to the session's bound, and the seal holds
+// the scrub's rewrite of it to the same bound (executordomain's seal), so the
+// rewrite may not come out larger than what the box packed. Media is where it
+// would: an image or a PDF a model read is kept as base64 of bytes already
+// compressed, and Go's compress/flate at levels one to six stores such base64
+// as it is, where the box's GNU gzip entropy-codes it. Measured on the build VM
+// (Go 1.27, two cores), on 27,962,028 bytes of base64 of random bytes, a 20 MiB
+// PDF's as Claude Code writes it, and on 118 MiB of transcript-shaped JSON:
+//
+//	base64:  levels 1-6 0.996-1.000, level 7 0.7525, level 9 0.7524, GNU gzip -6 0.757
+//	JSON:    level 6 0.2241 at 93 MB/s, level 7 0.2198 at 48.5 MB/s
+//
+// A Claude Code session holding one whole-PDF read at its 20 MiB limit, taken
+// through the real take, is a 40.36 MiB box archive kept as 53.10 MiB at level
+// six and 40.13 MiB at seven. So the scrub writes at [keptGzipLevel], seven:
+// the lowest level that codes base64 as the box does, at about 0.4 s more a
+// PDF read and 1.2 s more for 118 MiB of text. A save is charged against its
+// seat at its packed size and an eighth (internal/sandbox's countedFor), which
+// the rewrite now stays within for media as for text.
+//
 // # A definition the scrub renamed is cut out of its line
 //
 // Claude Code keeps the tool definitions a session loaded through tool search
