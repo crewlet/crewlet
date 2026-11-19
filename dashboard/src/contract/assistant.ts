@@ -21,7 +21,7 @@
 import type { Remedy } from "./remedies.ts";
 
 /** The protocol version every frame and every request carries. */
-export const ASSISTANT_PROTOCOL_VERSION = 1;
+export const ASSISTANT_PROTOCOL_VERSION = 2;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
@@ -276,7 +276,7 @@ type AssistantBriefActionKind = "open" | "ask";
 
 /** Why the assistant is not available to the viewer. */
 export type AssistantViewerReason =
-  "disabled" | "no_model" | "not_a_person" | "no_permission" | "model_not_ready";
+  "no_model" | "model_problem" | "not_a_person" | "no_permission" | "model_not_ready";
 
 /** Whether a page action asks for the person's approval. */
 type AssistantActionConfirm = "approve" | "none";
@@ -798,8 +798,6 @@ export interface AssistantTurnRequest {
   page_context: AssistantPageContext | null;
   /** What the question asks for; absent is `ask`. A brief needs the page context. */
   mode?: AssistantTurnMode;
-  /** Think harder: this one question runs on the company's stronger chain. */
-  deliberate?: boolean;
   // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
@@ -947,12 +945,20 @@ interface AssistantAuditRead {
 export interface AssistantViewerAssistant {
   available: boolean;
   reason?: AssistantViewerReason;
+  /** The model Ask Crewlet runs on; absent where none is assigned. */
+  model?: AssistantViewerModel;
   /** What a `model_not_ready` reason means for this person; absent for every other reason. */
-  model?: AssistantModelNotice;
+  notice?: AssistantModelNotice;
+  /** The person may assign Ask Crewlet's model: they hold the company document's write. */
+  can_assign?: boolean;
   /** A question's images are read: only deep work reads them, so absent where the company has none. */
   reads_images?: boolean;
-  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
-  deliberate?: boolean;
+}
+
+/** A helper's model as anybody is shown it: its `providers.llm` key and the model it names. */
+export interface AssistantViewerModel {
+  key: string;
+  label: string;
 }
 
 /**

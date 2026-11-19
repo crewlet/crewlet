@@ -93,11 +93,11 @@ describe("whether the reader may ask", () => {
     expect(assistantUnavailableFor(ready, "Nimbus")).toBeNull();
   });
 
-  test("each of the engine's reasons is its own sentence, and off names the company", () => {
-    const off = assistantUnavailableFor({ ...ready, assistant: "disabled" }, "Nimbus");
-    expect(off).toMatchObject({ reason: "disabled", short: "An admin turned Ask Crewlet off." });
-    expect(off?.title).toBe("Ask Crewlet is off for Nimbus");
-    for (const reason of ["no_model", "not_a_person", "no_permission"] as const) {
+  test("each of the engine's reasons is its own sentence, and no model names the company", () => {
+    const off = assistantUnavailableFor({ ...ready, assistant: "no_model" }, "Nimbus");
+    expect(off).toMatchObject({ reason: "no_model", short: "No model is assigned to Ask Crewlet yet." });
+    expect(off?.title).toBe("Ask Crewlet has no model for Nimbus yet");
+    for (const reason of ["model_problem", "not_a_person", "no_permission"] as const) {
       const words = assistantUnavailableFor({ ...ready, assistant: reason }, "Nimbus");
       expect(words?.reason).toBe(reason);
       expect(words?.short).not.toBe(off?.short);
@@ -109,7 +109,7 @@ describe("whether the reader may ask", () => {
       "Sign in to ask.",
     );
     expect(
-      assistantUnavailableFor({ ...ready, asking: true, assistant: "disabled" }, "")?.reason,
+      assistantUnavailableFor({ ...ready, asking: true, assistant: "no_model" }, "")?.reason,
     ).toBe("checking");
   });
 });
@@ -118,7 +118,7 @@ describe("the assistant's model", () => {
   const signedOut = {
     available: false,
     reason: "model_not_ready",
-    model: {
+    notice: {
       code: "model_signed_out",
       message: "Ask Crewlet's model is signed out, so it cannot answer.",
       hint: "Ask an administrator to sign Ask Crewlet's model in again.",
@@ -138,12 +138,12 @@ describe("the assistant's model", () => {
   });
 
   test("the notice is the engine's sentence and hint, and Send's reason its own phrase", () => {
-    const problem = assistantModelFor({ assistantModel: signedOut.model });
+    const problem = assistantModelFor({ assistantModel: signedOut.notice });
     expect(problem).toEqual({
       code: "model_signed_out",
       short: "Ask Crewlet's model is signed out",
-      title: signedOut.model.message,
-      body: signedOut.model.hint,
+      title: signedOut.notice.message,
+      body: signedOut.notice.hint,
     });
     expect(assistantModelFor({ assistantModel: null })).toBeNull();
   });

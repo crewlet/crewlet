@@ -8,9 +8,9 @@
  * disabled with the reason after its name and in its tooltip.
  *
  * THE REASON IS THE ENGINE'S. The viewer answer carries the first condition
- * that fails (`ViewerAssistant` in `internal/assistant/wire`): the company
- * left it off, no model this node can reach, a caller that is not a person
- * signed in through a session, or a person the authority table refuses it.
+ * that fails (`ViewerAssistant` in `internal/assistant/wire`): no model is
+ * assigned, the model is one Ask Crewlet cannot run on, a caller that is not a
+ * person signed in through a session, or a person the authority table refuses it.
  * Two more are the frame's own: nobody signed in, and a viewer answer still
  * on its way, which is drawn as "checking" rather than as any of the four, so
  * a reader is never told the assistant is off for the second it takes to ask.
@@ -44,17 +44,17 @@ function words(
   company: string,
 ): Omit<AssistantUnavailable, "reason"> {
   switch (reason) {
-    case "disabled":
-      return {
-        short: "An admin turned Ask Crewlet off.",
-        title: `Ask Crewlet is off for ${company}`,
-        body: "An admin turned it off. Everything else in Crewlet works as usual. Ask an admin if you need it.",
-      };
     case "no_model":
       return {
-        short: "Ask Crewlet has no model it can use right now.",
+        short: "No model is assigned to Ask Crewlet yet.",
+        title: `Ask Crewlet has no model for ${company} yet`,
+        body: "An admin has not chosen the model Ask Crewlet runs on. Everything else in Crewlet works as usual. Ask an admin if you need it.",
+      };
+    case "model_problem":
+      return {
+        short: "Ask Crewlet cannot run on the model it is assigned.",
         title: "Ask Crewlet cannot answer right now",
-        body: "None of the models it is set up with can be reached from here. Everything else in Crewlet works as usual. Ask an admin to check Ask Crewlet's models.",
+        body: "The model it is assigned runs with tools of its own that Crewlet cannot turn off. Everything else in Crewlet works as usual. Ask an admin to choose another model for Ask Crewlet.",
       };
     case "not_a_person":
       return {
