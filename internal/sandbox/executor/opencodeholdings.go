@@ -206,7 +206,13 @@ var (
 // openCodeHoldingsWalk is one reading's state, the export walk's visitor: what
 // it keeps of the document, of the run's start, and of each class's parts,
 // and of the message, the item and the state it is in, which their ends
-// decide. It never keeps a message, an item or a text past its visit.
+// decide. It never keeps a message, an item or a text past its visit. It asks
+// `info`'s id, a message's id, a part's name, its `executed` and input, a
+// step's `completed` and a state's metadata captured within
+// [exportValueMaxBytes]; each type as a word; a message, an item, their times,
+// a state, an answer, a metadata and a failure as frames with their key facts
+// ([openCodeKeys]); an answer's text and a failure's message as a digest. An
+// item's verdict waits for its message's end, whose kind may come after it.
 type openCodeHoldingsWalk struct {
 	session string
 	start   sandbox.RunStart

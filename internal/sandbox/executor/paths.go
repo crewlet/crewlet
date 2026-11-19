@@ -171,27 +171,14 @@
 // is is never decided: a class is held whole or told whole.
 //
 // ONE WALK, TWO VISITORS. The reading is a visitor of the one export walk
-// ([scanExport]), as the take's meter is ("What OpenCode counts a session at
-// before its next request"), which reads the document on the scanner and
-// holds no value whole. It hands the reading each member by the means the
-// reading asks for it: `info`'s id, a message's id, a part's name, its
-// `executed` and input, a step's `completed` and a state's metadata captured
-// within [exportValueMaxBytes]; a message's, an item's, a status's and a
-// failure's type read as words; a message, its time, an item, its time, its
-// state, an answer, a metadata and a failure walked as frames with their key
-// facts ([openCodeKeys]): the names met, one met twice, one outside the
-// frame's set; and an answer's text and a failure's message read as a digest
-// ([textDigest]): their size, their SHA-256 and the sum at every opening a cut
-// class keeps, whether they hold the scrub's marker, whether they are blank,
-// a piece at a time. A VALUE PAST ITS CAPTURE OR ITS WORD IS THERE, of its
-// kind, and equal to no word: an `executed` past the bound passes its part,
-// and a message's or an item's `type` past the word is a shape not read. An
-// item is read before its message's kind may be, so the reading keeps each
-// item's verdict and decides it at the message's end, in the order its checks
-// always ran. The decode walk it read by before ([walkOpenCodeExport]), which
-// a person's transcript still reads by, is its oracle
-// (TestAHoldingsReadingReadsAnExportAsItsWalkDid, whole and in pieces of 17
-// bytes).
+// ([scanExport]), as the take's meter is, on the scanner, holding no value
+// whole: it asks each member by a means ([openCodeHoldingsWalk] lists them),
+// an answer's text and a failure's message by their digest ([textDigest]). A
+// VALUE PAST ITS CAPTURE OR ITS WORD IS THERE, of its kind, and equal to no
+// word: an `executed` past the bound passes its part, and a `type` past the
+// word is a shape not read. The decode walk it read by before
+// ([walkOpenCodeExport]), which a person's transcript still reads by, is its
+// oracle (TestAHoldingsReadingReadsAnExportAsItsWalkDid).
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
 // anything else: `info` once, an object, its id the session's; `messages`
@@ -254,24 +241,15 @@
 // import keeps one, since no message's id is read but the start's.
 //
 // THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), no message
-// or value held whole (a step's `completed` past the capture's bound is no
-// reading, toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted
-// calls at the log's own bounds. What it keeps: whether `info` matched, the
-// start, the step, per class at most Calls+1 step numbers and the parts the
-// message it is in counts; never a message, an item or a text. It reads in a
-// slot of its own ([HoldingsReadsAtOnce]). MEASURED
-// (BenchmarkAnOpenCodeReadingAtItsBounds, one case a process on a dedicated
-// two-core slot, three runs; held the largest live heap at GOGC=10, a peak the
-// largest heap at the default): every case holds at most 2 MiB, peaking at
-// 5 MiB; one answer of 32 MiB reads in 82 to 89 ms and of 64 MiB in 139 to
-// 153 ms, past the 32 MiB the decode walk held a message to; 64 MiB of minimal
-// items in 1.06 to 1.10 s; 255 MiB of ordinary steps in 3.0 to 3.4 s and of
-// `{"type":"idle"}` messages in 4.8 to 4.9 s; the slowest, one step of 255 MiB
-// of `0` items, read to its end and refused, in 8.5 to 9.0 s; the largest
-// export a release's own runs kept in 36 to 52 ms. Beside a person's read of
-// the 64 MiB export, which still reads by the decode walk and holds 97 MiB to
-// its 32 MiB bound, the two hold 97 to 98 MiB, against 161 to 193 MiB on that
-// walk.
+// or value held whole (a step's `completed` past the capture is no reading,
+// toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted calls at
+// the log's own bounds. What it keeps: whether `info` matched, the start, the
+// step, per class at most Calls+1 step numbers and the parts the message it is
+// in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
+// (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
+// most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
+// `0` items, 8.5 to 9.0 s; beside a person's read of the 64 MiB export the two
+// hold 97 to 98 MiB, against 161 to 193 MiB on the decode walk.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
@@ -407,10 +385,10 @@
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
 // turn's relaunch is told; apart, it never does. One slot, not two: the
 // process's thread readers then hold at worst 2 x 134 + 43 + 48 = 359 MiB
-// beside the base tier: the two transcript reads, a relaunch's reading in its
-// own slot ([HoldingsReadsAtOnce]) and this one. One waiter behind a pass over
-// ordinary lines at the bound (2.6 to 2.8 s with the count and the next
-// request's estimate, 5.7 s loaded) is through in 11.4 s, within the 27 s.
+// beside the base tier, a reading's 43 in its slot ([HoldingsReadsAtOnce]).
+// One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
+// the count and the next request's estimate, 5.7 s loaded) is through in
+// 11.4 s, within the 27 s.
 // Behind the slot's slowest holder, loaded, it is not: a pass keeping more than
 // [collectionBaseRecords] records holds the slot to its end whatever its lines,
 // so a collection whose chain keeps the records of 2^20 short lines of blocks
@@ -1178,29 +1156,19 @@
 // model is not held to it.
 //
 // ONE WALK of the export ([scanExport]), on the scanner (internal/jsonscan),
-// which never holds a string. It owns the export's grammar, its names and its
-// frames, and hands each member to its visitor by the means the visitor asks
-// for it, fixed per visitor: passed, read as a word into a fixed buffer,
-// captured within [exportValueMaxBytes], or walked as a frame; a value past
-// its word or its capture is there, of its kind, and past. The meter is its
-// visitor ([exportMeter]) and asks what the walk it read by before read, which
-// is its oracle (TestTheMeterReadsAnExportAsItsWalkDid, whole and in pieces of
-// 17 bytes): each message's small values captured, its content walked for the
-// spans of its tool results and the files it names, and every other value
-// passed over, its bytes checked and none held. The floor's last-request
-// figure ([measuredPrompt]) is read in the same walk.
-//
-// ITS PACE: the take's pipe waits on the meter, so the walk keeps up with the
-// one it replaced (BenchmarkTheMeterAtItsBounds, one case a process on a
-// dedicated two-core slot, three runs, 255 MiB of plaintext, against that
-// walk): `{}` messages in 7.8 to 8.2 s (0.09 µs a message) against 27.9 to
-// 31.3, a message that captured nothing counted with no decode; `{"type":
-// "idle"}` messages in 14.3 to 16.6 s (0.85 to 0.99 µs) against 14.7 to 17.4;
-// ordinary steps, each a call answered with a kibibyte, in 1.51 to 1.62 s (8
-// µs a step) against 1.40 to 1.64 (1.51 against 1.61 s over five reads in
-// one process); steps whose tokens are captured at the bound in 0.52 to 0.62
-// s against 0.67 to 0.84. It holds at most 2 MiB live (GOGC=10), its heap at
-// most 5 MiB at the default.
+// which never holds a string. It owns the export's grammar, names and frames
+// and hands each member to its visitor by the means the visitor asks
+// ([exportAsks]): passed, read as a word, captured within
+// [exportValueMaxBytes], or walked as a frame; a value past its word or
+// capture is there, of its kind. The meter ([exportMeter]) asks what the walk
+// it read by before read, its oracle (TestTheMeterReadsAnExportAsItsWalkDid):
+// each message's small values captured, its content walked for the spans of
+// its tool results and the files it names, the rest passed unheld. The
+// floor's last-request figure ([measuredPrompt]) is read in the same walk. The
+// take's pipe waits on the meter, so the walk keeps up with its oracle
+// (BenchmarkTheMeterAtItsBounds, 255 MiB of plaintext a case): within 10% on
+// every case, `{}` messages in 7.8 to 8.2 s against 27.9 to 31.3, holding at
+// most 2 MiB live.
 //
 // # The OpenCode releases the count reads
 //
