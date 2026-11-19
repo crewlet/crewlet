@@ -1753,9 +1753,9 @@ func owedGone(round roundCalls, owed []int) int {
 // of round where its harness is not known to have ended its own run
 // ([Resume.HarnessEnd]): EVERY CALL OF THE ROUND, and every call its log
 // dropped from its middle counted, told as calls the session may already show
-// ([prompts.AfterSave.Interrupted]) — what a capture cut off is told on a fleet
-// of this version, its save point the round's start (internal/sandbox's
-// savepoint.go), for a copy no capture describes.
+// ([prompts.AfterSave.Interrupted]) — what a capture cut off and never raised
+// past the round's start is told (internal/sandbox's savepoint.go), for a
+// copy no capture describes.
 //
 // NEVER ONLY THE JOB'S OWN CALLS. The copy is not known to hold the job's
 // brief, which told the round's calls before the job's own — an earlier job's,

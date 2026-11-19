@@ -175,7 +175,7 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   replaced, so a seat holds up to twice it:
                                         #   twenty seats or more belong on S3
     save_interval_seconds: 600          # shortest time between saves of a running
-                                        #   Claude Code job's session (300..3600; 0 takes
+                                        #   executor job's session (300..3600; 0 takes
                                         #   600, anything else refused): a run lost with
                                         #   its box redoes about this plus one save's
                                         #   take, longer where a seat's saves are paced

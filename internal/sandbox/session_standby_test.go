@@ -28,7 +28,9 @@ var (
 // takenAs is a runner whose take hands back body as the box's session, and
 // otherwise answers as the rig's fake does. Where taking is set it is closed
 // as the take begins, once the read has read the run's row; where proceed is
-// set, the take waits for it before it hands anything back.
+// set, the take waits for it before it hands anything back, holding its pack,
+// so a case that reads beside it stages the job where packs need no node's
+// slot ([ownMemory]).
 type takenAs struct {
 	*FakeRunner
 	body            io.Reader
@@ -52,6 +54,17 @@ func (r takenAs) TakeSession(ctx context.Context, box Sandbox, take SessionTake)
 	}
 	taken.Body = io.NopCloser(r.body)
 	return taken, nil
+}
+
+// ownMemory moves run's job to a cell that owns its memory, where a take's pack
+// takes no node's pack slot ([Coordinator.packSlot]), and answers its row:
+// there alone can a second read take the session while a first read's pack is
+// held.
+func ownMemory(t *testing.T, rig *coordRig, run PendingRun) PendingRun {
+	t.Helper()
+	everyCell(t, rig)
+	reshape(t, rig, run.TurnID, func(r *PendingRun) { r.Placement = string(Container) })
+	return rig.get(run.TurnID)
 }
 
 // heldArchive is an archive a take streams that holds at its first read,
@@ -329,7 +342,7 @@ func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T)
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, writes, keep := keepingRig(t)
-		run := rig.launchKept(t, "t1")
+		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
 		taking, proceed := make(chan struct{}), make(chan struct{})
 		second := make(chan *spooledCapture, 1)
 		go func() {
@@ -768,7 +781,7 @@ func TestAFinalReadBesideACaptureTakenAsTheJobStoodTakesTheNextPlace(t *testing.
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, keep := keepingRig(t)
-		run := rig.launchKept(t, "t1")
+		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
 		taking, proceed := make(chan struct{}), make(chan struct{})
 		second := make(chan *spooledCapture, 1)
 		go func() {
@@ -840,7 +853,7 @@ func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testin
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, writes, keep := keepingRig(t)
-		run := rig.launchKept(t, "t1")
+		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
 		store := &failsReservations{PendingStore: rig.coordinator.pending}
 		rig.coordinator.pending = store
 		taking, proceed := make(chan struct{}), make(chan struct{})

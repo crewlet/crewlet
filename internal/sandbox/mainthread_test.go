@@ -400,33 +400,7 @@ func TestTheCaptureStampsItsCount(t *testing.T) {
 func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 	t.Parallel()
 	count := &ResumedCount{Tokens: 42_000, Mark: CountMedia, Window: 200_000, Restart: new("u-1")}
-	carried := func(t *testing.T, typ reflect.Type, keys []string, value any, read func([]byte) any) {
-		t.Helper()
-		raw, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		declared := wireKeys(typ)
-		older := maps.Clone(declared)
-		for _, key := range keys {
-			if !declared[key] {
-				t.Fatalf("%s declares no key %s: %v", typ, key, declared)
-			}
-			delete(older, key)
-		}
-		var plain map[string]json.RawMessage
-		extra, err := unmarshalCarrying(raw, &plain, older)
-		if err != nil {
-			t.Fatal(err)
-		}
-		written, err := marshalCarrying(struct{}{}, older, extra)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := read(written); !reflect.DeepEqual(got, read(raw)) {
-			t.Errorf("after the older build's write %s reads %+v, want %+v: %s", typ, got, read(raw), written)
-		}
-	}
+	carried := carriedByAnOlderBuild
 	carried(t, reflect.TypeFor[LaunchRecord](), []string{"resumed_count", "basis_restart", "count_provider",
 		"count_release"}, LaunchRecord{ResumedCount: count, BasisRestart: new("u-0"), CountProvider: "stub",
 		CountRelease: "2.3.0"}, func(raw []byte) any {
@@ -444,6 +418,37 @@ func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 			}
 			return []any{back.ResumedCount, back.CountProvider}
 		})
+}
+
+// carriedByAnOlderBuild holds that value, of type typ, reads as read reads it
+// after a build that declares none of keys decodes and writes it back: what
+// that build keeps of them verbatim ([unmarshalCarrying], [marshalCarrying]).
+func carriedByAnOlderBuild(t *testing.T, typ reflect.Type, keys []string, value any, read func([]byte) any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := wireKeys(typ)
+	older := maps.Clone(declared)
+	for _, key := range keys {
+		if !declared[key] {
+			t.Fatalf("%s declares no key %s: %v", typ, key, declared)
+		}
+		delete(older, key)
+	}
+	var plain map[string]json.RawMessage
+	extra, err := unmarshalCarrying(raw, &plain, older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := marshalCarrying(struct{}{}, older, extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := read(written); !reflect.DeepEqual(got, read(raw)) {
+		t.Errorf("after the older build's write %s reads %+v, want %+v: %s", typ, got, read(raw), written)
+	}
 }
 
 // A LAUNCH RECORDS THE RESTART OF THE SESSION IT HANDS ITS RUN, the newest
