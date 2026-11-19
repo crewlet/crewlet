@@ -3987,8 +3987,8 @@ export interface WorkItemDetail {
   links?: WorkLink[];
   /** How many atlas entries the task names, for a reader without the atlas
    *  app: those links are left out of `links`, so the count is all this
-   *  reader is told. Absent for a reader who holds it. */
-  entries_withheld?: number;
+   *  reader is told. Always stated: 0 where the answer left none out. */
+  entries_withheld: number;
   /** The task this one is filed under, named — absent for a top-level task
    *  and for a parent this node holds no row for. */
   parent?: WorkTaskRef;

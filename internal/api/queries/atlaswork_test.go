@@ -161,7 +161,7 @@ func TestAWorkItemNamesItsAtlasEntriesOnlyToAnAtlasReader(t *testing.T) {
 		t.Errorf("a reader without the atlas was answered %s", encoded)
 	}
 	answer, encoded = ask(iam.GrantWorklet, iam.GrantAtlas)
-	if answer["entries_withheld"] != nil || !strings.Contains(encoded, web) || len(listOf(t, answer["links"])) != 3 {
+	if answer["entries_withheld"] != float64(0) || !strings.Contains(encoded, web) || len(listOf(t, answer["links"])) != 3 {
 		t.Errorf("an atlas reader was answered %s", encoded)
 	}
 }

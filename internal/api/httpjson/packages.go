@@ -73,7 +73,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"toolsession": true, "toolsessiontest": true,
 		"topics": true, "tracing": true, "turn": true, "turnctx": true, "types": true,
 		"ticket": true, "trashreap": true,
-		"usage": true, "version": true, "webhooks": true, "whsec": true,
+		"usage": true, "version": true, "webhooks": true, "whsec": true, "wiregate": true,
 		"words": true, "workapi": true, "workkey": true, "worklet": true,
 	}
 })
