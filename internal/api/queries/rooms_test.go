@@ -518,6 +518,10 @@ var readOutsideTheDashboard = map[string]string{
 	// (`work_inbox`), read by a script on the path the reference prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+	// THE ADVISOR'S WEEKLY REPORTS, read by a script until the Advisor page's
+	// Reports tab reads them; that tab makes these lines red, and they go.
+	"advisor_reports": "an admin's script: GET /advisor/reports, as docs/guides/advisor.md prints it",
+	"advisor_report":  "an admin's script: GET /advisor/reports/{week}, as docs/guides/advisor.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
