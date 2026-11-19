@@ -27,14 +27,20 @@
 // reader charges a value of any length by its length (the thread layer's estimate) without holding it.
 // [Scanner.Skip] passes over a whole value and [Scanner.Capture] answers a value's bytes as written up to a
 // bound its caller names, passing over a longer one: a reader that hands a short value out raw holds it, at
-// that bound, and passes media over unheld. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for
-// a reader that models a byte-level load by where a key sits in its line.
+// that bound, and passes media over unheld. [Scanner.Tee] hands a value's bytes as written to a writer as the
+// scan passes them, whether the caller reads the value's tokens or passes it, so a reader that keeps a value
+// of any length raw (compacted into a stream, say) while it reads the value's strings reads it once and holds
+// none of it. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for a reader that models a
+// byte-level load by where a key sits in its line.
 //
 // EVERY BYTE IS VALIDATED, the ones a reader passes over too: a reader moved onto the scanner keeps the
 // acceptance it had, and a reader that decides from a line (the thread layer, which reads a line that is no
 // JSON value as Claude Code's own load reads it) needs to know the line was one value before it decides.
 // A refusal is an [*Error] with the [Fault] and the Offset it was met at, five faults a reader maps onto its
-// own; an error of the reader beneath passes through, wrapped. Either ends the scan.
+// own; an error of the reader beneath passes through, wrapped. Either ends the scan. A TEE'S WRITER'S ERROR
+// ENDS ONLY THE WRITING: the scan validates every byte on, and the call that ends the value answers it, a
+// [*TeeError], the scan going on past the value. A reader whose writer refuses a value (a redaction stream
+// that refuses a text) so loses that value alone, and reads the rest of its line.
 //
 // # One grammar, both decoders'
 //
@@ -76,7 +82,10 @@
 // holds up to B bytes more than the figure above from then on. A scan allocates nothing else: its test
 // reads a 64 MiB string, one of escapes and characters past ASCII, a 64 MiB name, a 64 MiB number, 64 MiB
 // of blanks and a value nested MaxDepth deep, and passes a 64 MiB string over, each within 68 KiB allocated
-// from New to io.EOF, and captures one past a 1 MiB bound within that and twice the bound.
+// from New to io.EOF, and captures one past a 1 MiB bound within that and twice the bound. A TEE HOLDS
+// NOTHING: its state is five fields that keep the struct in its size class (1,528 bytes), and a 64 MiB string
+// teed while it is read, and while Skip passes it, allocates 67,072 bytes from New to io.EOF in each of three
+// runs, one case a process, exactly what the string read untapped allocates.
 //
 // A long string is copied out in bulk: a run of plain bytes is found eight bytes at a time and copied in one
 // step, and passed over the same way, never stepped through a byte at a time. On two efficiency cores of a

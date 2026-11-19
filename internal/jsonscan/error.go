@@ -121,9 +121,31 @@ func (e *Error) Error() string {
 // ErrNoText is [Scanner.Read]'s answer at a token that has no text: read a Name's, a String's or a Number's.
 var ErrNoText = errors.New("jsonscan: the current token has no text to read: Read reads a Name, a String or a Number")
 
-// ErrNoValue is [Scanner.Skip]'s and [Scanner.Capture]'s answer where the current token begins no value they
-// can take: before the first token, or at a container's end; and for Capture, at a Name too, or once a Read
-// has taken part of the value's text or read it to its end. A Read that answers io.ErrShortBuffer takes
-// nothing, and Capture still answers the value after it.
-var ErrNoValue = errors.New("jsonscan: the current token begins no value to pass over or capture: " +
-	"call Skip or Capture right after the Next that answers the value")
+// ErrNoValue is [Scanner.Skip]'s, [Scanner.Capture]'s and [Scanner.Tee]'s answer where the current token
+// begins no value they can take: before the first token, or at a container's end; and for Capture and Tee,
+// at a Name too, or once a Read has taken part of the value's text or read it to its end. A Read that
+// answers io.ErrShortBuffer takes nothing, and Capture and Tee still take the value after it.
+var ErrNoValue = errors.New("jsonscan: the current token begins no value to pass over, capture or tee: " +
+	"call Skip, Capture or Tee right after the Next that answers the value")
+
+// ErrTeeing is [Scanner.Tee]'s answer while a tee writes the value the current token is in: one writes at a
+// time.
+var ErrTeeing = errors.New("jsonscan: a tee already writes the value the current token is in: " +
+	"tee a value once its tee has ended")
+
+// TeeError is a tee's writer's first error ([Scanner.Tee]), which the call that ends the teed value answers.
+// UNLIKE A SCAN'S ERROR IT ENDS NOTHING: every call after it goes on with the text past the value.
+type TeeError struct {
+	// Offset is where in the text the teed value begins.
+	Offset int64
+	// Err is what the writer answered.
+	Err error
+}
+
+// Error says which value's tee failed, and how.
+func (e *TeeError) Error() string {
+	return fmt.Sprintf("jsonscan: writing the value at byte %d through its tee: %v", e.Offset, e.Err)
+}
+
+// Unwrap is the writer's error, so errors.Is and errors.As reach it.
+func (e *TeeError) Unwrap() error { return e.Err }

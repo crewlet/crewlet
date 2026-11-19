@@ -80,6 +80,15 @@ type Scanner struct {
 	// last went on at, wide the bytes taken since then past the units they count, and textUnits the current
 	// text's decoded units ([Scanner.TextUnits]).
 	units, onAt, wide, textUnits int64
+
+	// The tee ([Scanner.Tee]): tw writes the value while it is on, buf[teeFrom:pos] is what it has not yet
+	// written, the value began at teeAt and is whole once depth is back at teeDepth, and teeErr is its writer's
+	// first error, kept past the value's end until the call that ended it answers it.
+	tw       io.Writer
+	teeErr   error
+	teeAt    int64
+	teeFrom  int
+	teeDepth int
 }
 
 // textState is what of the current token's text is still unread.
@@ -147,7 +156,8 @@ func (s *Scanner) Reset(r io.Reader) {
 // after it are read, which is when the text is known to be one JSON value. A Name's, a String's or a
 // Number's text is read with Read before the next Next; what of it is not read, Next passes over, validating
 // it. A text the grammar refuses answers an [*Error]; an error of the reader beneath passes through,
-// wrapped, so errors.Is and errors.As reach it. Either ends the scan: every call answers it from then on.
+// wrapped, so errors.Is and errors.As reach it. Either ends the scan: every call answers it from then on. A
+// [*TeeError] ends nothing ([Scanner.Tee]).
 func (s *Scanner) Next() (Kind, error) {
 	if s.err != nil {
 		return "", s.err
@@ -160,6 +170,7 @@ func (s *Scanner) next() (Kind, error) {
 	// The current token is passed from here, so a fill need keep none of it, and what its text held is no
 	// longer what the current token's holds.
 	s.whole, s.invalid = false, false
+	// A text passed that ends a teed value whose writer failed answers that, the scan standing past it.
 	if err := s.passText(); err != nil {
 		return "", err
 	}
@@ -177,7 +188,7 @@ func (s *Scanner) next() (Kind, error) {
 			return s.value(c, whereTop)
 		case expectFirstElement:
 			if c == ']' {
-				return s.close(ArrayEnd), nil
+				return s.close(ArrayEnd)
 			}
 			return s.value(c, whereFirstElement)
 		case expectElement:
@@ -189,7 +200,7 @@ func (s *Scanner) next() (Kind, error) {
 			case c == '"':
 				return s.name(), nil
 			case c == '}' && s.expect == expectFirstName:
-				return s.close(ObjectEnd), nil
+				return s.close(ObjectEnd)
 			case s.expect == expectFirstName:
 				return "", s.refuse(whereFirstName)
 			}
@@ -206,7 +217,7 @@ func (s *Scanner) next() (Kind, error) {
 				s.pos++
 				s.expect = expectElement
 			case ']':
-				return s.close(ArrayEnd), nil
+				return s.close(ArrayEnd)
 			default:
 				return "", s.refuse(whereElementEnd)
 			}
@@ -216,7 +227,7 @@ func (s *Scanner) next() (Kind, error) {
 				s.pos++
 				s.expect = expectName
 			case '}':
-				return s.close(ObjectEnd), nil
+				return s.close(ObjectEnd)
 			default:
 				return "", s.refuse(whereMemberEnd)
 			}
@@ -295,13 +306,20 @@ func (s *Scanner) literal(k Kind, lit string) (Kind, error) {
 	return k, nil
 }
 
-// close passes the closing bracket or brace at pos, of the container it closes.
-func (s *Scanner) close(k Kind) Kind {
+// close passes the closing bracket or brace at pos, of the container it closes, and answers its kind, or
+// the failure of a teed container's writer in its place where it closes that container.
+func (s *Scanner) close(k Kind) (Kind, error) {
 	s.kind, s.at, s.whole = k, s.offset(), false
 	s.pos++
 	s.depth--
 	s.afterValue()
-	return k
+	if s.tw != nil && s.depth == s.teeDepth {
+		s.endTee()
+		if err := s.takeTee(); err != nil {
+			return "", err
+		}
+	}
+	return k, nil
 }
 
 // push opens a container, an object or an array, one level deeper.
@@ -498,7 +516,8 @@ func (s *Scanner) fill(need int) error {
 }
 
 // slide moves the unscanned bytes to the front of buf, so a read can fill the rest. What a Capture records
-// of the bytes before them goes into held first, since they are about to be written over.
+// of the bytes before them goes into held first, and what a tee has not written to its writer, since they
+// are about to be written over.
 //
 // WHILE NOTHING OF THE CURRENT TOKEN IS TAKEN (whole), ITS FIRST BYTE MOVES WITH THEM, so Capture can still
 // answer the token from it: a Read whose p is too short for the next character fills to learn so and takes
@@ -509,13 +528,16 @@ func (s *Scanner) slide() {
 		s.hold(s.buf[s.recFrom:s.pos])
 		s.spilled = true
 	}
+	if s.tw != nil {
+		s.teeWrite(s.buf[s.teeFrom:s.pos])
+	}
 	from := s.pos
 	if s.whole {
 		from = int(s.at - s.base)
 	}
 	n := copy(s.buf, s.buf[from:s.end])
 	s.base += int64(from)
-	s.pos, s.end, s.recFrom = s.pos-from, n, 0
+	s.pos, s.end, s.recFrom, s.teeFrom = s.pos-from, n, 0, s.pos-from
 }
 
 // hold adds chunk, the next bytes of the value Capture records, to held, or gives up holding where the
@@ -546,12 +568,19 @@ func (s *Scanner) hold(chunk []byte) {
 }
 
 // stop makes err, which a call answers as it ends the scan, the scan's answer to every call after it (a
-// fault is already; a reader's error becomes it here), and answers err.
+// fault is already; a reader's error becomes it here), and answers err. A tee's error ends no scan.
 func (s *Scanner) stop(err error) error {
-	if err != nil && s.err == nil {
+	if err != nil && s.err == nil && !isTee(err) {
 		s.err = err
 	}
 	return err
+}
+
+// isTee reports whether err is a tee's writer's, answered once and ending nothing. Asked only of an error,
+// since its target escapes.
+func isTee(err error) bool {
+	var tee *TeeError
+	return errors.As(err, &tee)
 }
 
 // fault ends the scan with e.

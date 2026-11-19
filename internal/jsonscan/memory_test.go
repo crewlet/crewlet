@@ -3,6 +3,7 @@ package jsonscan_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"runtime"
@@ -69,12 +70,12 @@ const mib64 = 64 << 20
 // string, one of escapes and characters past ASCII, a 64 MiB name, a 64 MiB number and 64 MiB of blanks,
 // each read in full through a 32 KiB p, and a value nested MaxDepth deep, each allocate no more than New's
 // buffer and the scanner's few KiB of state, from New to io.EOF; so do a 64 MiB string passed over by Skip,
-// and one captured past a 1 MiB bound, beside what growing its capture to the bound takes (at most twice
-// the bound, by doubling, of which the bound at most is held). Measured as the bytes allocated in all by
-// the package's code (allocatedByTheScan), which a held value cannot pass under, however briefly it was held.
+// one teed while it is read or passed over, and one captured past a 1 MiB bound, beside what growing its
+// capture to the bound takes (at most twice the bound). Measured as the bytes allocated in all by the
+// package's code (allocatedByTheScan), which a held value cannot pass under, however briefly it was held.
 //
-// Mutation: hold a string's text until its closing quote, keep a growing stack of containers, or let a
-// capture grow past its bound, and this fails naming the input.
+// Mutation: hold a string's text until its closing quote, keep a growing stack of containers, let a
+// capture grow past its bound, or hold what a tee writes, and this fails naming the input.
 func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
 	// Not parallel: a parallel case's scan would be counted as this one's.
 	readEvery := func(s *jsonscan.Scanner, p []byte) error {
@@ -175,6 +176,16 @@ func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
 				}
 			}
 		}, stateCeiling},
+		{"a 64 MiB string teed while it is read in full", func() io.Reader {
+			return spell(segment{text: `{"data":"`}, segment{pattern: "A", n: mib64}, segment{text: `"}`})
+		}, func(s *jsonscan.Scanner, p []byte) error {
+			return teeTheData(s, func() error { return readText(s, p) })
+		}, stateCeiling},
+		{"a 64 MiB string teed while it is passed over by Skip", func() io.Reader {
+			return spell(segment{text: `{"data":"`}, segment{pattern: "A", n: mib64}, segment{text: `"}`})
+		}, func(s *jsonscan.Scanner, _ []byte) error {
+			return teeTheData(s, s.Skip)
+		}, stateCeiling},
 		{"a 64 MiB string captured past a 1 MiB bound", func() io.Reader {
 			return spell(segment{text: `["`}, segment{pattern: "A", n: mib64}, segment{text: `"]`})
 		}, func(s *jsonscan.Scanner, _ []byte) error {
@@ -208,6 +219,46 @@ func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+// teeCount takes a teed value without holding it: how many bytes it was handed, and how many of them are no
+// 'A', which for a teed string of them are its two quotes.
+type teeCount struct{ n, other int }
+
+// anA is what teeCount counts, made once so no write allocates.
+var anA = []byte("A")
+
+func (w *teeCount) Write(p []byte) (int, error) {
+	w.n += len(p)
+	w.other += len(p) - bytes.Count(p, anA)
+	return len(p), nil
+}
+
+// teeTheData tees the string of As a {"data":...} text holds while take takes it, and reads on to io.EOF:
+// the tee must hand over the string whole, quotes and all.
+func teeTheData(s *jsonscan.Scanner, take func() error) error {
+	for range 3 {
+		if _, err := s.Next(); err != nil {
+			return err
+		}
+	}
+	w := &teeCount{}
+	if err := s.Tee(w); err != nil {
+		return err
+	}
+	if err := take(); err != nil {
+		return err
+	}
+	for range 2 {
+		if _, err := s.Next(); err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+	}
+	if w.n != mib64+2 || w.other != 2 {
+		return fmt.Errorf("the tee handed over %d bytes, %d of them no A; want the %d of the string as written",
+			w.n, w.other, mib64+2)
+	}
+	return nil
 }
 
 // allocatedByTheScan is the bytes scan allocates with the package's code on the stack, from a memory profile

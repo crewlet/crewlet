@@ -44,6 +44,12 @@ func (s *Scanner) Read(p []byte) (int, error) {
 		// first byte.
 		s.whole = false
 	}
+	if err == nil {
+		if tee := s.takeTee(); tee != nil {
+			// The read ended a teed value whose writer failed: answered with the bytes it read.
+			return n, tee
+		}
+	}
 	// What ended the read, if anything did, is the scan's answer from now on: the next call answers it,
 	// after the bytes this one read.
 	err = s.stop(err)
@@ -71,25 +77,32 @@ func (s *Scanner) InvalidUTF8() bool {
 	return s.invalid
 }
 
-// passText passes over what of the current token's text is still unread, validating it.
+// passText passes over what of the current token's text is still unread, validating it, and answers the
+// failure of a teed value's writer where that ends the value.
 func (s *Scanner) passText() error {
+	var err error
 	switch s.text {
 	case textName, textString:
-		return s.passString()
+		err = s.passString()
 	case textNumber:
-		_, err := s.number(nil, true)
+		_, err = s.number(nil, true)
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	return s.takeTee()
 }
 
 // closeText ends the current token's text: after a Name its colon comes, after a String or a Number
-// whatever follows a value.
+// whatever follows a value, which ends a tee of it.
 func (s *Scanner) closeText() {
 	if s.text == textName {
 		s.expect = expectColon
 	} else {
 		s.afterValue()
+		if s.tw != nil && s.depth == s.teeDepth {
+			s.endTee()
+		}
 	}
 	s.text = textNone
 }
