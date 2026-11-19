@@ -108,7 +108,6 @@ const nobody: ViewerState = {
   assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantAssigned: null,
   assistantCanAssign: false,
   chatVendors: [],
 };

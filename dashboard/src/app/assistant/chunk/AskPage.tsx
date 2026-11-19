@@ -70,9 +70,7 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
-import { useViewer } from "~/lib/viewer.ts";
 import { useAskReading } from "../place.ts";
-import { AskModel, ChooseAskModel } from "./AskModel.tsx";
 import { readTab } from "../tab.ts";
 import {
   ASK_PAGE_PATH,
@@ -118,9 +116,6 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
   const { view, askDelete, askRename, resetPage, deletable, composer } = useAskGestures();
   const reading = useAskReading();
   const offline = reading.unavailable !== null;
-  // NO MODEL, AND A READER WHO MAY ASSIGN ONE: the picker is the page.
-  const viewer = useViewer();
-  const chooseModel = reading.unavailable?.reason === "no_model" && viewer.assistantCanAssign;
   const now = useNow();
   const [query, setQuery] = useState("");
   // ON ONE PANE, the list is shown once the reader asks for it (Back), and
@@ -245,7 +240,6 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
             <ListDetailBack label="Back to conversations" onClick={() => setListing(true)} />
             <h2 className="ask-page__title">{title}</h2>
             <span className="ask-page__actions">
-              <AskModel />
               {deletable ? (
                 <>
                   <IconButton
@@ -271,7 +265,7 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
           <div
             className={offline ? "ask-page__thread ask-page__thread--offline" : "ask-page__thread"}
           >
-            {chooseModel ? <ChooseAskModel /> : <AskThread onNew={startNew} />}
+            <AskThread onNew={startNew} />
           </div>
           {offline ? null : (
             <footer className="ask-page__foot">
