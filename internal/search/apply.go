@@ -13,24 +13,14 @@ import (
 // Applier is the vector domain's deterministic state machine: the ONLY writer
 // of `kb_vectors` and `kb_vectors_bin`, on every node.
 //
-// # The two rows are written together, in one statement pair, or not at all
+// The two rows are written together, or not at all: `model` and `dim` on the
+// narrow table duplicate the wide one's but cannot disagree, since both are
+// written in the transaction committed with the checkpoint, under one guard.
 //
-// That is what answers the objection this design's shape invites — that
-// carrying `model` and `dim` on the narrow table duplicates a fact the wide
-// one already holds, and a duplicated fact is a fact that can disagree. It
-// cannot disagree here, because there is no window in which one row is written
-// and the other is not: both are inside the transaction the framework commits
-// with the checkpoint, and the guard that decides whether the wide row moves is
-// the same guard the narrow one follows.
-//
-// # Why the guard is the POSITION and not a revision
-//
-// A record's own position on this stream is monotone and is a pure function of
-// the record — the framework composes it from the writer's generation and the
-// broker's sequence — so an applier needs no clock, no config read and no
-// second table to decide whether what it is holding is newer than what it has.
-// A redelivery is then a no-op by arithmetic rather than by a ledger, which is
-// exactly what lets this domain keep none.
+// The guard is the POSITION, not a revision: a record's position is monotone
+// and a pure function of it (the writer's generation and the broker's
+// sequence), so the applier needs no clock, config read or second table to tell
+// newer from held. A redelivery is a no-op by arithmetic, so no ledger.
 type Applier struct {
 	// index is the decoded copy of the installed index, keyed by its
 	// CONTENT: see [ivfMemo]. Nil is an applier that decodes the index from

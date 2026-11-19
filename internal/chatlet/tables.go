@@ -4,22 +4,16 @@ import "github.com/crewlet/crewlet/internal/statelog"
 
 // THE TABLE INVENTORIES, and what each list is for.
 //
-// Three readers derive from these and none of them can see the others:
-// [Domain.Tables], which the framework turns into a snapshot's scrub list, an
-// identity claim and a local sweep; the completeness walk, which asserts that
-// a replay from zero reproduces every one of them; and the applier, which is
-// the only writer of any of them.
+// Three readers derive from these: [Domain.Tables] (the framework's snapshot
+// scrub list, identity claim and local sweep), the completeness walk (a replay
+// from zero reproduces every table) and the applier, the only writer.
 //
-// THE NAMES ARE THE MIGRATION'S, EXACTLY. Nothing in Go connects a string here
-// to `internal/store/schema/replicated/0055_the_chat_domain_lands.sql` (and
-// `0068_a_chat_message_is_decided_where_it_is_applied.sql`, the verdicts,
-// `0070_the_chat_verdicts_say_how_far_back_they_were_pruned.sql`, and
-// `0071_a_room_says_what_changed_in_it.sql`, the auto-join account, and
-// `0075_a_message_says_who_answered_it.sql`, the receipts), and a
-// misspelling is silent in the direction that matters: a table left out of the
-// map is scrubbed from no snapshot, compared by no claim and swept by nobody,
-// which looks exactly like a table that behaves. What catches it is the
-// framework's own suite, which counts the rows of every table this map names.
+// THE NAMES ARE THE MIGRATIONS', EXACTLY (`0055_the_chat_domain_lands.sql`,
+// `0068`, `0070`, `0071`, `0075` under `internal/store/schema/replicated/`).
+// Nothing in Go connects a string here to them, and a misspelling is silent: a
+// table left out is scrubbed from no snapshot, compared by no claim and swept
+// by nobody. The framework's suite catches it by counting the rows of every
+// table this map names.
 
 // ReproducibleTables is every table a record's payload must be able to
 // rebuild.
@@ -106,23 +100,16 @@ var BarrierTables = map[string]statelog.TableClass{}
 
 // Tables is every durable table this domain writes, with its class.
 //
-// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP, which is why a table missing from it is three lists that are
-// silently short rather than one error. It is built from the exported
-// inventories rather than typed a third time, and it lives here beside them
-// rather than with the rest of the declaration for exactly that reason.
+// THE SCRUB LIST, IDENTITY CLAIM AND LOCAL SWEEP ARE ALL DERIVED FROM THIS
+// MAP, so a missing table is three silently short lists.
 //
-// THREE CLASSES, AND THE ONE DIVERGENT TABLE IS THE LEDGER. No ROW table is
-// Divergent, and that is a property of the applier rather than an omission: it
-// reads no epoch key and no node identity, so every node writes identical rows
-// and the identity claim covers the whole of the conversation. The wiki's
-// tool-skill flag is the shape a Divergent row table takes — THIS BUILD'S
-// parser answering about this build's rules, which two builds mid-upgrade
-// legitimately disagree about — and nothing in a conversation is in that
-// position. The operation ledger is Divergent for the framework's reason
-// instead: it travels inside every snapshot, and its `applied_at` is each
-// node's own clock. A table that ever joins it belongs in this function with
-// the class stated, never in [ReproducibleTables] with a comment.
+// THE ONE DIVERGENT TABLE IS THE LEDGER. No ROW table is: the applier reads no
+// epoch key or node identity, so every node writes identical rows. (A Divergent
+// row table would be a build's parser answering about its own rules, as the
+// wiki's tool-skill flag does.) The operation ledger is Divergent for the
+// framework's reason: it travels inside every snapshot and `applied_at` is each
+// node's own clock. A table that joins it belongs here with the class stated,
+// never in [ReproducibleTables] with a comment.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))

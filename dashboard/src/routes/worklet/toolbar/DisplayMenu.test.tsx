@@ -531,6 +531,7 @@ function serving(answers: Partial<Record<QueryName, unknown>>) {
 }
 
 const task: WorkSummary = {
+  flow: null,
   id: "1",
   key: "ENG-1",
   project: "ENG",

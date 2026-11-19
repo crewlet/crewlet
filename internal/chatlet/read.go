@@ -18,83 +18,17 @@ import (
 )
 
 // Reader answers questions about the company's conversation from THIS NODE's
-// own applied rows.
-//
-// # Every answer says where it came from
-//
-// EVERY READ GOES THROUGH [statelog.Reader], which is what turns the level
-// from a word into a property of the answer: the refusal ladder first (an
-// evicted node, one below the trim floor, one whose applier has stopped serves
-// nothing), then the coverage probe over what the read is ABOUT, then the
-// freshness target — a quorum-committed barrier for `linearizable`, the
-// caller's own high-water mark for `session`, a declared bound for `stale` —
-// and only then the rows. [Served] travels with every answer for the same
-// reason the wiki's listing carries it: a caller cannot reconstruct the
-// position afterwards, because [Reader.At] answers about NOW rather than about
-// the transaction the rows were read in.
-//
-// AND ONE TRANSACTION PER ANSWER. A channel's detail is its row plus its
-// membership, and a transcript page is its messages plus their reactions —
-// each read in the transaction [statelog.Reader.Read] opens, so a page cannot
-// answer with reactions from after the messages it reports.
-//
-// # Read-your-own-writes is the framework's floor, not a level of ours
-//
-// A write returns the position its record landed at and a wake carries one.
-// A caller that holds either names it as [statelog.Freshness.Floors] and
-// is served nothing from before it — at every level, with a `behind` refusal
-// rather than rows from before the write when this node has not got there.
-// There is no chat read level, no `wait_for` parameter and no second waiter:
-// the one the framework already honours is the one this package threads.
-//
-// # ONE visibility function
-//
-// [Visible] decides who may read a room, and every read here calls it. The
-// set reads narrow in SQL as well — `private = 0 OR <this reader is a member>`
-// over the `private` column the applier computed from the same predicate — and
-// that is a NARROWING rather than a second answer: without it a LIMIT would
-// count rows the caller may not see and a page of fifty would render three.
-// The decision is still [Visible]'s, on every row either filter admits.
-//
-// A ROOM THE VIEWER MAY NOT READ IS NOT FOUND. Not forbidden: a private room's
-// EXISTENCE is information — who is talking to whom, and about what, is most
-// of what a transcript discloses — and a refusal that distinguished "no such
-// room" from "not yours" would answer that question for anybody who guessed an
-// id.
-//
-// # Two cursors, and why they are not one
-//
-// A TRANSCRIPT PAGES ON `channel_seq`, the contiguous per-room number the
-// applier mints from log order. A FEED PAGES ON THE COMPOSED POSITION, which
-// carries the generation in the ordering and therefore spans a reanchor with
-// no gap and no repeat.
-//
-// The composed position is the WRONG cursor for a transcript, and that is a
-// correctness property rather than a preference: `chat_messages.version` is
-// the last record that CHANGED the row, so an edit moves a message up the
-// ordering. Paging backwards on it, a message edited while somebody scrolls
-// jumps above the cursor and is never returned — the exact gap a keyset cursor
-// exists to prevent. `channel_seq` is minted once and never moves, it is what
-// `chat_messages_channel_idx` is ordered by, and it survives a reanchor
-// because a replay in the same log order mints the same number. The mention
-// feed has no such column and needs none: an edit keeps the row of every
-// handle it still names and `chat_mentions` rows are written `ON CONFLICT DO
-// NOTHING`, so a row's version is the position of the record that NAMED that
-// handle and never moves either.
-//
-// # What is NOT here
-//
-//   - READ STATE. Where somebody's eye has reached lives in coordination
-//     ([github.com/crewlet/crewlet/internal/coord.ChatReads]), and the cursors
-//     reach this package as a VALUE on the query. A reader that dialled
-//     coordination itself would put a fleet round trip inside every rail poll
-//     and give this package a second store to be wrong about.
-//   - SEARCH. The keyword index over this corpus is
-//     [github.com/crewlet/crewlet/internal/search]'s, and it crosses the
-//     estate boundary — the messages are replicated and the index is this
-//     node's own — which is precisely why it is not a statement in here.
-//   - A WAKE. That is derived from the committed record by something that
-//     outlives the writer; see [github.com/crewlet/crewlet/internal/changefeed].
+// own applied rows. Every read goes through [statelog.Reader] (refusal ladder,
+// coverage probe, freshness target, rows) in ONE transaction per answer, so a
+// page never pairs reactions from after its messages. [Served] travels with each
+// answer because [Reader.At] answers about NOW. A caller's write position goes in
+// [statelog.Freshness.Floors]; there is no chat level or `wait_for`. Read state
+// lives in coord and arrives as a value on the query: no second store here.
+// [Visible] decides every room read; the SQL `private` narrowing only stops a
+// LIMIT counting rows the caller cannot see. A room the viewer may not read is
+// NOT FOUND, never forbidden: its existence discloses who talks to whom.
+// A transcript pages on `channel_seq`, a feed on the composed position:
+// `chat_messages.version` moves on edit, so paging on it skips an edited message.
 type Reader struct {
 	log *statelog.Reader
 
@@ -157,94 +91,49 @@ const (
 // carries, summed. A page ends at its limit or here, whichever comes first,
 // and its cursor carries on from the last message it holds.
 //
-// HALF OF WHAT ONE MESSAGE ON THE BROKER CARRIES ([queue.MaxPayloadBytes]),
-// because a page is ONE REPLY when a node that holds no data reads it through
-// the estate router, and a reply past that ceiling is refused whole — "too
-// large, narrow the request" — so a room of long messages could not be read a
-// page at a time from such a node at all. The count alone never bounded it: a
-// message's document at its caps runs to most of [MaxRecordBytes] — a body of
-// markup encodes six bytes for one — so a page at [MaxLimit] is well over a
-// hundred mebibytes of them, and a screen asking for one gets an error rather
-// than fewer rows. The other half is for what rides
-// with the page — the reactions, a thread's root and participants, the
-// envelope — and for the difference between a stored document and its wire
-// encoding. On an ordinary room the count binds long before this does.
+// HALF OF [queue.MaxPayloadBytes]: a page is ONE REPLY when a node holding no
+// data reads it through the estate router, and a reply past that ceiling is
+// refused whole. The count alone never bounded it: a message at its caps runs
+// to most of [MaxRecordBytes], so a page at [MaxLimit] is over a hundred MiB.
+// The other half is for what rides with the page (reactions, a thread's root
+// and participants, the envelope) and the wire encoding.
 const pageBytes = queue.MaxPayloadBytes / 2
 
 // UnreadLimit is how far an unread count counts before it answers "at least
 // this many".
 //
-// A HUNDRED. An unread badge is a number somebody glances at: the difference
-// between 100 and 4,000 changes nothing anybody does, while counting to 4,000
-// is a scan of a room's whole transcript on every poll of a rail that has one
-// row per room. So the count is a COUNTED RANGE over the room's newest hundred
-// messages — a person back from a fortnight's leave is told "99+" instead of
-// costing the node a corpus scan to be told a number they will not read.
-//
-// THE WINDOW CAN ONLY LOSE WHAT THE CAP ALREADY HIDES. The messages above a
-// cursor are the newest ones, so if more than a hundred of them are unread the
-// answer is the cap whichever way it was counted; the window and the cap are
-// one decision rather than two.
+// A HUNDRED: counting to 4,000 changes nothing anybody does but scans a room's
+// whole transcript on every poll of a rail with one row per room. The count is
+// a range over the room's newest hundred messages. The window loses only what
+// the cap already hides: the messages above a cursor are the newest, so more
+// than a hundred unread is the cap however it was counted.
 const UnreadLimit = 100
 
 // MaxRailChannels bounds how many rooms one person's channel list answers for.
 //
-// TWO HUNDRED AND FIFTY-SIX, which is the cap the read-state bucket puts on
-// one person's cursors
-// ([github.com/crewlet/crewlet/internal/coord.MaxReadCursors]) — past it a
-// room could not carry an unread count at all, because the record that would
-// remember where its reader had got to has already dropped the stalest cursor
-// to stay inside its own bound. Tying the two is what stops a rail that lists
-// rooms whose badge can never be right.
+// 256 is [github.com/crewlet/crewlet/internal/coord.MaxReadCursors], the cap on
+// one person's read cursors: past it a room could not carry an unread count,
+// its cursor already dropped.
 //
-// THE RAIL IS NOT PAGED, and that is what this cap buys. The list is ordered
-// by ACTIVITY, which is a fact about each room's newest message rather than
-// about any column the membership index is ordered by — so a window applied in
-// SQL would page by channel id and re-sort each page against itself, which is
-// an order that changes as you scroll. A bounded list sorted once is the
-// honest shape; [ChannelListing.Truncated] says when a person is in more rooms
-// than that. A caller that reads fewer ([ChannelsQuery.Limit]) is given the
-// most recently active of that one sorted list, its top, never a page of it.
+// THE RAIL IS NOT PAGED. It is ordered by ACTIVITY (each room's newest
+// message), not by any indexed column, so a SQL window would page by channel id
+// and re-sort each page, an order that changes as you scroll. One bounded list
+// is sorted once; [ChannelListing.Truncated] says when there are more rooms. A
+// smaller [ChannelsQuery.Limit] gets the top of that list, never a page of it.
 const MaxRailChannels = 256
 
 // Visible is the ONE answer to whether somebody may read a room.
 //
-// # The rule
+// A public or unit room is readable by any seat of the company (the engine is
+// the boundary: callers are already resolved to a seat). A private room, a
+// direct conversation and a group are their membership, the predicate the
+// applier wrote the `private` column from ([privateRoom]).
 //
-// A PUBLIC OR A UNIT ROOM IS READABLE BY ANY SEAT OF THE COMPANY, because the
-// ENGINE is the boundary: everything that reaches this package has already
-// been resolved to a seat in this company's own org chart, and a company whose
-// seats could not read its own open rooms would be one where the org chart hid
-// the work rather than organised it. A PRIVATE ROOM, A DIRECT CONVERSATION AND
-// A GROUP ARE THEIR MEMBERSHIP, which is the same predicate the applier wrote
-// the `private` column from ([privateRoom]) — one rule, one column, no second
-// opinion.
-//
-// AN UNKNOWN KIND IS NOT VISIBLE. A kind a newer peer wrote is one this build
-// cannot classify, and a room whose visibility rule is unknown must not be
-// served on the guess that it resembles a public one: the failure of refusing
-// is a room a person cannot open until this node is upgraded, and the failure
-// of serving is a transcript disclosed to everybody.
-//
-// AN EMPTY VIEWER IS NOBODY. Identity is resolved above this package — a
-// person reads as the human seat they hold, and the node the caller asked
-// refuses a principal with no seat to read as before anything is routed — so
-// an empty handle here is such a caller that slipped through, and the only
-// honest answer for one is no. The reads refuse it by name rather than by an
-// empty answer; see [viewerOf].
-//
-// AND NOBODY ELSE HAS A WAY IN. There is deliberately no arm here for an
-// admin: no principal reads a private room, a group or a direct conversation
-// it is not in. What compliance needs reaches past membership WITHOUT reading
-// — a moderator's delete, an erase, a prune — and an arm that let whoever runs
-// the deployment read every conversation between two people would be a
-// product decision of its own, not a property of being trusted with the
-// company's configuration.
-//
-// THE MEMBER FLAG IS THE CALLER'S because the two ways of establishing it are
-// a row lookup and a row the caller already read: a function that went and
-// looked would issue a second statement for every room in a listing that had
-// just read the membership it needed.
+// An unknown kind is NOT visible: a newer peer's room must not be served on the
+// guess that it resembles a public one. An empty viewer is nobody ([viewerOf]).
+// There is deliberately no admin arm: compliance (a moderator's delete, an
+// erase, a prune) reaches past membership WITHOUT reading. The member flag is
+// the caller's so a listing does not issue a second statement per room.
 func Visible(viewer string, ch Channel, member bool) bool {
 	if strings.TrimSpace(viewer) == "" {
 		return false
@@ -662,42 +551,15 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 }
 
 // Readable is every room this viewer may READ, each as a search needs it
-// ([ReadableRoom]): its id to scope the index by, and the name and kind a hit
-// in it is shown under.
+// ([ReadableRoom]). The rail is not this set: [Visible] also admits public and
+// unit rooms the viewer has not joined, which a search must not silently miss.
+// Archived rooms are in: an archive closes a room to writing, not reading.
 //
-// # The rail is not this set
-//
-// A rail is what somebody is IN, and [Visible]'s rule is wider than that: a
-// public room and a unit's room are readable by any seat of the company,
-// joined or not. A search driven off the rail would therefore answer nothing
-// from exactly the rooms a company does most of its talking in, and would do
-// it silently — an empty result reads as "nobody said that" rather than as
-// "this search could not see the room".
-//
-// # Archived rooms are in
-//
-// An archive closes a room to new messages, not to reading it, and a search is
-// the read where a closed room is most of the point: what a team concluded
-// last quarter is in the room they stopped using. The rail leaves them out
-// because it is the list somebody works out of; this is not that list.
-//
-// # Whole, never cut
-//
-// The WHOLE set materialises here, with no limit and so no truncation to
-// report. That is what makes it safe to hand a search as its visible set: a
-// partial one would narrow the answer without saying so, which is the failure
-// the search's own [github.com/crewlet/crewlet/internal/search.ErrNoViewer]
-// exists to refuse. It is NOT bounded by [MaxChannels], which counts live
-// rooms only — archived rooms accumulate, since nothing deletes a room — and
-// a limit at that cap cut the set, alphabetically and silently, for a company
-// that had archived its way past it. What the set's size costs a search is
-// the search's own concern: the index binds it in chunks sized from the
-// store's measured parameter limit, so no count of rooms decides whether chat
-// search works.
-//
-// An empty slice with no error is a viewer who may read nothing at all — a
-// real state, and the caller's to tell apart from a viewer it failed to
-// resolve, which is refused here by name.
+// The WHOLE set materialises, with no limit: a partial one would narrow a search
+// without saying so, the failure
+// [github.com/crewlet/crewlet/internal/search.ErrNoViewer] exists to refuse. It
+// is NOT bounded by [MaxChannels], which counts live rooms only. An empty slice
+// with no error is a viewer who may read nothing, not an unresolved one.
 func (r *Reader) Readable(ctx context.Context, viewer string,
 	fresh statelog.Freshness) ([]ReadableRoom, error) {
 
@@ -817,22 +679,14 @@ type RoomNames struct {
 // set, less the direct and group conversations, which have no name, and
 // bounded at [MaxRoomNames].
 //
-// # Why a reader needs the names
-//
 // A room's name is any `[a-z0-9][a-z0-9_-]{0,63}` ([namePattern]), so `#e2e`
-// and `#b2b` are spelled exactly as a colour is and `#2026` as an issue's
-// number. Prose names rooms that way, a seat's and a model's alike, and a
-// reader can only tell the room from the colour by knowing which rooms there
-// are. The rail is not that set, for [Reader.Readable]'s reason: a public room
-// and a unit's room are readable by every seat, joined or not, and they are
-// the rooms a company names most.
+// and `#2026` read as a colour or an issue number; a reader can only tell them
+// apart by knowing which rooms exist. The rail is not that set, for
+// [Reader.Readable]'s reason.
 //
-// # Names, never a room's contents
-//
-// Each room is its id, its name, its kind and whether it is archived: nothing
-// a [Visible] room does not already show the viewer, and nothing the rail adds
-// (a room's last message, its unread count), which costs a scan per room. It
-// is one statement over the rooms, read for a frame rather than per screen.
+// Names, never contents: each room is its id, name, kind and archived flag,
+// nothing a [Visible] room does not already show, and none of the rail's
+// per-room scans (last message, unread count). One statement, read per frame.
 func (r *Reader) RoomNames(ctx context.Context, viewer string,
 	fresh statelog.Freshness) (RoomNames, error) {
 
@@ -1177,41 +1031,15 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 
 // unreadCount is the counted range above one person's cursor in one room.
 //
-// # Why the newest message decides whether anything is counted at all
-//
-// The cursor is a POSITION and the transcript is ordered by SEQUENCE, so the
-// two meet only through a row's own `version`. The newest message carries the
-// highest version any post in the room has, so a room whose newest message is
-// at or below the cursor has nothing above it and the count is zero WITH NO
-// SECOND STATEMENT — which is every room a person has already read, on every
-// poll after the first.
-//
-// # Why the window is the room's tail
-//
-// Because a predicate that is not the index's own order cannot terminate. The
-// rows above a cursor are the newest ones, so counting the room's newest
-// [UnreadLimit] messages and keeping those above the cursor reads exactly that
-// many rows, always — where `version > cursor` scanned in sequence order would
-// walk the whole room to be sure it had found every straggler. The window can
-// only lose rows in a room that is already past the cap, where the answer is
-// the cap either way.
-//
-// A MESSAGE YOU WROTE IS NOT ONE YOU HAVE NOT READ, and a tombstone is not a
-// message: both are excluded, because a badge nobody can clear by reading the
-// room is a badge that trains people to ignore the rail. Nor is a room event,
-// which is the room's change rather than anything said in it, nor a reply in
-// a thread, which a reader follows in the thread rather than in the room: the
-// window is the room's newest [UnreadLimit] ROOM POSTS, stepping past events
-// and replies on the same index.
-//
-// # And the mentions among them, in the same statement
-//
-// The third value is how many of the counted messages name the viewer
-// (a `chat_mentions` row, one primary-key probe per message in the window) or
-// the whole room (the row's own `collective`). A LEFT JOIN rather than a
-// correlated EXISTS, because the pinned driver may rewrite a correlated
-// subquery into a join over its whole child table ([storetest.Decorrelated]),
-// and that child is every mention in the company.
+// The cursor is a POSITION, the transcript ordered by SEQUENCE; they meet only
+// through `version`. A newest message at or below the cursor means zero WITH NO
+// SECOND STATEMENT (every already-read room, every poll). The window is the
+// newest [UnreadLimit] because `version > cursor` in sequence order would walk
+// the whole room. Your own messages, tombstones, events and thread replies are
+// excluded: a badge reading cannot clear trains people to ignore the rail.
+// Mentions (`chat_mentions` or `collective`) join as a LEFT JOIN, not a
+// correlated EXISTS the driver may decorrelate over every mention in the
+// company ([storetest.Decorrelated]).
 func unreadCount(ctx context.Context, tx *sql.Tx, channelID, who string,
 	cursor int64, last *MessagePreview) (unread int, capped bool, mentions int, err error) {
 
@@ -1289,16 +1117,11 @@ func attachParticipants(ctx context.Context, tx *sql.Tx, summaries []ChannelSumm
 // sortRail orders a person's rooms the way they read them: newest activity
 // first.
 //
-// IN GO RATHER THAN IN SQL, and that is what [MaxRailChannels] pays for. The
-// ordering value is the newest message's instant, which lives in a different
-// table from the membership the listing is driven off — so an ORDER BY would
-// need every room's last message before the first row could be returned, which
-// is the whole scan a bounded list plus one seek per room replaces.
-//
-// A ROOM WITH NOTHING IN IT SORTS BY ITS CREATE, so a room somebody has just
-// made appears where they expect it rather than at the bottom for ever. The
-// tie-break is the id, so two nodes answering one person's rail answer it in
-// one order.
+// IN GO, not SQL, which [MaxRailChannels] pays for: the newest message's instant
+// lives in another table than the membership, so an ORDER BY would need every
+// room's last message before the first row, the scan a bounded list plus one
+// seek per room replaces. An empty room sorts by its create, not at the bottom
+// for ever. The id tie-break makes two nodes answer one rail in one order.
 func sortRail(summaries []ChannelSummary) {
 	slices.SortFunc(summaries, func(a, b ChannelSummary) int {
 		if at := railActivity(b).Compare(railActivity(a)); at != 0 {
@@ -1410,23 +1233,13 @@ func (r *Reader) Channel(ctx context.Context, viewer, channelID string,
 // [Visible], and NOT FOUND for a room this viewer may not read, so a private
 // room's name discloses exactly as much as its id does.
 //
-// # Why a name is an address here and not only on somebody's rail
+// A name IS the room's address (unique, never renamed), so it resolves against
+// every room the viewer may read, not only the ones they are IN: a decision may
+// promise its outcome to any unit's room, and no seat call hands over that id.
 //
-// Because a name IS the room's address — unique across the company, claimed
-// once and never renamed — and every sentence anybody writes about a room uses
-// it. Resolved only against the rooms a caller is IN, a public room or a unit's
-// room nobody here had joined was readable and writable by id while its name
-// meant nothing — and nothing a seat can call hands it that id. A decision may
-// promise its outcome to any unit's room, so an asker outside that unit owed a
-// post to a room it could name and could not reach, and its turn was sent back
-// until its cap.
-//
-// # What the read is about
-//
-// The ADDRESS, and the room it resolves to: a deferred record claiming this
-// name — a newer peer's create — refuses the read rather than answering "no
-// such room" about a room that is on its way. Resolved in the answer's own
-// transaction, because the room's id is what the name is being read to find.
+// The read is about the ADDRESS and the room it resolves to: a deferred record
+// claiming this name (a newer peer's create) refuses rather than answering "no
+// such room". The name resolves in the answer's own transaction.
 func (r *Reader) ChannelNamed(ctx context.Context, viewer, name string,
 	fresh statelog.Freshness) (ChannelDetail, error) {
 
@@ -1868,16 +1681,11 @@ type ThreadQuery struct {
 	// themselves, behind the root — and counts the rest in [Thread.Earlier].
 	// Held to [MaxLimit]; refused beside a Cursor, which pages the other way.
 	//
-	// A DELETED REPLY IS STEPPED OVER, because the newest end is read to be
-	// read: a tombstone is a blank line a reader drops, and one answered in
-	// the window is a reply that could have been there in its place. It is
-	// counted in Earlier with the rest — the thread is no shorter for it.
-	//
-	// It is what a seat woken in a thread reads ([ThreadReader]): the
-	// message that woke it is the thread's newest, and paging forwards from
-	// the root to reach it is a walk the length of the thread — where the
-	// index this read drives on ([chat_messages_thread_idx]) is a seek
-	// from either end.
+	// A DELETED REPLY IS STEPPED OVER: a tombstone is a blank line a reader
+	// drops and would displace a real reply from the window. It still counts
+	// in Earlier. This is what a seat woken in a thread reads ([ThreadReader]):
+	// its waking message is the newest, and paging from the root is a walk the
+	// thread's length where [chat_messages_thread_idx] seeks from either end.
 	Newest int
 }
 
@@ -2193,17 +2001,11 @@ type messagePage struct {
 // readMessagePage reads one window of `chat_messages` and everything hanging
 // off it.
 //
-// ONE FUNCTION FOR THE TRANSCRIPT AND THE THREAD, because they differ in
-// exactly two values — the predicate and the direction — and everything after
-// the scan is identical: decode the document, carry the minted sequence and
-// the position, and attach the reactions in one statement. Written twice, the
-// second copy is where a page stops carrying reactions or starts overrunning
-// its limit.
-//
-// THE WINDOW IS BOUND HERE, not by the caller. The placeholders are
-// positional, so a caller that appended the limit to its own `args` would be
-// one reordering away from paging a room by a channel id — which reads exactly
-// like a room nobody has written in.
+// ONE FUNCTION FOR THE TRANSCRIPT AND THE THREAD: they differ only in the
+// predicate and direction, and a second copy is where a page stops carrying
+// reactions or overruns its limit. THE WINDOW IS BOUND HERE: placeholders are
+// positional, so a caller appending the limit to its own `args` is one
+// reordering from paging by a channel id, which reads like an empty room.
 func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	where []string, args []any, order string, limit int) (messagePage, error) {
 
@@ -2475,16 +2277,11 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 // attachReactions puts each message's reactions on it, in ONE statement for
 // the whole page.
 //
-// AGGREGATED IN SQL rather than read as rows: the handles behind a count are
-// [MaxReactionEmoji] times a room's membership, which is a product no page of
-// messages may carry to draw a row of emoji. The viewer's own membership of
-// each set comes back as part of the same aggregate, so a client can render
-// the toggle without a second question.
-//
-// THE VIEWER IS THE FIRST BIND, before the page's ids, because the
-// placeholders are positional and the `CASE` sits in the select list ahead of
-// the `IN`. One page is at most [MaxLimit] ids plus this one, which is inside
-// the 999 parameters the store guarantees.
+// AGGREGATED IN SQL, not read as rows: the handles behind a count are
+// [MaxReactionEmoji] times a room's membership. The viewer's own membership
+// comes back in the same aggregate. THE VIEWER IS THE FIRST BIND because the
+// placeholders are positional and the `CASE` precedes the `IN`; a page is at
+// most [MaxLimit] ids plus this one, inside the store's 999 parameters.
 func attachReactions(ctx context.Context, tx *sql.Tx, who string,
 	views []MessageView, ids []string) error {
 

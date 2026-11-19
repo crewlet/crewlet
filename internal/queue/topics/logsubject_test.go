@@ -25,6 +25,7 @@ func everyLogPrefix() []string {
 		topics.CodeLogPrefix,
 		topics.AccessLogPrefix,
 		topics.AtlasLogPrefix,
+		topics.AdvisorLogPrefix,
 	}
 }
 
@@ -177,6 +178,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 		if got, want := topics.AtlasLogSubject(tc.kind, tc.id),
 			topics.LogSubject(topics.AtlasLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the atlas log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
+		if got, want := topics.AdvisorLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.AdvisorLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the advisor log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
 		if got, want := topics.ExecutorLogSubject(tc.kind, tc.id),
 			topics.LogSubject(topics.ExecutorLogPrefix, tc.kind, tc.id); got != want {

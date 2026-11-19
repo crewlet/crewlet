@@ -169,7 +169,7 @@ hearing silence.
   unblocked, which moves every registration's backlog into unbounded
   goroutines rather than one registration's into a bounded wait.
 - AN ABSOLUTE CROSSING MARGIN in place of the share would shorten a dead
-  host's wait by about ten minutes of seventy-eight, at the cost of a second
+  host's wait by about ten minutes of seventy-nine, at the cost of a second
   rule beside the tail's for the same question.
 - A SHARE OF WHAT THE ASKER STILL WAITS for a read that waited `d` (main's
   rule, `0.75 × (wait − d)`) ends the read later the longer it waited: at the
@@ -187,8 +187,8 @@ did: the older build drops `budget_ms`, reads by the time to the deadline with
 no allowance, and never answers busy — today's behaviour for that pair until
 the host rolls. An OLDER asker's request reaches a newer host as version 1 with
 no wait and is refused (`wire`): its asker hears silence after its whole wait,
-so a collection hands its claim back only after that wait (seventy-eight to
-ninety-nine minutes) and asks again from the host's next poll, a stop's read is
+so a collection hands its claim back only after that wait (seventy-nine to
+a hundred minutes) and asks again from the host's next poll, a stop's read is
 written off once the older asker's own rule reads the stop past the box
 timeout, after one whole silent ask, and a lost run's session is not kept.
 Rolling every node within one read's wait avoids each. Reading the older

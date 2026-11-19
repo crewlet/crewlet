@@ -13,75 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// The one admission every turn on this node passes.
+// The one admission every turn on this node passes ([Node.AdmitTurn]). It is
+// one method, not a check each path makes, because turns arrive by more than the
+// mailbox: an executor finishing in its box resumes on the seat's CONTROL topic
+// and a recorded answer resumes from the sandbox coordinator's timer, and
+// neither passed the ownership check, the slot or the drain's closed gate, so a
+// draining node kept starting full turns. Whatever road, it is admitted here or
+// it does not start. In order:
 //
-// # Why it is one method rather than a check each path makes
-//
-// A turn reaches this node by more than one road. A seat's mailbox delivers
-// most of them, and the turn it starts was the only one this package admitted,
-// inside the subscription's handler. An executor that finishes in its box
-// resumes the turn that launched it from the seat's CONTROL topic, and a
-// person's recorded answer resumes a parked run from the sandbox coordinator's
-// own timer: neither is a mailbox delivery, so neither passed the ownership
-// check, the concurrency slot or the drain's closed gate. A draining node went
-// on starting full turns through them while every mailbox was quiesced and
-// every API route refused work, and [Node.Drain] waited for each one before it
-// handed the seats back.
-//
-// So the admission is exported, and the mailbox's handler is one caller of it
-// among several rather than the place it lives. Whatever road a turn arrives
-// by, it is admitted here or it does not start.
-//
-// # What it decides
-//
-// In this order, each for the reason the mailbox path always had:
-//
-//  1. FRESH OWNERSHIP of the seat ([seat.Host.MayStart]). A node that cannot
-//     prove a recent renew does not start minutes of work on a seat a peer
-//     may already be entitled to.
-//  2. A CONCURRENCY SLOT ([gate]), which waits while the node is at its
-//     ceiling and refuses at once while it drains.
-//  3. ONE TURN PER SEAT ([ErrSeatBusy]), refused rather than waited for: see
-//     below. After the slot, so a draining node says it is draining (the
-//     refusal its callers hand work on for), and a turn that waited for a
-//     slot is checked against the seat as it stands once it has one.
-//  4. THE DRAIN'S CUT: the admitted context is cancelled if a drain finds the
-//     queue's acknowledgements lost, as every mailbox turn's always was.
-//
-// # One turn per seat
-//
-// A seat is one agent, and a turn acts for it: it reads the seat's thread and
-// memory, posts as it, and writes to the tracker under its name. Two of its
-// turns in flight at once each act with no view of the other. The mailbox
-// alone could not have caused that, because it dispatches one delivery at a
-// time, but the other roads could: a person's answer reaches the run it names
-// on the seat's control topic, which no mailbox turn waits for, and its resume
-// would start beside whatever turn the mailbox was running. So the admission
-// that every road passes is where the rule lives.
-//
-// WHAT WAITS FOR THE SEAT, AND HOW, without spending a delivery. A turn that
-// does not come from the mailbox (a completion's, an answer's) is REFUSED on a
-// busy seat, and its caller keeps the work and tries again when
-// [Config.SeatTurnEnded] says the seat is free. Once admitted, such a turn
-// HOLDS THE SEAT'S INBOX for as long as it runs ([HoldSeatTurn]), so the
-// mailbox fetches nothing meanwhile: the mail waits on the broker with its
-// order and its delivery count intact, as it does behind an executor's hold.
-// A mailbox delivery that was fetched before that hold took effect WAITS for
-// the seat rather than being handed back, because every hand-back spends one
-// of the message's deliveries (queue.OutcomeDefer), and a seat busy for hours
-// would have spent its own mail into the dead-letter subject.
-//
-// # A turn inside a turn
-//
-// A recorded answer is usually resumed INLINE, on the mailbox delivery that
-// carried it, and that delivery already holds this seat's admission. Admitting
-// it a second time would take a second slot for the one turn that is running,
-// and on a node whose ceiling is one it would wait for ever on the slot its own
-// delivery holds. So the admitted context carries the admission, and asking
-// again for the same seat on this node while that admission is still held is
-// answered by it. Only while it is held: a context that outlives its turn
-// (detached with [context.WithoutCancel], say) keeps its values, and a
-// released admission it still carried would let a later turn past a drain.
+//  1. FRESH OWNERSHIP ([seat.Host.MayStart]): no minutes of work on a seat a peer may own.
+//  2. A CONCURRENCY SLOT ([gate]): waits at its ceiling, refuses at once while draining.
+//  3. ONE TURN PER SEAT ([ErrSeatBusy]), after the slot so a draining node says so.
+//  4. THE DRAIN'S CUT: the context is cancelled if a drain finds acks lost.
 
 // ErrSeatNotOwned is a turn refused because this node cannot prove it still
 // holds the seat. The work belongs to whichever node does, and the caller hands
@@ -91,6 +34,15 @@ var ErrSeatNotOwned = errors.New("node: this node cannot prove it holds the seat
 // ErrSeatBusy is a turn refused because another turn is running on the same
 // seat on this node. Nothing is wrong with the work: the caller hands it back,
 // or waits for [Config.SeatTurnEnded], and it runs once the seat's turn ends.
+//
+// A seat is one agent and two of its turns would act with no view of each
+// other; the mailbox dispatches one at a time, but a person's answer resumes on
+// the control topic beside it, so the rule lives where every road passes. A
+// non-mailbox turn is REFUSED on a busy seat and HOLDS THE SEAT'S INBOX while it
+// runs ([HoldSeatTurn]), so the mail waits on the broker intact. A mailbox
+// delivery fetched before the hold WAITS rather than being handed back, since
+// each hand-back spends a delivery (queue.OutcomeDefer) and a long-busy seat
+// would spend its mail into the dead-letter subject.
 var ErrSeatBusy = errors.New("node: another turn is running on the seat")
 
 // ErrDraining is a turn refused because this node is draining. The node is
@@ -110,7 +62,11 @@ var ErrDraining = errors.New("node: this node is draining")
 const HoldSeatTurn = "seat_turn"
 
 // admission is one turn's hold on its seat's admission, carried on the turn's
-// context so a nested ask for the same seat reuses it.
+// context so a nested ask for the same seat reuses it: a recorded answer is
+// usually resumed INLINE on a delivery that already holds the admission, and a
+// second slot would wait for ever on a node whose ceiling is one. Only while it
+// is held: a context detached with [context.WithoutCancel] keeps its values,
+// and a released admission it still carried would let a later turn past a drain.
 type admission struct {
 	node   *Node
 	handle string

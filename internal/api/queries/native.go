@@ -248,6 +248,8 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// showing only the position renders a deferral as lag.
 		"applied_through": answer.AppliedThrough,
 		"complete":        answer.Complete,
+		// FALSE IS SAID: the rows' flow read no live fact on this node.
+		"flow_live": answer.FlowLive,
 	}
 	if answer.LogLag != nil {
 		// ABSENT RATHER THAN ZERO when the broker could not be reached.

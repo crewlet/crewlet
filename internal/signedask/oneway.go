@@ -11,23 +11,17 @@ import (
 )
 
 // # One way: a frame nobody answers
+// A BROADCAST has no reply and no single receiver, so the request/reply id
+// bindings do not apply; the reason for signing does: admission vouches for a
+// connection, never a frame, and a forged presence frame would put a colleague
+// in a room they are not in.
 //
-// A request and its reply are a pair: the request carries an id the reply is
-// bound to, and a serving node remembers the ids it took. A BROADCAST has no
-// reply and no single receiver (the queue's Broadcast hands it to every node
-// listening), so neither binding applies. What still applies is the reason
-// for signing at all: the broker's admission vouches for a connection and
-// never a frame, and a frame that names a person causes a display of that
-// person. A forged presence frame would put a colleague in a room they are
-// not in.
-//
-// So a one-way frame is sealed with the same frame the state log signs with,
-// in a key domain of its own ([OneWay.Domain], the name it was built with),
-// and its body carries the instant it EXPIRES, inside the MAC: a captured
-// frame replayed later is refused once that instant has passed, and a sender
-// sets it to the short validity its channel is worth. No id is remembered,
-// because a broadcast is meant to be heard by every node and a repeat of one
-// says only what the original said, for no longer than the original could.
+// So a one-way frame is sealed with the state log's frame, in a key domain of
+// its own ([OneWay.Domain]), and its body carries the instant it EXPIRES,
+// inside the MAC: a replay is refused once it has passed, and a sender sets
+// the short validity its channel is worth. No id is remembered: every node is
+// meant to hear it, and a repeat says only what the original said, for no
+// longer than the original could.
 
 // Message is a one-way frame's body as the seal binds it.
 type Message interface {

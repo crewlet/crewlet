@@ -16,46 +16,14 @@ import (
 
 // Running a third-party app's provisioning pass from inside the engine.
 //
-// # What a pass is, and who else runs one
-//
-// A pass is a third-party app's own Reconcile with a sink and a webhook base
-// supplied: a base is permission to register a webhook and a sink is
-// permission to mint a credential, so those two arguments are the whole of
-// what separates provisioning from reading.
-//
-// It used to be what separated this package from the reconcile loop, which
-// ran every tick with neither. It no longer does: CONNECTING IS THE
-// PERMISSION, so the loop supplies both as well (see
-// [github.com/crewlet/crewlet/internal/engine] `startIntegrations`), and what
-// still cannot happen unattended is anything a person has not asked for — a
-// company with no block is not reconciled, a block with no credential reports
-// a finding rather than acting, and nothing is deleted except through a
-// disconnect somebody pressed.
-//
-// So this package is no longer "the writing one". It is the surface an
-// operator's button runs a pass through, and — through [Runner.Hold] — the
-// one guard every other writer at a surface takes as well.
-//
-// # One writer per surface, on this node and across the fleet
-//
-// Two operators pressing Connect at once, a loop tick landing on the pass an
-// operator just started, or a disconnect deleting the webhook a pass beside it
-// is registering: three shapes of one collision, at a third-party app where a
-// write creates an account or mints a credential.
-//
-// [Runner.Hold] is the only thing standing between them, and it is two guards
-// rather than one because either alone is a hole. The named duty lease stops
-// two NODES; it cannot stop two goroutines here, because a claim by an owner
-// that already holds the lease doubles as a renew, so both would be told yes.
-// An in-process claim stops those two goroutines and knows nothing of a peer.
-// A writer takes both or writes nothing.
-//
-// # Its result speaks the reconcile vocabulary
-//
-// A pass reports findings, exactly as a loop tick does, and the caller writes
-// them to the same status the loop writes. So a pass triggered from the
-// dashboard and a tick that ran a minute later cannot disagree about what an
-// integration's state is: there is one classifier and one status row.
+// A pass is a third-party app's own Reconcile with a sink (permission to mint
+// a credential) and a webhook base (permission to register a webhook).
+// CONNECTING IS THE PERMISSION, so the reconcile loop supplies both too
+// ([github.com/crewlet/crewlet/internal/engine] `startIntegrations`);
+// unattended, nothing happens a person has not asked for: no block, no
+// reconcile; no credential, a finding; deletion only through a disconnect
+// somebody pressed. [Runner.Hold] is the one writer guard per surface, and a
+// pass reports findings as a tick does, into the same status row.
 
 // Pass runs one integration's provisioning, with permission to write.
 //
@@ -79,53 +47,27 @@ type Pass interface {
 
 // Teardowner is a [Pass] that can also remove what it created.
 //
-// OPTIONAL, and today every [Pass] satisfies it. That is not an argument for
-// folding Teardown into Pass: what decides membership is whether this engine
-// PUT something at the surface, and the one kind that has nothing — Slack,
-// whose apps are created from the command line — has no pass here at all, so
-// it never reaches this assertion. A kind that gains a read-only pass gains
-// one without a teardown.
-//
-// A WEBHOOK IS NOT WHAT DECIDES IT. Mattermost withdraws none — it revokes
-// the tokens it issued and disables the bots it created — and Datadog
-// withdraws the webhook its own pass registers as well as disabling the
-// accounts. Both are destructive, which is the property that matters here.
-//
-// A type assertion is what asks, which keeps a third-party app's answer in one
-// place (its own package) rather than in a list here that has to be kept in
-// step with it.
+// OPTIONAL: membership is whether this engine PUT something at the surface, so
+// a kind that gains a read-only pass gains one without a teardown (Slack, whose
+// apps are made from the command line, has no pass at all). A webhook is not
+// what decides it: Mattermost withdraws none yet revokes tokens and disables
+// bots, which is destructive too. A type assertion asks, keeping each app's
+// answer in its own package rather than in a list here.
 type Teardowner interface {
 	Pass
 
-	// Teardown removes what this third-party app's passes created. It is the
-	// only operation in this package that DESTROYS at a third-party app, so it
-	// takes the operator's own answer about how far to go rather than inferring
-	// it.
+	// Teardown removes what this app's passes created: the only operation here
+	// that DESTROYS at a third-party app, so it takes the operator's own answer
+	// about how far to go. An error holds the surface in
+	// [integration.PhaseDisconnecting] and the loop retries, so every step is
+	// "remove this if it is there".
 	//
-	// An error holds the surface in [integration.PhaseDisconnecting] and
-	// the loop tries again, so a partial teardown must be safe to repeat:
-	// every step is "remove this if it is there".
-	//
-	// # It reports what it removed, and that is an END STATE
-	//
-	// A teardown knows which seats' accounts went — it walks its own plan,
-	// and each [provision.Seat] carries the `${VAR}` names its credentials
-	// live in. That knowledge used to die at an error-only return, and
-	// nothing downstream could delete the values those accounts left
-	// sealed. See [provision.Removed].
-	//
-	// The result names the state this teardown ESTABLISHED, not the delta
-	// this call performed. Every step is already "remove this if it is
-	// there" and the whole thing is retried on failure — so if the result
-	// were a delta, a retry after a failed secret deletion would find the
-	// accounts already gone, report nothing removed, and let the block drop
-	// with the credentials still in the store. "Already absent" counts as
-	// removed.
-	//
-	// AND ONLY WHAT IS GENUINELY DEAD. A merely DISABLED account does not
-	// belong here: a token on one works again the moment anybody re-enables
-	// it, so naming it would delete a company's only record of a live
-	// credential.
+	// It reports the END STATE ESTABLISHED ([provision.Removed]), not this
+	// call's delta: after a failed secret deletion a delta-reporting retry
+	// would find the accounts gone and let the block drop with the credentials
+	// stored. "Already absent" counts as removed. ONLY WHAT IS GENUINELY DEAD:
+	// a merely DISABLED account works again when re-enabled, so naming it
+	// deletes a live credential's record.
 	Teardown(ctx context.Context, in TeardownInput) (provision.Removed, error)
 }
 
@@ -188,19 +130,11 @@ type PassInput struct {
 
 	// There is deliberately no DryRun and no Seats here.
 	//
-	// Both existed, both were forwarded straight from the HTTP request, and
-	// NO pass read either — so `{"dry_run": true}` ran a full pass that
-	// created accounts and minted live tokens, and a seat-scoped run touched
-	// every seat. A field that means "do not write" while writing is worse
-	// than no field: it is an operator acting on a promise the code never
-	// made.
-	//
-	// Removed rather than stubbed, because no tag has ever shipped this
-	// surface, so there is nobody on the other side of a compatibility path.
-	// Honouring them is a real feature — every one of the seven passes has to
-	// implement plan-without-write, and a partial answer is the same lie in a
-	// smaller font — so it goes back when somebody builds it, with the passes
-	// that read it.
+	// No pass reads either, so a `dry_run` field would run a full pass that
+	// creates accounts and mints live tokens: a field meaning "do not write"
+	// while writing is worse than none. Honouring them means every pass
+	// implementing plan-without-write; they return with the passes that read
+	// them.
 
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments: the previous secret stops working everywhere else this
@@ -227,20 +161,15 @@ type PassInput struct {
 
 // BaseKey is the Tier A key a webhook base was read from, as a pass names it
 // when it had no address to register a delivery path at: key as its caller
-// handed it ([PassInput.WebhookBaseKey], or a vendor's own Options field of the
-// same name), or the key a deployment with NO PUBLIC LISTENER reads when key is
-// empty.
+// handed it ([PassInput.WebhookBaseKey], or a vendor's Options field), or the
+// key a deployment with NO PUBLIC LISTENER reads when key is empty.
 //
-// EMPTY IS THAT DEPLOYMENT, and not a guess: it is what the zero
-// [config.API] answers, and the only deployment a caller holding no Tier A
-// file can describe — the command line run with no `-config`, and a case
-// building a pass's options by hand. Every caller that holds a Tier A hands
-// the key over from [config.API.WebhookBaseKey], beside the address it read
-// from the same block, so the two cannot name different listeners.
-//
-// ONE FUNCTION rather than each vendor's literal, which is what every vendor
-// had: four findings and a dozen sentences naming `api.external_url` on a
-// deployment whose webhooks are served only on `api.public.external_url`.
+// EMPTY IS THAT DEPLOYMENT, not a guess: it is what the zero [config.API]
+// answers, the only deployment a caller with no Tier A file can describe. A
+// caller that holds a Tier A takes the key from [config.API.WebhookBaseKey],
+// beside the address from the same block, so the two cannot name different
+// listeners. ONE FUNCTION, as vendors' own literals named `api.external_url`
+// where webhooks are served only on `api.public.external_url`.
 func BaseKey(key string) string {
 	if key != "" {
 		return key
@@ -301,63 +230,40 @@ const LeaseTTL = 5 * time.Minute
 // PassDeadline bounds the work that lease admits — every pass, whatever
 // started it.
 //
-// # Why a pass has a deadline at all
-//
-// The lease is taken once and NEVER RENEWED mid-pass, so a pass that outlived
-// it would go on writing at a third-party app with nothing left excluding a
-// peer: two nodes creating an account for one seat, which no later pass can
-// detect or repair. Bounding the work strictly inside the lease is what makes
-// "the lease protects this pass" true by construction rather than by
-// measurement.
-//
-// # Why it is one minute, and why the minute is not slack for its own sake
-//
-// The status write that RECORDS the pass runs under the same lease — see
-// [Runner.Hold] — so the margin is what that write has to complete in. A
-// coordination round trip is milliseconds; a minute is that with room for a
-// broker having a bad afternoon.
-//
-// The margin is real rather than nominal because the clock starts AFTER the
-// lease is acquired ([Runner.hold]). It used to start at the caller, before
-// the claim, so however long the claim took came out of the minute.
-//
-// # It is one value, and the loop's duty is derived from it
-//
-// A second, shorter deadline for the reconcile loop's own passes was the
-// obvious alternative and is worse: two numbers that have to stay in a
-// relationship nothing checks. Instead the loop's singleton TTL is derived
-// from this one — see `integrationDutyTTL` in internal/engine — so a pass
-// cannot outlive the duty that scheduled it either.
+// The lease is NEVER RENEWED mid-pass, so a pass outliving it would keep
+// writing with nothing excluding a peer: two nodes creating an account for one
+// seat, which no later pass can repair. The one-minute margin is what the
+// status write that RECORDS the pass (same lease, [Runner.Hold]) completes in,
+// room for a bad broker afternoon; real because the clock starts AFTER the
+// lease is acquired ([Runner.hold]). ONE VALUE: the reconcile loop's singleton
+// TTL derives from it (`integrationDutyTTL` in internal/engine), so a pass
+// cannot outlive the duty that scheduled it.
 const PassDeadline = 4 * time.Minute
 
 // RecordDeadline bounds the write that RECORDS a pass, and is the margin
 // [PassDeadline] deliberately leaves behind inside [LeaseTTL].
 //
-// DERIVED, never chosen. The whole reason the pass stops a minute early is that
-// the status write runs under the same lease and needs somewhere to run; a
-// second hand-written number here could drift out of that relationship with
-// nothing checking, so the relationship IS the definition.
+// DERIVED, never chosen: a second hand-written number could drift out of the
+// relationship (the pass stops early so the status write has room under the
+// same lease), so the relationship IS the definition.
 //
-// What it protects against is narrow and real: the caller that most needs it
-// has detached from an HTTP request on purpose, so a browser tab closing cannot
-// cancel a third-party app write half-way. That detachment removes the only
-// cancellation the write had, and an unbounded write into a coordination store
-// having a bad afternoon leaks the goroutine that was serving the request.
+// The caller that most needs it detached from an HTTP request on purpose, so a
+// closing tab cannot cancel a third-party write half-way; that removes the
+// write's only cancellation, and an unbounded write into a struggling
+// coordination store would leak the serving goroutine.
 const RecordDeadline = LeaseTTL - PassDeadline
 
 // Duty is the fleet lease a pass holds WHILE IT RUNS, and gives back when it
 // is done.
 //
-// The consumer's own interface: one call, answering whether this node may act
-// now and handing back the release. Three-valued through the error, like every
-// other ownership question in this engine, because "somebody else holds it"
-// and "the store could not be reached" lead to opposite actions.
+// Three-valued through the error, as every ownership question here: "somebody
+// else holds it" and "the store could not be reached" lead to opposite actions.
 //
-// THE RELEASE IS THE HALF THAT MAKES THE LEASE SHAREABLE. Held to its TTL
-// after the work finished, this lock is indistinguishable from an outage to
-// every other caller: the loop reconciles a surface every few seconds, so a
-// lease it kept for five minutes would refuse an operator's pass on any node
-// but its own, permanently. release is non-nil exactly when held is true.
+// THE RELEASE MAKES THE LEASE SHAREABLE. Held to its TTL after the work
+// finished, the lock looks like an outage to every other caller: the loop
+// reconciles a surface every few seconds, so a lease it kept five minutes
+// would refuse an operator's pass on any other node. release is non-nil
+// exactly when held is true.
 type Duty func(ctx context.Context) (release func(), held bool, err error)
 
 // Runner executes passes and remembers what they did.
@@ -421,21 +327,13 @@ func (r *Runner) Needs(kind integration.Kind) *Requirement {
 
 // Execute runs a pass, blocking until it finishes.
 //
-// # THE CALLER MUST ALREADY HOLD THE SURFACE
-//
-// ctx is the bounded context [Runner.Hold] returned, and the caller keeps the
-// hold until it has written what the pass found. This method used to take the
-// guard itself and give it back the moment the pass returned, which put the
-// write that RECORDS the pass outside it — and a status row written outside
-// the lease is exactly the lost update coord.Integrations forbids: a loop tick
-// holding a row it read a moment earlier puts its own copy back over an
-// operator's disconnect, the card flips from Disconnecting to connected, and
-// they press the button again.
-//
-// So the guard spans the pass AND its record, and the caller owns it because
-// only the caller knows when it has finished writing. Both callers take it the
-// same way — the reconcile loop through the Guard its worker holds, the
-// dashboard through [Runner.Hold] directly.
+// THE CALLER MUST ALREADY HOLD THE SURFACE: ctx is the bounded context
+// [Runner.Hold] returned, and the caller keeps the hold until it has written
+// what the pass found: a status row written outside
+// the lease is the lost update coord.Integrations forbids (a loop tick puts
+// its stale copy back over an operator's disconnect). The guard spans the pass
+// AND its record, and only the caller knows when it finished writing; the loop
+// holds it through its worker's Guard, the dashboard through [Runner.Hold].
 //
 // BLOCKING, deliberately. What bounds it is [PassDeadline], carried by ctx,
 // rather than anything here.
@@ -479,44 +377,16 @@ func (r *Runner) Execute(ctx context.Context, kind integration.Kind, in PassInpu
 
 // Hold is THE GUARD every writer at one surface passes through.
 //
-// Three callers write at a third-party app and none of them can see the
-// others: an operator's pass here, a tick of the reconcile loop, and a
-// disconnect's teardown. Two at once is one creating the account the other is
-// deleting, or a disconnect withdrawing the webhook a pass beside it just
-// registered.
-//
-// BOTH HALVES, because each alone leaves the collision reachable:
-//
-//   - The named duty lease stops two NODES. It cannot stop two goroutines in
-//     this one, because [coord.Backend.TryAcquire] doubles as a renew for the
-//     owner that already holds the record — so a loop tick and a button press
-//     on one node are both told yes. It is also absent entirely on a node with
-//     no coordination store, which is the single-node install.
-//   - The in-process claim stops those two goroutines and knows nothing about
-//     a peer.
-//
-// It also covers the writes ABOUT a surface, not only the ones at it. The
-// status rows are last-write-wins and [coord.Integrations] says why: "the duty
-// makes one node the only writer, so there is no second writer to race." That
-// premise is restored rather than replaced — the dashboard records a pass's
-// outcome, stamps an endpoint and marks a disconnect on whichever node served
-// the request, so it takes this same hold, and a caller that cannot take it
-// does not write.
-//
-// # It also BOUNDS the work it admits
-//
-// The lease is taken once and never renewed, so the returned context carries
-// [PassDeadline] and the work must run on it. That is what makes "the lease
-// protects this pass" true by construction: a pass cannot outlive its own
-// protection, because the context it was handed dies first. The bound derives
-// from the CALLER's context rather than replacing it, so cancellation still
-// reaches the pass — a worker stopping, or a suite handing in a dead context,
-// must still stop the work.
-//
-// held is false when somebody already has it; the context and release are
-// non-nil exactly when held is true, and calling release is what lets the next
-// writer in. The error is the third value: a store that could not answer has
-// not said the surface is idle.
+// A pass, a reconcile tick and a teardown cannot see each other; two at once
+// is one creating the account the other deletes. BOTH HALVES, each alone
+// leaving the collision reachable: the duty lease stops two NODES but not two
+// goroutines here ([coord.Backend.TryAcquire] renews for the current owner,
+// and it is absent on a single-node install), the in-process claim the
+// reverse. It covers the writes ABOUT a surface too: status rows are
+// last-write-wins ([coord.Integrations]), so recording an outcome takes this
+// hold; no hold, no write. The returned context carries [PassDeadline], derived
+// from the CALLER's. held is false when somebody has it; context and release
+// are non-nil exactly when held is true. An error is not "idle".
 func (r *Runner) Hold(
 	ctx context.Context, kind integration.Kind,
 ) (context.Context, func(), bool, error) {
@@ -541,21 +411,15 @@ const holdID = "hold"
 // hold takes the in-process claim, then the fleet lease, then the deadline,
 // and hands back one release for all three.
 //
-// IN THAT ORDER, and every step of it matters on a failing path:
-//
-//   - The local claim first, because the release below is what gives it back:
-//     taking the remote one first would leave a lease held for its full
-//     [LeaseTTL] whenever a second goroutine on this node lost the local race.
-//   - The lease on the CALLER's context, never on the bounded one built after
-//     it. The release closes over whatever context it was given, and
-//     schedule.HoldNamedDuty already wraps that in context.WithoutCancel so a
-//     cancelled pass still gives its lease back. Build it from a context that
-//     has hit [PassDeadline] and every release after a timeout is a no-op —
-//     locking the surface out for the rest of [LeaseTTL] at exactly the moment
-//     it most needs releasing.
-//   - The deadline last, so its margin inside [LeaseTTL] is the whole of
-//     [PassDeadline]'s minute rather than a minute minus however long the
-//     claim took.
+// IN THAT ORDER:
+//   - The local claim first: taking the remote lease first would hold it for
+//     its full [LeaseTTL] whenever a second goroutine here lost the local race.
+//   - The lease on the CALLER's context, never the bounded one built after it:
+//     schedule.HoldNamedDuty wraps it in context.WithoutCancel so a cancelled
+//     pass still releases, but from a context that hit [PassDeadline] every
+//     release is a no-op, locking the surface out for the rest of [LeaseTTL].
+//   - The deadline last, so its margin inside [LeaseTTL] is the whole minute,
+//     not a minute minus the claim's duration.
 func (r *Runner) hold(
 	ctx context.Context, kind integration.Kind, id string,
 ) (context.Context, func(), bool, error) {

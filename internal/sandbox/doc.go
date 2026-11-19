@@ -1072,6 +1072,47 @@
 // (executordomain.SessionStore.Fetch), so the decision is made before the
 // brief is, never part way through writing the archive into the box.
 //
+// # A cut-off session's calls, read by id or by content
+//
+// A relaunch that continues a cut-off capture asks one reading of what the
+// session holds of the calls it would tell ([Coordinator.HoldingsOf],
+// [HoldingsAsk]). The runner of the session's harness reads the kept archive
+// ([HoldingsReader]) and says which kind of facts it found ([HoldingsKind]);
+// [SessionHoldings.Holds] reads only that kind's, so no reading answers for
+// the other. Where the run began is the kept capture's word
+// ([SessionCapture.RunStart]), handed to the reader as the archive's
+// ([SessionArchive.RunStart]), never the caller's.
+//
+// BY ID ([HoldingsByID]), Claude Code's: its session files each call's use and
+// result under the id its harness sent the bridge, so a call is held through
+// the one live result that is the log's.
+//
+// BY CONTENT ([HoldingsByContent]), OpenCode's: its calls carry no id the log
+// keeps, so the ask keys each by its place in its log (Appended, in decimal),
+// and a reading counts calls by what they were. A class ([CallClass], [ClassOf])
+// is a tool's name, its arguments' key as the log keeps their text
+// (internal/tools/toolargs' Key, the log's own rule on both sides), its failure,
+// and its output's text key ([TextKey]): every byte of an output the log kept
+// whole, and the size and all the opening the log kept of one it cut
+// (internal/kept's Record.Opening). A call whose class cannot be stated, its
+// arguments not kept whole, held for a person's approval, or its opening not
+// read back, is never a member and is told. The reader pools every listed
+// call but approved and held ones, counts the run's live parts of each class,
+// and holds a class ([ClassRecords]) only where every pool call of it has a
+// part, no call the log cannot state the class of may be of it (one in flight
+// or dropped from the log's middle, [CallIdentity]; a held call, by its
+// answer), and its parts stand in the log's order. A class is held or told
+// whole: which of two identical calls a part is never matters, and with two
+// calls and one part neither is held. A content reading tells every call in
+// the main list: a subagent's calls lie in a child session it never reads.
+//
+// WHY A HELD CLASS IS NEVER A FALSE HOLD: every counted part lies after the
+// run's start, so the run made it; it is content-equal to its class; every
+// call that may have left one is in the pool or a wildcard; and each call
+// leaves at most one part. So n parts of a class of n calls are those calls'
+// own, and the model reads each held call's outcome as the log has it. The
+// reader, its bounds and its rules are internal/sandbox/executor's; ADR-0073.
+//
 // # Resume routing
 //
 // ErrResumeUnavailable reports that this node cannot resume the run a
@@ -2079,13 +2120,13 @@
 // the row at the slowest crossing. Every other read waits as it did.
 //
 // What that costs is the wait for a host that has truly stopped (about
-// seventy-eight minutes for a collection of a turn with no cap, ninety-six
-// with a served note; eighty-one and a half for a stop's or a loss's read,
-// ninety-nine and a half with one; ninety-nine and a half for a collection of
-// a turn with a cap, a hundred and seventeen with one), which a host that is
-// only slow, ending a job, packing a session or changing a run's row at its
-// bound across a link at the slowest pace allowed, must not be taken for.
-// Ordinary reads answer in seconds. A read that has not finished in that is
+// seventy-nine minutes for a collection of a turn with no cap, ninety-six and
+// a half with a served note; eighty-one and a half for a stop's or a loss's
+// read, ninety-nine and three quarters with one; a hundred for a collection of
+// a turn with a cap, a hundred and seventeen and three quarters with one),
+// which a host that is only slow, ending a job, packing a session or changing
+// a run's row at its bound across a link at the slowest pace allowed, must not
+// be taken for. Ordinary reads answer in seconds. A read that has not finished in that is
 // a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
 // the host's own waiter announces the completion again on its schedule once
 // the host is back (reannounce.go). Only a node that asks ANOTHER node's host

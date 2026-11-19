@@ -61,7 +61,7 @@ func TestAnUrgentItemIsHandedToABusySeatOnItsPriorityLane(t *testing.T) {
 // The urgent pickup queues on the lane, which the inbox holds with the rest of
 // its mail while the run holds the seat and takes first once it settles.
 //
-// Mutation: keep the executor's hold in UrgentMayJump, and the urgent item is
+// Mutation: keep the executor's hold in LaneMayJump, and the urgent item is
 // not handed while the run lasts.
 func TestAnUrgentItemIsHandedWhileTheSeatsExecutorRuns(t *testing.T) {
 	t.Parallel()

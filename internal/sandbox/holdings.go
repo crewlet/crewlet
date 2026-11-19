@@ -15,13 +15,13 @@ import (
 // A relaunch continuing a cut-off capture ([SessionCapture.Interrupted]) tells
 // the session every call logged after the save point, which is the newest its
 // launch held, not where the session ends ([SessionCapture.Through]), so the
-// list repeats calls the session holds. Its harness files each call's use and
-// result under the call's id ([BridgeCall.CallID]), so [Coordinator.HoldingsOf]
-// reads which of them the archive holds; internal/agent/runner asks it once per
-// such relaunch (runner.HoldingsAsker), and the launch hands a brief told by it
-// only to a box whose harness answers the release read for ([ExactTelling]).
-// Every failure is no reading, never a refusal: the relaunch then tells every
-// call after the save point, which is never wrong. ADR-0073.
+// list repeats calls the session holds. [Coordinator.HoldingsOf] reads which of
+// them the archive holds, by id or by content as its harness names a call
+// ([HoldingsKind]); internal/agent/runner asks it once per such relaunch, and
+// the launch hands a brief told by it only to a box whose harness answers the
+// release read for ([ExactTelling]). Every failure is no reading, which tells
+// every call after the save point and is never wrong. The package doc's "A
+// cut-off session's calls, read by id or by content" has the rules; ADR-0073.
 
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
@@ -73,14 +73,36 @@ type HoldingsAsk struct {
 	// records otherwise. So each reader holds Resumer to the releases whose
 	// resume it read, and any other is no reading.
 	Resumer string
+
+	// Unlisted are the round's calls the log lists no outcome of, by what it
+	// knows of each ([CallIdentity]): those in flight at the read, and those
+	// it dropped from its middle, late or not. A content reading reads them
+	// as wildcards ([HoldingsByContent]); a reading by id reads none.
+	Unlisted []CallIdentity
+}
+
+// CallIdentity is a call the log lists no outcome of, by what it knows of it:
+// its tool's name and its arguments' digest, "" where it knows neither.
+//
+// InFlight marks one in flight at the read, which has no outcome yet; any
+// other is an entry of the tally of calls the log dropped from its middle
+// ([ElidedCall]), OnlyFailed where every call that entry counts failed and
+// none is unfinished. A reader holds the in-flight ones to [MaxCallsInFlight]
+// and the dropped ones to the tally's own bound ([MaxElidedIdentityBytes]).
+type CallIdentity struct {
+	Name, Digest         string
+	InFlight, OnlyFailed bool
 }
 
 // LoggedCall is one listed call of a round as the run's log keeps it: what a
 // reading is asked about, and what [SessionHoldings.Holds] compares with what
 // the session holds.
 type LoggedCall struct {
-	// ID is the call's id as its harness named it ([BridgeCall.CallID]), ""
-	// where the log recorded none.
+	// ID is the call's key as the ask names it (internal/agent/runner's
+	// callKey): a Claude Code call's id as its harness named it
+	// ([BridgeCall.CallID]); an OpenCode call's place in its log, Appended in
+	// decimal, which the reader checks before it keys its answer by it. ""
+	// where the call has none.
 	ID string
 
 	// Asked marks a call the relaunch's telling asks about: one it would
@@ -99,6 +121,31 @@ type LoggedCall struct {
 	Failed      bool
 	Output      string
 	OutputBytes int
+
+	// Appended and Seq are the call's place in its round's log and its
+	// admission place ([BridgeCall.Appended], [BridgeCall.Seq]); Name its
+	// tool's; Digest the log's digest of its arguments, "" where it has none
+	// ([BridgeCall.Digest]); Args its arguments' key. A content reading alone
+	// reads them ([HoldingsByContent]).
+	Appended, Seq int
+	Name, Digest  string
+	Args          ArgsKey
+
+	// Held marks a call held for a person's approval: its arguments withheld
+	// ([BridgeCall.Withheld]) and its output the answer it was held with. Its
+	// class is never stated ([ClassOf]), and it is never asked.
+	Held bool
+}
+
+// ArgsKey is a call's arguments' key as the log keeps their text: Sum is
+// internal/tools/toolargs' Key of that text, and Whole says the log kept the
+// text whole and it states the arguments. Where Whole is false the call's
+// class is not stated ([ClassOf]): arguments cut, withheld, unparsed or
+// unreadable, or "" with no digest, which is the empty object only for an
+// admitted call.
+type ArgsKey struct {
+	Whole bool
+	Sum   [32]byte
 }
 
 // HoldingsKind is which facts a reading holds, by which
@@ -111,16 +158,22 @@ type HoldingsKind string
 // and its result under the id its harness sent the bridge.
 const HoldingsByID HoldingsKind = "by_id"
 
+// HoldingsByContent is a reading of classes of calls by what they were
+// ([CallClass]): OpenCode's, whose session names no call by an id the log
+// keeps.
+const HoldingsByContent HoldingsKind = "by_content"
+
 // HoldingsKinds are the kinds of reading this build reads.
-var HoldingsKinds = []HoldingsKind{HoldingsByID}
+var HoldingsKinds = []HoldingsKind{HoldingsByID, HoldingsByContent}
 
 // Valid reports whether k is one of [HoldingsKinds]: a reading of any other
 // kind holds no call.
 func (k HoldingsKind) Valid() bool { return slices.Contains(HoldingsKinds, k) }
 
 // SessionHoldings is what a reading found, in the archive of a kept capture,
-// of the calls a relaunch asked about: facts, which [SessionHoldings.Holds]
-// alone turns into a verdict. The zero value is no reading.
+// of the calls a relaunch asked about: facts, and a content reading's verdict
+// on each class, which [SessionHoldings.Holds] alone turns into an answer for a
+// call. The zero value is no reading.
 type SessionHoldings struct {
 	// Read is set where the reading read the archive to its stream's end
 	// within every bound: a reading cut part way vouches for none of its
@@ -137,6 +190,83 @@ type SessionHoldings struct {
 	// Subagents are, by agent id, every subagent whose thread holds a
 	// record naming an asked call ([HoldingsByID]).
 	Subagents map[string]SubagentThread
+
+	// Members are, by the ask's key ([LoggedCall.ID]), the class of each asked
+	// call the reading pooled with its class stated; Classes the verdict on
+	// each class ([HoldingsByContent]).
+	Members map[string]CallClass
+	Classes map[CallClass]ClassRecords
+
+	// Compacted is whether the session compacted after the run's start
+	// ([HoldingsByContent]), for the reading's log line.
+	Compacted bool
+}
+
+// CallClass is a class of calls by what they were: the tool's name, the
+// arguments' key ([ArgsKey]), whether it failed, and the output's text key.
+// Calls of one class are alike to the model that reads their parts, so a
+// reading counts them, never pairs them ([ClassOf]).
+type CallClass struct {
+	Name   string
+	Args   [32]byte
+	Failed bool
+	Text   TextKey
+}
+
+// TextKey is what a class's output is matched by: Bytes, the whole output's
+// size; Whole, whether the log kept it whole; Opening, where it cut it, how
+// many of its first bytes it kept (0 where whole); Sum, the SHA-256 of the
+// whole output, or of all the opening the log kept.
+type TextKey struct {
+	Bytes   int
+	Whole   bool
+	Opening int
+	Sum     [32]byte
+}
+
+// ClassRecords is a reading's verdict on one class: Calls, the pool's calls of
+// it; Parts, the run's live parts of it the reading counted, counted to
+// Calls+1; Wild, whether a call the log cannot state the class of may be of
+// it; Held, whether the reader holds it (Calls at least 1, Parts equal to
+// Calls, not Wild, and its parts in the log's order).
+type ClassRecords struct {
+	Calls, Parts int
+	Wild, Held   bool
+}
+
+// ClassOf is c's class, and false where c's arguments or output cannot be
+// stated: arguments the log did not keep whole ([ArgsKey]), a call held for a
+// person's approval, or a cut output whose opening is not read back exactly
+// (internal/kept's Record.Opening). A cut output is keyed by ALL the log kept
+// of it, never [HoldingsOpeningBytes]: with no id to pair by, the text is the
+// pairing.
+func ClassOf(c LoggedCall) (CallClass, bool) {
+	if !c.Args.Whole || c.Held {
+		return CallClass{}, false
+	}
+	text, ok := TextKeyOf(c.Output, c.OutputBytes)
+	if !ok {
+		return CallClass{}, false
+	}
+	return CallClass{Name: c.Name, Args: c.Args.Sum, Failed: c.Failed, Text: text}, true
+}
+
+// TextKeyOf is the text key of an output the log keeps as output, cut from a
+// whole of outputBytes where that is above 0 ([LoggedCall.OutputBytes]), and
+// false where it cannot be stated: a negative size, or a cut whose opening is
+// not read back exactly. A content reading keys a held call's answer by it.
+func TextKeyOf(output string, outputBytes int) (TextKey, bool) {
+	switch {
+	case outputBytes < 0:
+		return TextKey{}, false
+	case outputBytes == 0:
+		return TextKey{Bytes: len(output), Whole: true, Sum: sha256.Sum256([]byte(output))}, true
+	}
+	opening, ok := rowRecord.Opening(output, outputBytes)
+	if !ok {
+		return TextKey{}, false
+	}
+	return TextKey{Bytes: outputBytes, Opening: len(opening), Sum: sha256.Sum256([]byte(opening))}, true
 }
 
 // CallRecords is what a reading counted of the records naming one asked call.
@@ -202,7 +332,37 @@ const HoldingsOpeningBytes = 256
 // under is the agent whose heading tells c ("" for the main list), set only
 // where c's records lie in an unreported subagent's thread. Asked only of an
 // asked call ([LoggedCall.Asked]); a reading of a kind this build does not
-// read ([HoldingsKind.Valid]) holds none.
+// read ([HoldingsKind.Valid]) holds none. A reading by id holds c only
+// through one live result that is the log's ([heldByID]); a content reading
+// only as a member of a held class ([heldByContent]).
+func (h SessionHoldings) Holds(c LoggedCall) (held bool, under string) {
+	switch {
+	case !h.Read || !h.Kind.Valid():
+		return false, ""
+	case h.Kind == HoldingsByID:
+		return h.heldByID(c)
+	case h.Kind == HoldingsByContent:
+		return h.heldByContent(c), ""
+	}
+	return false, ""
+}
+
+// heldByContent is [SessionHoldings.Holds] of a reading of classes: c, by the
+// ask's key, is a member whose class is c's own ([ClassOf]) and held whole.
+// ALWAYS IN THE MAIN LIST: a subagent's calls lie in a child session, which
+// the reading never reads, so none is told under a subagent.
+func (h SessionHoldings) heldByContent(c LoggedCall) bool {
+	class, member := h.Members[c.ID]
+	own, stated := ClassOf(c)
+	if c.ID == "" || !member || !stated || own != class {
+		return false
+	}
+	records := h.Classes[class]
+	return records.Held && records.Calls >= 1 && records.Parts == records.Calls && !records.Wild
+}
+
+// heldByID is [SessionHoldings.Holds] of a reading of the records its session
+// files under each call's id.
 //
 // ONLY THROUGH ONE LIVE RESULT THAT IS THE LOG'S: c's records in one thread,
 // one use and one result there, live, in the main thread or a reported
@@ -210,18 +370,6 @@ const HoldingsOpeningBytes = 256
 // text: every byte where it kept the output whole ([CallRecords.Whole]), its
 // opening where it cut it ([HoldingsOpeningBytes]). Its harness was handed
 // exactly that output, so a result anything else wrote never matches.
-func (h SessionHoldings) Holds(c LoggedCall) (held bool, under string) {
-	switch {
-	case !h.Read || !h.Kind.Valid():
-		return false, ""
-	case h.Kind == HoldingsByID:
-		return h.heldByID(c)
-	}
-	return false, ""
-}
-
-// heldByID is [SessionHoldings.Holds] of a reading of the records its session
-// files under each call's id.
 func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 	records, named := h.Calls[c.ID]
 	if c.ID == "" || !named || records.Threads != 1 {
@@ -257,16 +405,16 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
 // run's record is read: the record, the row, the reader's slots, open and read.
 //
-// FIFTEEN SECONDS, the frame's patience for one session-sized operation, as the
-// keep's is ([relaunchCaptureWait]): the relaunch's frame holds the seat and an
-// admission slot, so a kept session costs it thirty seconds, plus the one
-// bounded step a reader may overrun by ([HoldingsReader]) and the keep's settle
-// writes ([Coordinator.ContinuedCapture]). A reading past it is no reading.
-// BenchmarkAReadingAtItsBounds, two cores: an ordinary 1.6 MiB archive reads in
-// ~70 ms (a burst of 32 sharing the seats' one transcript slot, ~2.2 s), 255 MiB
-// of ordinary lines (the plaintext's bound) in 2.7 s, and the slowest lines
-// measured, extrapolated to that bound, ~11 s: inside the wait still.
-const holdingsReadWait = 15 * time.Second
+// THIRTY SECONDS, so a reading at its bounds is one: the slowest measured, a
+// subagent's lines of blocks of an empty kind to the plaintext's and the
+// lines' bounds, reads in 21.4 to 22.6 s on two dedicated cores
+// (BenchmarkAReadingAtItsBounds), about 25 s behind a burst of 32 ordinary ones
+// in the seats' one slot; an OpenCode export at its bound in 7.9 s on two cores
+// (BenchmarkAnOpenCodeReadingAtItsBounds). With the keep's
+// ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
+// a reader's overrun step ([HoldingsReader]), an unread member's discard and
+// the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
 // calls ask marks asked, read by reader off the capture (launchSeq,
@@ -306,7 +454,8 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	case !found:
 		return SessionHoldings{}, errors.New("the turn has no run record")
 	}
-	switch kept := run.Kept; {
+	kept := run.Kept
+	switch {
 	case kept == nil || kept.LaunchSeq != launchSeq || kept.CaptureSeq != captureSeq:
 		return SessionHoldings{}, fmt.Errorf("the run's record does not keep the capture the relaunch "+
 			"continues (launch %d, capture %d)", launchSeq, captureSeq)
@@ -322,7 +471,11 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	if continuity := ContinuityOf(row, &run, run.LaunchSeq, reader); !continuity.Continues {
 		return SessionHoldings{}, errors.New(continuity.Why)
 	}
-	holdings, err := reader.ReadHoldings(ctx, ArchiveOf(row), func(ctx context.Context) (io.ReadCloser, error) {
+	// WHERE THE RUN BEGAN IS THE KEPT CAPTURE'S WORD, the capture ContinuityOf
+	// has just held the row to, and never the caller's.
+	archive := ArchiveOf(row)
+	archive.RunStart = kept.RunStart()
+	holdings, err := reader.ReadHoldings(ctx, archive, func(ctx context.Context) (io.ReadCloser, error) {
 		return c.restore.Open(ctx, row)
 	}, ask)
 	if err != nil {
