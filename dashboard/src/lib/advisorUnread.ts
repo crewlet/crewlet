@@ -25,6 +25,11 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
     "The week's schedule fires couldn't be read, so the patterns the engine finds in them are missing.",
   holds: "The conversations the engine holds couldn't be read, so one it holds may be missing.",
   findings: "The Advisor's findings couldn't be read, so a notice about one may be missing.",
+  alarm_episodes:
+    "The engine's alarm history couldn't be read, so an alarm that keeps coming back may be missing.",
+  flow: "How long work items stood in each state couldn't be read, so work that has stopped moving may be missing.",
+  schedule_skips:
+    "The schedules' skipped runs couldn't be read, so a schedule that keeps skipping may be missing.",
 };
 
 /** What each unread source is called in a sentence that names it. */
@@ -42,6 +47,9 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
   fires: "the week's schedule fires",
   holds: "the conversations the engine holds",
   findings: "the Advisor's findings",
+  alarm_episodes: "the engine's alarm history",
+  flow: "how long work items stood in each state",
+  schedule_skips: "the schedules' skipped runs",
 };
 
 /**
@@ -49,6 +57,9 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
  * engine's alarms and the last 7 days of work". "Couldn't read everything"
  * said nothing a reader could act on or check against what was missing.
  */
+/** Every unread word this build can name, for the gate that holds it to the engine's. */
+export const UNREAD_KNOWN: readonly string[] = Object.keys(UNREAD_WORDS);
+
 export function unreadTitle(unread: readonly string[]): string {
   return `The advisor couldn't read ${unreadNames(unread)}`;
 }
