@@ -27,6 +27,14 @@
 // holds and classified by the same Classifier, so the filter and the marks a
 // page carries are one rule stated once.
 //
+// # Where each domain's marks live
+//
+// A person's tracker marks sit on their Worklet person record. Gitlet's code
+// marks are `code_person_marks`, written by `marks` records on the person's own
+// `person.<handle>` subject of the code log, never on that record, because a
+// position counts on one stream; the artifacts' are `artifact_person_marks`,
+// on the artifacts log.
+//
 // It is a LEAF above the state log's position and the standard library: every
 // domain that keeps an inbox imports it, and nothing here reaches back into
 // one.

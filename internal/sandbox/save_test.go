@@ -581,10 +581,10 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 }
 
 // A SAVE IS CUT OFF AND PLACED AT ITS LAUNCH'S NEWEST SAVE POINT: one read of
-// the run's row before the pack places it, at the point of this launch's
-// newest landed save (an older build's may state one past zero), or zero,
-// never at another launch's; it is stamped cut off, not final, holding no
-// note; and a capture placed during its pack refuses it.
+// the run's row before the pack places it, raised after its take to the point
+// of this launch's newest landed save where both name one newest compaction,
+// or zero, never at another launch's; it is stamped cut off, not final,
+// holding no note; and a capture placed during its pack refuses it.
 //
 // Mutation: stamp no point or a fixed one, read the point off any launch's
 // kept capture, or place the save off a row read after the pack.
@@ -614,6 +614,9 @@ func TestASaveIsCutOffAndPlacedAtItsLaunchsNewestSavePoint(t *testing.T) {
 			rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
 			rig.launchKept(t, "t1")
 			earlier := saved(rig, 1, 7)
+			earlier.ResumedCount = &ResumedCount{Tokens: 1, Restart: new("u-1")}
+			rig.runner.Session.Count = &ResumedCount{Tokens: 1, Restart: new("u-1")}
+			rig.runner.Session.ResumeRead = true
 			if took, err := rig.pending.ReserveSave(t.Context(), "t1", earlier); err != nil || !took {
 				t.Fatalf("reserving the earlier save = %v, %v", took, err)
 			}

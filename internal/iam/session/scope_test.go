@@ -26,15 +26,14 @@ func (s *signedIn) restrictedCookie() string {
 
 // A SESSION THAT MAY ONLY ENROL SAYS SO IN ITS OWN BEARER, WHEREVER IT IS READ.
 //
-// The restriction lived on the session's ROW alone, and a node that has not
-// applied the row serves reads on the bearer alone — every node, for the apply
-// latency after every sign-in, since a sign-in answers before any node
-// applies it. There the row is the zero row, so the session read as whole. It
-// is the bearer's own signed fact now, so a node with no row still reads it,
-// and every re-issue carries it on.
+// A node that has not applied the row serves reads on the bearer alone, every
+// node for the apply latency after every sign-in; there the row is the zero
+// row, so a restriction held only on the row read as whole. It is the bearer's
+// own signed fact, so a node with no row still reads it and every re-issue
+// carries it on.
 //
 // The CONTROL is a whole session on the same lagging node, which reads as
-// whole — so the restriction is the bearer's and not the lag's. Mutation:
+// whole, so the restriction is the bearer's and not the lag's. Mutation:
 // drop the scope from the payload, or read [session.Validation.EnrolmentOnly]
 // off the row alone, and the restricted rows read as whole.
 func TestASessionThatMayOnlyEnrolSaysSoInItsOwnBearer(t *testing.T) {
@@ -88,11 +87,10 @@ func TestASessionThatMayOnlyEnrolSaysSoInItsOwnBearer(t *testing.T) {
 // A FORMAT NO OLDER BUILD ACCEPTS.
 //
 // Two builds share bearers during a rolling upgrade, so the scope is OPTIONAL:
-// an ordinary session's bearer is byte for byte the nine fields every build
-// parses, and only a restricted one grows the tenth — which a build knowing no
-// scope refuses as malformed rather than serving whole. The same refusal meets
-// a scope THIS build cannot name (a newer build narrowing a session some other
-// way) and a scope cut off to widen the session, which the signature covers.
+// an ordinary session's bearer is byte for byte the eleven fields every build
+// parses, and only a restricted one grows a twelfth, which a build knowing no
+// scope refuses as malformed rather than serving whole. So does a scope THIS
+// build cannot name, and a scope cut off to widen the session.
 //
 // Mutation: always append a scope and the whole row has twelve fields; accept an
 // unknown scope as whole and the forged row is served; leave the scope outside

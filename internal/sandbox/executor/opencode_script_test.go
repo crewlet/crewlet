@@ -34,6 +34,7 @@ import (
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
+printf '%s|%s|%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "${NO_PROXY-}" "${no_proxy-}" "$1" "$2" >> "$d/pinned"
 printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
 printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {
@@ -134,6 +135,9 @@ session)
     if up; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
+    if [ -e "$d/export-fails" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
+    if [ -n "${FAKE_SESSION_EXPORT_BYTES:-}" ]; then dd if=/dev/null of=/dev/stdout bs=1 seek="$FAKE_SESSION_EXPORT_BYTES" 2> /dev/null; exit 0; fi
+    if [ -e "$d/export-doc" ]; then cat "$d/export-doc"; exit 0; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then answer "$FAKE_SESSION_EXPORT"; else
       msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
       answer "$(printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}' "$id" "$msgs")"; fi ;;

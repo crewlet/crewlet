@@ -17,42 +17,17 @@ import (
 )
 
 // A box on an engine host is its launching node's (internal/sandbox,
-// boxhost.go), and this file is what the rest of the fleet reaches it through.
-//
-// # A read of the box, asked of its host
-//
-// A node that holds a run's seat and not its box — the seat moved while the
-// job worked — collects the run by asking the box's host to read it back
-// ([sandbox.BoxReader]). Every node serves [topics.SandboxBoxRead] and only the
-// node the request names answers. The request is an INSTRUCTION — the host
-// pauses the box a collection reads — so it crosses a channel the fleet signs
-// (internal/signedask), and the host makes the read only where the run's own
-// row still licenses it ([sandbox.Coordinator.ReadHostedBox]).
-//
-// THE ASKER'S WAIT CROSSES AS A DURATION ([sandbox.BoxReadRequest.BudgetMS]),
-// and the host reads for its share of it counted from the moment the request
-// reaches it, on its own clock: two machines' clocks stand apart, and a host
-// that read the asker's instant on its own clock read past the asker's give-up
-// when it stood behind, and refused every read when it stood ahead by more
-// than the wait. The instant stays on the wire only to bind the request
-// against a replay, admitted within the allowance the channel gives two
-// clocks ([sandbox.BoxReadClockAllowance]).
-//
-// THE HOST TAKES EVERY READ AS IT ARRIVES, so the wait it counts is the read's
-// whole wait: its registration is wider than what it holds ([boxReadAnswers]),
-// it makes [boxReadsHeld] reads at once and keeps [boxReadsWaiting] more
-// waiting inside the answer with their wait counted, and answers busy past
-// those — never leaving a read to wait unseen in the broker's buffer, where
-// nothing counts its wait.
-//
-// # A nudge, told to whichever waiter drives the run
-//
-// A run that submits its work over its bridge is about to exit, and a node
-// that leaves a box to its host wants it reclaimed now: both are said with a
-// [sandbox.Nudge], told to this node's own waiters at once and broadcast
-// ([topics.SandboxNudge]) to every other node's. A hint, never an instruction —
-// what a waiter does with it is what its own pass would do, sooner — so it
-// travels unsigned on the ephemeral broadcast.
+// boxhost.go); this file is how the fleet reaches it: a read of the box asked
+// of its host ([sandbox.BoxReader], [topics.SandboxBoxRead], answered only by
+// the node named), and a nudge to its waiters. A read pauses the box, so it
+// crosses the fleet-signed channel (internal/signedask) and the host reads only
+// where the run's row licenses it ([sandbox.Coordinator.ReadHostedBox]).
+// [sandbox.BoxReadRequest.BudgetMS] carries the asker's wait as a duration the
+// host counts on its own clock: an instant read on another machine's clock
+// overran the asker's give-up or refused every read. The instant only binds a
+// replay ([sandbox.BoxReadClockAllowance]). The host registers wider than it
+// holds ([boxReadAnswers]), answering busy past that, so no read waits unseen.
+// A [sandbox.Nudge] is a hint ([topics.SandboxNudge]), so it travels unsigned.
 
 // boxReadWire is the box-read channel's envelopes ([sandbox.BoxReadChannel]).
 type boxReadWire = signedask.Channel[sandbox.BoxReadRequest, sandbox.BoxReadReply]
@@ -303,20 +278,16 @@ const boxReadsHeld = queue.ConcurrentAnswers
 
 // boxReadsWaiting is how many reads wait for one of those at once, each
 // counting its wait against its own share of its asker's wait, so a read that
-// waited reads only for what is left of its share. A request past them is answered busy at
+// waited reads only for what is left. A request past them is answered busy at
 // once, rather than waiting where its wait could not be counted; one still
-// waiting when its share runs out is answered busy then, with the rest of its
-// asker's wait left for the answer to cross.
+// waiting when its share runs out is answered busy then, leaving the rest of
+// its asker's wait for the answer to cross.
 //
-// A JUDGMENT, anchored to one more round of reads: a second round behind the
-// round in flight, so a host whose every read is taken serves a burst as large
-// again in turn — the brief saturation a drain makes, every box on a host
-// becoming a remote collection at once, which a host that answered busy at
-// once past its reads would cost a lost run's session — while a backlog
-// deeper than that, at reads that each run minutes, is not a burst but a host
-// that cannot keep up, whose askers are better told so now and ask again
-// than left to spend their whole wait in a queue. Waiting costs a goroutine
-// and a decoded request each, no reply.
+// A JUDGMENT: one more round of reads behind the round in flight, so a drain's
+// brief saturation (every box on a host becoming a remote collection at once,
+// which answering busy would cost a lost run's session) is served in turn. A
+// deeper backlog of minutes-long reads is a host that cannot keep up, whose
+// askers are better told now. Waiting costs a goroutine and a decoded request.
 const boxReadsWaiting = boxReadsHeld
 
 // boxReadAnswers is the box reads' registration: every read held and waiting,

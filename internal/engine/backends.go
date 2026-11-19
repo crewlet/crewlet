@@ -32,19 +32,15 @@ import (
 // Backends is the infrastructure a node runs on.
 //
 // TWO SLOTS, chosen independently and validated together: the STREAM carries
-// events, and COORDINATION carries seat ownership. The combinations that make
-// sense are enumerated in config's topology validation — a multi-node fleet
-// cannot coordinate locally, and a two-member fleet has no quorum.
+// events, and COORDINATION carries seat ownership. The valid combinations are
+// enumerated in config's topology validation.
 //
-// The STORE is not a third slot in that sense — there is nothing to choose, and
-// nothing to validate against the other two. It is this node's own file, a
-// rebuildable index over what the replicated layer already holds, and it is
-// here because its lifetime is the same lifetime: opened before anything can
-// deliver, closed after everything has stopped delivering.
+// The STORE is not a third slot: nothing to choose or validate. It is this
+// node's own rebuildable index file, here because its lifetime is the same:
+// opened before anything can deliver, closed after everything has stopped.
 //
-// All three are opened here and closed together, because a node holding one
-// without the others is a node that can hear work it may not do, hold seats it
-// cannot serve, or run turns it cannot record.
+// All three open and close together: one without the others hears work it
+// may not do, holds seats it cannot serve, or runs turns it cannot record.
 type Backends struct {
 	Queue queue.EventQueue
 	Coord coord.Backend
@@ -186,34 +182,26 @@ func (b *Backends) API() jsapi.API { return b.api }
 // on an EMBEDDED broker, and nil on an external one.
 //
 // For the ONE subsystem whose answer differs between the two: the backup,
-// which snapshots the streams themselves. The estate it copies is not addressable any other way — on the
-// default topology the broker is embedded here and binds no socket — so a
-// backup that could not reach this connection could not exist.
+// which snapshots the streams themselves. The embedded broker binds no socket
+// on the default topology, so this connection is the only way to reach them.
 //
 // Nil when this node DIALLED an external broker: the queue owns that
-// connection, and the streams belong to a cluster with its own backup tooling.
-// The caller takes no ownership: closing it is [Backends.Close]'s job, and a
-// caller that closed it would take this node's leases down with it SILENTLY —
-// a close this process makes itself is never the loss the node stops for.
+// connection, and the cluster has its own backup tooling. The caller takes no
+// ownership: closing it is [Backends.Close]'s job, and a caller that closed it
+// would take this node's leases down SILENTLY, since a close this process
+// makes itself is never the loss the node stops for.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
 
 // CoordinationConn is the broker connection this node's coordination store
 // rides, on every topology: the second connection [Backends] owns on an
 // embedded broker, the queue's own on an external one. Nil only where there is
-// no broker at all — a Backends a caller assembled around the memory twin.
+// no broker at all (a Backends built around the memory twin).
 //
-// For a subsystem that talks to the broker outside the queue contract and
-// whose answer does NOT depend on who runs the broker: the seat memory
-// changelog, which a node publishes and a peer replays whichever broker the
-// fleet shares. It read [Backends.Conn] once, whose nil is the backup's
-// decision about an external cluster's streams, so every fleet on
-// `stream.type: nats` carried no seat's memory at all, and a seat placement
-// moved forgot everything it had learned, with nothing saying so.
-//
-// THE COORDINATION STORE'S CONNECTION rather than the queue's on an embedded
-// broker, so what a subsystem here does in volume (a seat's replay is an
-// ordered consumer over its whole history) never sits on the read loop every
-// mailbox consumes through. The caller takes no ownership.
+// For a subsystem that talks to the broker outside the queue contract whoever
+// runs it: the seat memory changelog. It must not use [Backends.Conn], whose
+// nil on an external broker would drop every seat's memory silently. Not the
+// queue's connection on an embedded broker, so a seat's replay volume never
+// sits on the read loop every mailbox consumes through. No ownership.
 func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
 
 // CoordinationJetStream is the JetStream client over [Backends.CoordinationConn],
@@ -229,49 +217,17 @@ func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
 // caller takes no ownership.
 func (b *Backends) CoordinationJetStream() natsjs.JetStream { return b.coordination }
 
-// Close releases both slots, in the reverse order of acquisition.
+// Close releases both slots in reverse order of acquisition; each step
+// depends on the one before:
 //
-// THE ORDER IS THE POINT and each step depends on the one before:
-//
-//  1. Stop the QUEUE. That closes every attachment and waits briefly for
-//     in-flight handlers, so consumers release their unacked messages
-//     cleanly instead of having them time out. Skipping it and going
-//     straight to the server shutdown works, in the sense that the process
-//     exits — and leaves every prefetched message to wait out the broker's
-//     full ack timeout before a peer can have it.
-//
-//     NOT COVERED BY A TEST IN THIS PACKAGE, and it is worth saying so
-//     rather than implying otherwise: the whole effect is on a PEER's
-//     handoff latency, and in one process a shut-down server kills the
-//     connection either way. What would cover it is the fleet suite —
-//     two nodes, one broker, measuring how long a successor waits for a
-//     departed node's messages.
-//
-//  2. Close the COORDINATION connection, if the store rides one. After the
-//     queue, because a node that released its broker while still holding
-//     leases looks alive to its peers: renewals keep succeeding against a
-//     store it can no longer reach work through, and its seats stay
-//     unclaimable for a full TTL. The lease store's own background watch —
-//     the view its gates are judged by — is stopped first, while its
-//     connection is still open, so it ends rather than failing.
-//
-//  3. Shut down the embedded SERVER, if this node started one. Last of the
-//     three broker steps, because everything above it is a client of it.
-//
-//     Also not covered here, and for a plainer reason: a solo embedded
-//     server runs with DontListen and binds no port at all, so there is no
-//     socket to probe after the fact. A clustered one does bind, but a
-//     single member never reaches JetStream quorum — measured, it waits
-//     the full 60 s and fails — so a one-node probe cannot be stood up.
-//
-//  4. Close the STORE. After everything, because everything writes to it:
-//     the ledgers a turn records into, the event log the queue's own writer
-//     appends to. Closing it first would turn the tail of a graceful drain
-//     into a run of "database is closed" — the drain would still finish,
-//     and would finish having recorded none of what it drained.
-//
-// A node that merely DIALLED an external broker never reaches step 3: it
-// must not take down a broker its peers are using.
+//  1. QUEUE: consumers release unacked messages instead of leaving a peer
+//     to wait out the ack timeout (untested: only the fleet suite could).
+//  2. COORDINATION connection, after the queue: a node that released its
+//     broker while holding leases looks alive and its seats stay unclaimable
+//     for a full TTL. The lease store's watch stops first.
+//  3. The embedded SERVER, if this node started one (never a dialled one).
+//  4. The STORE, last because everything writes to it: closed first, a
+//     drain would end in "database is closed" having recorded nothing.
 func (b *Backends) Close(ctx context.Context) {
 	if b.Queue != nil {
 		if err := b.Queue.Stop(ctx); err != nil {
@@ -323,45 +279,16 @@ type backgroundCloser interface {
 
 // OpenBackends builds everything a node runs on.
 //
-// It does NOT re-validate the topology: config.Bootstrap.Validate already
-// refuses the incoherent combinations, and duplicating those rules here would
-// give an operator two places to read and two chances to disagree. What this
-// adds is the construction, and one rule validation cannot express — an
-// embedded-KV coordination store lives on the stream's own NATS broker, so the
-// two slots are not independent at runtime even though they are in config.
+// It does NOT re-validate the topology (config.Bootstrap.Validate does), but
+// embedded-KV coordination rides the stream's broker, so the slots are not
+// independent at runtime. The COMPANY gives the embedding vector width.
 //
-// It takes the COMPANY as well as the bootstrap, for one field: the width of
-// the vectors the configured embedding model produces. That width is Tier B
-// because the model is, and the store wants it at open time — it is the only
-// thing that knows how wide the packed BLOBs in its vector columns are.
-//
-// A NIL COMPANY IS A REAL CASE, not a caller's mistake, and it is two. A node
-// whose store activated no revision has no company to be asked for, and holds
-// no rows. A node started with `-import-company` reads none, so that a stored
-// revision this build cannot run does not refuse the boot that replaces it —
-// and it may hold that revision's rows. Both open at width 0 and learn their
-// width from the first epoch that arrives ([store.DB.LearnEmbeddingDim]); for
-// the import that epoch is the imported file's, so the store ends at the width
-// a boot on the file opened it at, over rows of the width it replaced — where
-// a restart onto a new width, which is how the width is changed, has always
-// left a store. Opened at the stored revision's width instead, a file that
-// changes it would be refused by its first apply ([Engine.buildEmbedder]) with
-// the fleet already pointed at it, and need a second restart to take.
-//
-// This does NOT make the width mutable, and it was refused here while it was
-// immutable for a reason that still holds: a store left at a wrong non-zero
-// width refuses every write from the right provider, and recall stops
-// returning anything with nothing in the log to say why. So it is fixed once
-// non-zero, [Engine.buildEmbedder] refuses a revision that would change it,
-// and only the never-told case is learnable.
-//
-// A node that boots ON a revision does not arrive here nil: the caller reads
-// the active revision first and passes it, so the store opens at its width.
-// The one node holding a revision that arrives nil is the import above.
-//
-// rec is the node's recorder, which a backend that counts what it does counts
-// into from its first request — the object store's bucket client, whose
-// check of the bucket is a request ([openObjects]). Nil counts nothing.
+// A NIL COMPANY IS A REAL CASE: a node whose store activated no revision, and
+// `-import-company`, which reads none so an unrunnable stored revision does not
+// refuse the boot that replaces it. Both open at width 0 and learn it from the
+// first epoch ([store.DB.LearnEmbeddingDim]); it is immutable once non-zero
+// ([Engine.buildEmbedder]), since a wrong width silently empties recall.
+// rec counts what a backend does from its first request; nil counts nothing.
 func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, rec *metrics.Recorder) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
@@ -378,35 +305,25 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, r
 		return nil, err
 	}
 
-	// LAST, because it is the only step whose failure has something to
-	// clean up behind it. Opening the file first and then failing to reach
-	// a broker would leave the node's own database open with nobody
-	// holding it — and the store is exclusive to one process, so the next
-	// attempt in the same process would contend with the corpse of this
-	// one.
+	// LAST, because it is the only step with something to clean up behind
+	// it: the store is exclusive to one process, so a database left open by
+	// a failed broker step would block the next attempt in this process.
 	db, err := openStore(ctx, b, c)
 	if err != nil {
 		return nil, out.abandon(ctx, err)
 	}
 	out.Store = db
 
-	// The node's own observability, registered the moment both halves
-	// exist and BEFORE anything can publish. A listener attached later
-	// races the first turn a restarting node picks up off its durable
-	// inbox — that turn's phases would be projected onto a dashboard and
-	// missing from the record of the same seat.
+	// The node's own observability, registered once both halves exist and
+	// BEFORE anything can publish: a listener attached later races the first
+	// turn a restarting node picks up off its durable inbox, which would be
+	// missing from the seat's record. Here, not beside the dashboard, because
+	// a worker-only node with no API still keeps a record of its turns; the
+	// live projection is the API's (see observe.Projector).
 	//
-	// Here rather than beside the dashboard because persisting what this
-	// node did is the engine's business: a worker-only node with no API
-	// still keeps a record of its turns. The other half of the pipeline —
-	// feeding a live projection — is the API's, and is a broadcast
-	// subscription for reasons observe.Projector states.
-	//
-	// ONLY WHERE THE STORE OUTLIVES THE PROCESS. A node without `data`
-	// deletes its store at every boot, so rows written into it would be
-	// gone at its next restart with nothing able to read them in between
-	// — it hands them to a data node instead ([observe.Custody], armed by
-	// [New] once the estate client exists).
+	// ONLY WHERE THE STORE OUTLIVES THE PROCESS: a node without `data`
+	// deletes its store at every boot, so it hands these rows to a data node
+	// instead ([observe.Custody], armed by [New] once the estate client exists).
 	if HoldsEstate(b) {
 		out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
 	}
@@ -631,16 +548,14 @@ func (e *ObjectStoreMismatchError) Error() string {
 // fleet has agreed it is the fleet's.
 //
 // AGREED BEFORE OPENED. The first node to open a store records which backend
-// it is ([coord.ObjectStores]), and every node after compares its own Tier A
-// against that record: a node pointed at another bucket — or at the broker
-// where the fleet uses a bucket — would split the company's files between two
-// stores, each side's uploads readable on that side alone, with nothing
-// failing. Refused here, by name, it is a node that does not start.
+// it is ([coord.ObjectStores]) and every later node compares its Tier A to
+// that record: a node on another bucket would split the company's files
+// between two stores with nothing failing, so it is refused by name and does
+// not start.
 //
-// An `s3` bucket's client counts its attempts, its requests and its throttle
-// gate into rec, the node's recorder, from its first request — the check of
-// the bucket below — so it is handed to the client's constructor rather than
-// set on the backend afterwards. Nil counts nothing.
+// An `s3` client counts into rec from its first request (the bucket check
+// below), so rec goes to its constructor, not onto the backend afterwards.
+// Nil counts nothing.
 func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream, rec *metrics.Recorder) error {
 	objects := b.Store.Objects
 	identity := objects.Identity()
@@ -696,24 +611,16 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 
 // THE NATS BUCKET'S RESERVATION, and what it is carved out of.
 //
-// The broker grants a stream its whole ceiling when it creates it, against one
-// limit (stream.store_max_bytes, or the share of its volume the embedded
-// broker takes). The state logs reserve [StreamBudgetShare] of what it can
-// grant; every seat's mailbox and every coordination bucket reserve nothing
-// and share what is left. The bucket is given a reservation of its own
-// (internal/objstore/natsobj says why it may not grow into that remainder),
-// so it is sized here, beside the logs' share and a floor the remainder keeps.
+// The broker grants a stream its whole ceiling at creation, against one limit
+// (stream.store_max_bytes, or the share of its volume the embedded broker
+// takes). The state logs reserve [StreamBudgetShare] of it; mailboxes and
+// coordination buckets reserve nothing. The bucket's own reservation
+// (internal/objstore/natsobj says why) is sized here.
 //
-// ITS RESERVATION IS SPENT BEFORE THE LOGS ARE SIZED. The object store opens
-// with the backends, ahead of the state logs, so the logs size themselves
-// from what the broker has left once the bucket holds its reservation
-// ([logsGrantable]) and every restart divides the same remainder, which keeps
-// the logs' ceilings reproducible from boot to boot. That holds on a broker
-// that states no limit too: the limit standing in for it ([unstatedLimit] of
-// the free space, the cap a server running its defaults takes) is the one both
-// are sized against, and the bucket's reservation, which the broker still
-// reports, comes off it before the logs are, so the bucket and the logs never
-// reserve more between them than they would under a stated limit of that size.
+// IT IS SPENT BEFORE THE LOGS ARE SIZED: the object store opens first and the
+// logs size from what is left ([logsGrantable]), so every restart divides the
+// same remainder. With no stated limit both use the stand-in ([unstatedLimit]
+// of free space), so they never reserve more than a stated limit would allow.
 
 // objectsCoordinationFloor is what the derived reservation always leaves the
 // broker beside the state logs' share: the mailboxes and coordination buckets
@@ -819,50 +726,25 @@ func derivedObjectsReservation(limit, declared int64) int64 {
 }
 
 // openStream dials or starts the broker, and answers the connection
-// coordination should ride.
+// coordination should ride (ADR-0001): the queue's own on an external broker,
+// on the embedded one a SECOND to the in-process server, shared with the
+// seat-memory replay and the backup, off the mailboxes' read loop.
 //
-// THE COORDINATION STORE LIVES ON THE STREAM'S BROKER either way, and that is
-// ADR-0001: one estate, so reaching the leases is reaching the mail. Which
-// CONNECTION it rides differs by topology. On an external broker it is the
-// queue's own. On the embedded one it is a SECOND connection to the same
-// in-process server, which the seat-memory replay and the backup's stream
-// copies ride too, so that neither — an ordered consumer over a seat's whole
-// history, a copy of whole streams — sits on the read loop every mailbox
-// consumes through.
+// Two connections fail independently, so a node could hold leases while deaf
+// to its inbox: the second is dialled WATCHED ([jetstream.Queue.DialWatched])
+// and NATS closing either for good stops the node ([Engine.Fatal]).
 //
-// Two connections fail independently, and the hazard in that is a node holding
-// live leases over the one that still works while the one carrying its inbox
-// is gone — alive to its peers, deaf to its work. So the second one is dialled
-// WATCHED ([jetstream.Queue.DialWatched]): NATS closing either connection for
-// good stops the node ([Engine.Fatal]), and the split lasts no longer than a
-// reconnect.
-//
-// A NODE WITHOUT `data` IS THE EMBEDDED BRANCH TOO, as a LEAF: its in-process
-// server runs no JetStream of its own and links to the members' listeners
-// (ADR-0025), so both its connections reach JetStream through that link, under
-// the members' domain — which is why every client built over them is built in
-// the API the stream speaks ([jetstream.Config.API]) rather than with the
-// client's defaults.
-//
-// EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
-// it publishes is stamped with ([queue.WithNode]) — on both branches, so an
-// event's origin names this node whichever broker topology it rode.
-//
-// AND THE BROKER IT STARTS COUNTS WHAT IT REFUSES into rec
-// ([countRefusals]): installed the moment the server has started, and handed
-// whatever it refused while it was still starting. Nil counts nothing.
+// A NODE WITHOUT `data` IS THE EMBEDDED BRANCH TOO, as a LEAF with no
+// JetStream of its own (ADR-0025), so clients are built in the API the stream
+// speaks ([jetstream.Config.API]). Refusals count into rec ([countRefusals]).
 func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	rec *metrics.Recorder, opts ...queue.Option,
 ) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
-	// `stream.type: nats` mean anything. Without it every path here
-	// started an in-process member and connected to THAT: an operator who
-	// pointed a fleet at an external cluster got one private broker per
-	// node instead, so no node shared a stream or a coordination bucket
-	// with any other, and nothing anywhere said so. Every symptom that
-	// followed was a fleet-shared-state break wearing a different mask —
-	// a seat claimed by everyone, a trigger worked twice, a token counter
-	// per node.
+	// `stream.type: nats` mean anything: without it each node would start a
+	// private in-process broker and share no stream or coordination bucket
+	// with any other, with nothing saying so (a seat claimed by everyone, a
+	// trigger worked twice, a token counter per node).
 	if b.Stream.URL != "" {
 		q, err := jetstream.Open(ctx, cfg, opts...)
 		if err != nil {
@@ -910,13 +792,11 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // counts nothing.
 //
 // A COUNTER AND A LOG LINE, NEVER THE AUTHENTICATION TRAIL. The trail's rows
-// are the identity estate's doors — a person or a machine proving who it is —
-// and a connection to the fleet's broker is no principal: what it presented is
-// a key of the keyring or nothing, and a refused one has no author a row could
-// name. It also arrives at whatever rate the peer that reaches a port chooses,
-// which a row in every backup must not, for crewlet.auth.attempts.failed's
-// reason. The broker's own broker_peer_refused line, once a minute a class,
-// says which key and from where.
+// are the identity estate's doors, and a broker connection is no principal: it
+// presented a keyring key or nothing, so a refusal has no author a row could
+// name, and it arrives at whatever rate the peer chooses, which a row in every
+// backup must not (crewlet.auth.attempts.failed's reason). The broker's own
+// broker_peer_refused line, once a minute a class, says which key and from where.
 func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
 	return func(r jetstream.PeerRefusal, n uint64) {
 		if rec == nil {
@@ -928,43 +808,17 @@ func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
 }
 
 // attachCoordination builds the fleet store and the lease slot on one
-// connection.
+// connection, for both branches (a store forgotten on one is a later panic).
 //
-// ONE FUNCTION FOR BOTH BRANCHES, and that is the point rather than tidiness:
-// an external broker and an embedded one differ in who owns the connection
-// and nothing else, so two copies of this would be two chances to forget the
-// fleet store on one of them — and a nil Fleet is not a startup error, it is
-// a panic hours later in whichever subsystem reached for it first.
+// THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot says; only
+// the LEASE store follows it, as one node has nobody to fence against. Its
+// RECORDS (token counter, A2A asks, claimed fires, executors, secrets) must
+// outlive the PROCESS on one node as on four (stream.store_dir).
 //
-// # THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot says
-//
-// Only the LEASE store follows that setting. The two answer different
-// questions and only one of them is about peers. A lease answers "who runs
-// this seat": one node has nobody to fence against and re-claims everything
-// at boot, so an in-process table is the honest implementation there. The
-// fleet store holds RECORDS — the token counter, an open agent-to-agent ask,
-// a claimed scheduled fire, a detached executor, the company's secrets —
-// and every one of those has to outlive the PROCESS, on one node as much as
-// on four.
-//
-// It did not, and the consequences were silent: a company's token spend for
-// the current window reset to zero on every restart, a redelivered trigger after a restart was worked twice, and a detached
-// executor, in a BILLED box, was forgotten by the process that launched it.
-// What persistence the records get is the same choice as the event log's:
-// stream.store_dir.
-//
-// # AND THE FENCING COUNTER IS A RECORD, whatever the coordination slot says
-//
-// The in-process lease table is right about OWNERSHIP and was wrong about the
-// TOKEN. A seat's epoch is written into fleet records (the owner_epoch on an
-// executor's row) and compared with later, so it has to outlive the process as
-// those records do. Counted beside the in-process leases, it restarted at 1 on
-// every boot, and after a graceful restart the seat's new holder was refused
-// as older than its own previous self on every run that self had parked: an
-// answer to such a run was never recorded, and its resume and reap were
-// refused too. So a single node's leases mint from the same persistent counter
-// a fleet's lease store does (coord/kv.Epochs), in the same bucket, which also
-// carries the tokens across a move from local coordination to a fleet.
+// THE FENCING COUNTER IS A RECORD too: a seat's epoch is written into fleet
+// records (an executor row's owner_epoch). Counted in process it restarted at 1
+// each boot and a new holder was refused as older than itself, so a single
+// node mints from the persistent counter a fleet does (coord/kv.Epochs).
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: every replicated bucket of both coordination
@@ -1005,19 +859,15 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // floorSeatEpochs raises each seat's fencing counter above every epoch its
 // executors' rows carry, BEFORE this node claims a seat.
 //
-// The counter is the only source of tokens, so a row should never carry one
-// above it, and on a deployment that has only ever minted from this bucket none
-// does. One that did not (local coordination before its counter was
-// persistent), or one whose epochs bucket was deleted and re-created, has rows
+// The counter is the only source of tokens, so no row should carry one above
+// it. A deployment whose epochs bucket was deleted and re-created has rows
 // stamped above an empty counter, and the seat's next holder would be refused
-// as older than its own previous self on every one of them: an answer to a
-// parked run never recorded, its resume and reap refused. Raising the counter
-// is the whole repair, because the seat's next claim then mints above the rows
-// and its recovery fences them to the new lease.
+// as older than its previous self on each: a parked run's answer never
+// recorded, its resume and reap refused. Raising the counter is the whole
+// repair: the next claim mints above the rows and recovery fences them.
 //
-// EVERY BOOT, on every topology, rather than once: it costs one listing of the
-// runs, and a floor at or below the counter changes nothing, so a fleet's
-// nodes doing it concurrently agree.
+// EVERY BOOT, on every topology: it costs one listing of the runs, and a floor
+// at or below the counter changes nothing, so concurrent nodes agree.
 func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet, home string) error {
 	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
@@ -1051,20 +901,15 @@ type coordinationStores struct {
 }
 
 // coordinationStoresOf is every configuration a node configured as b opens its
-// coordination stores with — at boot ([attachCoordination]) and for a command
+// coordination stores with: at boot ([attachCoordination]) and for a command
 // that wants the fleet store alone ([OpenFleetStore]).
 //
-// ONE FUNCTION, which every site that opens a store takes its configuration
-// from, so how a store reaches its buckets ([coordinationReach]) is decided
-// in one place a test drives (coordreach_internal_test.go). Stated at each
-// opening site, it was a site no test read: a store opened there as though
-// its connection crossed nothing would hold a large write across a leaf's
-// link to the request term alone, and every test would stay green.
-//
-// The retentions are supplied HERE for the same reason leaseTTL is: each one
-// is a BUCKET's age, fixed when the bucket is created, so a silent default
-// would decide it at the moment nobody was looking. Every number is the one
-// the subsystem that reads it already uses, named at its own package.
+// ONE FUNCTION every opening site takes its configuration from, so how a store
+// reaches its buckets ([coordinationReach]) is decided in one place a test
+// drives (coordreach_internal_test.go); a site assuming its connection crossed
+// nothing would hold a large write across a leaf's link to the request term.
+// Retentions are supplied HERE as leaseTTL is: each is a BUCKET's age, fixed at
+// creation, so a silent default would decide it unseen.
 func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 	reach, replicas, clustered := coordinationReach(b), b.Stream.Replicas, clusteredStream(b)
 	return coordinationStores{
@@ -1140,18 +985,15 @@ func streamTLS(t config.NATSTLS) jetstream.TLS {
 
 // leaseTTL is the lease TTL both slots must agree on.
 //
-// Not free to choose independently of the coordination backend: the KV store's
-// expiry is bucket-wide, so it can only honour one — and a backend that
-// silently accepted a different per-call value would be lying about when a
-// lease expires. That is also why the store REQUIRES it rather than defaulting
-// one: a bucket created with the wrong expiry is wrong for its lifetime, and a
-// silent default would decide that at the moment nobody was looking.
+// Not free to choose independently of the coordination backend: the KV
+// store's expiry is bucket-wide, so it can honour only one, and the store
+// REQUIRES the value rather than defaulting it (a bucket created with the
+// wrong expiry is wrong for its lifetime).
 //
-// So the default is supplied HERE, from the seat layer's own measured constant
-// — 45 s, three heartbeat intervals, which tolerates two consecutive missed
-// renewals with a full interval left to recover in. Shorter drops healthy
-// nodes' seats on ordinary jitter, and each spurious handoff costs a real MCP
-// respawn; longer is time a dead node's seats sit dark.
+// The default is supplied HERE from the seat layer's constant: 45 s, three
+// heartbeat intervals, tolerating two missed renewals with a full interval to
+// recover. Shorter drops healthy nodes' seats on jitter, each handoff costing
+// an MCP respawn; longer leaves a dead node's seats dark.
 func leaseTTL(b *config.Bootstrap) time.Duration {
 	// The ZERO-MEANS-DEFAULT policy stays here rather than moving onto the
 	// accessor: seat.SeatLeaseTTL is the seat package's constant, and
@@ -1175,26 +1017,14 @@ type leaseTTLInForce interface {
 
 // effectiveLeaseTTL resolves what this node must acquire and renew with.
 //
-// # Why this cannot simply be the configured value
+// Not simply the configured value: the KV backend ADOPTS the lease bucket
+// ([kv.Open]), so the TTL in force is whichever member created it first, and
+// [kv.Store.validateTTL] refuses a longer claim. The node's own value is wrong
+// both ways: SHORTER and leases lapse early; LONGER and every acquire is
+// refused, so a healthy-looking node holds no seats. Derived timings (the
+// heartbeat, a stop's allowance) are fractions of it and must follow it.
 //
-// The KV backend ADOPTS the lease bucket rather than rewriting it, so on a
-// fleet the TTL in force is whichever member created the bucket first — see
-// [kv.Open]. The bucket's own age is the arbiter, and [kv.Store.validateTTL]
-// refuses a claim longer than it. A node that went on acquiring at its own
-// configured value would therefore be wrong in both directions, and one of
-// them is fatal: configured SHORTER than the bucket and its leases lapse
-// earlier than the operator asked for; configured LONGER and every single
-// acquire is refused as too long, so the node holds no seats at all and the
-// company's work sits unclaimed on a node that looks healthy.
-//
-// Taking the live value is also what keeps the derived timings coherent: the
-// heartbeat and a stop's allowance are fractions of this number, so a node
-// renewing on a 90-second cadence against a 45-second bucket would lose every
-// seat it held between beats.
-//
-// A mismatch is not silent — [kv.Open] logs it with both values and the
-// remedy. It is not fatal either: refusing to boot over it would take a
-// company down for a disagreement the fleet is already resolving one way.
+// A mismatch is logged by [kv.Open], not fatal.
 func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration {
 	configured := leaseTTL(b)
 	live, ok := backend.(leaseTTLInForce)
@@ -1226,20 +1056,16 @@ func runsBucketHome(b *config.Bootstrap) string {
 
 // clusteredStream is whether this node's broker has PEERS.
 //
-// The one place the engine decides it, so the queue, the lease store, the
-// fleet store and the memory sync's hydrations (memsync.Config) cannot
-// disagree about which budget they are on — and it is the same rule
-// [Queue.Clustered] applies, which is the rule the embedded server itself is
-// built by: the cluster block takes effect only when it is NAMED.
-// Tier A refuses a port or a peer list without one, so the name is sufficient.
+// The one place the engine decides it, so the queue, lease store, fleet store
+// and memory sync (memsync.Config) cannot disagree about which budget they are
+// on. It is [Queue.Clustered]'s rule, which the embedded server is built by:
+// the cluster block takes effect only when NAMED (Tier A refuses a port or peer
+// list without one).
 //
-// A topology question rather than a replica count: an external NATS is
-// somebody else's cluster, and an embedded member that names one is clustered
-// whatever replica count it asks for — see [jsprovision.Clustered].
-//
-// A LEAF IS CLUSTERED TOO: it holds nothing of its own, so every object it
-// provisions is a replicated create on the members it reaches, and the solo
-// budget would fail it against peers that are themselves still forming.
+// A topology question, not a replica count: an external NATS is somebody
+// else's cluster ([jsprovision.Clustered]). A LEAF IS CLUSTERED TOO: every
+// object it provisions is a replicated create on the members, and the solo
+// budget would fail it against peers still forming.
 func clusteredStream(b *config.Bootstrap) bool {
 	return b.BrokerKind() != placement.BrokerMember || b.Stream.Cluster.Name != ""
 }
@@ -1248,19 +1074,14 @@ func clusteredStream(b *config.Bootstrap) bool {
 // durable state — the replicated estate, opened from boot and held whole: a
 // node with the `data` role holds it, and a node without holds nothing.
 //
-// It is a fact about the NODE, not about the company it applies, and it is the
-// one answer two callers read here rather than deriving it: the engine opening
-// the file, and a backup copying it ([backup.HoldingFor]). The operator's
-// `crewlet migrate` reaches the same answer by another road — Tier A requires
-// a node without `data` to be scratch and refuses one with it, and the command
-// refuses a scratch store before it reaches the replicated estate at all.
+// A fact about the NODE, not the company it applies, read here by the engine
+// opening the file and a backup copying it ([backup.HoldingFor]) rather than
+// derived. `crewlet migrate` reaches the same answer another way: Tier A
+// requires a node without `data` to be scratch, and the command refuses a
+// scratch store. Through the profile, the one parse of `node.roles`.
 //
-// Through the profile, which is the one parse of `node.roles`: an unreadable
-// role list has already been refused by Tier A, and every other reader of the
-// roles asks the same accessor.
-//
-// A NIL BOOTSTRAP IS EVERY ROLE, on the rule an unset role list follows: an
-// engine assembled without one declares nothing to subtract.
+// A NIL BOOTSTRAP IS EVERY ROLE, as an unset role list is: an engine assembled
+// without one declares nothing to subtract.
 func HoldsEstate(b *config.Bootstrap) bool {
 	if b == nil {
 		return true

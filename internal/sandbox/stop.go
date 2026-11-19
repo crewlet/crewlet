@@ -158,7 +158,7 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 	unlifted := false
 	if run.HeldFor != "" {
 		liftCtx, liftDone := c.endingCall(ctx)
-		lifted, err := c.pending.LiftHold(liftCtx, run.TurnID, run.HeldFor)
+		lifted, err := c.pending.LiftHold(liftCtx, run.TurnID, run.HeldFor, run.Holds)
 		liftDone()
 		switch {
 		case err != nil:

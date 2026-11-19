@@ -221,16 +221,13 @@ func referenceOnly(kind AuthorKind, n *Notify) bool {
 // pageCandidates are a change's candidates in precedence order, from its Notify
 // alone, with lead the container's lead its chart names, or none.
 //
-// THE TRACKER'S RULE AT ITS SMALLEST (internal/routing): two reasons in
-// precedence order and a chain of one lead to fall back on. A mention outranks
-// a watch, so a watcher who is also named hears that they were named, and
-// hears it once. THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted
-// once at write time — so this can never forget to, and a handle that
-// unwatched is not woken by a set that still remembers them.
-//
-// ONE BUILDER for the parser, which routes by it, and for the store's decide,
-// which asks it whether an agent other than the actor may wake
-// ([mayWakeAnAgent]) with no lead, which only the parser's chart can name.
+// THE TRACKER'S RULE AT ITS SMALLEST (internal/routing): a mention outranks a
+// watch, so a watcher who is also named hears it once, as named. THE RECIPIENTS
+// ARE THE WATCHERS MINUS THE MUTED, subtracted once at write time, so a handle
+// that unwatched is not woken by a set that still remembers them. ONE BUILDER
+// for the parser and for the store's decide, which asks it whether an agent
+// other than the actor may wake ([mayWakeAnAgent]) with no lead, which only the
+// parser's chart can name.
 func pageCandidates(n *Notify, lead string) []routing.Candidate[string] {
 	var b routing.Builder[string]
 	b.AddAll(n.Mentions, ViaMention, true)
@@ -419,17 +416,14 @@ func withVia(base notify.Inbound, via string) notify.Inbound {
 
 // recordFromBody recovers the record the feed relayed.
 //
-// THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote reaches
-// this parser with everything it carried: the body is exactly the record,
-// unknown fields included, and re-encoding it later must not strip them.
+// THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote keeps every
+// field it carried, unknown ones included, through a later re-encode.
 //
 // A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
-// build ([notify.Defer]), never refused as a payload nobody can read: the
-// notify service acks what a parser refuses, on the ONE group every node takes
-// inbound mail from, so the wake the newer node's feed relayed was gone for
-// the whole fleet when an older node won its delivery during a roll
-// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
-// on this side of the relay.
+// build ([notify.Defer]), never refused: the notify service acks what a parser
+// refuses on the ONE group every node takes inbound mail from, so the wake was
+// lost to the whole fleet when an older node won its delivery during a roll
+// (crewlet#993). This is the feed's own future-version arm ([Translator]).
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, fmt.Errorf("doclet: the delivery carries no record")

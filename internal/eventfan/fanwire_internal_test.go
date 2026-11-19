@@ -60,13 +60,11 @@ func TestAPeerMeasuresTheWindowFromTheAskersInstant(t *testing.T) {
 // EVERY QUESTION THAT IS FLOORED CARRIES THE ASKER'S INSTANT, AND ONE THAT
 // CARRIES NONE IS REFUSED.
 //
-// Every node floors the history at the instant its asker sends, so a node that
-// answered a question carrying none as of its own clock would answer a
-// different question from its peers — a union of horizons, merged as one. No
-// asker on this protocol sends one, so a node refuses it and is named in the
-// coverage rather than answering around it. The one question asked at no
-// instant is [QuestionKept], which names rows a floored question already
-// found.
+// Every node floors the history at its asker's instant, so a node answering
+// without one by its own clock would answer a different question from its
+// peers, a union of horizons merged as one. It refuses and is named in the
+// coverage. [QuestionKept] is the one question asked at no instant: it names
+// rows a floored question already found.
 //
 // Mutation: drop the instant check from any one question in [answer], and that
 // case is answered.

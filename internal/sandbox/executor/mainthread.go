@@ -286,8 +286,9 @@ type lineRun struct {
 	gate pieceGate
 	run  int
 	// held is whether it holds the gate; open, whether the line it holds for
-	// has not yet broken.
-	held, open bool
+	// has not yet broken. whole says the piece is the whole reader, which no
+	// break ends: a text the scrub redacts as one ([pieceGate.pieces]).
+	held, open, whole bool
 }
 
 func (l *lineRun) Read(p []byte) (int, error) {
@@ -300,7 +301,10 @@ func (l *lineRun) Read(p []byte) (int, error) {
 		return n, err
 	}
 	for rest := p[:n]; ; {
-		brk := bytes.IndexByte(rest, '\n')
+		brk := -1
+		if !l.whole {
+			brk = bytes.IndexByte(rest, '\n')
+		}
 		if brk < 0 {
 			l.run += len(rest)
 		} else {

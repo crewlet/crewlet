@@ -8,8 +8,8 @@
 // ONE SOURCE FOR THE CHECK AND THE REFERENCE. A [Form] is derived by
 // reflection from the Go type the format decodes into, so the keys and types
 // the strict decode admits are exactly the keys and types the typed decode
-// reads, and the reference an agent is handed ([Form.Paths]) is the same tree
-// again. A key added to the struct is a key the decode admits and the
+// reads, and the reference an agent is handed ([Form.Paths], [Form.Outline])
+// is the same tree again. A key added to the struct is a key the decode admits and the
 // reference lists, in the same change, with nothing to keep in step by hand.
 //
 // EVERY STRUCTURAL FAULT IN ONE PASS. encoding/json with DisallowUnknownFields
@@ -18,6 +18,13 @@
 // the whole value, names every repeated key, unknown key and wrong type, each
 // with the shape the format reads there, and decodes what remains, so the
 // format's own field rules can run over it in the same pass.
+//
+// # The strict read is the publish's alone
+//
+// A version already stored reads through [Stored], its format's old acceptance,
+// so nothing stored needs a migration. TestOnlyThePublishReadsAVersionStrictly
+// walks the tree and refuses [Decode] or a format's strict read anywhere but the
+// publish pipeline and the formats.
 package jsonform
 
 import (

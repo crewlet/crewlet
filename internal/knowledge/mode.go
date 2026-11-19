@@ -5,32 +5,18 @@ import (
 	"strings"
 )
 
-// # Three modes, one vocabulary
-//
 // A search ranks by the WORDS a query used (keyword), by what it MEANS
 // (semantic), or by both fused (hybrid). The same three values name the
-// knowledge search and the tracker's ranked item search, on every surface —
-// the query kinds, the tool layer and the dashboard, whose label for
-// `semantic` is "Meaning" — so a mode is never spelled two ways for one
-// ranker.
+// knowledge and tracker item searches on every surface.
 //
-// # A mode asked for is not always a mode served, and the answer says which
+// A mode asked for is not always served: with no embeddings provider nothing
+// ranks by meaning, and Confluence ranks by its own CQL search only. Neither
+// is an error, but serving a different ranking silently is not allowed: every
+// answer carries an [Outcome], the mode SERVED, the modes servable now, and a
+// [Degradation] naming why when they differ from the ask.
 //
-// A company with no embeddings provider has nothing to rank by meaning with,
-// and Confluence ranks by its own CQL search and nothing else. Neither is an
-// error: a search is best effort by contract. What is NOT allowed is serving
-// a different ranking than was asked for and saying nothing — a keyword
-// answer presented as a hybrid one is a reader concluding that no page means
-// what they typed. So every answer carries an [Outcome]: the mode it actually
-// SERVED, the modes this backend could serve right now, and — when those
-// differ from what was asked — a [Degradation] naming why.
-//
-// The two degradations differ in what they serve. HYBRID FALLS BACK to its
-// keyword half, because the words are half of what was asked for and an
-// answer from them is still an answer. SEMANTIC DOES NOT: somebody who asked
-// for meaning asked precisely for the pages that share no word with the
-// query, and a keyword answer is the one ranking guaranteed not to find them.
-// It answers nothing, and says why.
+// HYBRID FALLS BACK to its keyword half. SEMANTIC DOES NOT: it asked for pages
+// sharing no word with the query, which a keyword answer cannot find.
 
 // Mode is how a search ranks.
 type Mode string

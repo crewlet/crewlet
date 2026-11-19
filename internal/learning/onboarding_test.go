@@ -779,33 +779,17 @@ func TestAClaimNeedsAPositiveTTL(t *testing.T) {
 
 func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	t.Parallel()
-	// The measurement behind Claim's single conditional upsert.
+	// The measurement behind Claim's single conditional upsert. A write
+	// transaction takes the lock at BEGIN (internal/store/begin.go), so two
+	// claimants SERIALISE and the loser's read sees the winner's lease. A
+	// read-then-write claim would be correct but holds the single write lock
+	// across read, decision and write for every claimant queued; the upsert
+	// holds it for one statement and needs no fn safe to run twice.
 	//
-	// This used to measure a RACE. store.Tx began DEFERRED, so two
-	// claimants doing read-then-write both took their snapshot before
-	// either wrote and the loser's write was refused with "database
-	// snapshot is stale"; the retry turned that refusal into a correct
-	// answer by re-reading. internal/store/begin.go removed the premise:
-	// a write transaction now takes the lock at BEGIN, so two claimants
-	// SERIALISE and there is no interleaving to recover from.
-	//
-	// The conclusion is unchanged, and the reason it survives is worth
-	// stating because it is not the reason it had before. A read-then-write
-	// claim is now correct — the loser's read happens after the winner
-	// committed, so it sees the lease and declines — but it holds the
-	// database's single write lock across its read, its decision and its
-	// write, for every claimant in the queue. The conditional upsert
-	// evaluates the same predicate in ONE statement under that lock, so it
-	// holds it for a statement rather than for a round trip, and it does
-	// not depend on fn being safe to run twice.
-	//
-	// What this asserts is therefore the SERIALISATION, and the old test's
-	// barrier is gone rather than relaxed: it forced both claimants to read
-	// before either wrote, which is exactly the interleaving the begin mode
-	// makes impossible, so under it the barrier deadlocks — claimant two
-	// blocks in BEGIN and never reaches the barrier claimant one is waiting
-	// on. A test that cannot run is not a weaker test than one that can; it
-	// is asserting about a world that no longer exists.
+	// So this asserts the SERIALISATION. It has no barrier forcing both
+	// claimants to read before either writes: begin mode makes that
+	// interleaving impossible, and the barrier would deadlock (claimant two
+	// blocks in BEGIN, never reaching it).
 	_, db := onboarding(t)
 	if _, err := db.SQL().ExecContext(t.Context(),
 		`INSERT INTO agent_onboarding_markers (agent_id, chain_hash, created_at, updated_at)
@@ -890,19 +874,15 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 // passWriteFault wraps a certified driver and breaks the WRITE path once
 // armed.
 //
-// It reaches two branches nothing else does. The store's own fault injector
-// (internal/store/storetest) intercepts result-set ITERATION, which is the
-// read path; both of a claim's failure modes are writes. One of them is not a
-// transport failure at all: database/sql documents Result.RowsAffected as
-// something a driver need not support, so a statement can run and still leave
-// its caller unable to say whether it changed anything.
+// The store's fault injector (internal/store/storetest) intercepts result-set
+// ITERATION, the read path; both of a claim's failure modes are writes. One is
+// not a transport failure: database/sql lets a driver not support
+// Result.RowsAffected, so a statement can run and leave its caller unable to
+// say whether it changed anything.
 //
-// (skill_test.go carries a second, SQL-matching write fault. Two wrappers in
-// one test package is duplication neither file can retire on its own — the
-// shared home would be internal/store/storetest, which neither owns.)
-//
-// What runs underneath is the real, certified driver. Only the two behaviours
-// under test are fiction.
+// (skill_test.go has a second, SQL-matching write fault; the shared home would
+// be internal/store/storetest, which neither file owns.) Underneath is the
+// real, certified driver; only the two behaviours under test are fiction.
 type passWriteFault struct {
 	armed atomic.Bool
 	kind  passFaultKind

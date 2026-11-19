@@ -1189,15 +1189,11 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 
 // A RETIREMENT WAITING ON A CALL STILL RUNNING KEEPS THE MAILBOX WITHOUT FAILING
 // THE TICK. A run whose tool call is still running is no run that cannot be
-// ended: the call is doing its work, and the retirer ends the run once it is
-// recorded or its bound passes. So the retirement is undone, every
-// subscription kept, as for a failure — but the tick answers no error and logs
-// no warning, which sent an operator looking for a fault nobody had; the wait is
-// said at info, naming each call and the latest instant any is waited for, on
-// every tick it lasts. Once the retirer leaves nothing waiting, the tick
-// retires the mailbox.
-//
-// NOT PARALLEL, because it reads the process-wide log sink, at info.
+// ended: the retirer ends it once the call is recorded or its bound passes. The
+// retirement is undone and every subscription kept, as for a failure, but the
+// tick answers no error and no warning; the wait is said at info, naming each
+// call and the latest instant waited for. Once nothing waits, the mailbox goes.
+// NOT PARALLEL: it reads the process-wide log sink, at info.
 //
 // Mutations: read a wait as a failure (wait-read-as-failure), and the tick
 // fails; read it as the runs ended (wait-read-as-ended), and the subscriptions

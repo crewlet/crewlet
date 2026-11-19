@@ -396,18 +396,13 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 // AN ANSWER A SEAT INHERITS RESUMES AS THE SEAT IS ESTABLISHED, not a heartbeat
 // later.
 //
-// The seat's preparation recovers a run whose answer a previous holder
-// recorded and never resumed with, and retries it — from inside the
-// acquisition, while the seat is still establishing and admits no turn. The
-// refusal names ownership, and nothing used to say when that lifted: an
-// establishment is not a renew's admission edge, so the retry slept until the
-// clock said a heartbeat had passed (15 s at the default TTL). The seat host
-// now reports the establishment, and the engine passes it on.
+// The seat's preparation retries a run whose answer a previous holder never
+// resumed, from inside the acquisition, where no turn is admitted and the
+// refusal names ownership. An establishment is not a renew's admission edge,
+// so unless the host reports it the retry sleeps a heartbeat (15 s default).
 //
-// DETERMINISTIC rather than raced: the coordinator's retries are hand-cranked,
-// and the one owed to the first inherited answer is fired from INSIDE the
-// acquisition — from the store call the recovery makes for the second — so it
-// is refused for establishing every time.
+// Deterministic: retries are hand-cranked and the first answer's is fired from
+// inside the acquisition (the store call the recovery makes for the second).
 func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)

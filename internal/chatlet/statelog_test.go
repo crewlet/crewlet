@@ -238,21 +238,15 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 
 // suitePayload is one valid (op, payload, scope) per kind.
 //
-// # Why the name, the room and the message are the first three kinds
-//
 // The suite publishes the FIRST THREE kinds a candidate declares, twice each,
-// in order — so [chatlet.ObjectKinds]'s declaration order decides what gets
-// certified, and this domain's three are a real sequence rather than three
-// unrelated records: a create on an ADDRESS whose payload names the room it
-// makes, a patch on that room, and a message posted into it. A message in a
-// room no create wrote is a malformed record under a strict replay, so any
-// other order would certify a failure.
+// in order, so [chatlet.ObjectKinds]'s declaration order decides what is
+// certified: a create on an ADDRESS naming the room it makes, a patch on that
+// room, a message posted into it. A message in a room no create wrote is
+// malformed under a strict replay.
 //
-// THE CREATE'S SCOPE IS THE ONE WITH TWO TERMS, and it has to be: the record
-// arbitrates on the name and its apply writes the room as well, so the
-// exactly-the-subject sentinel would declare a blast radius smaller than what
-// the record touches — and a node deferring it would let a later write to that
-// room step over it.
+// THE CREATE'S SCOPE HAS TWO TERMS: the record arbitrates on the name and
+// writes the room too, so the sentinel would understate its blast radius and a
+// node deferring it would let a later write to that room step over it.
 func suitePayload(kind chatlet.ObjectKind, id string) (chatlet.OpKind, any, chatlet.ScopeSet) {
 	switch kind {
 	case chatlet.KindChannelName:

@@ -849,6 +849,10 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND THE POINT OF THE KEPT CAPTURE IT CONTINUED, each figure at its
+		// widest spelling, twenty bytes for an int64's minimum
+		// ([LaunchRecord.Continued]): nothing but the type bounds either.
+		Continued: &ContinuedPoint{LaunchSeq: math.MinInt64, Through: math.MinInt},
 		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
 		// writes as itself ([ValidCountProvider]).
 		CountProvider: plain(MaxCountProviderBytes),
@@ -1000,7 +1004,7 @@ func worstRow(t *testing.T) PendingRun {
 		PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
-		HeldFor: Condition(plain(32)), HeldUntil: worstAt,
+		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
 		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
 			Reads: math.MaxInt, Tellings: tellings},
 		CreatedAt: worstAt, UpdatedAt: worstAt,

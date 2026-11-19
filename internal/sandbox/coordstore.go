@@ -1167,6 +1167,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.HeldFor, run.HeldUntil = "", time.Time{}
 		if hold := release.Hold; hold != nil {
 			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
+			run.Holds++
 			// AND THE COMPLETION OWED, in the same write, where the record
 			// owes none yet ([LaunchRecord.RefusalOwed]): the hold spent its
 			// delivery, and a lift clears the hold, so this is what tells a
@@ -1190,9 +1191,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 }
 
 // LiftHold clears a run's hold for cond — see [PendingStore.LiftHold].
-func (s *CoordStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *CoordStore) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	_, lifted, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.HeldFor == "" || run.HeldFor != cond {
+		if run.HeldFor == "" || run.HeldFor != cond || run.Holds != hold {
 			return false
 		}
 		run.HeldFor, run.HeldUntil = "", time.Time{}
@@ -2044,6 +2045,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// whether the job restarted it after its brief
 			// ([LaunchRecord.BasisRestart]).
 			run.Launch.BasisRestart = box.Restart
+			// AND THE POINT OF THE KEPT CAPTURE IT CONTINUED, off the same
+			// capture, for a later capture of the job to be raised to
+			// ([LaunchRecord.Continued]).
+			run.Launch.Continued = box.Continued
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).

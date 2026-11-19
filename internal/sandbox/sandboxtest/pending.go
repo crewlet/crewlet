@@ -90,6 +90,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"ALiftClearsOnlyTheHoldItRead", testALiftClearsOnlyTheHoldItRead},
 		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -2796,10 +2797,10 @@ func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbo
 	if !got.Held(until.Add(-time.Second)) || got.Held(until) {
 		t.Error("the row is not held exactly until its refusal lifts")
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "pause"); err != nil || lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "pause", got.Holds); err != nil || lifted {
 		t.Fatalf("a lift for another condition: lifted=%v err=%v", lifted, err)
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", got.Holds); err != nil || !lifted {
 		t.Fatalf("a lift for its own condition: lifted=%v err=%v", lifted, err)
 	}
 	if got := mustGet(t, s, "t1"); got.HeldFor != "" || !got.HeldUntil.IsZero() {
@@ -2815,6 +2816,41 @@ func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbo
 	mustRelease(t, s, mustClaim(t, s, "t1"))
 	if got := mustGet(t, s, "t1"); got.HeldFor != "" {
 		t.Fatalf("an ordinary release kept the earlier hold for %q", got.HeldFor)
+	}
+}
+
+// A LIFT CLEARS ONLY THE HOLD IT READ: a lift asked from a read made before a
+// newer hold was written (a claim and its resume, held again, between them)
+// leaves that hold standing, since nothing has signalled its condition since.
+func testALiftClearsOnlyTheHoldItRead(t *testing.T, s sandbox.PendingStore) {
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	hold := func() sandbox.PendingRun {
+		t.Helper()
+		held := releaseOf(mustClaim(t, s, "t1"))
+		held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+		if released, err := s.ReleaseClaim(t.Context(), "t1", held); err != nil || !released {
+			t.Fatalf("held release: released=%v err=%v", released, err)
+		}
+		return mustGet(t, s, "t1")
+	}
+	read := hold()
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", read.Holds); err != nil || !lifted {
+		t.Fatalf("a lift of the hold read: lifted=%v err=%v", lifted, err)
+	}
+	newer := hold()
+	if newer.Holds == read.Holds {
+		t.Fatalf("two holds share the number %d", read.Holds)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", read.Holds); err != nil || lifted {
+		t.Fatalf("a lift of the earlier hold cleared the newer one: lifted=%v err=%v", lifted, err)
+	}
+	if got := mustGet(t, s, "t1"); got.HeldFor != "budget" || got.Holds != newer.Holds {
+		t.Fatalf("the row is held for %q (hold %d); want the newer hold %d standing", got.HeldFor, got.Holds,
+			newer.Holds)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", newer.Holds); err != nil || !lifted {
+		t.Fatalf("a lift of the newer hold: lifted=%v err=%v", lifted, err)
 	}
 }
 
@@ -2841,7 +2877,7 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 		t.Fatalf("the refused claim moved the run to %s held for %q, want it running and held",
 			got.Status, got.HeldFor)
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", row.Holds); err != nil || !lifted {
 		t.Fatalf("lift: lifted=%v err=%v", lifted, err)
 	}
 	mustRelease(t, s, mustClaim(t, s, "t1"))
@@ -2875,7 +2911,7 @@ func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.Pe
 		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
 			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
 	}
-	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(ctx, "t1", "budget", mustGet(t, s, "t1").Holds); err != nil || !lifted {
 		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
 	}
 	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {

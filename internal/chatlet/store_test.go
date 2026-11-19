@@ -563,25 +563,13 @@ func TestTwoPeopleTalkingInOneRoomNeverContend(t *testing.T) {
 
 // A RETRIED POST WRITES ONE MESSAGE, AND IS ANSWERED WITH THE ONE THAT LANDED.
 //
-// A post arbitrates nothing, so there is no broker rejection to tell a retry
-// from a second remark: what makes it idempotent is that the gesture derives
-// the SAME message id and the SAME operation id from the caller's key and what
-// it asked to say. Two identifiers for one thing would be two places for a
-// retry to disagree with itself, so they are one value.
-//
-// AND THE RETRY'S ANSWER IS THE ROWS, NOT THE REQUEST. The ledger answers a
-// resubmission before any decision runs, so the message it reports is read
-// back — and the retries here name a colleague the first submission did not,
-// which is what a roster that moved between a call and its retry does to the
-// mentions a surface resolved from the same words. That is the only way to
-// tell an answer read from the rows from one echoed off the call: a read-back
-// that came back empty, or one that reported what the retry asked for, would
-// tell the person their remark reached somebody it never named.
-//
-// A DIFFERENT REMARK UNDER THE SAME KEY IS A SECOND MESSAGE. The words are part
-// of what the key derives from, which is how one request is one call: the act
-// transport derives a request's operation from the call it carried, so a body
-// that changed is a different call even where a client kept its request id.
+// A post arbitrates nothing, so it is idempotent only because the gesture
+// derives the SAME message id and operation id from the caller's key and what
+// it asked to say. THE RETRY'S ANSWER IS THE ROWS, NOT THE REQUEST: the ledger
+// answers before any decision runs, and the retries here name a colleague the
+// first submission did not, the only way to tell rows read back from the call
+// echoed. A DIFFERENT REMARK UNDER THE SAME KEY IS A SECOND MESSAGE: the words
+// are part of what the key derives from.
 func TestARetriedPostWritesOneMessage(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))
@@ -728,22 +716,13 @@ func TestARetryTheBrokerCollapsedIsNotAnsweredWithItsOwnDecision(t *testing.T) {
 
 // A POST THIS NODE'S LEDGER CANNOT VOUCH FOR NAMES NO MESSAGE.
 //
-// Once the operation ledger may have lost rows to its retention sweep — a
-// turn whose trigger predates the ledger's thirty-day sweep — a post whose
-// operation was minted before that point is answered `unknown`
-// ([statelog.Result.Unvouched]), with no error, on BOTH of the framework's
-// arms: a refusal its decision took on rows that may hold the operation's own
-// first application, and a decision that ran to completion and was then never
-// published. The second is the one that reads as a success.
-// Its decision formed a whole message out of the request — id, body, author —
-// and a caller handed that would report a remark as said that is nowhere on the
-// log; the first would report one posted into a room that does not exist, or
-// into one that takes no new messages. So every arm answers with the operation
-// and nothing else: no message, no room, no revision.
-//
-// THE BOUND IS PAST EVERY MINT INSTANT, so the case holds whatever grammar the
-// post's operation id takes — it is the answer to an unvouched post that is
-// under test here, not which ids fall before the bound.
+// Once the ledger may have lost rows to its retention sweep, a post minted
+// before that point is answered `unknown` ([statelog.Result.Unvouched]), no
+// error, on BOTH framework arms: a refusal taken on rows that may hold the
+// operation's first application, and a decision that completed and was never
+// published (which reads as a success, reporting a remark nowhere on the log).
+// So every arm answers with the operation alone: no message, room or revision.
+// THE BOUND IS PAST EVERY MINT INSTANT, whatever grammar the id takes.
 func TestAPostTheLedgerCannotVouchForNamesNoMessage(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))
@@ -925,16 +904,13 @@ func (r *writeRound) loseLedgerBefore(at time.Time) {
 
 // A SEAT POSTING TWICE IN ONE TURN WRITES TWO MESSAGES.
 //
-// A turn legitimately says more than one thing — an answer, and then a note
-// about what it did — so a message id derived from the turn ALONE would make
-// the second remark overwrite the first, everywhere, silently. The key's seed
-// is the turn's unit of work and its repeat count is the run's own call log's
-// (turnctx.CallLog: how many earlier calls to the same tool asked for
-// something else), which is why a re-run that makes the same calls in the same
-// order still writes each message once, and why the same words said again
-// AFTER a different remark are a third message rather than the first one's
-// retry. The keys below are what that derivation hands these calls, one per
-// (tool, count) — the turn derives them, and this store holds each to one
+// A message id derived from the turn ALONE would make a turn's second remark
+// overwrite the first, silently. The key's seed is the turn's unit of work and
+// its repeat count the run's call log's (turnctx.CallLog: earlier calls to the
+// same tool that asked for something else), so a re-run making the same calls
+// writes each message once, and the same words said AFTER a different remark
+// are a third message, not a retry. The keys below are what that derivation
+// hands these calls, one per (tool, count); this store holds each to one
 // message ([chatlet.Actor.OpKey]).
 func TestASeatPostingTwiceInOneTurnWritesTwoMessages(t *testing.T) {
 	t.Parallel()
@@ -1004,17 +980,14 @@ func TestASeatPostingTwiceInOneTurnWritesTwoMessages(t *testing.T) {
 // in, the message a reply answers, and the message and emoji a reaction names
 // are each part of what the gesture IS.
 //
-// A turn's repeat count can hand two different calls the SAME number. A seat
-// that says "on it" in #launch, then in #ops, then in #launch again counts the
-// second and the third 1 each — one earlier call asked for something else
-// before both — and the two differ only by the room. So does a reply under
-// one message, under another, then under the first again, and a reaction
-// that differs from the one before it only by its emoji — and a request's
-// key names the request rather than the call, so one key can arrive with any
-// of them. They are told apart by these parts and nothing else, so every one
-// of them is held here, at the store, under one key: drop one from the
-// identity ([statelog.KeyedOpID]'s object or content) and the second gesture
-// is answered as the first's retry, `applied`, and never said.
+// A turn's repeat count can hand two different calls the SAME number: "on it"
+// in #launch, then #ops, then #launch again counts the second and third 1 each
+// and they differ only by the room; likewise a reply under different messages
+// or a reaction differing only by emoji. A request's key names the request, not
+// the call, so one key can arrive with any of them. Only these parts tell them
+// apart, so each is held here under one key: drop one from the identity
+// ([statelog.KeyedOpID]'s object or content) and the second gesture is answered
+// as the first's retry, `applied`, and never said.
 func TestOneCountInAnotherPlaceIsAnotherGesture(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents())
@@ -1253,17 +1226,14 @@ func TestAnEditThatNamesNoLinksKeepsThem(t *testing.T) {
 // address, refused otherwise by the post, the reply and the edit alike, naming
 // the entry to change, and stored exactly as it was sent.
 //
-// A message's links are read on a person's screen, by a seat in the thread it
-// is handed and by any client that prints them, and a link that resolves
-// against whichever page shows it, or one in a scheme the dashboard draws as
-// words, is one none of them can follow. Each shape below sits second in its
-// list, behind a link the room takes, so the refusal has to name the entry
-// rather than the list, and two that are not addresses are named in the one
-// refusal. Mutation: answer nil from checkLink once its size is checked, and
-// every gesture below is said; name the list rather than the entry, and every
-// refusal names `links`; stop at the first link that is not one, and the post
-// with two names only the first; store the parsed address's own spelling, and
-// the uppercase scheme comes back lowered.
+// A link that resolves against whichever page shows it, or in a scheme the
+// dashboard draws as words, is one no reader can follow. Each shape below sits
+// second in its list, behind a link the room takes, so the refusal must name
+// the entry, and two non-addresses are named in one refusal. Mutation: answer
+// nil from checkLink once its size is checked, and every gesture below is said;
+// name the list rather than the entry, and every refusal names `links`; stop at
+// the first bad link, and the post with two names only the first; store the
+// parsed spelling, and the uppercase scheme comes back lowered.
 func TestALinkIsAnAddressEveryReaderOpens(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))
@@ -1505,17 +1475,13 @@ func TestAPostCarriesTheRoutingItsRoomSupported(t *testing.T) {
 // A UNIT ROOM'S ANSWERER IS ITS LEAD, RESOLVED AT THE WRITE AND CARRIED ON THE
 // RECORD.
 //
-// The routing arithmetic is never handed a roster to look an answerer up in:
-// the node that derives a wake from a record is rarely the node that wrote it,
-// so an answerer resolved at READ time would be whoever leads the unit when
-// the record is read rather than who led it when somebody spoke. The decide
-// asks the roster ONCE, for the room and its unit, and copies the answer onto
-// the record. This is the only path in the engine that resolves one.
-//
-// The answerer it feeds is the narrow one: a PERSON spoke to a room and the
-// arithmetic reached nobody else at all. And the roster is asked about the
-// ROOM as well as its unit, since whose a unit room is belongs to the chart;
-// a roster that answered for the unit alone is held to it by
+// The routing arithmetic is never handed a roster: the node deriving a wake is
+// rarely the writer, so an answerer resolved at READ time would be whoever
+// leads the unit now, not who led it when somebody spoke. The decide asks the
+// roster ONCE, for the room and its unit, and copies the answer onto the
+// record; this is the only path that resolves one. It feeds the narrow case: a
+// PERSON spoke and the arithmetic reached nobody else. The roster is asked
+// about the ROOM too, since whose a unit room is belongs to the chart, held by
 // [TestARoomNoUnitAnswersForWakesNoLead].
 func TestAUnitRoomsAnswererIsItsLeadResolvedAtTheWrite(t *testing.T) {
 	t.Parallel()
@@ -1594,17 +1560,14 @@ func TestARoomNoUnitAnswersForWakesNoLead(t *testing.T) {
 
 // A PERSON IS NEVER ANSWERED BY SILENCE IN A ROOM MADE BY HAND.
 //
-// The failure this holds shut: a person posted in a public room six agents
-// had joined, none of them following every message, named nobody, and the
-// routing woke nobody at all, with nothing to say so. A room nobody's chart
-// names still has a seat responsible for it: its most senior agent member,
-// resolved by the roster at the write and carried on the record like a unit's
-// lead.
+// Held shut: a person posted in a public room six agents had joined, none
+// following every message, named nobody, and routing woke nobody, silently. A
+// room no chart names still has a responsible seat: its most senior agent
+// member, resolved by the roster at the write and carried on the record.
 //
-// EACH CASE IS ALSO A WRITER AND PARSER AGREEMENT. The record carries the
-// routed set and the answerer, and the parser re-routes from the record
-// through the same arithmetic; with the roster unmoved, the two must name the
-// same seats for the same reasons.
+// EACH CASE IS ALSO A WRITER AND PARSER AGREEMENT: the parser re-routes from the
+// record through the same arithmetic, so with the roster unmoved both must name
+// the same seats for the same reasons.
 func TestAHandMadeRoomIsAnsweredByItsMostSeniorAgentMember(t *testing.T) {
 	t.Parallel()
 	roster := agents().withPeople("jane", "bob").withRank("ceo", "cto", "amir", "dev")
@@ -2400,24 +2363,17 @@ func takeBack(t *testing.T, take func(r *writeRound, room, message string) error
 	}
 }
 
-// A ROOM OF A KIND THIS BUILD DOES NOT KNOW REFUSES EVERY WRITE, which is the
-// same answer [chatlet.Visible] gives a reader and the one the two halves have to
-// agree on.
+// A ROOM OF A KIND THIS BUILD DOES NOT KNOW REFUSES EVERY WRITE, the answer
+// [chatlet.Visible] gives a reader, which the two halves must agree on.
+// The ROLLING-UPGRADE room, and reachable: [chatlet.DecodeMutation] does not
+// validate, because an applier must apply what the fleet accepted, so a newer
+// node's create lands with a kind this build cannot classify. `privateRoom`
+// asks a two-valued question of an open enum, so such a room is "not private",
+// and an authorization defaulting to yes on an unknown rule cannot be walked
+// back: the read half refuses the transcript while the write half accepts posts.
 //
-// This is the ROLLING-UPGRADE room, and it is reachable rather than
-// theoretical: [chatlet.DecodeMutation]'s decoder deliberately does not validate,
-// because an applier reading off the log must apply what the fleet accepted —
-// so a newer node's create lands in this node's rows with a kind this build
-// cannot classify. `privateRoom` is a two-valued question asked of an open
-// enum, so such a room falls out of it as "not private", and an authorization
-// that defaults to yes when the rule is unknown is the one direction of this
-// that cannot be walked back: the read half refuses to serve the transcript
-// while the write half accepts posts into it.
-//
-// THE ROOM IS BUILT FROM A RAW RECORD rather than through the store, because
-// the store is exactly what cannot mint one: [chatlet.Store.CreateChannel]
-// refuses a kind that is not `Named` and `OpenDirect` one that is not
-// `Direct`. A record on the log is the only way in, which is the whole point.
+// THE ROOM IS BUILT FROM A RAW RECORD, since [chatlet.Store.CreateChannel] and
+// `OpenDirect` refuse a kind that is not `Named` / `Direct`.
 func TestARoomOfAnUnknownKindRefusesEveryWrite(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))

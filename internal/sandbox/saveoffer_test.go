@@ -556,12 +556,12 @@ func (s stampsAcrossTheWire) StampCapture(ctx context.Context, turnID string, st
 	return s.PendingStore.StampCapture(ctx, turnID, stamp)
 }
 
-// AN OPENCODE RUN IS OFFERED NO SAVE: a runner whose harness takes no save of
-// a running job (OpenCode's) costs its offer nothing: no task, no slot, no
-// memory and no read of its box.
+// A RUNNER THAT TAKES NO SAVE IS OFFERED NONE: a runner whose harness takes no
+// save of a running job costs its offer nothing: no task, no slot, no memory
+// and no read of its box.
 //
 // Mutation: drop the runner's check from the offer.
-func TestAnOpenCodeRunIsOfferedNoSave(t *testing.T) {
+func TestARunnerThatTakesNoSaveIsOfferedNone(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())

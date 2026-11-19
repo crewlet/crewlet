@@ -13,39 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CONVERSATION'S NEXT TURN, AS ITS DISPATCH READS IT.
-//
-// A turn that serves a conversation reads that conversation's head ONCE, here at
-// its dispatch, through the estate router at `linearizable`
-// (internal/executordomain's Reader.Head): an end another node published must be
-// in the copy that answers, or the turn would continue a session missing the
-// conversation's last turn and be told an older turn's ending. From that one
-// read it renders how the conversation's earlier turns ended, under the turn's
-// own token (internal/agent/prompts' BuildConversationEndings), which its runner
-// freezes on every park; and its first launch freezes the read itself on the
-// turn's run record and holds the base on the executor log
-// (internal/sandbox's conversationbase.go). No launch of the turn reads the head
-// again: a relaunch continues the base the read named, and every brief tells
-// the endings it rendered.
-//
-// FAIL OPEN, as every reader of the log is: a read that fails or that the ladder
-// refuses is logged (`executor_conversation_unread`), and the turn runs with no
-// account of its conversation's earlier turns and a session of its own — a
-// turn with less context, never one that cannot work.
-//
-// AND ONLY WHERE THERE IS A CONVERSATION TO CONTINUE: a turn with no
-// conversation key (an agent-to-agent ask, a generic source's wake) reads
-// nothing, and so does every turn of a company that keeps no session
-// (`turn_engine.conversation_session.enabled: false`), the one switch that turns
-// off everything a conversation carries between turns. Their ends are recorded
-// all the same: that is the turn's account, not its session.
-//
-// A SCHEDULE'S FIRE IS A TURN OF ONE: every fire of a schedule carries the
-// schedule's conversation (internal/notify's ScheduleConversation), so its
-// dispatch reads the head the schedule's last fire left on the seat and its
-// run continues that session, as any conversation's next turn does — told in
-// the schedule's words, the earlier fires and how they ended
-// ([notify.Scheduled]).
+// A CONVERSATION'S NEXT TURN, AS ITS DISPATCH READS IT: the head, read ONCE at
+// dispatch through the estate router at `linearizable` (internal/executordomain's
+// Reader.Head), so an end another node published is in the answering copy. The
+// turn renders how earlier turns ended (internal/agent/prompts'
+// BuildConversationEndings), and its first launch freezes the read on the run
+// record (internal/sandbox's conversationbase.go); a relaunch continues that
+// base and never reads the head again. FAIL OPEN, as every log reader is: a
+// failed read is logged (`executor_conversation_unread`) and the turn runs with
+// less context. No key (an A2A ask) or
+// `turn_engine.conversation_session.enabled: false` reads nothing, though ends
+// are recorded. A SCHEDULE'S FIRE IS A TURN OF ONE: it carries the schedule's
+// conversation (internal/notify's ScheduleConversation).
 
 // headReader is the one read a turn's dispatch makes of its conversation on the
 // executor log ([estate.ExecutorReads.Head]): the router's on every node, a

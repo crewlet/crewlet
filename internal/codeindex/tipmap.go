@@ -13,10 +13,9 @@ import (
 	"strings"
 )
 
-// A TIP MAP: one immutable file naming, for one tip of a repository, every
-// file the tip holds and the blob at it — which of a segment's postings count
-// at that tip, since a posting names a blob and never a path. Big-endian
-// throughout:
+// A TIP MAP: an immutable file naming every file a tip holds and its blob,
+// which says what of a segment's postings count at that tip (a posting names
+// a blob, never a path). Big-endian:
 //
 //	header   "CRCT" | version u8 (1) | oid bytes u8 (20) | reserved u16 | entries u32 |
 //	         reserved u32 | path bytes u64 | tip [20] | reserved u32           (48 bytes)
@@ -24,14 +23,12 @@ import (
 //	                                                  ascending by path, byte for byte; no path twice
 //	paths    path bytes — the entries' paths back to back, in the entries' order
 //	trailer  SHA-256 of every byte before it [32]
-//
-// A path is the file's from the repository's root as git names it: any bytes
-// but NUL, so not always UTF-8. Flag 1 is the file's blob SKIPPED (Skip), so
-// a search counts the file among those it did not read; any other bit is a
-// file this build did not write. tip is the commit the map was read at, the
-// one a search answers about.
 
-// The format's fixed parts.
+// The format's fixed parts. A path is the file's from the repository's root as
+// git names it: any bytes but NUL, so not always UTF-8. Flag 1 is the file's
+// blob SKIPPED (Skip), so a search counts the file among those it did not
+// read; any other bit is a file this build did not write. tip is the commit
+// the map was read at, the one a search answers about.
 const (
 	tipMagic      = "CRCT"
 	tipVersion    = 1

@@ -39,8 +39,9 @@
 // window's id index rather than counted twice. The first refusal ends a flush
 // — a broker that refused one record is down for the next, and asking it for
 // each of a backlog of thousands would spend the flush on refusals and the log
-// on a line apiece — and what it held back is kept, oldest first, up to
-// [MaxPending].
+// on a line apiece — and what it held back is kept in seal order
+// ([Ledger.keep]), up to [MaxPending], past which the oldest is dropped and
+// said ([Records.Held]).
 //
 // # What a crash costs
 //
@@ -249,15 +250,13 @@ func (l *Ledger[K, B]) flush(ctx context.Context, pick func(K) bool, retry bool)
 // WERE SEALED, and drops the oldest past the ledger's bound ([MaxPending]).
 //
 // MERGED BY SEAL ORDER rather than put in front or behind, because neither
-// place is right for every flush that is refused. A full flush takes the
-// backlog with it, so what it hands back is the oldest there is; a chosen
-// flush ([Ledger.FlushWhere]) takes only its own new buckets, so what IT hands
-// back is newer than every record already waiting — and put in front, the
-// bound's trim dropped a turn's fresh records as "the oldest" at every turn's
-// end of an outage while an hour-old backlog stayed, and the next retry
-// published newest first. Two flushes refused at once interleave either way.
-// failed and the backlog are each in seal order, so one merge keeps the whole
-// of it so.
+// place is right for every refused flush. A full flush takes the backlog with
+// it, so what it hands back is the oldest there is; a chosen flush
+// ([Ledger.FlushWhere]) hands back records newer than everything waiting, and
+// put in front the bound's trim would drop them as "the oldest" while an
+// hour-old backlog stayed, and the retry would publish newest first. Two
+// flushes refused at once interleave either way. failed and the backlog are
+// each in seal order, so one merge keeps the whole so.
 func (l *Ledger[K, B]) keep(ctx context.Context, failed []sealed[B]) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

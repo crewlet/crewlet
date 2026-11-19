@@ -14,83 +14,30 @@ import (
 	"syscall"
 )
 
-// A SHARED LOGIN IS A SET OF FILES, AND IT IS WRITTEN AS ONE.
+// A SHARED LOGIN IS A SET OF FILES, AND IT IS WRITTEN AS ONE: a harness may
+// keep its login in several (gemini-cli's token beside its account, kimi-code's
+// beside config.toml), one login only while they come from the same sign-in.
+// Replacing them one rename at a time left half a login after a failure or
+// kill, which every presence check, seed and export read as a login and the
+// restore declined to repair because the directory was not empty.
 //
-// A harness may keep its login in more than one file — gemini-cli's OAuth
-// token beside the account it names, kimi-code's token beside the config.toml
-// that declares its provider, cursor-agent's sign-in beside its settings — and
-// those files are one login only while they come from the same sign-in. Every
-// writer of the shared credential directory used to replace them one rename at
-// a time, so a write that failed or was killed between two renames left half of
-// one: a directory that every presence check read as a login, every seed handed
-// a seat, every bundle exported, and that the automatic restore of a configured
-// bundle declined to repair because the directory was not empty.
-//
-// So a write is JOURNALED, under the directory's lock ([LockCredentials]) that
-// every writer already takes:
-//
-//  1. the whole new login — every file it holds, and every name it does not —
-//     is written to the directory's JOURNAL ([CredentialJournal]) through a
-//     staged copy of its own beside it and a rename, and the journal's
-//     directory is synced. THAT RENAME IS THE COMMIT: from here on the new
-//     login is the login of record;
-//  2. each file is replaced or removed, and the credential directory is
-//     synced;
-//  3. the journal is removed.
-//
-// A JOURNAL THAT STANDS is a write that stopped between 1 and 3 — a process
-// killed, a disk that refused a file — and every READ under the lock finishes it
-// first ([ReadCredentials]), so no reader that holds the lock ever sees a
-// directory part way through a write: it reads the login before the write or
-// the login after it, whichever the journal says. A write that finds one
-// standing REPLACES it rather than finishing it ([WriteCredentials]): the new
-// write states every name it knows, so the old one's decision about each of
-// them is superseded unapplied — which is what lets a logout discard a login
-// that was never put in place, rather than writing it to disk to delete it.
-//
-// WHAT A WRITE STAGED IS GONE BY THE NEXT HOLD OF THE LOCK. A file is replaced
-// through a staged copy and a rename, and a write stopped between the two by a
-// SIGKILL, an out-of-memory kill or a power loss, none of which runs the
-// deferred removal that cleans up after a failure, leaves the staged copy:
-// credential bytes under a name no reader reads, which no logout removed
-// either, since a logout removes the login's own names. So every read and every
-// write removes them first ([sweep]): each staged login file inside the
-// directory, and the journal's staged copy beside it, which has a name of its
-// own for that reason. Only a holder of the directory's lock stages either, so
-// whatever the next holder finds was left by a writer that is gone. The
-// directory's PARENT is never swept: other writers stage their own files
-// there, under other locks.
-//
-// THE OBVIOUS ALTERNATIVE, an immutable directory per login behind a symbolic
-// link swapped by one rename, is no less locked: a reader that resolved the link
-// without the lock reads a directory a later writer may already be collecting,
-// and an absent file there reads as half a login again — so the readers take
-// the lock either way, and the link adds a collector, a directory every
-// consumer's path now goes through, and a layout every document describing the
-// directory has to change for. The journal leaves the directory a directory of
-// files, where every path a consumer was handed still names the file it did.
-//
-// THE STEPS ARE NAMED ([CredentialStep]): the journal landing, each file put in
-// place, each file removed, the journal removed. Each leaves a directory no
-// other instant leaves. Between two of them nothing a reader of the login can
-// see changes: a file being replaced is staged under a name no reader reads
-// until its rename, which is the step, and which the next hold of the lock
-// removes if a kill came first, and a directory's sync changes only what a
-// power loss keeps, which no kill reaches. So a writer killed at every step has
-// been killed at every instant that matters, and a write reports each step to
-// the observer its caller hands it ([CredentialSteps]). That observer is nil in
-// every write the engine makes; in the suites it is the kill matrix
-// (internal/hostbox/hostboxtest), which parks the writer's process at one step
-// at a time and kills it there. A READER FINISHING a write reports none: what
-// it puts in place is what the write it finishes would have, in the same
-// order, skipping what is already there, so a reader killed part way leaves a
-// directory the write killed at one of its own steps leaves.
+// So a write is JOURNALED under the directory's lock ([LockCredentials]):
+// (1) the whole new login, every file it holds and every name it removes, is
+// renamed into the JOURNAL ([CredentialJournal]) and the directory synced: THAT
+// RENAME IS THE COMMIT; (2) each file is replaced or removed, the directory
+// synced; (3) the journal is removed.
 
 // CredentialJournal is the journal of the shared credential directory dir
 // ([WriteCredentials]): dir + ".pending", BESIDE the directory for the reason
-// its lock is ([CredentialLock]) — nothing that copies the directory, a login
-// bundle or a box's seed, ever carries a write in progress along with the
-// login it is part way through replacing.
+// its lock is ([CredentialLock]): nothing that copies the directory carries a
+// write in progress along.
+//
+// A JOURNAL THAT STANDS is a write stopped between steps 1 and 3. Every READ
+// under the lock finishes it first ([ReadCredentials]), so a reader sees the
+// login before or after the write, never part way. A write that finds one
+// REPLACES it ([WriteCredentials]): the new write states every name it knows,
+// so the old decisions are superseded unapplied, which lets a logout discard a
+// login never put in place.
 func CredentialJournal(dir string) string { return filepath.Clean(dir) + ".pending" }
 
 // stagedJournal is where a write of dir's login stages its journal before the
@@ -118,6 +65,13 @@ const journalVersion = 1
 
 // credentialJournal is one committed write of a shared login: the content of
 // every file it puts in place, and every name it removes.
+//
+// THE OBVIOUS ALTERNATIVE, an immutable directory per login behind a symlink
+// swapped by one rename, is no less locked: a reader resolving the link
+// without the lock may read a directory a writer is collecting, an absent file
+// reading as half a login again. It adds a collector, a directory every
+// consumer's path goes through and a layout every document must change for;
+// the journal leaves the directory a directory of files.
 type credentialJournal struct {
 	Version int               `json:"version"`
 	Write   map[string][]byte `json:"write"`
@@ -158,6 +112,11 @@ func Committed(err error) bool {
 // CredentialStep is one step of a journaled login write ([WriteCredentials]),
 // as the write reaches it: a point at which a writer killed there leaves a
 // directory no other instant leaves.
+//
+// Between two steps nothing a reader can see changes (a staged file is
+// invisible until its rename, which is the step; a directory sync changes only
+// what a power loss keeps), so a writer killed at every step has been killed at
+// every instant that matters.
 type CredentialStep string
 
 const (
@@ -186,15 +145,16 @@ func (s CredentialStep) Valid() bool {
 
 // CredentialSteps observes a login write's steps as it reaches them: the step,
 // and the file it is about ("" for a step about the whole login). It is called
-// on the writing goroutine, under the caller's hold of the directory's lock,
-// after the step has happened, so an observer that does not return holds the
-// write, and the lock, at that step: which is how a suite parks a writer's
-// process there to kill it (internal/hostbox/hostboxtest).
+// on the writing goroutine, under the caller's hold of the lock, after the
+// step happened, so an observer that does not return holds the write there:
+// how the kill matrix (internal/hostbox/hostboxtest) parks a writer's process
+// to kill it.
 //
-// NIL OBSERVES NOTHING, and nil is every write the engine makes. A file
-// already holding what the write puts there, a removal of a file that is not
-// there, a directory's sync and a file staged before its rename report
-// nothing: none of them changes what a reader of the login can see.
+// NIL OBSERVES NOTHING, and nil is every write the engine makes. What changes
+// nothing a reader can see (a file already holding its content, a removal of
+// an absent file, a directory sync, a staged file) reports nothing, and so does
+// a READER FINISHING a write: it puts in place what the write would, in order,
+// so a reader killed part way leaves what a write killed at a step leaves.
 type CredentialSteps func(step CredentialStep, name string)
 
 // reach reports step to s, where there is an s.
@@ -210,13 +170,12 @@ func (s CredentialSteps) reach(step CredentialStep, name string) {
 // part of one write and part of another.
 //
 // The caller holds dir's lock ([LockCredentials]). A write that stopped part
-// way is finished first, so what is read is the login that write committed; one
-// that cannot be finished is an error rather than the half it left, because a
-// login read as whole from half of one is what this exists to end.
+// way is finished first; one that cannot be finished is an error rather than
+// the half it left, which is what this exists to end.
 //
-// A name that is there but is not a regular file, or is larger than
-// [MaxCredentialBytes], is an error rather than an absence: read as nothing it
-// would hand a seat a login with a file missing, which is the half login again.
+// A name that is there but is no regular file, or exceeds [MaxCredentialBytes],
+// is an error rather than an absence: read as nothing it would hand a seat a
+// login with a file missing, the half login again.
 func ReadCredentials(dir string, names []string) (map[string][]byte, error) {
 	if err := checkNames(names); err != nil {
 		return nil, err
@@ -241,25 +200,16 @@ func ReadCredentials(dir string, names []string) (map[string][]byte, error) {
 }
 
 // WriteCredentials makes the login the shared credential directory dir holds
-// EXACTLY login, over names: every name login holds is written with its
-// content, every other name in names is removed, and nothing else in the
-// directory is touched — as ONE committed step ([CredentialJournal]).
+// EXACTLY login, over names: every name login holds is written, every other
+// name in names removed, nothing else touched, as ONE committed step
+// ([CredentialJournal]). names is every file the login may hold, and the write
+// decides each: a caller writing only what changed passes the rest as it read
+// them under the same lock. login may name nothing outside names.
 //
-// names is every file the login may hold, and the write decides each of them:
-// a caller that writes only what changed passes the rest as it read them under
-// the same hold of the lock. login may name nothing outside names.
-//
-// The caller holds dir's lock ([LockCredentials]). A write left standing by an
-// earlier one is REPLACED rather than finished: its decision about every name in
-// names is superseded, and only its decisions about names outside them are
-// carried into this write's journal, so nothing it committed is lost and
-// nothing this write states is overridden.
-//
-// steps observes the steps the write reaches ([CredentialSteps]); nil observes
-// none.
-//
-// A failure before the journal lands writes nothing; one after it is an
-// [*UnappliedError] — see [Committed].
+// The caller holds dir's lock ([LockCredentials]). A write left standing is
+// REPLACED: its decisions about names in names are superseded, others carried
+// over, so nothing committed is lost. A failure before the journal lands
+// writes nothing; after it, an [*UnappliedError] ([Committed]).
 func WriteCredentials(dir string, names []string, login map[string][]byte, steps CredentialSteps) error {
 	if err := checkNames(names); err != nil {
 		return err
@@ -337,6 +287,12 @@ func writeJournal(dir string, raw []byte) error {
 // staged inside it. The caller holds dir's lock, which every writer that
 // stages either holds, so nothing it removes is a write in progress. Only
 // regular files go: anything else at such a name is no copy a write made.
+//
+// A SIGKILL, OOM kill or power loss runs no deferred removal, leaving
+// credential bytes under a name no reader reads and no logout removes (a
+// logout removes the login's own names), so every read and write sweeps first.
+// The directory's PARENT is never swept: other writers stage there under
+// other locks.
 func sweep(dir string) error {
 	staged := []string{stagedJournal(dir)}
 	entries, err := os.ReadDir(dir)
@@ -528,16 +484,14 @@ func checkNames(names []string) error {
 // SyncDir makes the entries of dir — a rename into it, a removal from it —
 // durable.
 //
-// Exported for a write that has to reach the disk BEFORE a login write does,
-// which [ReplaceFile] alone does not promise: it syncs the file it renames into
-// place but not the directory holding the rename — the shared login's
-// operator epoch, which a login write must never outlive.
+// Exported for a write that must reach the disk BEFORE a login write does
+// (the shared login's operator epoch): [ReplaceFile] syncs the file it renames
+// but not the directory holding the rename.
 //
 // A FILESYSTEM THAT CANNOT SYNC A DIRECTORY is not refused: some network and
-// FUSE mounts answer EINVAL or ENOTSUP, and such a filesystem never promised
-// an order to wait for. The journal still makes a write all or nothing against
-// a killed process there, which is the failure a host actually has; refusing
-// every login write instead would leave the entry unable to sign in at all.
+// FUSE mounts answer EINVAL or ENOTSUP and never promised an order. The
+// journal still makes a write all or nothing against a killed process, the
+// failure a host has; refusing would leave the entry unable to sign in.
 func SyncDir(dir string) error {
 	d, err := os.Open(dir) //nolint:gosec // the caller's own directory
 	if err != nil {
