@@ -12,19 +12,22 @@ import (
 
 // MintHold is called by a backend as a claim that has won its record is about
 // to mint its fencing epoch: the one point where a claim is neither granted
-// nor refused. A backend under [RunMinting] calls it there; every running
-// store leaves it unset.
+// nor refused. A backend under [RunMinting] calls it there with the claim's
+// resource, or with the counter it mints on ([coord.CounterResource]) where
+// that is all it knows (the twin's counter); every running store leaves it
+// unset.
 type MintHold func(ctx context.Context, resource string)
 
 // RunMinting runs the cases about a claim HELD MID-MINT over the backends open
 // builds, each with hold wired into its mint step: what a second claim of the
-// same resource is answered while the first is still minting.
+// same resource is answered while the first is still minting, a browser
+// control's take among them.
 //
 // ITS OWN ENTRY POINT, beside [Run], because no backend can be held mid-claim
 // from outside: each wires the hold into its own mint step, the memory twin
 // through its epoch counter ([MintCounter]) and the KV store through a hook
 // only its own tests set.
-func RunMinting(t *testing.T, open func(t *testing.T, hold MintHold) coord.Backend) {
+func RunMinting(t *testing.T, open func(t *testing.T, hold MintHold) BrowserControlStore) {
 	t.Helper()
 	for _, c := range mintingCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -81,9 +84,11 @@ func (g *mintGate) arm(resource string) (minting <-chan struct{}, release func()
 	return g.minting, func() { once.Do(func() { close(r) }) }
 }
 
+// hold holds the mint the gate is armed for, matched by the counter it mints
+// on, since the twin's counter is told no more than that ([MintHold]).
 func (g *mintGate) hold(ctx context.Context, resource string) {
 	g.mu.Lock()
-	if g.resource != resource || g.release == nil {
+	if coord.CounterResource(g.resource) != coord.CounterResource(resource) || g.release == nil {
 		g.mu.Unlock()
 		return
 	}
@@ -99,7 +104,7 @@ func (g *mintGate) hold(ctx context.Context, resource string) {
 
 var mintingCases = []struct {
 	name string
-	fn   func(t *testing.T, b coord.Backend, gate *mintGate)
+	fn   func(t *testing.T, b BrowserControlStore, gate *mintGate)
 }{{
 	// A CLAIM WHILE THE SAME OWNER'S CLAIM IS STILL MINTING is neither a
 	// grant nor a refusal: the unknown arm, named. errors.Is answers it as
@@ -110,7 +115,7 @@ var mintingCases = []struct {
 	// mint is released the first claim holds, and the owner's next claim
 	// renews it.
 	name: "a claim while the same owner's claim is minting is ErrClaimInFlight",
-	fn: func(t *testing.T, b coord.Backend, gate *mintGate) {
+	fn: func(t *testing.T, b BrowserControlStore, gate *mintGate) {
 		ctx := t.Context()
 		resource := coord.WorkerResource("conformance-minting")
 		mine := coord.AcquireOptions{Owner: "node-a:boot-1", TTL: LongTTL, Ungated: true}
@@ -154,6 +159,53 @@ var mintingCases = []struct {
 			lease.Epoch != got.lease.Epoch {
 			t.Errorf("the owner's next claim = (%+v, %v), want a renew at epoch %d", lease, err,
 				got.lease.Epoch)
+		}
+	},
+}, {
+	// A TAKE WHILE ANOTHER OWNER'S TAKE IS MINTING is unknown, never held: the
+	// record holds no tenure yet, so a held answer would name nobody, and the
+	// person's panel asks again. Released, the first take holds, and a second
+	// take is told so.
+	name: "a take while another owner's take is minting is unknown, never held naming nobody",
+	fn: func(t *testing.T, b BrowserControlStore, gate *mintGate) {
+		ctx := t.Context()
+		l, ada, grace := newLaunch(), newPerson("Ada Lovelace"), newPerson("Grace Hopper")
+		minting, release := gate.arm(coord.BrowserControlResource(l.launch))
+		defer release()
+		type answer struct {
+			control coord.BrowserControl
+			taken   coord.BrowserControlTaken
+			err     error
+		}
+		first := make(chan answer, 1)
+		go func() {
+			control, taken, err := b.TakeBrowserControl(ctx, l.take(ada), LongTTL)
+			first <- answer{control, taken, err}
+		}()
+		select {
+		case <-minting:
+		case got := <-first:
+			t.Fatalf("the first take answered (%q, %v) without minting an epoch", got.taken, got.err)
+		case <-time.After(30 * time.Second): //fixedwait:liveness
+			t.Fatal("the first take never reached its mint")
+		}
+
+		control, taken, err := b.TakeBrowserControl(ctx, l.take(grace), LongTTL)
+		if taken != "" || !errors.Is(err, coord.ErrUnavailable) {
+			t.Errorf("a take while another owner's mints = (%+v, %q, %v), want only an error wrapping "+
+				"coord.ErrUnavailable", control.Current, taken, err)
+		}
+		release()
+		got := <-first
+		won, ok := got.control.Held()
+		if got.err != nil || got.taken != coord.ControlTaken || !ok {
+			t.Fatalf("the first take, released = (%q, %v), want it taken", got.taken, got.err)
+		}
+		control, taken, err = b.TakeBrowserControl(ctx, l.take(grace), LongTTL)
+		if held, ok := control.Held(); err != nil || taken != coord.ControlHeld || !ok ||
+			held.Owner != ada.owner || held.Epoch != won.Epoch {
+			t.Errorf("the second take, once the first held = (%+v, %q, %v), want held by Ada at epoch %d",
+				control.Current, taken, err, won.Epoch)
 		}
 	},
 }}

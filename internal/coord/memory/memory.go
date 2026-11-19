@@ -13,7 +13,8 @@
 // Records are never deleted, which is not a leak but the contract: releasing
 // a lease expires it in place so the epoch counter survives, because a
 // counter that restarts hands the next owner a token a zombie from the
-// previous tenure is still fencing its writes with.
+// previous tenure is still fencing its writes with. The one exception is a
+// browser control's record, whose counter is its class's (below).
 //
 // # The counter outlives the process; the leases do not
 //
@@ -28,13 +29,29 @@
 // for nothing that persists a token. A token is minted on the counter its
 // resource counts on (coord.CounterResource), so the persistent counter keeps
 // no record per process start for the one lease every process claims afresh,
-// its taker lease, whose record here is this process's own and goes with it.
+// its taker lease, whose record here is this process's own and goes with it,
+// and none per launch for a person's control of a run's browser.
 //
 // A token is minted OUTSIDE the store's lock, because a persistent counter is
 // a round trip and every renew, release and read of every other resource
 // waits on that lock. The resource is held meanwhile by a CLAIMING marker,
 // the in-process form of the KV store's claiming record: a peer reads it as
 // held, and a claim that cannot mint gives it back.
+//
+// # A browser control's record is forgotten at the duty bucket's age
+//
+// On a single node the twin is the production lease store, and a person takes
+// a run's browser under a lease of its own per launch (coord.BrowserControls),
+// so a row per launch anybody ever took would otherwise grow for the life of
+// the process. So every take of the class first removes each row of it that
+// holds nothing live and claims nothing, once its end — its expiry, which a
+// release sets to its own instant and a lapse leaves at the deadline — is
+// coord.MaxDutyTTL past on the twin's clock. That is the KV duty bucket's age,
+// which removes a key that long after its last write, at most a TTL before
+// its end, so the two stores keep an end readable for as long, within a TTL.
+// Removing the row loses no token: "never deleted" exists to keep a
+// resource's own counter, and this class mints from its class's
+// (coord.CounterResource), which the row is not.
 package memory
 
 import (

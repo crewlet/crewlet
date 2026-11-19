@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Four classes name four kinds:
+// than reading every lease in the fleet. Five classes name five kinds:
 //
 //   - seat:{id} — one agent seat this node runs, named by the agent id
 //     derived from its handle (ADR-0013), as its mailbox is.
@@ -30,6 +30,12 @@
 //     that has given presence up, and claimed afresh by every process, so a
 //     restart never waits on its predecessor's. Its tokens come from ONE
 //     counter for the whole class ([CounterResource]).
+//   - browser_control:{launch} — a PERSON'S control of one executor launch's
+//     browser ([ClassBrowserControl], [BrowserControls]): taken by the node
+//     serving the person's gesture and followed by the node holding the seat,
+//     its tokens from ONE counter for the class, as a taker's are. Coord's own
+//     class rather than a caller's, because [CounterResource] must know its
+//     counter and its record is a typed contract both stores implement.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
 // claims are `move:` and `merge:` — and every such class is held to
@@ -156,6 +162,81 @@
 // [Lease.ExpiresAt] in every non-test file but a backend's (coord/kv's,
 // coord/memory's), the contract suite's (coordtest) and [TimeLeft]'s, and Lease
 // has no method that judges one.
+//
+// # A person's control of a run's browser
+//
+// A person can take the browser an agent's executor runs in its box
+// ([BrowserControls]): one lease per launch of the executor
+// ([ClassBrowserControl]), taken and renewed by the node serving the person
+// and followed by the node holding the seat, which tells the box. It is a
+// LEASE of this store rather than a record of its own because what a control
+// needs is what a lease already is: one owner at a time by compare-and-set, a
+// fencing epoch from a counter that never restarts, and a lapse the store
+// judges on its own clock, as the section above says, never a reader's. A
+// record carrying a deadline its writer stamped — the shape [ModelChecks]
+// takes for a check that lingers minutes — would be judged on whichever node
+// read it, and a 30-second deadline written on one machine's clock and read
+// on another's lapses at once, or late, at skews far inside the two hours a
+// fleet tolerates. A second store-judged expiry beside the lease's would be a
+// second implementation of the rule (ADR-0008).
+//
+// Its OWNER is the person, the browser session they act in and the take
+// ([BrowserControlOwner]): a uuid their panel mints per take gesture, because
+// every tab of one session sends one cookie, and an owner of the person and the
+// session alone would hand two tabs one epoch, the box then answering one
+// tab's input from its record of the other's. Its HOLDER is who the owner is
+// to everybody watching: their human seat and display name, the name made one
+// a holder may have ([BrowserControlHolderName]), since the identity estate
+// bounds a display name by its bytes alone and a take refuses what the record
+// cannot carry. Both ride the lease's Meta beside the launch, the turn and the
+// seat, so a take, a renewal and an end each stay one write, and a reader gets
+// them with the tenure.
+//
+// AN END SAYS WHY, ON THE RECORD IT LEAVES ([BrowserControlEnd]): the node that
+// ends a tenure writes the cause into the tombstone its release leaves, and the
+// end's instant is the store's stamp on that write. Every later take carries
+// the [MaxBrowserControlEnds] newest ends of the launch forward, each with its
+// cause and instant, so a reader can say how a past epoch ended for at least a
+// TTL and through four later tenures: as long as the node holding the seat can
+// still be finding out, to tell the model. A LAPSE IS NO WRITE: the store
+// derives it from its own clock, ended at the deadline. A record a generic
+// Release ended names no cause and reads as released; nothing in the engine
+// sends one. A failed claim's give-back rewrites the record it was made over,
+// clearing its owner and moving its stamp, so the take's give-back writes how
+// that record's tenure ended, and when, into it: unmarked, a lapse would read
+// afterwards as a release, and both a lapse's and an end's instant as the
+// give-back's. That is the one place an end's instant is written: the moment
+// a later write would move the stamp it was read from.
+//
+// THE RECORD KEEPS THE KEYS IT DOES NOT DECLARE, at every level: the top's
+// ride every write of the record, and a tenure's ride with it as it is carried
+// forward. Every take, renewal and end rewrites the record whole, so a build
+// that kept only what it declares would strip what a newer one added on the
+// first write it made during a rolling upgrade. So the codec edits the record
+// it is handed rather than rebuilding it from what it knows, and every value is
+// a JSON string, an epoch included, since the stores hand a Meta back as JSON
+// decodes it ([Lease.Meta]) and a number would round past 2^53.
+//
+// Its tokens count on ONE COUNTER FOR THE CLASS ([CounterResource]), for the
+// taker lease's reason: a launch is a resource nobody leases again once its
+// job ends, and a counter per launch would leave a record per launch for the
+// life of the deployment. Every token is still above every earlier one, so a
+// tenure is fenced against every past one, of its launch and of every other.
+// coord/kv keeps the leases in its duty bucket, whose age removes a launch's
+// key three hours after its last write, and the twin forgets an ended record
+// at the same age past its end (coord/memory's package doc), so a record and
+// its ends are readable for at least three hours less a TTL on either store.
+//
+// What a store promises, each held by coordtest.RunBrowserControls: a take is
+// taken at a new epoch, kept at the owner's own live one, or answered held
+// with another owner's live tenure, read from the record that refused it, and
+// never with a tenure that is not live; a renewal and an end hold only for
+// the owner at a live epoch, a lapse is never renewed, and an end is never
+// written as a lapse; a read judges the newest tenure on the store's clock and
+// hands out no deadline; a watch names the launch of every write, a hint and
+// never an answer. Every error is unknown, and the safe direction is CLOSED:
+// a control the store could not record is no control, and its caller asks
+// again.
 //
 // # Why coordination is not itself a replicated log
 //
@@ -546,7 +627,10 @@ func (o AcquireOptions) EffectiveProtocol() int {
 // the caller says so. Every field whose zero value would be dangerous says
 // what its zero means.
 type AcquireOptions struct {
-	// Owner is the process incarnation claiming the resource.
+	// Owner is who claims the resource, the name every renewal and release of
+	// it must give: a node's process incarnation, or a node id and a uuid for
+	// one hold of its work, and for a browser control a person's take
+	// ([BrowserControlOwner.Key]).
 	Owner string
 	// TTL is how long the claim survives without a renew.
 	TTL time.Duration
@@ -568,8 +652,8 @@ type AcquireOptions struct {
 	// presence: a newer node unable to register is missing from the roster,
 	// so its peers over-take shares. Non-seat work: a fleet duty and a hold
 	// on one (internal/schedule), a server's OAuth renewal lease
-	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun)
-	// and the taker lease ([ClassTaker]).
+	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun),
+	// the taker lease ([ClassTaker]) and a person's control of a run's browser.
 	//
 	// It skips the check, never the stamp: on presence the stamp is what the
 	// gate reads; on a duty it holds nothing back ([ProtocolGateCounts]).
@@ -725,7 +809,7 @@ const ResourceSeparator = ":"
 // no members; [Class.Valid] refuses one.
 //
 // Not enumerated, or every caller's vocabulary would land here: this package
-// owns the four the fleet leases, the tracker leases under classes of its own,
+// owns the five the fleet leases, the tracker leases under classes of its own,
 // and only [Class.HeldToSeatTTL] says which classes the seat lease TTL holds.
 type Class string
 
@@ -748,6 +832,14 @@ const (
 	// renewed [KeptRenewals] times a TTL, and ungated and uncounted by the
 	// gate ([ProtocolGateCounts]): it says nothing about holding a seat.
 	ClassTaker Class = "taker"
+
+	// ClassBrowserControl is a person's control of one executor launch's
+	// browser ([BrowserControls], [BrowserControlResource]): taken and renewed
+	// by the node serving the person, ended by it or by the node holding the
+	// seat. Its tokens come from one counter for the class ([CounterResource]),
+	// since a launch is a resource nobody leases again once its job ends;
+	// ungated and uncounted by the gate. See the package doc.
+	ClassBrowserControl Class = "browser_control"
 )
 
 // TakerResource names the taker lease of one process incarnation
@@ -758,18 +850,24 @@ func TakerResource(incarnation string) string { return ClassTaker.Resource(incar
 // tokens; every backend asks this one function so the twin and the store
 // agree.
 //
-// The resource itself, except a taker lease, which counts on its class's one
-// counter keyed by the class name: a counter is never removed (a removed one
-// restarts at 1), so one per process start would grow forever. A class
-// counter keeps the guarantee — every token above every earlier one, so a
-// re-claiming taker is fenced against its past self — at the cost of
-// contention its compare-and-set absorbs. It keeps no placement hint.
+// The resource itself, except a taker lease or a browser control, which counts
+// on its class's one counter keyed by the class name: a counter is never
+// removed (a removed one restarts at 1), so one per process start or per
+// launch would grow forever. A class counter keeps the guarantee — every
+// token above every earlier one, so a re-claim is fenced against its past
+// self — at the cost of contention its compare-and-set absorbs. It keeps no
+// placement hint.
 func CounterResource(resource string) string {
-	if ClassTaker.Holds(resource) {
-		return string(ClassTaker)
+	for _, class := range classCounted {
+		if class.Holds(resource) {
+			return string(class)
+		}
 	}
 	return resource
 }
+
+// classCounted is every class whose tokens one counter of the class mints.
+var classCounted = []Class{ClassTaker, ClassBrowserControl}
 
 // Valid reports whether this class can address a key: SHAPE, not membership.
 // It must be non-empty and survive the key grammar's escaping UNCHANGED, or

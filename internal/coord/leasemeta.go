@@ -10,15 +10,15 @@ import (
 // MaxLeaseMetaBytes is the largest Meta a lease carries, as the store encodes
 // it ([LeaseMetaBytes]): 8 KiB, refused before anything is sent ([HoldLeaseMeta]).
 //
-// Only a node's presence carries a Meta, re-sent on EVERY heartbeat, so an
-// unbounded Meta is an unbounded renewal. This is its worst case (the label
+// A Meta is re-sent on EVERY renewal, so an unbounded one is an unbounded
+// renewal. Two classes carry one: a node's presence, whose worst case (the label
 // limits of internal/seat/placement, [MaxBuildBytes], one alarm mark per kind)
-// rounded up to the next KiB, held there by internal/engine's
-// TestThePresenceLeaseAtItsWorstFitsItsBound; with its ~400-byte envelope a
-// record crosses in a quarter second at internal/objstore's MiBPace. A NODE
-// OVER IT LOSES ITS STATUS, NEVER ITS PRESENCE: the seat host publishes the
-// placement half alone (internal/seat, presenceMeta), and this refusal is the
-// backstop for every other caller.
+// this is, rounded up to the next KiB (internal/engine's
+// TestThePresenceLeaseAtItsWorstFitsItsBound), and a browser control's record,
+// whose worst case fits under it. A record crosses in a quarter second at
+// internal/objstore's MiBPace. A NODE OVER IT LOSES ITS STATUS, NEVER ITS
+// PRESENCE: the seat host publishes the placement half alone (internal/seat,
+// presenceMeta), and this refusal is the backstop for every other caller.
 const MaxLeaseMetaBytes = 8 << 10
 
 // MaxBuildBytes is the most of a node's build name its status carries
