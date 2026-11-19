@@ -156,80 +156,6 @@ func (s Sources) seatBusy(ctx context.Context, from, to time.Time, zone *time.Lo
 	return out, nil
 }
 
-// seatStops is each seat's stops by agent id, read from its own records: its
-// pause, open since before the event history where it is; its pause and model
-// limit events over the history; and its budget refusals, each until its
-// window reset. A stop whose end its records do not give has a zero end, which
-// leaves the seat unmeasured.
-func (s Sources) seatStops(ctx context.Context, from, to, now time.Time) (map[string][]span, error) {
-	floor := now.Add(-store.EventHistory)
-	type mark struct {
-		at     time.Time
-		cause  string
-		begins bool
-	}
-	marks := map[string][]mark{}
-	for _, kind := range stopEvents {
-		rows, err := s.spanOf(ctx, floor, to, kind.kind, nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range rows {
-			marks[r.AgentID] = append(marks[r.AgentID], mark{at: r.Time.UTC(), cause: kind.cause, begins: kind.begins})
-		}
-	}
-	out := map[string][]span{}
-	for agent, ms := range marks {
-		slices.SortStableFunc(ms, func(a, b mark) int { return a.at.Compare(b.at) })
-		open := map[string]time.Time{}
-		for _, m := range ms {
-			began, isOpen := open[m.cause]
-			switch {
-			case m.begins && !isOpen:
-				open[m.cause] = m.at
-			case !m.begins && isOpen:
-				out[agent] = append(out[agent], span{began, m.at})
-				delete(open, m.cause)
-			case !m.begins:
-				// AN END WHOSE BEGINNING HAS AGED OUT of the history: the
-				// stop stood from before the history's floor.
-				out[agent] = append(out[agent], span{floor, m.at})
-			}
-		}
-		for _, began := range open {
-			out[agent] = append(out[agent], span{began, to})
-		}
-	}
-	// A PAUSE OLDER THAN THE HISTORY has no event left, only its record.
-	if s.Pauses != nil {
-		pauses, err := s.Pauses.ListSeatPauses(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("queries: list the seats' pauses: %w", err)
-		}
-		for _, p := range pauses {
-			agent := p.Seat.String()
-			if p.At.Before(floor) {
-				out[agent] = append(out[agent], span{p.At, to})
-			}
-		}
-	}
-	refusals, err := s.budgetStopsIn(ctx, maxTime(from.AddDate(0, -1, 0), floor), to)
-	if err != nil {
-		return nil, err
-	}
-	chart := s.chartHandles()
-	byHandle := map[string]string{}
-	for id, seat := range chart {
-		byHandle[seat.handle] = id
-	}
-	for _, r := range refusals {
-		if agent, ok := byHandle[r.Seat]; ok {
-			out[agent] = append(out[agent], span{r.At, r.Resets})
-		}
-	}
-	return out, nil
-}
-
 func maxTime(a, b time.Time) time.Time {
 	if a.After(b) {
 		return a
@@ -297,12 +223,11 @@ func (s Sources) seatPlacement(ctx context.Context, from, to, now time.Time) (ma
 		kind   string
 		placed bool
 	}{{types.SeatPlaced{}.EventType(), true}, {types.SeatReleased{}.EventType(), false}} {
-		rows, err := s.spanOf(ctx, floor, to, kind.kind, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, r := range rows {
+		// NO CEILING ON THE RECORDS: each is kept as its mark alone.
+		if err := s.eachOf(ctx, floor, to, kind.kind, func(r store.EventRecord) {
 			marks[r.AgentID] = append(marks[r.AgentID], mark{at: r.Time.UTC(), placed: kind.placed})
+		}); err != nil {
+			return nil, nil, err
 		}
 	}
 	// THE LIVE TENURE is a placement too, which a lost event cannot take away.
