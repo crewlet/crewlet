@@ -49,7 +49,6 @@ import type {
   AssistantErrorCard,
   AssistantErrorEvent,
   AssistantEventKind,
-  AssistantFileCard,
   AssistantBriefCard,
   AssistantFileStored,
   AssistantFrame,
@@ -110,7 +109,6 @@ export interface AssistantCardBodies {
   error: AssistantErrorCard;
   notice: AssistantNoticeCard;
   oversize: AssistantOversizeCard;
-  file: AssistantFileCard;
   brief: AssistantBriefCard;
 }
 
@@ -152,7 +150,6 @@ const CARD_KINDS: Record<AssistantCardKind, true> = {
   error: true,
   notice: true,
   oversize: true,
-  file: true,
   brief: true,
 };
 

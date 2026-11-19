@@ -6,7 +6,7 @@
  * is held to, answered on `delegated_decisions` beside its rules; `inbox`,
  * `atlas`, `code` and `chat` are the settings Worklet, Atlas, Gitlet and
  * Chatlet change in place; `sign_in` is the company's sign-in policy, answered
- * on `sign_in_policy`; `assistant` is Ask Crewlet's, on its settings page.
+ * on `sign_in_policy`.
  */
 type LimitGroup =
   | "turn"
@@ -18,8 +18,7 @@ type LimitGroup =
   | "atlas"
   | "code"
   | "chat"
-  | "sign_in"
-  | "assistant";
+  | "sign_in";
 
 /** What a limit's number counts. COPIES of `queries.LimitUnits`. */
 type LimitUnit = "count" | "seconds" | "fraction" | "per_second" | "days";

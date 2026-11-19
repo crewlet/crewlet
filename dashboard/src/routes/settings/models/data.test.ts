@@ -15,7 +15,7 @@ function models() {
         modelEntry({ key: "c", used_by: [{ assistant: "chat", position: 1 }] }),
         modelEntry({
           key: "b",
-          used_by: [ASSISTANT_CHAT, { assistant: "deep_work", position: 0 }],
+          used_by: [ASSISTANT_CHAT],
         }),
       ],
       alarms: [],

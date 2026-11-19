@@ -80,7 +80,6 @@ describe("usesOf", () => {
       { seat: "lead", job: "executor", position: 0 },
       { seat: "lead", job: "review", position: 1 },
       { assistant: "chat", position: 0 },
-      { assistant: "deep_work", position: 0 },
     ];
     const uses = usesOf(used);
     expect(uses.jobs.executor).toEqual(["lead"]);

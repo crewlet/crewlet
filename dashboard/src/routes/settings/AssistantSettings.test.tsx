@@ -48,7 +48,7 @@ const LIMITS: LimitsAnswer = {
   limits: [
     {
       key: "assistant.max_steps",
-      group: "assistant",
+      group: "turn",
       unit: "count",
       value: 30,
       default: 30,

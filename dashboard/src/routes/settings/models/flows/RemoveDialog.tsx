@@ -282,14 +282,7 @@ export function placesBySeat(
 
 /** A place's own row label under its seat: the job, capitalised ("Coding", "Chat"). */
 function jobLabel(ref: ModelReference): string {
-  const words =
-    ref.at.assistant === "chat"
-      ? "chat"
-      : ref.at.assistant === "deep_work"
-        ? "deep work"
-        : ref.at.job
-          ? JOB_WORDS[ref.at.job]
-          : "";
+  const words = ref.at.assistant === "chat" ? "chat" : ref.at.job ? JOB_WORDS[ref.at.job] : "";
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
