@@ -4,9 +4,9 @@
 // index holds — whether it holds a query's every term, and where the first is
 // — read as it is written or through a JSON text's escapes ([Reading]), and
 // [Reading.FindIn] of one handed over in pieces, which [Reading.MayHold] says
-// of a text whether any stretches cut from it could answer, and a
-// [Reading.Finder] answers of a text handed over as it is read, holding a word
-// and an escape of it at most, never the text.
+// of a text whether any stretches cut from it could answer. [Reading.Finder]
+// answers FindIn of a text handed over as it is read, holding a word and an
+// escape of it at most, never the text.
 //
 // # Why the engine has one at all
 //
