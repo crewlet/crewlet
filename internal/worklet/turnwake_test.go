@@ -33,6 +33,8 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 		worklet.ReasonChecklist:      {true, true},
 		worklet.ReasonBlocking:       {true, true},
 		worklet.ReasonPurged:         {true, true},
+		// Nobody is moving an item: its lead is told to look (ADR-0162).
+		worklet.ReasonFlow: {true, true},
 		// Woken when the change asks something of the seat holding it.
 		worklet.ReasonAssignee:     {false, true},
 		worklet.ReasonCollaborator: {false, true},

@@ -23,214 +23,103 @@ import (
 )
 
 // The PUBLISHER: one per data node, publishing that node's own days and
-// nothing else. A node without `data` runs none: it keeps no event log, and
-// its events are counted in the day of the data node that keeps them in
-// custody (see the package doc).
+// nothing else. A node without `data` runs none: its events are counted in the
+// day of the data node that keeps them in custody (see the package doc).
 //
-// # Not a duty
-//
-// Every other writer of a derived domain in this engine is a fleet singleton,
-// because every node could compute the same value and paying for it N times
-// is waste. That is false here: a data node's event log holds only what its
-// own seats did and what it keeps in custody for nodes without `data`, so
-// each data node is the only one that can derive its day. The node in the
-// subject is what makes N writers safe — no two nodes ever publish on one
-// subject — and it is why a node that leaves the fleet takes nothing with it:
-// what it published stays on the stream and in every peer's rows for
-// [History].
-//
-// # What a tick does
-//
-// Every [FlushInterval] it fingerprints today and yesterday — yesterday
-// because a turn that ended at 23:59:58 is written a moment after midnight —
-// and re-derives only a day whose fingerprint moved. Each derived object is
-// compared with what this process last published for it, and only an object
-// whose content changed is published. A record carries the object's whole
-// cumulative value, so a publish that failed is simply repeated by the next
-// tick that finds the day still unconfirmed.
-//
-// # And every older day whose kept rows changed
-//
-// A day counts the rows this node KEEPS ([store.DB.UsageForDay]): a custody
-// batch it has written and not settled may be another data node's, and
-// counted on both, every reader summing the fleet would bill it twice. So a
-// batch settled as kept makes rows count on the days they fall on — and only
-// on those, since every count of a day is read off rows inside it, a turn's
-// off the one record that ends it (a turn whose end states no tally — ended by
-// a build before the tally, or resumed from such a build's park — is read off
-// its records, which reach back to wherever the turn started; see
-// [store.DB.UsageForDay]) — and a batch can carry a stateless
-// node's events from a partition that outlasted midnight by days. On today or
-// yesterday the settle moves the fingerprint. On an older day it is the mark
-// the settle leaves in its own transaction ([store.DB.UsageRederive]): each
-// tick reads the marks first and derives every day from the oldest through the
-// day before yesterday IN FULL, without a fingerprint, publishing each object
-// whose content differs from what this process last published for it. Once
-// every day the tick derived settled — published, or refused for good and
-// said — it clears the marks up to the newest it read, so a settle that lands
-// during the pass is stamped above it, survives the clear, and is derived on
-// the next tick.
-//
-// # And every day it owes, across a restart
-//
-// A day this process could not settle — an unresolved publish of yesterday's
-// last change — is derived again on later ticks however far the window has
-// moved, and so is the day the node stopped in: the tail of it written after
-// the last tick is in no published record. Both are held as ONE WATERMARK the
-// store keeps ([store.DB.UsageWatermark]): after every tick, the start of
-// yesterday, or of an older day still owed if there is one, written when it
-// moves — about once a day. A fresh process reads it before anything else and
-// derives every day from it again. That covers a crash, a long outage and a
-// stop whose last flush failed, as far back as the floor below: a node down
-// for longer than the event log is read back gets back nothing older than
-// that, and a day older than the dispatch ledger's sweep without its
-// schedules. Before the watermark a start re-derived only today and
-// yesterday, so a node down across two midnights never published the tail of
-// the day it stopped in; and the node's NEWEST ROW would not stand in for it,
-// since the first custody batch the keeper writes at boot — or the first fire
-// the scheduler's catch-up records — makes that today.
-//
-// # A day keeps the cut it was first given
-//
-// A record names its day by label alone, and a label is cut into instants on
-// the company's clock, which an apply can move. A day derived again — an older
-// one a mark or the watermark names, or one of the two a tick fingerprints at
-// the tick the clock moves — keeps the instants its first derivation was cut
-// on ([store.DB.PinUsageDay]): recut on the clock in force, a label replaced
-// the record its old cut published while the objects the new cut no longer
-// reached kept theirs, so a row either side of midnight counted in two
-// published days or in none. A day cut for the first time abuts the cuts of
-// the days either side of it, and is clamped by any farther recorded cut it
-// would reach into, so the day a clock moved on is longer or shorter by the
-// move and every instant is in exactly one day ([Publisher.windowOf]). The day
-// an instant is in is the recorded cut that holds it, or the label next to its
-// own whose first cut does ([Publisher.dayAt]) — so for the hours between the
-// old clock's midnight and the new one's the label runs one ahead of the
-// company's local date after a move west and one behind after a move east,
-// and up to two either way after a move of more than a day, which leaves a
-// label in between with no instants (east) or cuts a first day more than two
-// days long (west).
-//
-// # Never below what the fleet holds, and not before the applier has caught up
-//
-// Inside the floor below a day only GROWS: a kept settle adds rows, a late row
-// of this node's own adds one, a settle as not kept deletes rows no count
-// held, a settled batch never goes back in flight, and a turn whose end states
-// no tally gains segments rather than losing them. So a derivation that comes
-// out SMALLER than what the fleet holds of the day in any figure proves the
-// event log has lost rows that record counted: a store restored beside a usage
-// log copied later (a backup takes the store first, and a fleet restore puts
-// one node's store beside another's streams), one started empty, or an
-// untallied turn whose earliest records the event log's sweep already removed.
-// Published, the short record would replace the day on every node with what is
-// left — and that is as true of today and yesterday, which a restore copied
-// this morning most often names, as of any older day: the restored log never
-// gets back the rows it lacks.
-//
-// So EVERY publish is the derivation JOINED with what the fleet holds of the
-// object ([Applied], [Join]): figure by figure, the larger of the two. On the
-// ordinary day the fleet's record is an earlier derivation of the same rows
-// and the join is the derivation itself, byte for byte; after a loss it raises
-// exactly the figures the fleet held more of and lets every other move — a
-// day a restore cost one failed turn still publishes every later turn and its
-// spend, where holding the short derivation back whole froze them all. What a
-// join cannot do is recover what was lost: a figure the fleet held more of
-// counts the node's new rows only once its own count passes the fleet's. That
-// a derivation came out short is said once per run of short derivations of an
-// object, as `usage_rederive_short` ([Publisher.noteShort]). The other side of
-// the same rule is that a figure this node once published TOO HIGH is never
-// lowered below it — which only the build before the kept-rows rule did, by
-// counting a custody batch another node kept.
-//
-// What the fleet holds is read off the rows this node's applier wrote, so NO
-// day — today and yesterday included — is derived until that applier has
-// reached the end of the log since it started ([PublisherDeps.Caught]): right
-// after a restore its rows are the copy's, older than what this node published
-// after the copy was taken, and a short derivation joined with them would
-// still replace the fleet's. Until then every day stays owed — an older one by
-// the bound, the marks and the watermark, and today and yesterday as days the
-// tick could not settle, which lowers the bound to them, so a node still
-// catching up across a midnight does not lose the day it stopped in.
-//
-// # Never past the event log's floor
-//
-// A day is re-derived only while every row it was derived from is still held.
-// The event log is read back [store.EventHistory] — its rows are swept a day
-// after that — so a day that STARTS before now − EventHistory is never derived
-// again: its rows may be partly gone, and the record a short derivation made
-// would REPLACE the whole day every peer holds with less. Such a day keeps the
-// value it was last published at; the tick says so once
-// (`usage_rederive_past_floor`). Every row a day's counts are derived from
-// falls inside the day, and a fire's turn label comes from its trace, which
-// starts at the fire, so the floor is exact for them. The rows that can fall
-// outside are the records of a turn whose end states no tally, read off its
-// records — and those reach back to wherever the turn STARTED, which nothing
-// bounds: a park lasts as long as its executor, which is never stopped on a
-// timer, or as long as a person takes to answer. So a day inside the floor can
-// hold such a turn whose earliest records the sweep has removed, and derived
-// again it reads that turn shorter, with fewer reviews; the join holds every
-// figure of it at what the fleet was published (see above), and says so.
-// The dispatch ledger keeps a fire for less than that
-// ([PublisherDeps.FireHistory]), so a day older than IT is derived again
-// without its schedules: a kept settle moves no schedule-day — a fire's label
-// is read off rows in flight as well as kept ones, so it is set when the batch
-// is written — and derived from a ledger that has swept part of the day it
-// would shrink.
-//
-// # And every day again, after a reanchor anywhere in the fleet
-//
-// A data node that re-anchors a restored copy of this log follows it from its
-// end, so it never applies what the others published after the restore; and a
-// day this node published in that tail and has not moved since would stay at
-// its pre-restore value there. So a rise in any data node's generation of the
-// log, as the positions register states it, makes this node publish every day
-// its event log still holds again, under operation ids that cannot collapse
-// onto a copy from before the move. See republish.go.
-//
-// # A refusal no retry changes is said once
-//
-// Two refusals are not a moment's trouble: a record larger than the log takes
-// (`record_too_large`), which re-deriving the same content reproduces byte for
-// byte, and a log at its byte ceiling (`log_full`), which only an operator's
-// gesture or the horizon ageing a day out makes room in. Retried every tick,
-// each would put the same warning and the same refused append on the log every
-// fifteen seconds for as long as it lasted — on every node at once for a full
-// log. So the object is logged ONCE, as `usage_publish_refused`, and skipped
-// until its content changes, which is what makes a new record that might fit.
-// A full log is a property of the LOG rather than of the object, though, so the
-// first append that lands a subject NEW TO THE LOG afterwards — proof the log
-// has room again — puts every object skipped for it back in line, and its day
-// is derived again on the next tick: otherwise yesterday's last value, which
-// nothing will ever change, would stay off the fleet until this process
-// restarted. Whether a subject is new is asked of the replicated rows — the read
-// of what the fleet holds that every publish takes first ([Applied]) — before
-// the append, never of this process's memory: after a restart, or on an
-// older day this process has not derived yet, every subject is one it has not
-// published, and taken for new each would reopen every skip and have it
-// refused, and said, again.
-//
-// # What this process remembers
-//
-// Each object's last published derivation, last refusal and whether its last
-// derivation was short, for every day the floor still lets it derive — not
-// only the two it fingerprints: an older day a mark names is derived in full,
-// and remembered, its pass publishes only the objects whose derivation moved
-// rather than every object of the day. An object whose derivation is unchanged
-// costs no read of what the fleet holds. A fresh process remembers nothing,
-// so its first pass over a day republishes it whole — joined, which is the
-// fleet's own record wherever the derivation adds nothing — and that is
-// harmless twice over: the op id is the content's digest, so the broker's
-// duplicate window collapses a repeat, and past the window the apply replaces
-// the rows with the same rows.
-//
-// # And at the stop
-//
-// An orderly stop flushes once more as [Publisher.Run] returns: today and
-// yesterday, so the end of the day a node stops in is published even if it
-// never starts again. That flush runs on a context of its own, the loop's
-// having just ended, bounded by [FinalFlushBudget], and derives nothing older —
-// what an older day is owed stays in the marks and the watermark for the next
-// start.
+// Not a duty. A data node's event log holds only what its own seats did and
+// what it keeps in custody, so each data node alone can derive its day. The
+// node in the subject makes N writers safe, and a node that leaves the fleet
+// takes nothing with it: what it published stays for [History].
+
+// A tick, every [FlushInterval], fingerprints today and yesterday (a turn that
+// ended at 23:59:58 is written after midnight) and re-derives only a day whose
+// fingerprint moved. Only an object whose content changed since this process
+// last published it is published. A record carries the object's whole
+// cumulative value, so a failed publish is repeated by the next tick.
+
+// An older day whose kept rows changed. A day counts the rows this node KEEPS
+// ([store.DB.UsageForDay]): counted on two nodes, a custody batch would be
+// billed twice. A batch settled as kept makes rows count on the days they fall
+// on, which may be days back after a partition that outlasted midnight. On an
+// older day the settle leaves a mark in its own transaction
+// ([store.DB.UsageRederive]): each tick derives every day from the oldest
+// marked through the day before yesterday IN FULL, then clears the marks up to
+// the newest it read, so a settle landing mid-pass is stamped above it and
+// derived on the next tick.
+
+// A day owed across a restart. A day this process could not settle, and the
+// day the node stopped in (its tail is in no record), are held as ONE WATERMARK
+// ([store.DB.UsageWatermark]): after each tick the start of yesterday, or of an
+// older day still owed, written when it moves. A fresh process derives every
+// day from it again, as far back as the floor below. The node's NEWEST ROW
+// cannot stand in for it: the first custody batch or catch-up fire at boot
+// makes that today.
+
+// A day keeps the cut it was first given. A record names its day by label, cut
+// into instants on the company's clock, which an apply can move. A day derived
+// again keeps its first cut ([store.DB.PinUsageDay]): recut, a label replaced
+// the record its old cut published while objects the new cut no longer reached
+// kept theirs, so a row counted in two days or none. A day cut first abuts its
+// neighbours' cuts and is clamped by any farther recorded cut, so every instant
+// is in exactly one day ([Publisher.windowOf], [Publisher.dayAt]); around a
+// clock move the label can run up to two off the local date, leaving a label
+// with no instants (east) or a first day over two days long (west).
+
+// Never below what the fleet holds. Inside the floor a day only GROWS, so a
+// derivation SMALLER than the fleet's in any figure proves the event log lost
+// rows the record counted (a restore beside a later-copied usage log, an empty
+// start, an untallied turn whose records the sweep removed). Published, it
+// would replace the day on every node with less. So EVERY publish is the
+// derivation JOINED with what the fleet holds ([Applied], [Join]): per figure,
+// the larger. A join cannot recover what was lost, and a figure published TOO
+// HIGH is never lowered below it. A short derivation is said once per run as
+// `usage_rederive_short` ([Publisher.noteShort]).
+
+// Not before the applier has caught up. What the fleet holds is read off the
+// rows this node's applier wrote, so NO day is derived until it has reached the
+// end of the log since it started ([PublisherDeps.Caught]): right after a
+// restore its rows are the copy's, and a short derivation joined with them
+// would still replace the fleet's. Until then every day stays owed, which
+// lowers the bound to today and yesterday.
+
+// Never past the event log's floor. A day that STARTS before
+// now - [store.EventHistory] is never derived again: its rows may be partly
+// swept, and a short record would REPLACE the whole day every peer holds. It
+// keeps its last value; the tick says so once (`usage_rederive_past_floor`).
+// The floor is exact except for a turn whose end states no tally, read off
+// records reaching back to wherever it STARTED, which nothing bounds (a park
+// lasts as long as its executor or a person's answer); the join holds every
+// figure of it at the fleet's. The dispatch ledger keeps a fire for less
+// ([PublisherDeps.FireHistory]), so a day older than IT is derived without its
+// schedules, since a kept settle moves no schedule-day.
+
+// After a reanchor anywhere in the fleet, a node that re-anchors a restored
+// copy follows the log from its end and never applies what the others
+// published after the restore. So a rise in any data node's generation of the
+// log (the positions register) makes this node publish every day its event log
+// holds again, under operation ids that cannot collapse onto a copy from before
+// the move. See republish.go.
+
+// A refusal no retry changes is said once: a record larger than the log takes
+// (`record_too_large`) or a log at its byte ceiling (`log_full`). Retried every
+// tick, each would log the same warning on every node. So the object is logged
+// ONCE, as `usage_publish_refused`, and skipped until its content changes. A
+// full log is the LOG's property: the first append landing a subject NEW TO THE
+// LOG proves room, and puts every object skipped for it back in line. Newness
+// is asked of the replicated rows ([Applied]) before the append, never of this
+// process's memory: after a restart every subject is unpublished, and each
+// would reopen every skip and be refused, and said, again.
+
+// What this process remembers: each object's last published derivation, last
+// refusal and whether it was short, for every day the floor still lets it
+// derive. An unchanged object costs no read of the fleet's rows. A fresh
+// process remembers nothing and republishes a day whole, joined, which is
+// harmless: the op id is the content's digest, so the broker's duplicate window
+// collapses a repeat, and past it the apply replaces rows with the same rows.
+
+// At the stop, [Publisher.Run] flushes once more on a context of its own (the
+// loop's has ended), bounded by [FinalFlushBudget]: today and yesterday only.
+// What an older day is owed stays in the marks and the watermark.
 
 // Store is this node's records, as the publisher reads them. Satisfied by
 // [store.DB].
@@ -269,19 +158,13 @@ type Store interface {
 //
 // THE STATE LOG'S OWN RESOLVE BUDGET ([statelog.DefaultResolveBudget]): the
 // longest the log lets ONE write wait for this node's applier before it
-// answers pending, and the line past which it calls the node one with a fault
-// a caller cannot fix by waiting. The stop takes this flush before the trim
-// and the logs come down (internal/engine's teardown), so its applier is
-// running, and the flush is two fingerprints and the derivation and publish
-// of whichever of today and yesterday moved since the last tick — it derives
-// nothing older, whatever the marks name — so a healthy one needs a small
-// fraction of the budget. One that has not finished inside it is meeting a
-// log no stop can wait out. A node whose applier had not caught up with the
-// usage log derives nothing at all ([PublisherDeps.Caught]), and its watermark
-// keeps both days owed. What it did not send is published by this node's
-// next start, whose watermark names the day it stopped in; it is lost only
-// to a node that never starts again, or one that starts again after the event
-// log's floor has passed that day.
+// answers pending. The stop flushes before the logs come down
+// (internal/engine's teardown), so the applier is running, and the flush is two
+// fingerprints and the publish of whichever day moved: a healthy one needs a
+// small fraction of the budget, and one that has not finished inside it is
+// meeting a log no stop can wait out. A node whose applier had not caught up
+// derives nothing ([PublisherDeps.Caught]) and keeps both days owed; the next
+// start's watermark publishes them unless the event log's floor has passed.
 const FinalFlushBudget = statelog.DefaultResolveBudget
 
 // Log is the domain's write authority, as the publisher uses it. Satisfied
@@ -796,22 +679,13 @@ func (p *Publisher) window(ctx context.Context, now time.Time, loc *time.Locatio
 // where none does — the first cut of the label next to it that does, cut and
 // recorded by [Publisher.windowOf].
 //
-// THAT LABEL NEED NOT BE t's DATE ON THE COMPANY'S CLOCK. A label recorded on
-// an earlier clock keeps the instants it was first cut on, so after a move WEST
-// the label t falls on can be one whose cut already ENDED before t — the hours
-// between the old clock's midnight and the new one's belong to no recorded cut
-// — and after a move EAST one whose cut STARTS after t. Either way t belongs to
-// the label beside it: cut for the first time, a label abuts its recorded
-// neighbours ([Publisher.windowOf]), so the one after a pin that ended starts
-// where it ended, and the one before a pin that starts late ends where it
-// starts. So the walk steps from t's own label toward t until a cut holds it.
-// For the hours of a westward move that makes a node's day label run one ahead
-// of the company's local date, and for an eastward move one behind — two, for
-// the first or last hours of a move of more than a day, which is the one case
-// that takes a second step: moved twenty-six hours west, t's own label and the
-// one after it can both have ENDED before t. A label the clock left EMPTY is
-// stepped past the same way, in the direction t lies from where its empty cut
-// would sit. No zone is two days from another, so three steps reach it.
+// THAT LABEL NEED NOT BE t's DATE ON THE COMPANY'S CLOCK. A recorded label
+// keeps its first instants, so after a move WEST t's own label can be one whose
+// cut already ENDED before t, and after a move EAST one whose cut STARTS after
+// t. So the walk steps from t's own label toward t until a cut holds it: one
+// ahead of the local date after a move west, one behind after a move east, two
+// for a move over a day. A label the clock left EMPTY is stepped past the same
+// way. No zone is two days from another, so three steps reach it.
 func (p *Publisher) dayAt(ctx context.Context, t time.Time, loc *time.Location) (period.Window, error) {
 	label, w, ok, err := p.deps.Store.UsageDayContaining(ctx, t)
 	if err != nil {
@@ -868,29 +742,17 @@ func (p *Publisher) step(ctx context.Context, day period.Window, n int) (period.
 	return period.Window{}, fmt.Errorf("usage: the days either side of %s are all empty", day.Label)
 }
 
-// windowOf is the window this node cuts the day `natural` names on — the
-// company's clock's own cut of it, which carries the label — and false for a
-// day it cuts EMPTY, which is then answered as the empty cut it would have
-// been, so a caller can tell which side of it an instant lies.
-//
-// THE FIRST CUT WINS ([store.DB.PinUsageDay]): a label recorded already keeps
-// the instants it was first cut on, so a day derived again after an apply
-// moved the company's clock counts what its record counted — recut, it would
-// replace the record its old cut published while the objects the new cut no
-// longer reaches kept theirs, and a row either side of midnight would count in
-// two published days or in none. A label cut for the FIRST time ABUTS its
-// adjacent labels' recorded cuts — it starts where the day before it ended and
-// ends where the day after it starts — so the day a clock moved on is longer
-// or shorter by the move. And it is CLAMPED by a farther recorded cut that
-// reaches into it: a move of more than a day leaves an adjacent label uncut
-// and empty, and a cut that looked only next door would take its natural
-// instants from under a recorded day two labels away, counting their rows in
-// both. A farther cut that ends before this day starts is the other case — a
-// day nobody has cut yet in between, an outage rather than a clock move — and
-// is left alone, or a day cut after a node was down two days would swallow the
-// uncut day before it. So every instant is in exactly one day. A move of a day
-// or more can leave a day with no instants at all, which is answered false
-// rather than recorded.
+// windowOf is the window this node cuts the day `natural` names on, and false
+// for a day it cuts EMPTY (so a caller can tell which side an instant lies).
+// THE FIRST CUT WINS ([store.DB.PinUsageDay]): a recorded label keeps its
+// first instants, or a day derived after a clock move would replace its old
+// record while objects the new cut no longer reaches kept theirs. A label cut
+// for the FIRST time ABUTS its neighbours' recorded cuts, so the day a clock
+// moved on is longer or shorter by the move, and is CLAMPED by a farther
+// recorded cut reaching into it, or its rows would count in both days. A
+// farther cut ending before this day starts (an outage) is left alone, or it
+// would swallow the uncut day between. A day left with no instants is
+// answered false rather than recorded.
 func (p *Publisher) windowOf(ctx context.Context, natural period.Window) (period.Window, bool, error) {
 	loc := natural.Start.Location()
 	as := func(w store.UsageWindow) period.Window {

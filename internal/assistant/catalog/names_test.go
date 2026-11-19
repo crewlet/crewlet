@@ -298,18 +298,17 @@ func TestEveryFaultOfACallNamingRecordsIsOneRefusal(t *testing.T) {
 }
 
 // TWO READS OF ONE TOOL ARE TOLD APART on the step and the card, PROVED FOR
-// EVERY READ rather than declared: the drawer keeps one read per title (a
-// table's), or per record (an entity's kind and id), the freshest, so two
-// reads it took for one lost the first (the C1 report: "Spend by agent" over
-// seven days and over fourteen; two direct conversations both "Messages"; one
-// search by two authors). So for every read and every argument that changes
-// what it sends, other than a page's size: one that picks the card (a view, a
-// section) is two cards, one of a table changes its title's scope (a room read
-// by its id said as the turn says the room, a direct conversation by its
-// people), and one of a record names the record. Mutation: drop get_spend's
-// Scope or the title's use of it, search_chat's author, read_chat_messages'
-// room, list_turns' seat or get_task_cost's task, or give a record read a
-// paging argument, and this fails.
+// EVERY READ rather than declared: the drawer keeps the freshest read per
+// title (a table's) or per record (an entity's kind and id), so two reads it
+// took for one lose the first (two direct conversations both "Messages"). So
+// for every read and every argument that changes what it sends, other than a
+// page's size: one that picks the card (a view, a section) is two cards, one
+// of a table changes its title's scope (a room by its id said as the turn
+// says it, a direct conversation by its people), one of a record names the
+// record. Mutation: drop get_spend's Scope or the title's use of it,
+// search_chat's author, read_chat_messages' room, list_turns' seat or
+// get_task_cost's task, or give a record read a paging argument, and this
+// fails.
 func TestTwoReadsOfOneToolAreToldApart(t *testing.T) {
 	t.Parallel()
 	// record are the arguments that name the record an entity read is of,

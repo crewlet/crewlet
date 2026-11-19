@@ -23,27 +23,14 @@ import (
 )
 
 // SPIKE S4: the publish-time linter and the strict script policy over a
-// corpus of model-shaped pages.
-//
-// testdata/s4 holds pages written the way a model writes an artifact when it
-// is asked for a dashboard, a game, a form or a tool: CDN libraries pinned and
-// unpinned, inline handlers, browser storage, remote APIs, embeds. Each is put
-// through the shipped linter ([lint.HTML], with the CDN copy-in answered
-// locally, as the publish pipeline answers it from its cache), and each page
-// the linter publishes is read against the policy the artifact origin serves
-// it under (internal/api/pagepolicy: a fresh nonce with 'strict-dynamic',
-// handler digests, 'none' for frames, forms and the base URL, the artifact's
-// own origin for every connection and image, workers from blob: only) by a
-// STATIC reading ([policyBreaks]) of what in the stored page that policy
-// stops. The static reading is a model, and it says which rules it applies;
-// the browser half of the spike (S4 in docs/reference/artifact-capacity.md)
-// opens the same pages on a serving node and counts the console's policy
-// violations.
-//
-// testdata/s4/corpus.json records, per page, what the linter refuses and
-// what the policy stops; [TestTheS4CorpusReadsAsRecorded] holds both to it,
-// so a linter or policy change that moves a page fails until the record (and
-// the capacity page's figures) move with it.
+// corpus of model-shaped pages. testdata/s4 holds pages written the way a model
+// writes an artifact. Each goes through the shipped linter ([lint.HTML], CDN
+// copy-in answered locally), and each published page is read against the
+// origin's policy (internal/api/pagepolicy) by a STATIC reading
+// ([policyBreaks], a model that says which rules it applies); the browser half (S4 in docs/reference/artifact-capacity.md)
+// counts real console violations. testdata/s4/corpus.json records, per page,
+// what the linter refuses and the policy stops; [TestTheS4CorpusReadsAsRecorded]
+// fails a change that moves a page until the record (and that page) moves.
 //
 // Run: go test -run '^$' -bench S4 -benchtime 1x ./internal/artifactspike
 

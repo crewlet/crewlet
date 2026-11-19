@@ -21,17 +21,14 @@ import (
 
 // SPIKE S6: presence fan-out, over the real hubs on a three-member fleet.
 //
-// Each node runs the shipped presence hub on its own member's core NATS (the
-// queue's Broadcast and Listen) and the shipped socket hub, with the room's
-// sockets registered and joined as /ws/stream registers and joins them, and
-// every presence fan-out pushed to the room exactly as the socket service
-// pushes it. A socket here is everything but the websocket write: its frames
-// are the encoded bytes a browser would receive, counted as they leave the
-// hub's queue. Viewers are spread evenly over the three nodes and each moves
-// its focus at a set rate; the spike reports what the busiest node sends its
-// sockets, what crosses the broker, the CPU the whole fleet spent, how long a
-// join takes to show on every node, and how long a focus change takes to
-// reach a socket on another node (the presence objectives' two events).
+// Each node runs the shipped presence hub on its member's core NATS and the
+// shipped socket hub, with sockets registered, joined and pushed to as the
+// socket service does. A socket is everything but the websocket write: its
+// frames are the bytes a browser would receive, counted as they leave the
+// hub's queue. Viewers spread evenly over the nodes, each moving its focus at
+// a set rate; the spike reports the busiest node's socket traffic, the broker
+// traffic, the fleet's CPU, and how long a join takes to show on every node
+// and a focus change to reach a socket on another (the presence objectives).
 //
 // Run: go test -run '^$' -bench S6 -benchtime 1x ./internal/artifactspike
 

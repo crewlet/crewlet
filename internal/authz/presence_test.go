@@ -32,27 +32,16 @@ func presenceObjects(self iam.Principal) map[string]authz.Object {
 }
 
 // A ROW THAT NEEDS A PERSON REFUSES A MACHINE TOKEN ON EXACTLY THE ARMS IT
-// NAMES, AND NOWHERE ELSE.
-//
-// A token acts as its owner and is stepped up by construction, so the table's
-// own refusal is the lock between it and changing how its owner proves who
-// they are — no permission is asked of that self arm at all. Walked over EVERY
-// row, with a principal holding every permission (so the class admits on every
-// arm and the token can only be refused for being one) and its control — the same
-// principal at a keyboard — over the four things a verb can be about:
-//
-//   - a row needing a person on every arm refuses the token on all four,
-//     with [authz.ReasonTokenRefused], where the control is admitted;
-//   - a row sparing the self arm admits the token about its own owner as the
-//     control is admitted, and refuses it everywhere the control is admitted
-//     on anything else;
-//   - and every other row decides the token exactly as it decides the control.
-//
-// Each value has to be stated by some row, or this certifies nothing about it.
-//
-// Mutation: refuse the token before the class on a row that spares the self
-// arm and its owner's own sessions are refused; drop the check after the class
-// and an administrator's token ends somebody else's.
+// NAMES, AND NOWHERE ELSE. A token is stepped up by construction, so the
+// row's refusal is the only lock on changing how its owner proves who they
+// are. Over EVERY row, with a principal holding every permission, against its
+// keyboard control, on the four things a verb can be about: a row needing a
+// person on every arm refuses the token on all four
+// ([authz.ReasonTokenRefused]); a row sparing the self arm admits the token
+// about its own owner and refuses it elsewhere; every other row decides it as
+// the control. Each value must be stated by some row. Mutation: refuse before
+// the class on a self-sparing row and the owner's sessions are refused; drop
+// the check after it and an admin's token ends somebody else's.
 func TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames(t *testing.T) {
 	t.Parallel()
 	stated := map[authz.Presence]int{}
@@ -113,22 +102,13 @@ func TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames(t *testing.T) 
 }
 
 // A TOKEN HOLDING ADMIN IS REFUSED EVERY PERSON-PRESENT GESTURE ABOUT ANYBODY
-// BUT ITS OWNER.
-//
-// A machine token may carry admin — the permission it is minted with is its
-// owner's to choose — so no permission it cannot hold stands between it and
-// revealing a credential, editing the directory, changing how somebody signs
-// in or ending everybody's sessions: the row's own presence does, and this
-// walk is what holds it there. Pinned to the gestures that need a person — the
-// directory's every write and every gesture on somebody's credentials or
-// sessions (every directory-class row but the read), writing the directory,
-// ending every session in the company, and revealing a secret — because each
-// is one a pipeline has no business making and nothing but this pin would
-// notice a row that stopped saying so. Over every such row, a token holding
-// every permission, freshly proved, is refused as a token about somebody
-// else, the company and nobody; its control, the same person at a keyboard,
-// is admitted somewhere on every row.
-//
+// BUT ITS OWNER. A machine token may carry admin, so only the row's presence stands
+// between it and revealing a credential, editing the directory or ending
+// everybody's sessions. Pinned to those gestures (every directory-class row
+// but the read, ending every session, revealing a secret): over each, a token
+// holding every permission, freshly proved, is refused as a token about
+// somebody else, the company and nobody; its control, the same person at a
+// keyboard, is admitted somewhere on every row.
 // Mutation: drop the presence from the machine-token write's row and an
 // administrator's token revokes somebody else's credentials here.
 func TestATokenHoldingAdminIsRefusedEveryPersonPresentGestureAboutAnybodyElse(t *testing.T) {
@@ -175,15 +155,12 @@ func TestATokenHoldingAdminIsRefusedEveryPersonPresentGestureAboutAnybodyElse(t 
 // contains itself.
 //
 // The self arm is the one no permission guards: a person changes their own
-// second factor, recovery codes and password holding nothing at all, and a
-// token acts as them, stepped up. So the row is the whole of the protection
-// there,
-// and which rows spare the self arm is the decision this pins: a token about
-// its own owner may revoke a token (itself included, from wherever somebody
-// found it leaked) and end its owner's sessions (which ends it), and is
-// refused every change to the proof its owner signs in with. The control is
-// the owner at a keyboard, admitted to all three as themselves.
-//
+// second factor, recovery codes and password holding nothing, and a token
+// acts as them, stepped up. So the row is the whole protection, and which
+// rows spare the self arm is what this pins: a token about its own owner may
+// revoke a token (itself included, if leaked) and end its owner's sessions
+// (which ends it), and is refused every change to the proof its owner signs
+// in with. The control is the owner at a keyboard, admitted to all three.
 // Mutation: spare the proof verb's self arm and the token enrols over its
 // owner's second factor here.
 func TestAMachineTokenNeverChangesHowItsOwnerProvesWhoTheyAre(t *testing.T) {
@@ -220,14 +197,12 @@ func TestAMachineTokenNeverChangesHowItsOwnerProvesWhoTheyAre(t *testing.T) {
 // ITSELF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no
-// dot, and a tool asks the same gate a dotted verb once it has read the row a
-// gesture is about ([toolVerbs]). Those tools are also an operator's
-// assistant's — the operator surface serves the same catalogue over MCP, and
-// an assistant connects with the machine token its person minted for it — so
-// either kind of row needing a person present would refuse every assistant
-// that call. The one declared exception ([presentInTools]) is why the act
-// transport also answers `token_refused`.
-//
+// dot, and a tool asks the same gate a dotted verb once it has read the row
+// ([toolVerbs]). The operator surface serves the same tools over MCP to an
+// assistant on its person's machine token, so either kind of row needing a
+// person present would refuse every assistant that call. The one declared
+// exception ([presentInTools]) is why the act transport also answers
+// `token_refused`.
 // Mutation: make `pages.rename` need a person present and this goes red
 // naming internal/agent/builtin, where the rename tool asks it.
 func TestNoToolNeedsAPersonPresent(t *testing.T) {

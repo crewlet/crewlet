@@ -14,27 +14,15 @@ var ErrNoChart = errors.New("authz: this surface holds no company chart, so " +
 
 // ErrUnresolved is the one UNKNOWN a caller acts on rather than reports: the
 // object names something nobody has resolved or read yet ([Object.Unresolved]),
-// and only the resolved record could admit this caller. So the answer is
-// "resolve it, then decide again on the record", and [Decide] returns it for
-// a caller holding nothing that admits them outright, in exactly these cases:
-//
-//   - somebody else's record named by a LOGIN, to a caller who leads
-//     somebody — the chart can say whether they lead its holder only of the
-//     seat the login resolves to;
-//   - a work item to a caller without the Worklet app ([ClassAppOrAsked]):
-//     whether an open ask on it names them is on the row;
+// and only the resolved record could admit this caller: resolve it, then
+// decide again. [Decide] returns it, for a caller nothing admits outright, in:
+//   - somebody else's record named by a LOGIN, to a caller who leads somebody;
+//   - a work item to a caller without the Worklet app ([ClassAppOrAsked]);
 //   - a row whose container and author nobody has read ([ClassTidy],
-//     [ClassContainer], [ClassDestructive]) — which project or space it is
-//     filed in, and who wrote it, decide it.
+//     [ClassContainer], [ClassDestructive]).
 //
-// A caller the resolved record could never admit is refused before anything
-// is read rather than answered this — a caller who leads nobody on somebody's
-// queue, and a caller without a relation row's app — so what the record says
-// is never theirs to learn.
-//
-// AN UNKNOWN RATHER THAN AN ALLOW, for the direction a caller that forgets to
-// check it fails in: read as an unknown it is a 503 a lead notices, and read
-// as an allow it would admit every lead to every record, which nobody would.
+// A caller the record could never admit is refused before anything is read.
+// AN UNKNOWN, NOT AN ALLOW: a caller forgetting to check gets a 503.
 var ErrUnresolved = errors.New("authz: whose record this is decides it, and " +
 	"the name has not been resolved to one yet")
 

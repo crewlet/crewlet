@@ -15,39 +15,16 @@ import (
 
 // The task graph one `delegate` call runs.
 //
-// # Why a graph and not a list
+// A flat batch can only express independent work; a turn wants "gather, then
+// synthesise". `after` closes that: a task naming another waits for it and
+// receives its SUBMITTED FIELDS in its own first user message.
 //
-// A flat batch could only express work that is entirely independent. The
-// shape a turn actually wants is one step further: gather from three places,
-// then synthesise the three answers. With a flat batch the parent had to make
-// that two calls and carry the first call's results into the second's prompts
-// by hand — which meant the parent's own model had to read three answers,
-// re-type them into a new prompt, and pay for both.
-//
-// `after` closes that. A task naming another waits for it, and receives its
-// SUBMITTED FIELDS in its own first user message. The parent writes the shape
-// of the work once and reads one report.
-//
-// # Waves, not a scheduler
-//
-// Execution is by topological wave: every task whose dependencies have
-// settled runs, bounded by the call's parallelism, then the next wave. It is
-// not the tightest possible schedule — a long task in wave one holds back a
-// short one in wave two that did not depend on it — and that is a deliberate
-// trade. The tight version needs a per-task readiness queue and a completion
-// fan-in, and its failure modes (a task started while its dependency was
-// mid-write, a deadlock when a wave's last worker is queued behind a
-// dependent) are exactly the ones nobody would find in review. A wave
-// boundary is a barrier, and a barrier is checkable.
-//
-// # Determinism is a property, not an accident
-//
-// The same graph run twice, with the same deadline, must produce the same
-// statuses. Two rules buy that: a task whose dependency did not succeed is
-// classified `skipped_dependency_failed` BEFORE the deadline is consulted, so
-// a call that ran out of time reports the broken chain rather than a
-// scattering of timeouts; and results are returned in INPUT order, whatever
-// order the waves finished in.
+// Execution is by topological WAVE, bounded by the call's parallelism. A long
+// task holds back an independent short one in the next wave, a deliberate
+// trade: a readiness queue has failure modes (a task started mid-write of its
+// dependency, a deadlock behind a dependent) nobody would find in review.
+// DETERMINISTIC: a task whose dependency failed is `skipped_dependency_failed`
+// BEFORE the deadline is consulted, and results return in INPUT order.
 
 // Task is one node of the graph.
 type Task struct {
@@ -335,21 +312,15 @@ func assignWaves(tasks []resolved) error {
 // dependencyBudget is the most the answers a task waited for may add to its
 // prompt, TOGETHER.
 //
-// Each answer is already bounded where it was made — a submission is one tool
-// call of a worker capped on tokens, its prose likewise — so one answer is
-// carried whole, and a task that waited on two or three never meets this. What
-// it answers is the fan-in: a task waiting on eight workers inherits eight
-// answers, and a worker usually runs on a small model whose context is the
-// first thing that runs out. 64 KiB is about sixteen thousand tokens, a share
-// of any context this engine targets that leaves the task its own room.
+// Each answer is already bounded where made, so only the fan-in meets this:
+// eight workers' answers land on a worker that usually runs on a small model.
+// 64 KiB is about sixteen thousand tokens, leaving the task its own room.
 //
-// PAST IT, AN ANSWER IS REWRITTEN, NEVER CUT. It used to be elided at sixteen
-// thousand runes per dependency, and a submission cut there is half a JSON
-// document that a model reads as the whole answer. Each answer over its share
-// is rewritten by the parent seat's auxiliary model instead — a submission as
-// JSON of the same shape — and where no rewrite can be had it is carried
-// whole: the dependent task cannot do its work without its input, and a
-// prompt that is too heavy fails loudly where a fragment fails silently.
+// PAST IT, AN ANSWER IS REWRITTEN, NEVER CUT: a cut submission is half a JSON
+// document a model reads as the whole answer. Each answer over its share is
+// rewritten by the parent seat's auxiliary model (a submission as JSON of the
+// same shape); where no rewrite can be had it is carried whole, since a prompt
+// too heavy fails loudly where a fragment fails silently.
 const dependencyBudget = 64 << 10
 
 // fitter rewrites an answer to fit its share — the parent seat's compactor.
@@ -359,17 +330,15 @@ type fitter interface {
 
 // withDependencies prefixes a task's prompt with the answers it waited for.
 //
-// In the USER message rather than the system prompt: the system prompt is the
-// worker's persona, which a template shares across every task that names it,
-// and injecting per-task data there would give two tasks of one template two
-// different prefixes — costing the provider's prompt cache the whole prefix
-// on the second.
+// In the USER message, not the system prompt: that is the worker's persona,
+// which a template shares across every task naming it, and per-task data there
+// would give two tasks of one template different prefixes, costing the
+// provider's prompt cache the whole prefix on the second.
 //
 // It returns the message's outline beside it (see [prompts.Prompt]): the
-// preamble, each dependency's answer as a section of its own — keyed by
-// position, because a task id is whatever the parent's model typed — and the
-// task. An answer is a worker's prose or its JSON, so whatever headings it
-// carries stay inside its own section.
+// preamble, each dependency's answer as a section of its own (keyed by
+// position, because a task id is whatever the parent's model typed) and the
+// task. An answer is prose or JSON, so its headings stay inside its section.
 func withDependencies(ctx context.Context, fit fitter, prompt string, deps []Result) prompts.Prompt {
 	b := prompts.NewBuilder("")
 	if len(deps) > 0 {
@@ -420,23 +389,16 @@ func withDependencies(ctx context.Context, fit fitter, prompt string, deps []Res
 type runner func(ctx context.Context, r resolved, deps []Result, calls *turnctx.CallLog) Result
 
 // runGraph executes the planned tasks wave by wave and returns their results
-// in INPUT order.
-//
-// Order matters more than it looks: the parent's model wrote the tasks as a
-// list and reads the answers as one, so results ordered by completion would
-// silently re-pair every answer with the wrong question.
+// in INPUT order (the parent's model reads answers as a list).
 //
 // # And each task counts its own calls
 //
 // Every worker writes under the parent's unit of work, so an operation id it
-// derives carries a repeat count from the run's call log (see
-// [turnctx.CallLog]): it has to see what the run called before it, and what
-// it calls itself. It must NOT see what a sibling in its own wave calls,
-// because siblings run concurrently and a count that depended on which one
-// finished first is one a re-run would not reproduce. So each task runs on a
-// fork taken when its wave starts, and the forks are absorbed back at the
-// wave's barrier in input order — the log every later wave, and the parent,
-// counts from is then the same log however the scheduler interleaved them.
+// derives carries a repeat count from the run's call log ([turnctx.CallLog]):
+// it must see what the run called before it and what it calls itself, but NOT
+// a sibling's in its own wave, as a count depending on which finished first
+// is not reproducible. So each task runs on a fork taken when its wave starts,
+// absorbed at the wave's barrier in input order.
 func runGraph(ctx context.Context, tasks []resolved, maxParallel int,
 	calls *turnctx.CallLog, run runner) []Result {
 	results := make([]Result, len(tasks))

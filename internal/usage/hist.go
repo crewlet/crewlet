@@ -11,30 +11,15 @@ import (
 // Hist is a turn-duration histogram: counts in geometric bins, 2^(1/6) wide,
 // from one second to a day.
 //
-// # Why a histogram and not the durations, or a stored percentile
+// Not a list of durations (a busy seat ends hundreds of turns a day, republished
+// every flush) nor a stored p50 (a median of medians is not the fleet's): a
+// record is a few dozen pairs and histograms merge by adding counts, so any
+// window over any nodes is exact to the bin.
 //
-// A seat-day record carries every turn the seat ended that day on one node,
-// and the question asked of it is "how long does this seat's work take" over
-// a week or a quarter, across every node. A list of durations answers that
-// exactly and does not fit: a busy seat ends hundreds of turns a day and the
-// record is republished every flush. A stored p50 fits and cannot be combined
-// — the median of two nodes' medians is not the fleet's median. Counts in
-// fixed bins do both: a record is a few dozen pairs, and two histograms merge by
-// adding counts, so any window over any set of nodes is exact to the bin.
-//
-// # Why 2^(1/6)
-//
-// A quantile read from a bin is the bin's geometric midpoint, which is within
-// a factor 2^(1/12) of every value in the bin — at most [QuantileResolution],
-// under 6%, anywhere in the range. That is finer than any decision the number
-// feeds (a seat taking 40 seconds versus 42), and six bins a doubling is 99
-// bins for the whole range, so a seat whose turns vary by an order of
-// magnitude touches about twenty of them.
-//
-// Outside the range the error is unbounded and says so here rather than
-// pretending: a turn under a second is counted in the first bin and read back
-// as about a second, and one past the last bin's upper edge (about 26 hours) is
-// counted in the last.
+// 2^(1/6): a quantile read is the bin's geometric midpoint, within 2^(1/12) of
+// every value in it, at most [QuantileResolution] (under 6%). Outside the range
+// the error is unbounded: a turn under a second is counted in the first bin,
+// and one past the last bin's upper edge (about 26 hours) in the last.
 type Hist struct {
 	// bins is sparse and sorted by index — the canonical form, so two
 	// histograms holding the same counts encode to the same bytes.

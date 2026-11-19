@@ -22,17 +22,15 @@ import (
 
 // THE ATLAS'S PROPOSALS: every change a person makes to the company's atlas,
 // prepared as a proposal they approve (ADR-0051) and sent as the operator tool
-// of the same verb, so a change Ask Crewlet prepared and one the person made on
-// the screen are one code path. Each preview reads the entries it changes as
-// they are now through the turn's grant (`GET /atlas/{id}`), refuses before
-// any card a change the tool would refuse (an entry the person cannot read, a
-// fact the settings declare), and binds the proposal to the entry as the card
-// shows it ([proposal.RevisionAtlasEntry]).
+// of the same verb, so a change Ask Crewlet prepared and one made on the
+// screen are one code path. Each preview reads the entries it changes through
+// the turn's grant (`GET /atlas/{id}`), refuses before any card a change the
+// tool would refuse (an unreadable entry, a fact the settings declare), and
+// binds the proposal to the entry as shown ([proposal.RevisionAtlasEntry]).
 //
 // A VALUE'S PURGE IS NEVER PROPOSED. A proposal keeps the exact request its
-// approval sends, so a purge of a value would keep, in the proposal's record,
-// the value it erases. An entry's purge names the entry by its id; a value is
-// purged from the screen.
+// approval sends, so it would keep the value it erases. An entry's purge
+// names the entry by id; a value is purged from the screen.
 
 // atlasEntryRoute is the read every atlas preview reads an entry through.
 const atlasEntryRoute = "GET /atlas/{id}"

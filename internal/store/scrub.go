@@ -16,36 +16,15 @@ var ErrScrubTable = errors.New("store: unscrubbable table")
 // ScrubFile empties the named tables in a database file this process does not
 // otherwise hold open, and reports what it emptied.
 //
-// # What it is for
+// A donated snapshot carries tables that are THIS NODE'S, not the fleet's: each
+// domain's deferred records and scope index, holding what this build could not
+// decode. A recipient on another build must not inherit them. THE DONOR
+// SCRUBS, NOT THE RECIPIENT: scrubbing after the transfer means the donor
+// already shipped them.
 //
-// A node that donates a snapshot ships a copy of its replicated estate, and a
-// few tables in it are THIS NODE'S rather than the fleet's: each domain's
-// deferred records and their scope index, which hold the records this node's
-// build could not decode. A recipient on another build decodes a different
-// set, so it must not inherit them.
-//
-// THE DONOR SCRUBS, NOT THE RECIPIENT, and the difference is the whole
-// argument for the transfer being safe at all: an offered artefact carries no
-// authority a peer does not already hold only once every table still in it is
-// fleet-visible. Scrubbing after the transfer means the donor shipped it.
-//
-// # The list is a DECLARATION, never a literal here
-//
-// Every caller derives it from what the registered domains say about their own
-// tables. A hardcoded list would "silently omit whatever a deployment actually
-// has", which is this tree's own words for the failure — so this function
-// takes the list and REFUSES a name it cannot find, rather than skipping it.
-// A table that was renamed and left on somebody's list is a table that travels
-// with the artefact and is reported as scrubbed.
-//
-// # It does not reclaim the pages
-//
-// The rows go and the pages stay, as free space in the file. That is
-// deliberate and it is what the two-estate split buys: the replicated estate
-// holds almost nothing local, so the free pages are a rounding error rather
-// than the event log's whole footprint. There is no in-place VACUUM on this
-// engine to reclaim them with, and copying the copy to reclaim them would cost
-// a second full pass over the artefact.
+// The list is a DECLARATION from the registered domains, never a literal. This
+// REFUSES a name it cannot find: a renamed table left on a list would travel
+// and be reported scrubbed. Pages stay as free space (no in-place VACUUM).
 func ScrubFile(ctx context.Context, path string, tables []string) ([]string, error) {
 	if path == "" {
 		return nil, errors.New("store: scrub: no path")

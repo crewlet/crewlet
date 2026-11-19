@@ -12,13 +12,11 @@ import (
 
 // A PAGE OF TURNS READ SPAN BY SPAN IS THE PAGE THE WHOLE WINDOW LISTS.
 //
-// The newest page is read from its top edge back ([EventLog.pageOfTurns]), so
-// a seat's newest turns cost their own rows rather than every row the seat
-// wrote that week. That is only sound if a span that fills the page holds
-// exactly the page the whole window would: a turn whose folded rows began
-// before the span, and so is cut off at its edge, must be left to a wider span
-// and ranked there by its true start, while a turn whose seat rows all lie in
-// the span is listed even when the turn holds an earlier row of another seat.
+// The newest page is read from its top edge back ([EventLog.pageOfTurns]),
+// which is sound only if a span that fills the page holds exactly the page the
+// whole window would: a turn whose folded rows began before the span is left
+// to a wider span and ranked by its true start, while a turn whose seat rows
+// all lie in the span is listed even if another seat's row is earlier.
 //
 // Mutation: drop the span's own probe from [TurnQuery.partialsSQL] and the turn
 // running since before the first span is listed by its later rows; ask it of

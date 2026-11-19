@@ -3,30 +3,14 @@ package artifactdata
 // THE FOOTPRINT METER (D42, ADR-0039): what a store's rows cost on disk, in
 // the bytes `artifacts.limits.data_store_bytes` and `data_bytes` bound.
 //
-// Every datastore byte is held on every data node and rides every snapshot
-// and backup, so a quota that counted less than the file holds would let a
-// company store several times what its operator sized disks for. The first
-// meter counted canonical bodies, 48 bytes per field-index entry and history
-// at its payload, and spike DS-2 measured the file at 2.06 times that: a
-// field-index entry is a row keyed by five columns and two more index entries
-// (152 bytes on the spike's sheet), a document row costs more than its body,
-// and history carries its row and index overhead.
-//
-// THE MODEL IS THE STORE'S OWN LAYOUT, not a ratio. A table row costs the
-// share of a 4 KiB B-tree page its cell takes, with the page's whole slack
-// charged to the rows that fit in it (one row of 2.1 KiB fills a page, which
-// a byte count would read as half), or its overflow pages past the largest
-// payload a page holds in place; an index entry costs its key and the row id,
-// at the fill an index's random inserts leave (nine eighths). Each cost is a
-// pure function of what the applier writes, so every data node meters every
-// record identically, and the constants are the column overhead of the
-// pinned driver's record format, calibrated against the DS-2 snapshot
-// (TestTheFootprintMeterMatchesTheFile holds the meter within 10 percent of
-// the file across row shapes).
-//
-// NOT METERED: a store's catalogue row and its collection and path rows, a
-// few KiB that the collection and column bounds hold; and the file's own
-// free pages, which a vacuum reclaims and a snapshot never carries.
+// A quota counting less than the file holds would let a company store several
+// times what its disks were sized for (spike DS-2: 2.06 times a byte count).
+// THE MODEL IS THE STORE'S OWN LAYOUT, not a ratio: a table row costs its share
+// of a 4 KiB B-tree page, slack charged to the rows that fit, or its overflow
+// pages; an index entry costs key plus row id at nine eighths fill. Each cost
+// is a pure function of what the applier writes, so every node meters a record
+// identically; TestTheFootprintMeterMatchesTheFile holds the constants within
+// 10 percent of the file. NOT METERED: catalogue rows and free pages.
 
 // pageBytes is the store's page size: the driver's default, which nothing in
 // the engine changes.

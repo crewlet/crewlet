@@ -9,14 +9,12 @@ import (
 )
 
 // A SEAT'S CODE DAY IS STAMPED BY WHAT IT COUNTS, AND ONLY WHERE IT COUNTS
-// SOMETHING: a seat's day carrying its changes and reviews is stamped 5, so a
-// build below 5 retains it rather than applying it with them dropped — which
-// would replace the day every upgraded node holds with one counting none — and
-// one counting its failed checks or its ejections is stamped 6, held back the
-// same way from a build at 5; a seat's day with none of them stays the base
-// format every build applies. A code day rides a seat's record alone, never
-// with a figure below zero, and never all zeros, which would hold older builds
-// back from a day that counts nothing.
+// SOMETHING: a day carrying changes and reviews is stamped 5, so a build below
+// 5 retains it rather than applying it with them dropped (replacing the day
+// upgraded nodes hold with one counting none); one counting failed checks or
+// ejections is stamped 6, held back the same way from a build at 5; a day with
+// none stays the base format. A code day rides a seat's record alone, never
+// below zero, never all zeros (which would hold older builds back needlessly).
 //
 // Mutation: drop the Record.Code row from versionedFields — the code day is
 // stamped 1, red; drop the Record.Code.ChecksFailed row — the day counting

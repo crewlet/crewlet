@@ -13,30 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
-// A SCHEMA CHANGE, decided in a snapshot of the schema it replaces (it is
-// arbitrated on the store's subject, so the decide and the apply see the same
-// schema) and judged again by the applier, which is authoritative.
+// A SCHEMA CHANGE, decided in a snapshot of the schema it replaces (arbitrated
+// on the store's subject) and judged again by the applier, which is authoritative.
 //
-// # What a change may do to the data
-//
-// Adding a column, a collection, an option, a label, a colour or a rule rewrites
-// nothing: a read fills a default. Archiving an option rewrites nothing: a
-// value naming it reads as archived until somebody reassigns it. Removing an
-// option outright is refused (archive it), so nothing a reviewer chose
-// disappears.
-//
-// Removing a column removes its values, and RETYPING one coerces them by the
-// one table below, clearing a value the new type cannot hold; changing a
-// collection's indexed paths re-indexes its documents. Each REWRITES documents,
-// and one record rewrites at most [artifacts.MaxMigrationDocs] (review A7: an
-// apply holds the estate's only writer, so its work is bounded); a change that
-// would rewrite more is refused, naming the count, at the writer and again
-// here. A retype the table has no coercion for is refused: add a column and
-// copy into it.
-//
-// Dropping a collection is admitted only when it holds no live document. A
-// collection a write created under the closed default is kept as it is when a
-// change does not name it; naming it declares it.
+// Adding a column, collection, option, label, colour or rule, or archiving an
+// option, rewrites nothing (a read fills a default). Removing an option
+// outright is refused, so nothing a reviewer chose disappears. Removing a
+// column, RETYPING one (coerced by the table below, clearing what the new type
+// cannot hold) and changing indexed paths REWRITE documents, at most
+// [artifacts.MaxMigrationDocs] per record, since an apply holds the estate's
+// only writer; a larger change, or a retype with no coercion, is refused at the
+// writer and here. A collection drops only when it holds no live document, and
+// one created under the closed default is kept unless a change names it.
 
 // configPlan is what a schema change decided.
 type configPlan struct {

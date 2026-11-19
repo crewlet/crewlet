@@ -12,22 +12,16 @@ import (
 
 // WHAT BECAME OF THE NOTIFICATIONS, counted per third-party app over a window.
 //
-// A COUNT rather than a page of the events it counts, because the question is
-// "how many in this window" and a page answers "how many among the newest N",
-// whose span is its own: the integrations answer used to count its outcomes
-// over the newest 400 `notification` events while it named the window its
-// deliveries covered, so on a company whose notification events outnumbered
-// its deliveries the two numbers in one row described two different stretches
-// of time with nothing to say so. Counted here, over the window the caller
-// names, the outcomes are bounded by exactly the edges the deliveries beside
-// them are.
+// A COUNT rather than a page: a page answers "how many among the newest N",
+// a span of its own. Counted over the caller's window, outcomes share the
+// edges of the deliveries beside them.
 //
 // # A row a node holds is not always a row it keeps
 //
-// The count is of the rows this node KEEPS, and the window's rows of a custody
-// batch it has written and not settled are named beside it instead, for the
-// asker to count once across the fleet — see unsettled.go, which every count
-// shares ([NotificationOutcomes.Unsettled], [EventLog.KeptRows]).
+// The count is of rows this node KEEPS; the window's rows of an unsettled
+// custody batch it wrote are named beside it, for the asker to count once
+// across the fleet — see unsettled.go ([NotificationOutcomes.Unsettled],
+// [EventLog.KeptRows]).
 
 // OutcomeQuery is the window a count of notification outcomes covers: the
 // half-open interval `[Since, At)`.
@@ -103,13 +97,10 @@ var (
 // third-party app — the rows this node KEEPS — and names the window's rows it
 // holds unsettled beside the counts (see the file doc).
 //
-// THE APP IS THE `notification_source` TAG, not the event's source: the source
-// of an engine-published event names the engine, and what a count has to line
-// up with is one app's deliveries. A row whose event names no app — an empty or
-// blank tag — carries none and is not counted, never a guess at which app it
-// concerned. The tag is TRIMMED here rather than in SQL, by the one rule every
-// reader of it applies ([strings.TrimSpace]; SQL's TRIM strips spaces alone),
-// and tags that trim to one app are counted as that app.
+// THE APP IS THE `notification_source` TAG, not the event's source (which names
+// the engine). A row with an empty or blank tag is not counted, never guessed.
+// The tag is TRIMMED here, not in SQL, by the rule every reader applies
+// ([strings.TrimSpace]; SQL's TRIM strips spaces alone).
 //
 // ONE SNAPSHOT for the count and the unsettled rows, because the second is
 // taken off the first: read apart, a batch settled between the two would be
@@ -192,41 +183,18 @@ func scanOutcomes(ctx context.Context, tx *sql.Tx, query string, args []any,
 	return rows.Err()
 }
 
-// countSQL is the statement [EventLog.NotificationOutcomes] runs and its
-// arguments, a function of its own so its plan can be read back for exactly
-// the statement that runs (TestEveryGroupedReadSeeksItsFiltersIndex). `at` is
-// the instant the query is asked at.
+// countSQL is the statement [EventLog.NotificationOutcomes] runs, a function so
+// its plan is read back (TestEveryGroupedReadSeeksItsFiltersIndex).
 //
-// BY TYPE, on the type index, and nothing else: the outcome types are the
-// filter, and `crewlet_events_type_time_idx` is (event_type, event_time …), so
-// the read is one seek of the window's time range per type — the outcome rows
-// in the window and no others. The CATEGORY would select them too, and would
-// read every `external_notification` beside them, which is the bulk of the
-// category.
+// BY TYPE on `crewlet_events_type_time_idx`: one seek of the window's range per
+// type; the CATEGORY would also read every `external_notification`. ONE SELECT
+// PER TYPE, UNION ALL, the only spelling that seeks the WINDOW: `event_type IN
+// (?, ?)` filters the window afterwards, an OR is a `MULTI-INDEX OR`.
 //
-// ONE SELECT PER TYPE, joined by UNION ALL, because that is the only spelling
-// the planner seeks the WINDOW in. `event_type IN (?, ?)` seeks the type alone
-// and reads every row of it the log still holds, the window's edges applied as
-// a filter afterwards; `(type = ? AND …) OR (type = ? AND …)` intersects two
-// index reads (`MULTI-INDEX OR`). Each arm here is `event_type = ?` beside both
-// edges, which is a range of the index — read back in the gate.
-//
-// THE APP IS READ FROM THE ROW'S TAGS, so each counted row costs a lookup of
-// its own — and only the counted rows do, which is the cost the gate holds
-// every grouped read to. That is why no migration promotes the tag to a column
-// with an index covering it: the read is already bounded by the rows it is
-// about — the window's outcome events, read a few times a minute by a screen —
-// where a column and its index are a write on every event the log ever
-// stores, almost none of which carries the tag.
-//
-// THE ROWS ARE SELECTED IN A DERIVED TABLE and grouped outside it, for the
-// reason [EventLog] gives: grouped over the table itself, the floor is a range
-// of the primary key the planner reaches for instead.
-//
-// EVERY ROW OF THE WINDOW, unsettled ones included: those are named by
-// [OutcomeQuery.unsettledWhere] in the same snapshot and taken back out, which
-// costs a read of the few rows in flight rather than a probe of the custody
-// table for every outcome the window holds.
+// THE APP IS READ FROM THE ROW'S TAGS: a column would cost a write on every
+// event. Rows are selected in a DERIVED TABLE and grouped outside it ([EventLog]).
+// EVERY ROW OF THE WINDOW, unsettled ones included: [OutcomeQuery.unsettledWhere]
+// names them in the same snapshot and they are taken back out.
 func (q OutcomeQuery) countSQL(at time.Time) (string, []any) {
 	since, until := q.window(at)
 	arms := make([]string, 0, len(outcomeTypes))

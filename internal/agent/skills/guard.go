@@ -16,21 +16,14 @@ import (
 // Load-before-use, enforced in code rather than in prose.
 //
 // A skill's body carries what an agent should read BEFORE touching the tools
-// its trigger covers — a workflow constraint, the mention markup, a
-// delegation convention — and models routinely skip the load and go straight
-// for the tool. Asking harder in the prompt does not fix that; refusing the
-// call does.
+// its trigger covers, and models routinely skip the load. Asking harder in the
+// prompt does not fix that; refusing the call does.
 //
-// # Session scope, not turn scope
-//
-// "Loaded" is tracked per LLM SESSION — one phase's message history — because
-// that is what determines whether the body is actually in the model's
-// context. Onboarding, the executor, the reviewer and each worker run on
-// separate histories, so a body loaded during onboarding is genuinely not in
-// front of the executor. A round-cap extension continues the same history and
-// the same surface, so the loaded set carries across it; a self_iterate starts
-// a fresh session and therefore a fresh guard, which is correct rather than
-// annoying.
+// "Loaded" is tracked per LLM SESSION (one phase's message history), because
+// that decides whether the body is in the model's context: onboarding, the
+// executor, the reviewer and each worker have separate histories. A round-cap
+// extension continues the same history and surface, so the loaded set carries
+// across it; a self_iterate starts a fresh session and therefore a fresh guard.
 
 // ExemptTools are never blocked, whatever a trigger says.
 //

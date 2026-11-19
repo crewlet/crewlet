@@ -5,29 +5,18 @@ import (
 	"strings"
 )
 
-// ratio implements difflib's SequenceMatcher.ratio — the gestalt
-// pattern-matching similarity measure.
+// ratio implements difflib's SequenceMatcher.ratio, 2·M / T: M the length of
+// the matching blocks (the longest common run, then recursively either side of
+// it), T the combined length. It rewards contiguity ("engineering" against
+// "engineer" scores far above scattered characters), which suits names typed
+// from memory.
 //
-// IMPLEMENTED RATHER THAN SUBSTITUTED, and the reason is the cutoff. FuzzyCutoff is
-// 0.6 on THIS measure — a number that was tuned against real role names by
-// watching which near-misses it let through. Swapping in Levenshtein or
-// Jaro-Winkler, both of which Go has libraries for, would keep the constant
-// and silently change what it means: 0.6 is a different set of pairs under
-// every metric, and the failure would be a lookup that started guessing wrong
-// colleagues with nothing in the diff to explain it.
-//
-// The measure: 2·M / T, where M is the total length of the matching blocks
-// found by recursively taking the LONGEST contiguous common run and repeating
-// on what lies either side of it, and T is the combined length. So it rewards
-// contiguity — "engineering" against "engineer" scores far above the same
-// characters scattered — which is what makes it right for names typed from
-// memory rather than mistyped.
-//
-// difflib's "autojunk" heuristic (ignore elements appearing in more than 1% of
-// a sequence of 200+) is deliberately not implemented: it engages only at 200
-// elements, and a handle or role name that long is not a thing this corpus
-// holds. Implementing a branch that can never be taken would be a claim the
-// next reader has to verify.
+// Implemented rather than substituted because FuzzyCutoff is 0.6 on THIS
+// measure, tuned against real role names: Levenshtein or Jaro-Winkler would
+// keep the constant and silently change what it means, and lookups would guess
+// wrong colleagues with nothing in the diff to explain it. difflib's
+// "autojunk" (200+ elements) is not implemented: no handle is that long, and a
+// branch that can never be taken is a claim the next reader must verify.
 func ratio(a, b string) float64 {
 	ar, br := []rune(a), []rune(b)
 	total := len(ar) + len(br)

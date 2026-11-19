@@ -846,10 +846,12 @@ func pointsText(points float64) string {
 	return strconv.FormatFloat(points, 'f', -1, 64)
 }
 
-// instantText renders an optional instant for a delta, and an absent one as
-// the empty string rather than a zero instant that renders as the year one.
+// instantText renders an optional instant for a delta or a wake's metadata,
+// and an absent one as the empty string rather than a zero instant that renders
+// as the year one. A pointer at the zero instant is absent too: the estate's
+// wire carries it as nil, so a wake parsed on either side of it reads alike.
 func instantText(at *time.Time) string {
-	if at == nil {
+	if at == nil || at.IsZero() {
 		return ""
 	}
 	return at.UTC().Format(time.RFC3339)

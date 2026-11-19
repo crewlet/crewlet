@@ -20,15 +20,14 @@ const (
 // start tag, the first element of the page, carries `data-crewlet-brand="off"`
 // (the value read case-insensitively, as HTML reads an enumerated attribute).
 //
-// ONE READING FOR THE PUBLISH AND THE ORIGIN: the publish pipeline asks it of a
-// version's entry page to decide the version's pin, and the artifact origin
-// asks it of every document it serves before it places the stylesheet's link,
-// so a page that opts out is never branded whichever document of a site it is.
+// ONE READING FOR THE PUBLISH AND THE ORIGIN: the pipeline asks it of a
+// version's entry page to decide the pin, and the artifact origin of every
+// document it serves before placing the stylesheet's link, so an opted-out
+// page is never branded.
 //
 // A BOUNDED READ OF THE PAGE'S OPENING: tokens up to the first element, past a
-// byte order mark, a doctype, comments and white space. A page whose first
-// element is not `<html>` (the tag is optional in HTML) has nowhere to say it,
-// and is branded.
+// byte order mark, doctype, comments and white space. A page whose first
+// element is not `<html>` (optional) has nowhere to say it, and is branded.
 func BrandOff(page []byte) bool {
 	z := html.NewTokenizer(bytes.NewReader(bytes.TrimPrefix(page, []byte("\xef\xbb\xbf"))))
 	for {

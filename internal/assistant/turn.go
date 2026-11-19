@@ -104,14 +104,11 @@ type turn struct {
 	subjects []string
 	model    string
 	provider string
-	// deep is the turn's deep work (ADR-0054): what this segment hands a
-	// run, and the run in flight.
-	deep deepState
+	// attachments are the images the question carried, which the turn
+	// hands to its model.
+	attachments []StoredFile
 	// brief is a brief turn's own state ([wire.TurnBrief], brief.go).
 	brief briefState
-	// strength is the chain the turn runs on ([Strength]): kept when it
-	// parks, so the segment an approval resumes answers on the same model.
-	strength Strength
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -261,12 +258,11 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, o cards.Options
 	t.steps++
 	index := t.steps
 	finished := t.finished
-	parent := t.deep.parent
 	t.mu.Unlock()
 	label := oneLine(redact.Secrets(tool.StepLabel(args, o)))
 	step := stepClock{started: t.svc.now(), pattern: pattern, StepEvent: wire.StepEvent{
 		StepID: assistantdomain.StepID(t.id, index), TurnID: t.id, Index: index, Tool: tool.Name,
-		Label: label, Request: req, State: wire.StepRunning, Parent: parent,
+		Label: label, Request: req, State: wire.StepRunning,
 	}}
 	step.StartedAt = step.started.UTC()
 	t.firstOutput()
@@ -396,14 +392,11 @@ type reply struct {
 // round's prose is recorded as its own message the moment it commits.
 //
 // ONE RULE FOR EVERY CHANGE ([llm.Reconcile]), per message: the text a round's
-// message should hold is computed whole from the snapshot (its committed
-// prose, or while it is written as much as is settled, [settledView]), and the
-// frame sent is the tail that takes the drawn text there, or a restart
-// carrying the whole of it where the drawn text is no prefix of it. A round's
-// partial grows by tails; a provider failover or a backend's retraction
-// empties it, and the screen is redrawn rather than left holding text the
-// answer does not contain; a round that ends with no prose withdraws what it
-// drew.
+// message should hold is computed whole from the snapshot (committed prose, or
+// while written what is settled, [settledView]), and the frame sent is the tail
+// taking the drawn text there, or a restart carrying the whole where the drawn
+// text is no prefix. A failover or retraction empties a partial and the screen
+// is redrawn; a round ending with no prose withdraws what it drew.
 func (t *turn) onProgress(res toolloop.Result) {
 	t.mu.Lock()
 	if t.brief.on {
@@ -558,6 +551,10 @@ func (t *turn) stop() { t.cancel(errStopped) }
 // on.
 type loopRun struct {
 	messages []llm.Message
+	// images are the question's attachments, handed to the model beside
+	// every round of the question's own segment. A segment an approval
+	// resumes carries none: the model read them in the segment it answers.
+	images   []llm.Image
 	provider llm.Provider
 	key      string
 	meter    toolloop.BudgetMeter
@@ -574,13 +571,9 @@ type loopRun struct {
 	// answer ([toolloop.Config.TerminateAfter]).
 	terminate []string
 	question  string
-	// deep is the deep-work run a resumed segment continues before its
-	// loop, the answer to the call it parked on being that run's end.
-	deep *parkedDeep
 	// decision is the engine's words for the decision a resumed segment
 	// answers its parked call with ([resultOf]), and screen the screen the
-	// decision was made from, empty when the decision carried none: kept
-	// apart, so a deep-work task records the decision alone.
+	// decision was made from, empty when the decision carried none.
 	decision, screen string
 }
 
@@ -597,15 +590,9 @@ func (r loopRun) maxRounds() int {
 func (t *turn) run(r loopRun) {
 	defer close(t.done)
 	defer t.svc.release(t)
-	// THE SEGMENT'S CLOCK, which a deep-work run moves later to cover itself
-	// ([segmentClock]); its expiry ends the segment as timed out.
-	ctx, cancel := context.WithCancelCause(t.ctx)
-	defer cancel(nil)
-	clock := startClock(t.svc.now(), r.timeout, func() { cancel(errTurnTimeout) })
-	defer clock.stop()
-	t.mu.Lock()
-	t.deep.clock, t.deep.meter, t.deep.tools = clock, r.meter, r.tools
-	t.mu.Unlock()
+	// THE SEGMENT'S CLOCK: its expiry ends the segment as timed out.
+	ctx, cancel := context.WithTimeoutCause(t.ctx, r.timeout, errTurnTimeout)
+	defer cancel()
 	ctx = llm.WithSeat(ctx, assistantHome(t.person.ID))
 	ctx, span := tracing.Start(ctx, "assistant", "assistant.turn",
 		attribute.String("conversation_id", t.conversation.String()),
@@ -613,22 +600,12 @@ func (t *turn) run(r loopRun) {
 		attribute.String("prompt_version", t.promptVersion()))
 	defer span.End()
 
-	if r.deep != nil {
-		// A PARKED RUN IS CONTINUED FIRST: its end, not the decision, is
-		// the answer to the call the turn parked on.
-		answered, parkAgain, err := t.answerParkedDeep(ctx, &r)
-		if err != nil || parkAgain {
-			end := t.conclude(ctx, answered, err)
-			span.SetAttributes(attribute.String("outcome", string(end.State)),
-				attribute.Int("steps", end.Steps))
-			return
-		}
-	}
 	surface := newSurface(t, r.tools)
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
-		Host: t.svc.sessions, ServerTitle: "Ask Crewlet",
+		Images: r.images,
+		Host:   t.svc.sessions, ServerTitle: "Ask Crewlet",
 		MaxRounds: r.maxRounds(), AllowSuspend: true, Budget: r.meter,
 		TerminateAfter: r.terminate,
 		Fence:          t.fence, OnProgress: t.onProgress, Progress: progress,
@@ -728,8 +705,7 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	t.publishAudit(ctx, state, end.ErrorCode, duration)
 	ended := []any{"turn", t.id, "conversation", t.conversation, "state", string(state),
 		"error_code", end.ErrorCode, "steps", end.Steps, "duration_ms", duration.Milliseconds(),
-		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens,
-		"strength", string(t.strength)}
+		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens}
 	if end.ErrorCode == string(wire.ErrorBriefInvalid) && err != nil {
 		// A BRIEF THAT COULD NOT BE WRITTEN SAYS WHY where the turn's end is
 		// read: the last refusal's reason, or the brief's own cap.
@@ -842,9 +818,6 @@ type parked struct {
 	// counted ([parkedTail]): what the segment an approval opens continues
 	// after where no node of the fleet remembers more.
 	Seq uint64 `json:"seq"`
-	// Deep is the deep-work run the turn parked on, continued by the
-	// approval that resumes it; absent for a quick-mode proposal.
-	Deep *parkedDeep `json:"deep,omitempty"`
 	// Subjects are the turn's records asked about, which a web-tainted segment
 	// proposes on alone.
 	Subjects []string `json:"subjects,omitempty"`
@@ -857,9 +830,6 @@ type parked struct {
 	// none: the loop a resumed segment continues still holds that answer
 	// ([turn.taintedBy]).
 	Outside string `json:"outside,omitempty"`
-	// Strength is the chain the segment ran on ([Strength]); absent is
-	// [Quick], what every segment ran on before a stronger chain existed.
-	Strength Strength `json:"strength,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -874,8 +844,8 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
-		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
-		Page: t.page, Outside: string(t.outside), Strength: t.strength, Subjects: t.subjects}
+		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail,
+		Page: t.page, Outside: string(t.outside), Subjects: t.subjects}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}

@@ -10,22 +10,16 @@ import (
 
 // THE REPLICATED ESTATE'S THREE SCHEMA RULES, checked rather than written down.
 //
-// `0005_the_pages_domain_lands.sql` states them in prose and nothing enforced
-// them: NO FOREIGN KEY, NO `UNIQUE` OUTSIDE A PRIMARY KEY, NO `COLLATE`. Each
-// is load-bearing in the same way and for the same reason — every one of them
-// makes a statement inside an apply transaction abort DETERMINISTICALLY on
-// every node at once, which turns what would be a rare cosmetic anomaly on one
-// node into a fleet-wide stalled log with no partial-failure arm to recover
-// through. A cascade is a delete nobody committed; a unique index outside the
-// primary key wedges every applier on a row a restore could produce; and the
-// pinned driver ACCEPTS `COLLATE NOCASE`, so nothing else in the build stops a
-// migration from quietly collapsing 'A' and 'a' under a normalisation Go
-// already did once.
+// `0005_the_pages_domain_lands.sql` states them in prose: NO FOREIGN KEY, NO
+// `UNIQUE` OUTSIDE A PRIMARY KEY, NO `COLLATE`. Each makes an apply statement
+// abort DETERMINISTICALLY on every node at once: a fleet-wide stalled log. A
+// cascade is a delete nobody committed; a unique index outside the primary key
+// wedges every applier on a row a restore could produce; and the pinned driver
+// ACCEPTS `COLLATE NOCASE`, so nothing else stops a migration collapsing 'A'
+// and 'a' after Go already normalised them.
 //
-// THE NODE ESTATE IS DELIBERATELY UNGOVERNED BY THESE. It is one file owned by
-// one process with no applier and no peer, so a constraint there fails one
-// statement for one caller, which is what a constraint is for. The rules are a
-// property of rows N nodes must derive identically, not of SQL in general.
+// THE NODE ESTATE IS DELIBERATELY UNGOVERNED: with no applier and no peer, a
+// constraint fails one statement for one caller.
 
 // A statement's text, once comments and string literals are gone. The scan
 // runs over that rather than over the raw file, because every one of these

@@ -82,6 +82,7 @@ var documented = []documentedDetector{
 	{ClassRoundCap, sourceRuns, roundCap},
 	{ClassBudgetStopped, sourceStops, budgetStopped},
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
+	{ClassAlarmNoop, sourceLedger, alarmNoop},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -101,6 +102,10 @@ var stallWords = map[Class]said{
 	ClassWorkHeldByPerson: {"Agent work that needs no decision waits behind a person.",
 		"Agents could do this work now, but it waits on an item that waits on a person: their answer " +
 			"to a question on it, or the item they hold. It moves when they do."},
+	ClassAlarmNoop: {"An agent was woken on the engine's alarms for turns that changed nothing.",
+		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
+			"alarm another agent already answers still starts a turn here, and half or more of these " +
+			"changed nothing."},
 	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
 		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
 			"in a repository whose branch requires no check every merge waits on a person."},
@@ -413,12 +418,14 @@ func workBottleneck(ev Evidence, kind func(string) SeatKind) []Finding {
 		if kind(b.Holder) == SeatAgent {
 			subject = Subject{Kind: SubjectSeat, Seat: b.Holder}
 		}
-		out = append(out, stallFinding(ClassWorkBottleneck, AreaWork, subject,
+		f := stallFinding(ClassWorkBottleneck, AreaWork, subject,
 			fmt.Sprintf("%s: %s wait on it", b.Key, words.Count(b.Blocks, "item", "items")),
 			[]Fact{{Key: "waiting", Value: int64(b.Blocks)}, {Key: "ready", Value: int64(b.Ready)}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.Waiting...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: move it first, or take off the waits that need not be there."}))
+				Sentence: "Open the item: move it first, or take off the waits that need not be there."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }
@@ -440,13 +447,15 @@ func workHeldByPerson(ev Evidence, kind func(string) SeatKind) []Finding {
 		if len(b.Asks) > 0 {
 			item += ", " + words.Count(len(b.Asks), "open question", "open questions")
 		}
-		out = append(out, stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
+		f := stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
 			item,
 			[]Fact{{Key: "ready", Value: int64(b.Ready)}, {Key: "waiting", Value: int64(b.Blocks)},
 				{Key: "questions", Value: int64(len(b.Asks))}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.ReadyKeys...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."}))
+				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }

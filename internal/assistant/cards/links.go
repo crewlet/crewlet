@@ -42,12 +42,11 @@ type screen struct {
 // dashboard's own screen name (app/routes.ts), at the address its router
 // resolves.
 //
-// HELD AGAINST THE ROUTER, twice: every address below is a Go string the
-// dashboard's printed-address suite (app/links.test.ts) resolves with its
-// placeholders filled, and the golden file this package's fixture test writes
-// (testdata/links.json) is replayed by the dashboard's assistant link suite,
-// which asks the router which screen each rendered link opens. A screen
-// renamed or moved there fails here's build on the next run of either.
+// HELD AGAINST THE ROUTER, twice: the dashboard's printed-address suite
+// (app/links.test.ts) resolves every address below with its placeholders
+// filled, and this package's fixture test's golden file (testdata/links.json)
+// is replayed by the dashboard's assistant link suite. A screen renamed or
+// moved there fails here.
 //
 // The placeholders are the router fixture's own (`{KEY}`, `{id}`, `{handle}`,
 // `{CONTAINER}`, `{turn_id}`), so one table fills them on both sides.

@@ -12,23 +12,14 @@ import (
 
 // A READ-THEN-WRITE CANNOT LOSE A RACE, AND ITS BODY RUNS ONCE.
 //
-// The driver's default BEGIN is deferred and its conflict detection is per
-// FILE: a transaction that reads a row another writer has since advanced past
-// is refused its first write with "database snapshot is stale". Callers across
-// this tree do read-then-write inside Tx, and for as long as that was the
-// begin this package used, the refusal was either a lost write — a memory row,
-// a config revision, gone with a log line — or a retry that ran the whole body
-// again. A write transaction now holds the
-// lock from its BEGIN (begin.go) and queues for it in order (writequeue.go),
-// so the second writer reads only after the first has committed and there is
-// no race left to lose or to recover from.
-//
-// The counter is the sharpest shape of it: every goroutine reads the same row
-// and writes it back. Two assertions, and the second is what the first cannot
-// say on its own — the FINAL VALUE, because a lost update is silent by
-// construction, and how many times the bodies RAN, because a store that
-// recovered from the race by re-running them would pass the first and still
-// be paying for the race on every contended write.
+// The driver's default BEGIN is deferred with per-FILE conflict detection: a
+// transaction that read a row another writer has since advanced is refused its
+// first write ("database snapshot is stale"), a lost write or a retry rerunning
+// the body. A write transaction now holds the lock from its BEGIN (begin.go)
+// and queues in order (writequeue.go), so the second writer reads only after
+// the first commits. Every goroutine reads and rewrites one counter row. Two
+// assertions: the FINAL VALUE (a lost update is silent) and how many times the
+// bodies RAN, since a store re-running them would pass the first.
 func TestAReadThenWriteCannotLoseARace(t *testing.T) {
 	t.Parallel()
 	db, err := store.OpenNode(t.Context(),

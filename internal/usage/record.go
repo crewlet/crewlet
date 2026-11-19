@@ -23,77 +23,52 @@ import (
 //
 // Every record is the CUMULATIVE value of its (node, day, object) — re-derived
 // from the owning node's own event log and republished whole — and an apply
-// REPLACES what the object held. That is what makes the stream compactable: the
-// newest message on a subject is everything anybody needs, so the broker keeps
-// one and a node that joins replays one per object. A delta would need every
-// message ever published on the subject, which is a log rather than a table.
-// It is also what makes a lost or repeated publish harmless: the next flush
-// carries the whole day again.
+// REPLACES what the object held. That makes the stream compactable: the newest
+// message on a subject is everything anybody needs, so the broker keeps one and
+// a node that joins replays one per object (a delta would need every message
+// ever published). It also makes a lost or repeated publish harmless: the next
+// flush carries the whole day again.
 
 // RecordVersion is the record shape this build reads: the highest
 // [versionedFields] names, which the conformance suite holds it to.
 //
 // A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions. A seat's,
-// a schedule's and a person's day are the base format, version 1; a seat's
-// day that carries its calls per MCP tool ([Record.Tools]) is version 2; a
-// schedule's day that carries a fire's tick or the fires a seat did not run
-// ([Record.Superseded]) is version 3; a unit repository's readers
-// ([KindRepoRead]) are version 4; a seat's day that carries its changes and
-// reviews ([Record.Code]) is version 5; and one that counts its failed checks
-// or its ejections ([CodeDay.ChecksFailed], [CodeDay.Ejections]) is version 6;
-// and one that carries its turn ledger or its refused calls ([Record.Ledger],
-// [Record.Refusals]) is version 7.
+// newer peer's shape survives a rolling upgrade in both directions. What each
+// version adds is [versionedFields]'s table.
 //
 // IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
-// highest version: 7, a seat's turn ledger.
+// highest version.
 const RecordVersion = 7
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
 const baseRecordVersion = 1
 
+// ADDING A FIELD TO A RECORD IS ADDING A ROW BELOW, on the tracker's terms: an
+// older build decodes a field it has no home for AROUND (reads the version,
+// finds it readable, applies what it understands, drops the rest), so its rows
+// for that day differ from every upgraded node's for as long as the day is
+// kept. The row makes the encoder stamp a version that build retains instead;
+// [RecordVersion] moves with it, and the domain's statelogtest candidate gains
+// a record carrying the field. A field no tag has shipped is still one two
+// builds of a rolling upgrade disagree about, so "nothing has been released"
+// exempts no field from its row.
+
 // versionedFields is every field a usage record has gained since the base
-// format, and the version a reader must be at to apply a record carrying it:
-// a seat-day's calls per MCP tool and the count its cap dropped, at 2; a
-// schedule fire's tick (when it was due, and its label) and a schedule-day's
-// fires its seats did not run, at 3; the repo_read kind and the four fields
-// only it carries, at 4; and a seat's code day ([Record.Code]) at 5, its
-// failed checks and ejections at 6. A build below any of them has no column
-// for the field, and applying such a record there would keep the rest of the
-// day and lose the field for good, so it retains the record instead and
-// applies it once it can: a build below 4 RETAINS a repository's readers —
-// under the identity their writer stated ([RecordEnvelope.SubjectID]) — rather
-// than faulting at a kind it has no applier for. Every other record stays at 1
-// and every build applies it.
-//
-// THE ORDER IS ONE HISTORY, never two tables merged by number: a record is
-// stamped with the lowest version that reads it, so a version names exactly
-// one set of fields across every build of a rolling upgrade, and a number two
-// lines of work both claimed would let a build read a record whose field it
-// has no column for.
-//
-// ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
-// older build decodes a field it has no home for AROUND — it reads the
-// version, finds it readable, applies what it understands and drops the rest
-// — so its rows for that day differ from every upgraded node's for as long as
-// the day is kept. The row is what makes the encoder stamp a version that build
-// retains instead; the constant above moves with it, and the domain's
-// statelogtest candidate gains a record carrying the field. A field no tag has
-// shipped is still one two builds of a rolling upgrade disagree about, so
-// "nothing has been released" exempts no field from its row.
+// format, and the version a reader must be at to apply a record carrying it.
+// A build below it has no column for the field, and applying the record there
+// would lose the field for good, so it retains the record and applies it once
+// it can (a build below 4 RETAINS a repository's readers under the identity
+// their writer stated, [RecordEnvelope.SubjectID], rather than faulting at an
+// unknown kind). THE ORDER IS ONE HISTORY, never two tables merged by number.
 //
 // A NEW KIND IS A VALUE of a field every record carries, so its row names the
-// key and the value (`subject.kind` equal to the new kind's name): a row
-// naming only the key would stamp every record the domain writes.
-//
-// THE KIND'S OWN FIELDS HAVE ROWS BESIDE IT, though today only records of that
-// kind carry them: a row states one FIELD's version, by the rule above, so a
-// field that a later change lets another kind carry is already stamped by its
-// own row rather than relying on a kind it no longer rides with.
+// key and the value (`subject.kind` equal to the kind's name): a row naming
+// only the key would stamp every record. THE KIND'S OWN FIELDS HAVE ROWS BESIDE
+// IT: a row states one FIELD's version.
 var versionedFields = statelog.RecordFields{
 	{Name: "Record.Tools", Since: 2, Path: []string{"tools"}},
 	{Name: "Record.ToolsElided", Since: 2, Path: []string{"tools_elided"}},
@@ -260,24 +235,14 @@ func (s Subject) validateShared() error {
 }
 
 // validateFor is [Subject.Validate] as the envelope applies it to a record of
-// version v.
-//
-// A KIND THIS BUILD DOES NOT KNOW, ON A RECORD ABOVE [RecordVersion], IS A
+// version v. A KIND THIS BUILD DOES NOT KNOW, ON A RECORD ABOVE [RecordVersion], IS A
 // NEWER BUILD'S, and the envelope admits it with only the node and the day
-// checked, so the second pass retains it as [ErrFutureVersion]. The envelope
-// is the half every build must read, and refused here the record was an
-// unreadable envelope — which the framework treats as a STOP of the whole
-// applier rather than a deferral of one record. So every kind a later build
-// added stopped every node still on this one, which is the opposite of what
-// [Kind] promised. Below the day this build cannot read the subject's fields at
-// all, so the record is filed under the identity its writer stated
-// ([RecordEnvelope.SubjectID]) — which is NOT a label: on this compacted
-// domain a deferred record supersedes whatever was retained under its
-// subject, so a subject composed from the fields this build does know would
-// make every object of the new kind on one day one object. The deferred
-// record keeps its whole payload, and the build that can read it applies it.
-//
-// AT OR BELOW [RecordVersion] AN UNKNOWN KIND IS A WRITER FAULT rather than a
+// checked, so the second pass retains it as [ErrFutureVersion]; refused here
+// it would STOP the whole applier rather than defer one record. It is filed
+// under the identity its writer stated ([RecordEnvelope.SubjectID]), NOT one
+// composed from the fields this build knows: a deferred record supersedes
+// whatever was retained under its subject, so a composed one would make every
+// object of the new kind on one day one object. AT OR BELOW [RecordVersion] AN UNKNOWN KIND IS A WRITER FAULT rather than a
 // newer build, because a version this build reads is one whose kinds it knows.
 func (s Subject) validateFor(v int) error {
 	if !s.Kind.Valid() && v > RecordVersion {

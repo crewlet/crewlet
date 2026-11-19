@@ -139,15 +139,13 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 // hold pinned included.
 //
 // The applier commits throughout a backup, and the hold is taken at the
-// position the node stood at just before the copies — so a replicated copy
-// older than that position would leave every record between the two pinned by
-// nothing, for the trim to take before a restore replays them. Here the
-// applier's commit lands while the hold is being put: after the read the hold
-// took its position from, before either estate is copied, and on the pinned
-// writer's own connection, which no copy draws. The connection the copy does
-// draw last read before that commit, and a copy that took its connection's
-// last view instead of its own holds the position the hold pinned and nothing
-// after it.
+// position just before the copies, so a replicated copy older than that would
+// leave the records between pinned by nothing, for the trim to take before a
+// restore replays them. Here the applier's commit lands while the hold is being
+// put: after the read the hold took its position from, before either estate is
+// copied, on the pinned writer's own connection, which no copy draws. The
+// connection the copy does draw last read before that commit, so a copy taking
+// its connection's last view holds the pinned position and nothing after it.
 func TestTheCopyHoldsEveryCommitThatReturnedBeforeItBegan(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -316,18 +314,16 @@ func TestABackupIsRefusedWhereTheLogItsCopyHoldsBackHasNoRoom(t *testing.T) {
 
 // A LOG TRIMMED PAST THE COPY'S POSITION REFUSES THE MANIFEST.
 //
-// This is the assertion that makes "restorable" checkable. A restore replays
-// from the store's position to the log's head, which is only possible while
-// the log still holds `position + 1`; below that the records are gone, and
-// applying what remains writes state derived from a prefix with a hole in it —
-// silently, because every remaining record applies cleanly.
+// A restore replays from the store's position, possible only while the log
+// still holds `position + 1`; below that the rest applies cleanly onto a
+// prefix with a hole in it, silently.
 //
 // THE BOUNDARY IS PINNED ON BOTH SIDES, against a log whose first record is
 // 40: a copy at 39 has missed nothing and is accepted, and a copy at 38 is
-// short exactly record 39 and is refused. A copy far below the log proves
-// only that the check exists; one record either way is where a call site that
-// passes the wrong operand to the shared predicate goes wrong, and it goes
-// wrong in the direction that writes a manifest over a hole.
+// short exactly record 39 and is refused. A copy far below the log proves only
+// that the check exists; one record either way is where a call site passing the
+// wrong operand to the shared predicate goes wrong, in the direction that
+// writes a manifest over a hole.
 func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

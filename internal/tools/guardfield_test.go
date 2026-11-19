@@ -15,22 +15,16 @@ import (
 
 // THE GUARD FIELD IS THE SKILL GATE'S, AND AUTHORITY NEVER GOES THROUGH IT.
 //
-// [Surface.WithGuard] REPLACES the guard rather than composing with it, and a
-// surface holds exactly one. So the day somebody wires an authority decision
-// through it — the obvious move, since it already sits in front of every call
-// — the skill gate is displaced, and a tool a company locked behind a required
-// skill is callable before the skill was ever loaded. Nothing would fail: the
-// authority check would pass the tools it should, and the locked tool would
-// simply stop being locked.
+// [Surface.WithGuard] REPLACES the guard rather than composing, and a surface
+// holds exactly one. Wire an authority decision through it and the skill gate
+// is displaced: a tool locked behind a required skill is callable before it is
+// loaded, and nothing fails. Authority lives in internal/agent/builtin's own
+// gate, which wraps each tool at registration and also covers the assistant
+// and the HTTP surface, which never build a Surface.
 //
-// Authority lives in internal/agent/builtin's own gate instead, which wraps
-// each tool at registration and covers the operator's assistant and the HTTP
-// surface as well — two callers that never build a Surface at all.
-//
-// A WALK OF THE SOURCE rather than a behavioural test, because the failure is
-// an INSTALLATION nobody would write a test for: every call site that installs
-// a guard is named here, and a new one fails the build until somebody reads
-// this and decides whether it displaces the skill gate.
+// A WALK OF THE SOURCE, not a behavioural test: the failure is an INSTALLATION
+// nobody would test. Every guard-installing call site is named here, and a new
+// one fails the build until someone decides whether it displaces the skill gate.
 func TestTheSkillGateStillHoldsTheGuardField(t *testing.T) {
 	t.Parallel()
 	// THE TWO INSTALLERS OF THE SKILL GATE: a phase's surface, and a

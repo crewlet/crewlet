@@ -91,7 +91,25 @@ const (
 	// what a `blocking` wake is about beside its own item, so a wake whose
 	// every dependent ended starts no turn. Read through [WakeDependents].
 	MetaDependents = "dependents"
+
+	// MetaFlowState, MetaFlowCause, MetaFlowSince and MetaFlowUntil are the
+	// flow a flow notice tells of ([Snapshot.Flow]), the instants in RFC
+	// 3339 and empty where unknown, and MetaFlowRole the role it tells its
+	// seat in: what the prompt says, and what the moot rule compares the
+	// item with at dispatch ([WakeFlow]).
+	MetaFlowState = "flow_state"
+	MetaFlowCause = "flow_cause"
+	MetaFlowSince = "flow_since"
+	MetaFlowUntil = "flow_until"
+	MetaFlowRole  = "flow_role"
 )
+
+// WakeFlow is the state a flow notice's metadata tells of ([MetaFlowState]),
+// false for a wake that tells of none.
+func WakeFlow(metadata map[string]string) (FlowState, bool) {
+	state := FlowState(metadata[MetaFlowState])
+	return state, state != "" && state.Valid()
+}
 
 // WakeDependents is the dependents a wake's metadata names ([MetaDependents]),
 // none for a wake that names none.
@@ -197,7 +215,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			Origin: types.TriggerOrigin{Kind: types.OriginWorkItem, ID: record.Notify.Snapshot.Key,
 				Reason: string(c.Reason)}},
 			To: notify.Recipient{Handle: c.Handle}, Held: true,
-			WakeID: changefeed.WakeID(record.OpID, c.Handle), WakeAt: record.CreatedAt})
+			WakeID: changefeed.WakeID(wakeKey(record), c.Handle), WakeAt: record.CreatedAt})
 	}
 	for _, c := range routed {
 		inbound := base
@@ -217,13 +235,23 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			// open (an unreachable coordination store must not stop
 			// notifications), and this catches what slips through, in the inbox
 			// and the completion ledger.
-			WakeID: changefeed.WakeID(record.OpID, c.Handle),
+			WakeID: changefeed.WakeID(wakeKey(record), c.Handle),
 			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
 			// of this wake carries — see [notify.Routed.WakeAt].
 			WakeAt: record.CreatedAt,
 		})
 	}
 	return out, nil
+}
+
+// wakeKey is what a record's wakes are derived from: its operation id, or a
+// flow notice's own key ([FlowNotice.ID]), so a notice the duty published twice
+// under two ticks' operations is one wake, as it is one inbox row.
+func wakeKey(record MutationRecord) string {
+	if flow := record.Notify.Snapshot.Flow; flow != nil && flow.ID != "" {
+		return flow.ID
+	}
+	return record.OpID
 }
 
 // registryHas narrows the party registry to the one question routing asks.
@@ -293,6 +321,13 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 			ids[i] = party.Task
 		}
 		metadata[MetaDependents] = strings.Join(ids, ",")
+	}
+	if flow := snapshot.Flow; flow != nil {
+		metadata[MetaFlowState] = string(flow.State)
+		metadata[MetaFlowCause] = string(flow.Cause)
+		metadata[MetaFlowSince] = instantText(flow.Since)
+		metadata[MetaFlowUntil] = instantText(flow.Until)
+		metadata[MetaFlowRole] = string(flow.Role)
 	}
 	if decision := askedDecision(record); decision != nil {
 		metadata[MetaDecision] = jsonText(decision)

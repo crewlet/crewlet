@@ -54,22 +54,15 @@ func TestTheApplierIsNeverQueuedBehindReaders(t *testing.T) {
 	}
 	defer func() { _ = w.Close() }()
 
-	// SATURATE THE WHOLE POOL, which is what makes the mutation reachable:
-	// five readers are started against a pool of five (four readers plus
-	// the one declared pin) and only four can get a connection while the
-	// pin holds the fifth. Remove the pin — take the writer's connection
-	// from the pool per transaction — and all five readers get one, so the
-	// write has nothing left to begin on and this test goes red.
+	// SATURATE THE WHOLE POOL: five readers against a pool of five (four
+	// readers plus the one declared pin), of which only four can get a
+	// connection while the pin holds the fifth. Without the pin all five get
+	// one, the write has nothing to begin on, and this goes red. Waiting for
+	// four is the point: the fifth is EXPECTED to be blocked.
 	//
-	// Waiting for four rather than five is the point: the fifth is EXPECTED
-	// to be blocked in the correct implementation.
-	//
-	// EVERY READER IS WAITED FOR before the test returns: released, the four
-	// holders end and only then does the fifth get its connection. Left
-	// running, it was still at the store while the cleanup removed the
-	// store's directory, and the removal failed "directory not empty" — a
-	// red run of a test whose property held. Deferred in this order, the
-	// release runs first and the wait second.
+	// EVERY READER IS WAITED FOR before returning, else the fifth is still at
+	// the store when cleanup removes its directory ("directory not empty").
+	// Deferred in this order, the release runs first and the wait second.
 	var readers sync.WaitGroup
 	defer readers.Wait()
 	held := make(chan struct{})

@@ -33,32 +33,16 @@ const objectsDirName = "objects"
 
 // Objects is how a backup reaches the company's files' bytes.
 //
-// # Why a backup carries every object a restore's rows name
+// The collector deletes a removed file's object once it is over a day old, so a
+// week-old backup would restore rows whose objects a live store no longer
+// holds. The backup carries every object a REQUIRED table of the store copy
+// names, and every object a record the restore replays names (the package
+// doc's "The objects follow the log"), read against internal/objstore/references:
+// exactly the tables the collector's audit walks.
 //
-// A tracker restored without the bytes of its files names files nobody can
-// open, and the collector deletes a removed file's object at its next pass
-// once the object is more than a day old — within the hour of the removal for
-// any file older than that — so a restore from a week-old backup brings back
-// rows whose objects a live store may no longer hold. The backup is a copy of
-// the COMPANY, so it carries every object a REQUIRED table of the store copy
-// names — and every object a record the restore replays from the copy's
-// position names, since those records write rows too (the package doc's "The
-// objects follow the log").
-//
-// A RETIRED REFERENCE IS NOT CARRIED, NOR IS A DERIVED ONE (ADR-0081). A
-// retired row keeps a replaced object from the collector for a grace, and a
-// derived row an object the engine can build again; neither names anything
-// the company is owed, so its object is never copied, never asked after and
-// never recorded lost: on S3 it stays out of objects/, and on the broker's
-// bucket the stream snapshot holds whatever the bucket holds without this
-// package counting it. A restore brings the row back without its object,
-// which nothing owes it: a retired row's domain deletes it once its grace has
-// passed, and a derived row's domain builds the object again.
-//
-// WHICH OBJECTS is not an option: the copy is read against
-// internal/objstore/references, the one list its schema gate holds, and walks
-// exactly the Required tables the collector's audit walks — so a backup can
-// never be built knowing fewer required tables than the audit does.
+// A RETIRED OR DERIVED REFERENCE IS NOT CARRIED (ADR-0081): a retired row only
+// holds a replaced object for a grace, and a derived row's object can be
+// rebuilt, so neither is owed, copied, asked after or recorded lost.
 type Objects struct {
 	// Open streams one object back, checked against the row naming it
 	// ([objstore.Store.Open]): a stream of the wrong bytes ends in
@@ -108,29 +92,18 @@ type ObjectArtifact struct {
 	Reused     int    `json:"reused,omitempty"`
 	ReusedFrom string `json:"reused_from,omitempty"`
 
-	// Lost is every object the restored rows name that the object store
-	// answered it does not hold, or holds only as bytes that are not the
-	// ones the row records — each with the file that named it, which is what
-	// a person restores. ONLY WHERE THE RESTORED ROWS NAME IT: an object the
-	// copy names whose file a record past the copy replaced or removed — and
-	// the collector has since deleted — is owed by nothing a restore brings
-	// back, and is not listed. One residual: a record a restore's applier
-	// reads past (an evicted writer's) that rewrote a file is read here as
-	// having rewritten it, so an object the store lost whose file such a
-	// record touched reads as replaced rather than lost — it needs an
-	// eviction and a store loss on one file inside one backup, and the
-	// collector's daily audit reports it either way.
+	// Lost is every object the restored rows name that the object store does
+	// not hold, or holds as other bytes than the row records, each with the file
+	// naming it. ONLY WHERE THE RESTORED ROWS NAME IT: an object whose file a
+	// record past the copy replaced or removed is owed by nothing a restore
+	// brings back. A file rewritten by a record the applier reads past (an
+	// evicted writer's) reads as replaced; the daily audit reports it anyway.
 	//
-	// RECORDED RATHER THAN REFUSED. Refusing would not bring the object
-	// back, and every later backup would be refused for the same one —
-	// which stops the trim's backup term from ever advancing, so every log
-	// in the fleet grows towards its ceiling over one lost file. The
-	// artefact restores everything else, the files these objects belong to
-	// restore with their bytes missing exactly as they are missing now, and
-	// the `objects_missing` alarm is what sends somebody to replace them.
-	// An object the store could not ANSWER about is another matter — it may
-	// be intact there — and still refuses the backup
-	// ([ErrObjectsUnreachable]).
+	// RECORDED RATHER THAN REFUSED: refusing would not bring the object back and
+	// would refuse every later backup, so the trim's backup term never advances
+	// and every log grows over one lost file (`objects_missing` alerts). An
+	// object the store could not ANSWER about may be intact: the backup is
+	// refused ([ErrObjectsUnreachable]).
 	Lost []LostObject `json:"lost,omitempty"`
 }
 
@@ -142,64 +115,23 @@ type LostObject struct {
 }
 
 // ErrObjectsUnreachable is a backup owing objects it could not read and whose
-// absence is not definite — the object store did not answer for them. The
-// backup is refused rather than written without them: they may well exist, a
-// later attempt may reach them, and a restore missing them would bring back
-// files whose bytes the fleet still had.
+// absence is not definite: the object store did not answer for them. It is
+// refused rather than written without them, which would restore files whose
+// bytes the fleet may still have.
 var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could not read")
 
 // backupFetchConcurrency is how many objects a backup reads from the store at
 // once, on a store whose objects it copies (`s3`).
-//
-// THIRTY-TWO, because a first copy is bound by REQUEST LATENCY, not by how many
-// streams are open (Little's law: what is in flight is the rate times the time
-// each request takes). The design's large model holds about 2.1 million
-// objects in about 1.15 TB — a mean near 550 KB — and a GET of one from S3
-// spends about 100 to 200 ms before its first byte (AWS's performance
-// guidelines). Filling a 1 Gbit/s link at that mean is about 230 GETs a
-// second, each holding its slot for its first byte and its body — about 130
-// ms at a 100 ms first byte — so about thirty in flight: sixteen leave the
-// link a third idle and a first copy most of twice as long as it need be.
-// BenchmarkCarry measures exactly this at the first byte's lower end, over the
-// S3 backend and the model's mix of sizes with every request answered a first
-// byte late (two runs on a four-core host): at 100 ms sixteen carried 107 to
-// 117 objects a second (59–65 MB/s; the model's first copy about five hours)
-// and thirty-two 193 to 199 (107–111 MB/s — a 1 Gbit/s link's worth; about
-// three hours). At its upper end a 550 KB object holds its slot about 230 ms,
-// so thirty-two carry about 140 objects a second, three fifths of a 1 Gbit/s
-// link, and the model's first copy takes about four hours (arithmetic, not a
-// measurement). At 20 ms, under any first byte S3 answers in, both reached
-// what the host's own writing, verifying and syncing of each object allows,
-// 200 to 290 a second. A later backup takes what its predecessor holds from
-// this host's disk ([reuseObject]) and reads only the objects written since.
-//
-// NOT MORE, although sixty-four carried more again at 100 ms where the host
-// had room past a 1 Gbit/s link (203 to 295 a second): thirty-two fill the
-// link a modest host has — the one the CLI's wait for a first copy is sized
-// on — and past it the link, not the bound, sets how long the copy and the
-// trim hold it spans take. A faster link to a slower bucket is where a deeper
-// bound would pay, and it would take the warm-connection bound below with it.
-//
-// UNDER THE PREFIX'S RATE: S3 serves at least 5,500 GET and HEAD requests a
-// second per partitioned prefix, and every object the engine writes is under
-// one (`files/`); thirty-two out are about 140 to 250 requests a second at the
-// first bytes above — under a twentieth of it, the rest left to the company's
-// own downloads, the Gitlet nodes' syncs and the collector on the same prefix.
-//
-// AT httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides a
-// connection the bucket's own transport keeps warm — s3obj's clone of httpx's,
-// over HTTP/1.1 alone, which keeps httpx's pool of that many to a host —
-// rather than paying a TLS handshake of its own; past it, a GET opens a
-// connection the pool then closes.
-// Each worker streams one object through io.Copy's buffer rather than holding
-// it: thirty-two buffers, never thirty-two objects.
-//
-// A CLOSED LOOP, like the collector's bounds: an object goes out only when one
-// in flight has finished, so a store that slows down is read more slowly by
-// itself, and the first object it still does not answer for once it has been
-// asked again ([fetchAttempts]) ends the copy with at most the bound out — the
-// backup is refused for that object anyway, and a store that stopped answering
-// is not sent the rest of a terabyte.
+// THIRTY-TWO, because a first copy is bound by REQUEST LATENCY (in flight =
+// rate x time per request): 1 Gbit/s of the large model's 550 KB objects needs
+// about 230 GETs a second, each 100 to 200 ms to its first byte, so about
+// thirty in flight. BenchmarkCarry at 100 ms: sixteen carried 107 to 117
+// objects a second, thirty-two 193 to 199. NOT MORE: past the link, it sets the
+// copy's length. Under S3's 5,500 GET a second per prefix; AT
+// httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides a warm
+// pooled connection. A CLOSED LOOP: an object goes out only when one finishes,
+// so a store that stopped answering is not sent the rest of a terabyte. Each
+// worker streams through io.Copy's buffer: thirty-two buffers, never objects.
 const backupFetchConcurrency = 32
 
 // streamCheckConcurrency is how many objects a backup asks the store about at
@@ -224,14 +156,12 @@ type reference = objstore.Reference
 // after (`nats`) as they are read — never gathered first — and the ones the
 // records a restore replays past the copy name ([window]).
 //
-// WHY STREAMED. A company of two million objects is two million references,
-// and the backup used to hold every one twice — a map to de-duplicate them and
-// a sorted slice to copy them from — half a gibibyte before the first object
-// was read. The copy is now walked in ONE KEY ORDER across every Required
-// table ([objstore.MergeWalks]), holding a page of each: a key two rows name
-// comes out twice in a row, so de-duplicating it is a comparison with the one
-// before, and a key named as two different objects is caught at the same
-// comparison.
+// WHY STREAMED. Two million objects are two million references, half a
+// gibibyte if all held before the first object is read. The copy is walked in
+// ONE KEY ORDER across every Required table ([objstore.MergeWalks]), holding a
+// page of each: a key two rows name comes out twice in a row, so
+// de-duplicating is a comparison with the previous one, which also catches a
+// key named as two different objects.
 type objectPass struct {
 	objs     *Objects
 	required []objstore.ReferenceTable
@@ -343,19 +273,14 @@ func (p *objectPass) artifact() *ObjectArtifact {
 // [backupFetchConcurrency] at once, taking each from the previous backup on
 // this host where it is there and intact and reading the rest from the store.
 //
-// BEFORE THE STREAMS ARE SNAPSHOTTED, which is what makes an object the store
-// no longer holds judgeable: the collector deletes an object only once a
-// complete read of its estate finds no declared table naming it, so an object
-// of the copy it has deleted was un-named by a record its estate had applied
-// before the deletion — before this read, and so before the snapshot began. The
-// record lies in (P, L], which the window reads, and says whether a restore
-// names the object ([objectPass.finish]). Not because the object went unnamed
-// for any length of time: the collector's grace runs from the upload, so an
-// old object goes within the hour of the record that un-names it.
-//
-// Where the objects ride a stream the backup snapshots anyway it does nothing:
-// the snapshot is the copy, and [objectPass.finish] asks after each object
-// once it is taken.
+// BEFORE THE STREAMS ARE SNAPSHOTTED, which makes an object the store no longer
+// holds judgeable: the collector deletes an object only once a complete read of
+// its estate finds no table naming it, so a copy's object it has deleted was
+// un-named by a record applied before the deletion, hence before this read and
+// the snapshot. That record lies in (P, L], which the window reads, and says
+// whether a restore names the object ([objectPass.finish]). The collector's
+// grace runs from the upload, so an old object goes within the hour of that
+// record. On a stream it does nothing: the snapshot is the copy.
 func (p *objectPass) carryCopy(ctx context.Context) error {
 	if len(p.required) == 0 || p.inStream() {
 		return nil
@@ -435,25 +360,17 @@ func (p *objectPass) judgeReplayedLocked(ref reference) {
 }
 
 // finish completes the pass once the streams are snapshotted and the window
-// read, and answers its artefact — nil when the backup owes no object.
+// read, and answers its artefact, nil when the backup owes no object. ON `s3`
+// it judges the copy's objects the store did not hold, then carries every
+// object only the window names ([backupFetchConcurrency] at once).
 //
-// ON `s3` it judges the copy's objects the store did not hold, then carries
-// every object only the window names, up to [backupFetchConcurrency] at once.
-//
-// ON `nats` it asks the store about every object the copy names and then every
-// object only the window names, up to [streamCheckConcurrency] at once, and
-// counts what the store holds; what it answers it does not hold — or holds as
-// other bytes than the row records, by the size and the digest the backend
-// keeps, or as no object it can read at all ([objstore.ErrCorrupt]) — is judged
-// as on `s3`. AFTER THE SNAPSHOT, and that order is what makes a present answer
-// mean the snapshot holds it: a key is never reused, so an object the store
-// holds after the snapshot finished is one it held throughout, snapshot
-// included. Asked before, a deletion landing between the question and the
-// snapshot would be carried as present and restore as a file with no bytes.
-// And the object stream is snapshotted after every log ([snapshotStreams]), so
-// an object a record of a log's snapshot names was in the store — it was
-// uploaded before its record was written — before the object stream was
-// snapshotted.
+// ON `nats` it asks the store about every object the copy or only the window
+// names ([streamCheckConcurrency] at once); one not held, held as other bytes
+// than the row records, or unreadable ([objstore.ErrCorrupt]) is judged as on
+// `s3`. AFTER THE SNAPSHOT, so a present answer means the snapshot holds it (a
+// key is never reused); asked before, a deletion in between would restore a
+// file with no bytes. The object stream is snapshotted after every log
+// ([snapshotStreams]), so an object a log's record names was already stored.
 func (p *objectPass) finish(ctx context.Context) (*ObjectArtifact, error) {
 	if len(p.required) == 0 {
 		return nil, nil
@@ -589,14 +506,11 @@ func (p *objectPass) windowOnly(keys []objstore.Key,
 // seek of the key column's index.
 //
 // ASKED OF THE COPY, never of the bytes the backup carried: whether a window
-// object is one the copy's pass already handled, and whether the two name its
-// key as one object, are both questions about the copy's ROWS. Answered by
-// re-reading the carried file instead, they cost a read and a digest of every
-// such object — a gibibyte apiece at the tracker's largest file — on the one
-// goroutine handing objects to the store's readers.
-//
-// BOUNDED BY THE WINDOW, which is bounded by how much was written while the
-// backup ran, never by the inventory.
+// object was already handled, and whether both name its key as one object, are
+// questions about the copy's ROWS. Re-reading the carried file would cost a
+// read and a digest of every such object (a gibibyte apiece at the tracker's
+// largest) on the one goroutine handing objects to the readers. BOUNDED BY THE
+// WINDOW, never by the inventory.
 func (p *objectPass) copyNames(ctx context.Context, keys []objstore.Key) (map[objstore.Key]reference, error) {
 	copied := map[objstore.Key]reference{}
 	if len(keys) == 0 {
@@ -801,34 +715,18 @@ func (p *objectPass) carry(ctx context.Context, ref reference) (bool, error) {
 	})
 }
 
-// fetchAttempts is how many times a backup asks the store about one object —
-// a read on `s3`, a stat on `nats` — before a failure that is not a definite
-// answer refuses the backup ([unanswered]).
+// fetchAttempts is how many times a backup asks the store about one object (a
+// read on `s3`, a stat on `nats`) before an indefinite failure refuses it
+// ([unanswered]). FOUR, paced at [fetchRetryBase] doubling to
+// [fetchRetryCeiling]: seven seconds in all, longer than a broker election's
+// five and than a connection reset or stall. Each attempt is a read begun
+// again at the first byte; worth it at a backup's scale, where one failure
+// would refuse two million reads whole, with no manifest.
 //
-// FOUR, paced at [fetchRetryBase] doubling to [fetchRetryCeiling]: a second,
-// two and four between them, seven in all with a fifth of each spread either
-// way — longer than a broker election's five seconds, which is what a stat on
-// the bucket stream fails across, and than the connection reset or the stall
-// a GET from a bucket ends in now and then. What these attempts answer is a
-// read that ENDED: the bucket's own client asks a request it was refused again
-// until the request's deadline — which for a read is the store's stall on its
-// open ([objstore.Stall], a minute) — and a stall or a reset part way
-// through a body is final, so each attempt here is a read begun again, from
-// the object's first byte. And it is worth retrying at a backup's scale where
-// it would not be at a request's: a first copy is two million reads over
-// hours, refused whole — with no manifest, and every object read again by the
-// next attempt — for the first one that fails.
-//
-// NO LONGER THAN ONE BUDGET IN ALL: every attempt runs inside the object's
-// own read budget ([objstore.ReadBudget]; a stat's is [objstore.ReadBase]), so
-// a retry never lets one object hold its slot longer than a single read could.
-// So against a bucket that keeps failing one object's GET — each attempt
-// asked again by the client until the stall ends it — the four are fewer: a
-// small object's two-minute budget holds two opens the stall ends, and the
-// copy is refused about two minutes after that object's first GET. IN THE
-// SAME SLOT, so the bound on what is out at once still holds; a store that
-// has stopped answering ends the pass once the first object out has spent its
-// budget.
+// NO LONGER THAN ONE BUDGET IN ALL: every attempt runs inside the object's read
+// budget ([objstore.ReadBudget]; a stat's is [objstore.ReadBase]), in the SAME
+// SLOT, so a retry never holds a slot longer than a single read and the bound
+// on what is out at once holds.
 const fetchAttempts = 4
 
 // fetchRetryBase and fetchRetryCeiling pace [fetchAttempts] — see there.

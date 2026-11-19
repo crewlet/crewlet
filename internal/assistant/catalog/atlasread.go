@@ -13,18 +13,16 @@ import (
 
 // THE ATLAS'S READS: three curated reads over the atlas questions the
 // dashboard's own screens read (internal/api/queries' atlas_entries,
-// atlas_entry and atlas_trace), answered as the person, so a person without
-// the atlas permission is refused by the route exactly as the screens refuse
-// them, and never handed a row. Nothing here is a second reader of the atlas:
-// every answer is the route's own JSON, carded from its own keys.
+// atlas_entry and atlas_trace), answered as the person, so one without the
+// atlas permission is refused as the screens refuse them: every answer is the
+// route's own JSON, carded from its keys.
 //
-// AN ENTRY IS A CHIP. The entry card's kind is the frame's atlas object, so
-// the answer's first mention of an entry's name is its chip and its peek, and
-// each card's link opens the map with that entry's peek open ("Show on the
-// map"), lit along the trace where the read was one. The links are the link
-// table's, by the keys the atlas screens read on arrival, never a fact's
-// value: an address in the atlas is a fact like any other, fenced and read,
-// and nothing the model writes is a link.
+// AN ENTRY IS A CHIP. The entry card's kind is the frame's atlas object, so an
+// entry name's first mention is its chip and peek, and each card's link opens
+// the map at that peek ("Show on the map"), lit along a trace. Links are the
+// link table's, by the keys the atlas screens read on arrival, never a fact's
+// value: an address is a fact like any other, fenced, and nothing the model
+// writes is a link.
 
 // The atlas reads' names.
 const (

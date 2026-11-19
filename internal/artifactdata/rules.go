@@ -19,26 +19,15 @@ import (
 // THE COLLECTION RULES: the name grammar, the presets and what they compile to,
 // and what a collection's specification must hold to be stored.
 //
-// # One vocabulary, one evaluator
+// A preset (`shared`, `contribute`, `author`, `private`) compiles to rule
+// fields before storing, so the stored specification is the whole policy.
 //
-// A preset is a name people and agents pick by intent (`shared`, `contribute`,
-// `author`, `private`); what the applier evaluates is the rule fields it
-// compiles to (who reads, the least role that creates, the least role that
-// deletes, and each column's own write role and condition). The compilation
-// happens before a collection is stored, so the stored specification is the
-// whole of the policy and there is exactly one evaluator for it.
-//
-// # Who may change which row, stated once
-//
-// A writer at EDITOR or above may write any row the field rules admit their
-// role to. A writer BELOW editor (a contributor, a commenter, a viewer) may
-// change only rows they created, except where a column EXPLICITLY names a write
-// role, whose condition then decides (`own_row`, `assigned_to_viewer`, or any
-// row when it names none): that is how a review sheet lets a contributor tick
-// the box on a row an editor wrote and assigned to them, and why a contributor
-// cannot rewrite another participant's sign-up. A `private` collection is the
-// writer's alone at every role: per-viewer state is private even from the
-// artifact's owner.
+// Who may change which row, stated once: a writer at EDITOR or above may write
+// any row the field rules admit. One BELOW editor may change only rows they
+// created, except where a column EXPLICITLY names a write role, whose
+// condition then decides (`own_row`, `assigned_to_viewer`, or any row when
+// none): a contributor can tick a row assigned to them but not rewrite
+// another's sign-up. A `private` collection is the writer's alone at every role.
 
 // docIDPattern is the document grammar. The collection grammar is
 // [artifacts.ValidCollectionName]'s, the vocabulary every surface that names a

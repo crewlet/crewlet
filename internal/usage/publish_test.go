@@ -158,14 +158,11 @@ func contains(s, sub string) bool { return strings.Contains(s, sub) }
 // A SEAT THE CHART NO LONGER HOLDS KEEPS ITS NAME WHEN ITS DAY IS DERIVED AGAIN.
 //
 // A seat's handle is the chart's while the chart holds it and otherwise the
-// day's own rows' — and spend rows carry none, so a seat removed since whose
-// day on this node is spend alone derives no name. Published while it was in
-// the chart, its day named it; derived again once it left — a row added, a
-// mark, a restart's watermark — the join took the derivation's EMPTY handle as
-// the newer label, and every node's history of the day lost the name a reader
-// falls back on for a seat it can no longer resolve. A handle never changes, so
-// the fleet's is kept; and a carried label is no figure the derivation is
-// short of, so it is not said short.
+// day's own rows' — and spend rows carry none, so a removed seat whose day is
+// spend alone derives no name. Derived again, the join would take the
+// derivation's EMPTY handle as the newer label and every node's history of the
+// day would lose the name a reader falls back on. A handle never changes, so
+// the fleet's is kept, and a carried label is not said short.
 //
 // Mutation: take an empty handle as the derivation's in the join, and the day
 // names nobody; or decide shortness against the derivation as derived, and the

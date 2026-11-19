@@ -28,7 +28,7 @@ type FlowState string
 const (
 	// FlowWorking is a turn or an executor run of the assignee on the item now.
 	FlowWorking FlowState = "working"
-	// FlowBlocked is an open blocker.
+	// FlowBlocked is an open blocker, since the change the flow duty recorded.
 	FlowBlocked FlowState = "blocked"
 	// FlowWaiting is a start in the future, the assignee's own unanswered
 	// question on the item, or the assignee's run parked on it for a person.
@@ -121,7 +121,7 @@ type Flow struct {
 
 	// Since is when the state began, where the facts give it: the turn's
 	// start, the start that passed, the last change, a stop's or a park's
-	// beginning.
+	// beginning; for a blocked item, when the flow duty recorded it blocked.
 	Since *time.Time `json:"since"`
 
 	// Until is when it ends, where known: the start waited for, a seat's
@@ -238,6 +238,12 @@ const (
 		"AND fh.actor = t.assignee AND fh.effective_at >= t.start_at)"
 	flowStuck = "t.updated_at <= ? - 3600000000 * COALESCE((SELECT fp.stuck_after_hours " +
 		"FROM tracker_projects fp WHERE fp.key = t.project_key), ?)"
+	// A blocker gives no instant of its own, so a blocked item is blocked
+	// since the flow duty recorded it so: its latest recorded change, where
+	// that change is to blocked.
+	flowBlockedSince = "(SELECT CASE WHEN fb.state = '" + string(FlowBlocked) +
+		"' THEN fb.recorded_at END FROM tracker_flow fb WHERE fb.task_id = t.id " +
+		"AND fb.notice = '' ORDER BY fb.log_seq DESC LIMIT 1)"
 )
 
 // flowRendering is what each branch of the expression reads as.
@@ -334,7 +340,7 @@ func flowExpr(at flowAt, how flowRendering) (string, []any) {
 
 	live(itemSeat, working)
 	branches(
-		flowBranch{when: flowOpenBlocker, state: FlowBlocked},
+		flowBranch{when: flowOpenBlocker, state: FlowBlocked, since: flowBlockedSince},
 		flowBranch{when: "t.start_at > ?", args: []any{now}, state: FlowWaiting,
 			cause: FlowCauseStart, until: "t.start_at", why: flowWaitReason},
 		flowBranch{when: flowOwnAsk, state: FlowWaiting, cause: FlowCauseQuestion})

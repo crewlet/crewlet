@@ -24,41 +24,15 @@ import (
 
 // NO STATEMENT SPANS TWO FILES.
 //
-// A data node is two database files — its own and the replicated estate — and
-// the two rules that makes true are that no transaction spans them and no read
-// joins across them. Both fail the same way if they are broken: not
-// with an error a caller can handle, but with a driver refusing a table it
-// cannot see, from a query nobody thought was crossing a boundary — because in
-// one file it was not.
-//
-// # What it walks
-//
-// Every non-test .go file under internal/ and cmd/, parsed with go/parser,
-// looking at every STRING the code composes — a literal, a concatenation, a
-// fmt.Sprintf format — rendered as the applier gate renders them
-// ([composedString]), with what it cannot resolve marked rather than dropped.
-// A comment is not a string, so a doc discussing `tracker_tasks` and
-// `crewlet_events` in one sentence — which several package docs legitimately
-// do — is not one.
-//
-// # What it looks for
-//
-// Two things. A literal that looks like SQL and names a table the node's own
-// schema declares AND one the replicated schema declares — the table names are
-// DERIVED from each schema, so a table added by a migration is covered by that
-// migration and nothing else. And any ATTACH, which is the one way a statement
-// on one connection reaches a SECOND file — a copy of the replicated estate, a
-// snapshot artefact, a backup member — whose table names are the same as the
-// live file's, so no table name can tell a statement that crossed into a copy
-// from one that did not, and the only statement that can cross is one that
-// attaches.
-//
-// # Why the control strings are the load-bearing half
-//
-// A guard asserting an absence passes identically when the thing is absent and
-// when the guard has stopped working. They run the matchers on strings whose
-// verdict is known, so this is a test that can fail today rather than one that
-// starts working later and is trusted meanwhile.
+// A data node is two database files; no transaction or read spans them, or a
+// driver refuses a table it cannot see. The walk parses every non-test .go file
+// under internal/ and cmd/ and takes every STRING the code composes, rendered as
+// the applier gate does ([composedString]), unresolved parts marked not dropped.
+// It flags a literal that looks like SQL and names a table both schemas declare
+// (names DERIVED, so a migration's table is covered), and any ATTACH, the one
+// way a statement reaches a SECOND file (such as a copy of the replicated
+// estate, whose table names equal the live file's). The control strings are the
+// load-bearing half: an absence guard passes identically once it stops working.
 func TestNoStatementSpansTwoFiles(t *testing.T) {
 	t.Parallel()
 

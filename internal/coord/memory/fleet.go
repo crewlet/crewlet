@@ -68,9 +68,6 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	atlasWakes        map[string]coord.AtlasWake
 	atlasWakeRevision uint64
-	// advisorRecords is the advisor analyst's records, by name.
-	advisorRecords  map[string]coord.AtlasWake
-	advisorRevision uint64
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
@@ -220,7 +217,6 @@ func NewFleet() *Fleet {
 		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		atlasWakes:        map[string]coord.AtlasWake{},
-		advisorRecords:    map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},

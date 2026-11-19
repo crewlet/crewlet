@@ -5,19 +5,14 @@ import "fmt"
 // ---- what an adopted brand holds ------------------------------------------ //
 //
 // A DRAFT NEEDS ITS NAME, AN ADOPTED BRAND ITS LOGO AND ITS COLOUR. A kit is
-// published step by step while it is set up, so [Read] requires only `name`
-// and holds every field that is present to its rule; what the company's
-// brand must hold is decided where the brand is adopted, as its contrast is:
-// [MissingToAdopt] names the fields an adoption refuses a brand for leaving
-// out, and the adoption (internal/artifactsdomain's CheckBrandAdoptable)
-// refuses it naming each one.
+// published step by step, so [Read] requires only `name` and holds every
+// present field to its rule; [MissingToAdopt] names what an adoption refuses a
+// brand for lacking (internal/artifactsdomain's CheckBrandAdoptable).
 //
-// WHAT AN ADOPTED BRAND MAKES IS COMPUTED ONLY FROM A COMPLETE ONE. The
-// stylesheet ([CSS]) and the slide theme ([SlideTheme]) take an [Adoptable],
-// which only [AsAdoptable] and [DecodeAdopted] make, and only for a brand
-// that holds every field of [AdoptionFields]: a draft's head can be read,
-// outlined and searched, and can never be drawn as the company's brand by
-// mistake, because nothing compiles that would do it.
+// WHAT AN ADOPTED BRAND MAKES IS COMPUTED ONLY FROM A COMPLETE ONE. [CSS] and
+// [SlideTheme] take an [Adoptable], which only [AsAdoptable] and
+// [DecodeAdopted] make, for a brand holding every [AdoptionFields] field: a
+// draft can be read and searched but never drawn as the company's brand.
 
 // AdoptionField is one field an adopted brand holds, and what it is, as a
 // refusal names it.

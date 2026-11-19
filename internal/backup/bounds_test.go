@@ -439,19 +439,16 @@ func TestTheFetchBoundRidesWarmConnections(t *testing.T) {
 	}
 }
 
-// THE COPY IS WALKED A PAGE AT A TIME, never gathered first. A company of two
-// million objects is two million references, and a backup that read them all
-// before copying the first held half a gibibyte of them — twice; walked, it
-// holds a page of each table while the objects of the page before are copied.
+// THE COPY IS WALKED A PAGE AT A TIME, never gathered first. Two million
+// objects are two million references, and gathering them held half a gibibyte
+// (twice); walked, it holds a page of each table while the previous page's
+// objects are copied.
 //
 // SO WHILE ITS FIRST OBJECTS ARE COPIED IT HAS READ ONE PAGE OF EACH TABLE IT
 // MERGES, and no more: the merge reads every Required table's first page
-// before it can say which key comes first (objstore.MergeWalks), and the
-// tracker's first page holds far more references than a fetch's width. The
-// bound is counted from objstore/references rather than written down, because
-// a table a domain declares is a page the walk reads at its start — it was the
-// literal 2 while Worklet's files and Gitlet's packs were the only
-// Required tables, and every table declared since read as a gathering walk.
+// before it can say which key comes first (objstore.MergeWalks). The bound is
+// counted from objstore/references rather than written down, because every
+// table a domain declares is a page the walk reads at its start.
 func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
