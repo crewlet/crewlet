@@ -242,7 +242,7 @@ func readHolding(text string, h int, r *rand.Rand, most int) reading {
 		at += n
 		if s.p != nil {
 			h := s.p.held()
-			got.most = streamHeld{max(got.most.text, h.text), max(got.most.entries, h.entries), max(got.most.stageText, h.stageText), max(got.most.stageEdits, h.stageEdits)}
+			got.most = got.most.atLeast(h)
 			got.keysMost = max(got.keysMost, s.p.keys.in.held())
 			got.keysCap = max(got.keysCap, cap(s.p.keys.in.buf))
 		}

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"math/rand/v2"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -17,6 +19,41 @@ var StreamText = streamText
 // StageAdvance is [stageAdvance], where a rule's stage's first window ends, for
 // the package's external tests.
 const StageAdvance = stageAdvance
+
+// KeysBytes is [keysBytes], for the package's external tests.
+const KeysBytes = keysBytes
+
+// KeysBufferMost is the largest buffer a [Stream]'s keys' stage reads from
+// while text is written to it 64 KiB at a time, for the package's external
+// tests.
+func KeysBufferMost(text []byte) int {
+	s, most := NewStream(io.Discard), 0
+	for at := 0; at < len(text); at += 64 << 10 {
+		_, _ = s.Write(text[at:min(len(text), at+64<<10)])
+		if s.p != nil {
+			most = max(most, cap(s.p.keys.in.buf))
+		}
+	}
+	_ = s.Close()
+	return most
+}
+
+// StreamBuffers is the most a [Stream]'s stages allocate to read from
+// ([feed.reserve]) where its keys' stage never waits on its claims, for the
+// package's external tests: every rule's and claims stage's input at its
+// bound, and the keys' stage's doubled from a piece to [keysBytes], under
+// twice it summed, each allocation in the runtime's whole 8 KiB pages.
+var StreamBuffers = sync.OnceValue(func() int {
+	const page = 8 << 10
+	p := newPipeline(&endSink{}, true, holdBytes())
+	n := 2*keysBytes + (bits.Len(uint(keysBytes/pieceBytes))+1)*page
+	for _, f := range p.feeds() {
+		if f != &p.keys.in {
+			n += (f.bound + page - 1) / page * page
+		}
+	}
+	return n
+})
 
 // NewPoisonedStream is [NewStream] with every stage's input poisoned ([feed]),
 // for the package's external tests.
@@ -387,14 +424,17 @@ func TestAValueWrittenAStretchAtATimeIsWrittenAsWhole(t *testing.T) {
 // their inputs are read from, at their capacity, and the runs they read on,
 // and beside them the entries they keep (values, edits, claims and blocks,
 // the edits a stage hands on at the capacity it keeps for them) at the bytes
-// each takes; and the most any one rule's stage holds of input, and of edits.
+// each takes; and the most any one rule's stage holds of input, and of edits;
+// and rooms, the room the claims stages keep for the edits they hand on, each
+// room counted once however many stages share it ([handedEdits]).
 type streamHeld struct {
-	text, entries, stageText, stageEdits int
+	text, entries, stageText, stageEdits, rooms int
 }
 
 // held is what p's stages hold.
 func (p *pipeline) held() streamHeld {
 	var h streamHeld
+	rooms := map[*[]edit]bool{}
 	var walk func(s sink)
 	walk = func(s sink) {
 		switch st := s.(type) {
@@ -402,8 +442,9 @@ func (p *pipeline) held() streamHeld {
 			h.text += cap(st.in.buf) + len(st.run.head) + len(st.run.w.pending)
 			h.stageText = max(h.stageText, cap(st.in.buf))
 			h.entries += 16*len(st.prior) + 32*cap(st.outEdits)
-			if st.handed != nil && st == p.claims {
-				h.entries += 32 * cap(*st.handed)
+			if st.handed != nil && !rooms[st.handed] {
+				rooms[st.handed] = true
+				h.rooms += 32 * cap(*st.handed)
 			}
 			if st.raw != nil {
 				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 56*len(st.src.words)
@@ -425,6 +466,7 @@ func (p *pipeline) held() streamHeld {
 		h.text += cap(p.keys.in.buf)
 		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*(len(p.keys.early)+len(p.keys.beginsEarly))
 	}
+	h.entries += h.rooms
 	return h
 }
 
@@ -493,10 +535,10 @@ func handedEdits() int {
 // Token every fifteen bytes), values that run on past a window (one of escaped
 // breaks), and runs a stage counts rather than holds, each a MiB long; texts
 // held past the windows are TestNoTextHoldsAStreamPastItsWindowsAndItsHold's.
-// Mutation: hand output on a step at a time ([ruleStage.pass]), write counted
-// runs at once ([ruleStage.repeat]), grow a buffer past its bound
-// ([feed.reserve]), let go of one after the next stage closes
-// ([ruleStage.close]), keep edits behind the resume ([rawMap.prune]).
+// Mutation: hand output a step at a time ([ruleStage.pass]), write counted runs
+// at once ([ruleStage.repeat]), grow a buffer past its bound ([feed.reserve]),
+// free one past the next stage's close ([ruleStage.close]), keep edits behind
+// the resume ([rawMap.prune]), or give each claims stage a room ([newPipeline]).
 func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 	t.Parallel()
 	boundText, boundEntries := streamBound()
@@ -535,7 +577,7 @@ func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 				atEnd(s.p, func(p *pipeline) { closing = p.buffered() })
 			}
 			h := s.p.held()
-			most = streamHeld{max(most.text, h.text), max(most.entries, h.entries), max(most.stageText, h.stageText), max(most.stageEdits, h.stageEdits)}
+			most = most.atLeast(h)
 		}
 		_ = s.Close()
 		if closing > streamWindow {
@@ -546,12 +588,37 @@ func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 			t.Errorf("%s: a stage held %d bytes of its input, past the %d of its window", name, most.stageText, streamWindow)
 		case most.stageEdits > boundEdits:
 			t.Errorf("%s: a stage kept %d edits, past the %d markers that fit past where it resumes", name, most.stageEdits, boundEdits)
+		case most.rooms > 32*handedEdits():
+			t.Errorf("%s: the claims stages kept %d KiB of room for the edits they hand on, past the %d KiB of the one room they share", name, most.rooms>>10, 32*handedEdits()>>10)
 		case most.text > boundText || most.entries > boundEntries:
 			t.Errorf("%s: the stages held %d bytes of text and %d of entries, past the %d and %d derived", name, most.text, most.entries, boundText, boundEntries)
 		}
 		t.Logf("%s: held %d KiB of text, %d KiB of entries; a stage at most %d KiB and %d edits; %d KiB at the last close", name, most.text>>10, most.entries>>10, most.stageText>>10, most.stageEdits, closing>>10)
 	}
 	t.Logf("bound: %d KiB of text, %d KiB of entries; a stage %d KiB and %d edits", boundText>>10, boundEntries>>10, streamWindow>>10, boundEdits)
+}
+
+// atLeast is the most of m and h, figure by figure.
+func (m streamHeld) atLeast(h streamHeld) streamHeld {
+	return streamHeld{max(m.text, h.text), max(m.entries, h.entries), max(m.stageText, h.stageText),
+		max(m.stageEdits, h.stageEdits), max(m.rooms, h.rooms)}
+}
+
+// THE END WRITES A MARKER WITHOUT ALLOCATING ([endSink]): a string longer than
+// its scratch, and a run of one byte, to a writer with no WriteString of its
+// own, each a write or a few of what it copies to its scratch.
+//
+// Mutation: write a string through io.WriteString, which copies it to the
+// heap for such a writer, and every marker allocates.
+func TestTheEndWritesAMarkerWithoutAllocating(t *testing.T) {
+	e := &endSink{w: struct{ io.Writer }{io.Discard}}
+	marker := strings.Repeat(passwordMarker, 40)
+	if n := testing.AllocsPerRun(100, func() { e.putString(marker) }); n != 0 {
+		t.Errorf("writing a marker of %d bytes allocated %v times", len(marker), n)
+	}
+	if n := testing.AllocsPerRun(100, func() { e.putRepeat('*', 2000) }); n != 0 {
+		t.Errorf("writing a run of 2000 bytes allocated %v times", n)
+	}
 }
 
 // buffered is the capacity of every buffer p's stages read from.

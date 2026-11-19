@@ -225,6 +225,42 @@ func TestAStreamAllocatesItsBuffersNotItsText(t *testing.T) {
 	}
 }
 
+// A STREAM THAT NEVER WAITS ON ITS CLAIMS NEVER ALLOCATES THE HOLD: its keys'
+// stage reads from a buffer doubled no further than its own bytes
+// ([redact.KeysBytes]), and its stages allocate no more to read from than
+// [redact.StreamBuffers] derives, over a kept session of a base take's 256 KiB
+// and of 4 MiB, and a base64 line of 4 MiB: the pool of takes is sized on it.
+// Not parallel: the heap profile is the process's ([outsideRegexp]).
+//
+// Mutation: allocate the keys' stage's buffer at its bound, the hold in it
+// ([feed.reserve]), and the stream holds and allocates the hold at once.
+func TestAStreamThatNeverWaitsOnItsClaimsNeverAllocatesTheHold(t *testing.T) {
+	rate := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = rate }()
+	for _, c := range []struct {
+		name string
+		text []byte
+	}{
+		{"a kept session of 256 KiB", keptSession(256 << 10)},
+		{"a kept session of 4 MiB", keptSession(4 << 20)},
+		{"a base64 line of 4 MiB", base64Line(4 << 20)},
+	} {
+		var keys int
+		allocated, by := outsideRegexp(func() { keys = redact.KeysBufferMost(c.text) })
+		buffers := by["github.com/crewlet/crewlet/internal/redact.(*feed).reserve"]
+		if keys > redact.KeysBytes {
+			t.Errorf("%s: the keys' stage read from a buffer of %d KiB, past its own %d KiB", c.name, keys>>10, redact.KeysBytes>>10)
+		}
+		if buffers == 0 || buffers > int64(redact.StreamBuffers()) {
+			t.Errorf("%s: the stages allocated %d KiB to read from, where %d KiB is derived", c.name, buffers>>10,
+				redact.StreamBuffers()>>10)
+		}
+		t.Logf("%s: the keys' stage read from a buffer of %d KiB; the stages allocated %d KiB to read from of the %d KiB derived, %d KiB in all",
+			c.name, keys>>10, buffers>>10, redact.StreamBuffers()>>10, allocated>>10)
+	}
+}
+
 // outsideRegexp is what f allocates, in bytes, from the heap profile, which
 // MemProfileRate 1 makes whole, less what package regexp allocates: the
 // matches its searches return, and its machines, which a sync.Pool keeps
