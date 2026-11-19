@@ -481,6 +481,11 @@ func (w *openCodeHoldingsWalk) itemMember(i int, v exportValue) {
 	}
 }
 
+// A part's input is captured whole wherever the log keeps a call's arguments
+// whole: this fails to compile where [exportValueMaxBytes] is shorter than
+// [sandbox.MaxSubmissionArgsBytes].
+var _ [exportValueMaxBytes - sandbox.MaxSubmissionArgsBytes]struct{}
+
 // stateMember keeps a state's status, its input's key (an object within
 // [sandbox.MaxSubmissionArgsBytes], keyed by the log's own rule), and whether
 // its metadata and its failure are exactly what OpenCode writes.
@@ -490,7 +495,7 @@ func (w *openCodeHoldingsWalk) stateMember(i int, v exportValue) {
 	case stateStatus:
 		s.completed, s.failed = v.is(openCodeCompleted), v.is(openCodeCallFailed)
 	case stateInput:
-		s.argsOK = v.kind == jsonscan.ObjectStart && !v.past
+		s.argsOK = v.kind == jsonscan.ObjectStart && !v.past && len(v.text) <= sandbox.MaxSubmissionArgsBytes
 		if s.argsOK {
 			var err error
 			s.args, err = toolargs.Key(v.text)

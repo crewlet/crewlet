@@ -1079,10 +1079,12 @@ func TestAnUnkeptOutputIsNeverHeld(t *testing.T) {
 
 // A PART'S ARGUMENTS ARE READ BY THE LOG'S OWN RULE: another key order and an
 // escaped character key alike and are held; a key a closed schema dropped
-// keys apart and is told; an input past 64 KiB is passed.
+// keys apart and is told; an input of the call's own arguments is held at the
+// longest the log keeps whole ([sandbox.MaxSubmissionArgsBytes]) and passed a
+// byte past it, whatever the walk's capture holds.
 //
-// Mutation: compare the raw text, or decode under other options, and a case
-// goes red.
+// Mutation: compare the raw text, decode under other options, or bound the
+// input by the capture alone and raise the capture, and a case goes red.
 func TestAPartsArgumentsAreReadByTheLogsOwnRule(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"a":"é","b":1.0}`, "done")
@@ -1095,6 +1097,15 @@ func TestAPartsArgumentsAreReadByTheLogsOwnRule(t *testing.T) {
 		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", input, "done"))), ohBegan, c)
 		if got := ohHeld(t, h, err, c); (got != nil) != held {
 			t.Errorf("input %.40s: held %v; want held %t", input, got, held)
+		}
+	}
+	bound := sandbox.MaxSubmissionArgsBytes
+	for size, held := range map[int]bool{bound: true, bound + 1: false} {
+		input := `{"a":"` + strings.Repeat("p", size-len(`{"a":""}`)) + `"}`
+		c := ohCall(1, "echo", input, "done")
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", input, "done"))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); (got != nil) != held {
+			t.Errorf("the call's own input of %d bytes: held %v; want held %t", size, got, held)
 		}
 	}
 }
