@@ -34,7 +34,12 @@ import { Modal } from "~/components/Modal.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
-import { dryRunPatch, getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
+import {
+  dryRunPatch,
+  getConfig,
+  getEntity,
+  type ConfigWriteOutcome,
+} from "~/protocol/configWrite.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -401,8 +406,13 @@ export function RemoveDialog({
       // THE COMPANY'S OWN WARNINGS, as it stands: the ready panel names only
       // what this removal changes, never a warning the company already had.
       // Best effort: a baseline that cannot be read leaves every warning shown,
-      // never the removal waiting.
-      const before = await dryRunPatch({}, read.etag, abort.signal).catch(() => null);
+      // never the removal waiting. It is a check of the whole document, so it
+      // carries the document's tag, not the entry's the removal is sent under.
+      const company = await getConfig(abort.signal).catch(() => null);
+      const before =
+        company?.kind === "document"
+          ? await dryRunPatch({}, company.etag, abort.signal).catch(() => null)
+          : null;
       const baseline = before?.kind === "valid" ? before.warnings : [];
       setChoices(
         Object.fromEntries(

@@ -26,13 +26,19 @@ const companyAsItIs = vi.hoisted(() => ({ warnings: [] as unknown[] }));
 vi.mock("~/protocol/configWrite.ts", () => ({
   getConfig: () => Promise.resolve({ kind: "document", document: {}, etag: '"rev-1"' }),
   getEntity: () => Promise.resolve({ kind: "entity", entity: {}, etag: '"llm-providers-sonnet"' }),
-  dryRunPatch: () =>
-    Promise.resolve({
-      kind: "valid",
-      baseRevisionId: "rev-1",
-      warnings: companyAsItIs.warnings,
-      derived: null,
-    }),
+  // A CHECK OF THE WHOLE DOCUMENT answers only under the document's own tag:
+  // sent the entry's, the engine refuses it, as it does.
+  dryRunPatch: (_patch: unknown, etag: string) =>
+    Promise.resolve(
+      etag === '"rev-1"'
+        ? {
+            kind: "valid",
+            baseRevisionId: "rev-1",
+            warnings: companyAsItIs.warnings,
+            derived: null,
+          }
+        : { kind: "conflict", reason: "precondition_failed", currentRevisionId: null },
+    ),
 }));
 
 const REFS: ModelReference[] = [
