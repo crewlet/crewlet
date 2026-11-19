@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -96,6 +97,11 @@ type core struct {
 	atlasReader *atlasdomain.Reader
 	atlasWriter *atlasdomain.Writer
 
+	// advisorReader and advisorWriter are the advisor log's two sides, built
+	// on every data node for the same reason ([core.openAdvisor]).
+	advisorReader *advisordomain.Reader
+	advisorWriter *advisordomain.Writer
+
 	// run is the triggers' context and stop ends it. Held, not the caller's:
 	// a trigger under the caller's context is one [core.shutdown] could never
 	// end, and its wait would block for ever.
@@ -173,6 +179,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		return err
 	}
 	if err = c.openAtlas(sl); err != nil {
+		return err
+	}
+	if err = c.openAdvisor(sl); err != nil {
 		return err
 	}
 
