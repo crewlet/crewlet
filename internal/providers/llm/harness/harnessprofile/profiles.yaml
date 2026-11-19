@@ -100,8 +100,8 @@ claude-code:
     - "NotebookEdit"
     - "Agent"
   local_tools: denied
-  # WEB OFF, for an entry that sets `overrides: {web_tools: denied}` (the
-  # Dashboard Assistant requires it). The seats' --tools allow list names
+  # WEB OFF, for an entry that sets `overrides: {web_tools: denied}` and for
+  # every helper's run of an entry. The seats' --tools allow list names
   # the two web tools and nothing else, so the denial empties it
   # (`--tools ""`) and drops --allowedTools, and puts both web tools on the
   # deny list beside the local ones, which wins over any allow: a vendor
@@ -110,7 +110,7 @@ claude-code:
   # doctor's own web probe: the deny list answered NO-WEB while the seats'
   # args fetched the endpoint's clock to the second.
   #
-  # NO TOOL OF ITS OWN, because this argv is the Dashboard Assistant's: the
+  # NO TOOL OF ITS OWN, because this argv is a helper's: the
   # empty allow list takes every built-in tool away, not the deny list.
   # MEASURED against 2.1.310 with no login, which reaches no model, off the
   # stream's init event: the deny list alone left thirteen tools on offer
@@ -151,6 +151,15 @@ claude-code:
     args: [["--tools", ""], ["--strict-mcp-config"]]
     refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
     note: "--tools \"\" left the init event's built-in tool list empty and --strict-mcp-config loaded no server but the engine's crewlet server; measured on Claude Code 2.1.310"
+  # IMAGES BESIDE THE PROMPT, which Ask Crewlet hands a question's attachments
+  # in: the headless run reads its prompt as one stream-json user message on
+  # stdin, whose content is the transcript's text block and then a base64
+  # image block per picture. No tool is added: tools_off is judged with these
+  # arguments on the argv too.
+  image_input:
+    args: ["--input-format", "stream-json"]
+    format: claude-stream-json
+    note: "Claude Code's headless --input-format stream-json, a user message whose content holds a text block and base64 image blocks"
   model_args: ["--model", "{model}"]
   # Read from the 2.1.312 binary: an unknown level is dropped with a warning,
   # the models below run without effort, and max or xhigh where a model lacks
@@ -680,7 +689,7 @@ codex:
     - "-"
   # Denied: no shell, and apply_patch writes nothing (above).
   #
-  # NO tools_off, so the Dashboard Assistant refuses this harness: apply_patch has
+  # NO tools_off, so no helper runs on this harness: apply_patch has
   # no switch, so the model keeps a tool of its own, and its patch check
   # answers whether a file outside the call exists and holds given lines,
   # which is a read of the engine host no request of the person's made.
@@ -1743,7 +1752,7 @@ opencode:
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
   #
-  # NO tools_off, so the Dashboard Assistant refuses this harness. The seats'
+  # NO tools_off, so no helper runs on this harness. The seats'
   # policy was measured to decide what a call is offered (the web tools and
   # nothing else, above), but the denial's deny-all has not been measured to
   # leave a call offered nothing, and the construction lives in a seeded file

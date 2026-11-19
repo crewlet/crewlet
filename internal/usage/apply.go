@@ -17,32 +17,13 @@ import (
 // `usage_schedule_runs`, `usage_schedule_superseded`, `usage_person_tokens`,
 // `usage_repo_read_days` and `usage_repo_reads`, on every data node.
 //
-// # An apply REPLACES
-//
-// A record is its object's whole current value, so applying it deletes every
-// row the object held and writes the record's. Inserting beside what was there
-// would count a day's morning again every time its afternoon was published —
-// the one mistake this shape cannot survive, because nothing downstream could
-// tell a double count from a busy day.
-//
-// # The guard is the POSITION
-//
-// For the vector domain's reason: a record's position on this stream is
-// monotone and a pure function of the record, so a redelivery, or an older
-// message replayed after a newer one was applied, is a no-op by arithmetic.
-// A seat's guard lives on its head row in `usage_turns`, which every seat
-// record writes, and a unit repository's day on its own in
-// `usage_repo_read_days`; a schedule and a person have no head row, so each
-// one's guard is the newest version among its own rows.
-//
-// # The horizon is applied here, by the record
-//
-// Every apply also deletes the rows older than its own day minus [History].
-// That is a pure function of the record — the day it carries — so every data
-// node that applies it deletes the same rows, and no local sweep ever writes
-// this estate. A company that goes quiet keeps its old rows until the next
-// record arrives, which is harmless: the stream has already forgotten them,
-// and a read asks for a window rather than for everything.
+// An apply REPLACES: a record is its object's whole current value, so it deletes
+// the object's rows and writes the record's (inserting would count a day's
+// morning again). The guard is the POSITION, as for the vector domain, so a
+// replay is a no-op: a seat's head row in `usage_turns`, a unit repository's day
+// row in `usage_repo_read_days`, else the newest version among a schedule's or
+// person's rows. Rows older than the record's day minus [History] go too, a pure
+// function of the record, so no local sweep writes this estate.
 type Applier struct{}
 
 // NewApplier builds the usage applier. It takes nothing, for the vector

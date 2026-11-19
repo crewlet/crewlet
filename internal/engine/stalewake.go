@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -18,7 +19,10 @@ import (
 // row still tells it. Every such notice is moot once its item was finished,
 // removed or handed to somebody else; a `blocking` one also once every
 // dependent it names was finished, removed or no longer waits on the item; an
-// `unblocked` one also once its item is blocked again. Words are never moot.
+// `unblocked` one also once its item is blocked again. A flow notice, told to
+// a lead, is moot once its item was finished or removed or has left the state
+// it told of, judged only where the read can tell ([worklet.FlowLeft]). Words
+// are never moot.
 
 // dropStaleWakes is [Dispatcher.StaleWakes]: evs less the state notices whose
 // relation ended, each logged.
@@ -46,9 +50,9 @@ func staleWakes(ctx context.Context, tasks taskReader, handle string, evs []*eve
 }
 
 // staleWake names ev's item, its reason and why the wake is moot, or "" for a
-// wake that is no state notice about held work, or one a read could not
-// settle. Every read is floored at the wake's own change, so a node behind it
-// never reads a fresh assignment as removed.
+// wake that is no state notice about held work or the item's flow, or one a
+// read could not settle. Every read is floored at the wake's own change, so a
+// node behind it never reads a fresh assignment as removed.
 func staleWake(ctx context.Context, tasks taskReader, handle string,
 	ev *events.Event) (item string, reason worklet.Reason, why string) {
 
@@ -57,7 +61,9 @@ func staleWake(ctx context.Context, tasks taskReader, handle string,
 		return "", "", ""
 	}
 	reason, state := worklet.StateNotice(n)
-	if !state || !reason.Held() {
+	told, flow := worklet.WakeFlow(n.Metadata)
+	flow = flow && reason == worklet.ReasonFlow
+	if !state || (!reason.Held() && !flow) {
 		return "", "", ""
 	}
 	item = n.Metadata[worklet.MetaTaskID]
@@ -66,11 +72,22 @@ func staleWake(ctx context.Context, tasks taskReader, handle string,
 		return "", "", ""
 	}
 	fresh := statelog.FloorAt(statelog.DefaultReadLevel(statelog.SurfaceSeat), at)
-	detail, err := tasks.Task(ctx, item, worklet.DetailWants{}, fresh)
+	var want worklet.DetailWants
+	if flow {
+		// THE ITEM'S FLOW NOW, which only a read at an instant answers.
+		want.Clock = &worklet.DayClock{Now: time.Now(), Zone: time.UTC}
+	}
+	detail, err := tasks.Task(ctx, item, want, fresh)
 	switch why = taskEnded(detail, err); {
 	case why != "":
 		return item, reason, why
 	case err != nil:
+		return "", "", ""
+	case flow:
+		// A LEAD TOLD OF A COLLEAGUE'S ITEM: not reassigned away from it.
+		if worklet.FlowLeft(told, detail.Flow, detail.FlowLive) {
+			return item, reason, "it left the state it told of"
+		}
 		return "", "", ""
 	case detail.Task.Assignee != handle:
 		return item, reason, "reassigned"

@@ -38,6 +38,16 @@
 // can be quietly changed by an index rebuild. [internal/search] owns the
 // tables and the statements — its Indexer maintains the inverted list this
 // package's arithmetic ranks.
+//
+// # One tokenizer, a profile per corpus
+//
+// The index, the query side and [Reading.Find] run the same tokenizer, so a
+// search of one text finds what a search through the index would; a second
+// reading would be a second answer. The BM25 tuning is a named profile, not
+// package-level numbers: K1 is 1.2 on both, and B splits (see [ProseProfile]
+// and [ChatProfile]) because a knowledge base and a chat want opposite length
+// normalisations. The zero profile scores nothing rather than ranking by a
+// tuning nobody chose.
 package textindex
 
 import (
@@ -55,16 +65,10 @@ import (
 // A Profile is one corpus's BM25 tuning, chosen by the index that ranks with
 // it rather than baked into the arithmetic.
 //
-// TWO CORPORA, ONE ARITHMETIC. The knowledge base and the company's chat are
-// ranked by the same pure functions and differ in exactly one parameter,
-// because their length distributions differ and nothing else about BM25 does.
-// A second implementation would be two rankings to re-measure; a second
-// parameter set is one line each and a test that says what it buys.
-//
-// It is a named string rather than a struct of numbers so the zero value is
-// INVALID rather than a silent third tuning: an unset struct would score with
-// K1 = 0 and B = 0, which is not "the default" but "ignore term frequency and
-// ignore length" — a ranking nobody chose, returning plausible nonsense.
+// The knowledge base and chat share one arithmetic; only their length
+// distributions differ. A named string rather than a struct of numbers, so the
+// zero value is INVALID: an unset struct would score with K1 = 0 and B = 0,
+// ignoring term frequency and length.
 type Profile string
 
 const (
@@ -95,40 +99,22 @@ func (p Profile) Valid() bool {
 func (p Profile) params() (k1, b float64, ok bool) {
 	switch p {
 	case ProseProfile:
-		// K1 saturates term frequency: how much the tenth occurrence of
-		// a word adds over the second. 1.2, the low end of the usual
-		// 1.2-2.0 range, because these documents repeat their subject
-		// constantly — a page about the deploy pipeline says "deploy"
-		// thirty times — and a higher K1 would rank a document by how
-		// verbosely it says one word rather than by how many of the
-		// query's words it covers.
-		//
-		// B is how hard length normalisation bites, from 0 (ignore
-		// length) to 1 (fully normalise). 0.75, the standard value,
-		// kept deliberately: the length spread here is real and
-		// meaningful. A three-line page that mentions a term is usually
-		// ABOUT that term; a long runbook that mentions it usually is
-		// not. Dropping toward 0 would let every long page crowd out the
-		// short answer, and pushing toward 1 would bury the runbook that
-		// is genuinely the right hit for a broad query.
+		// K1 saturates term frequency: 1.2, low in the usual range,
+		// because these documents repeat their subject; a higher K1
+		// would rank by verbosity, not by query words covered.
+		// B is length normalisation, 0 (ignore) to 1 (full): 0.75, the
+		// standard value, kept deliberately. A short page that
+		// mentions a term is usually ABOUT it, a long runbook usually
+		// is not; toward 0 long pages crowd out the short answer,
+		// toward 1 they bury the runbook that fits a broad query.
 		return 1.2, 0.75, true
 	case ChatProfile:
-		// THE SAME SATURATION, because a person who says a word twice
-		// in a message means it as much as a page that says it twice.
-		//
-		// A MUCH WEAKER LENGTH PENALTY, because the prose argument
-		// inverts on this corpus. A chat corpus is bimodal: "ok" and
-		// "shipped, thanks" beside a pasted stack trace or a paragraph
-		// of reasoning, with almost nothing between them. At 0.75 the
-		// short messages win nearly everything — the two-token
-		// acknowledgement that happens to contain the query word
-		// outranks the paragraph that actually answers it, which is the
-		// opposite of what a person searching chat is looking for. At
-		// 0.30 length is a mild correction rather than the dominant
-		// term, and a substantive message beats an acknowledgement
-		// while a wall of pasted logs still does not beat a considered
-		// sentence. The reversal the two values buy is pinned by a
-		// test.
+		// Prose's saturation, a MUCH WEAKER LENGTH PENALTY: the prose
+		// argument inverts on a bimodal corpus ("ok" beside a pasted
+		// stack trace). At 0.75 a two-token acknowledgement with the
+		// query word outranks the paragraph that answers it; at 0.30
+		// the substantive message wins while pasted logs still do not
+		// beat a considered sentence. A test pins the reversal.
 		return 1.2, 0.30, true
 	}
 	return 0, 0, false
@@ -160,24 +146,15 @@ const MaxTermLength = 64
 // Analyze turns a document into its terms, in order of first appearance, with
 // the count of each.
 //
-// The analyzer is deliberately small and its every rule is reversible from
-// this doc, because an index is only as consistent as the promise that the
-// query side ran exactly the same function. Both sides call this.
+// Both the index and the query side call this one function.
 //
-//   - Case is folded, so a title's "Deploy" matches a body's "deploy".
-//   - Tokens break on anything that is not a letter or a digit, which keeps
-//     "k8s" and "v2" whole while splitting "deploy-pipeline" into two terms
-//     a query for either half will find.
-//   - Underscores split too, so "work_items" is findable as "work".
-//   - Stop words are NOT removed. A company's pages are full of titles like
-//     "The Why", and a stop list is a rule about English that silently makes
-//     some documents unfindable — the length normalisation above already
-//     denies a common word most of its influence, which is the effect a stop
-//     list was reaching for.
-//   - No stemming. "deploys" and "deploying" are different terms, which
-//     costs some recall and buys the property that matters more here: what a
-//     person typed is what was searched, so a result they cannot explain
-//     never appears.
+//   - Case is folded.
+//   - Tokens break on anything not a letter or digit (underscores too), keeping
+//     "k8s" whole and splitting "deploy-pipeline".
+//   - Stop words are NOT removed: a stop list makes titles like "The Why"
+//     unfindable, and length normalisation already damps a common word.
+//   - No stemming: it costs some recall but what a person typed is what was
+//     searched, so a result they cannot explain never appears.
 func Analyze(text string) map[string]int {
 	if text == "" {
 		return nil
@@ -195,15 +172,12 @@ func Analyze(text string) map[string]int {
 
 // Terms is a query's terms, deduplicated, in the order they were typed.
 //
-// A repeated query word does NOT count twice: scoring it twice would let
-// somebody double a term's weight by typing it again, which is a query
-// language this seam does not offer. The order is kept only so a caller can
-// report what it searched for and highlight it in a snippet.
+// A repeated query word does NOT count twice: typing a word again must not
+// double its weight. The order is kept only so a caller can report and
+// highlight what it searched for.
 //
-// THROUGH THE SAME TOKENIZER as [Analyze], which is not tidiness: an index is
-// only as good as the promise that both sides ran one function, and a second
-// loop here would be the thing that drifts — silently, as a query for a word
-// that is plainly in the document returning nothing.
+// THROUGH THE SAME TOKENIZER as [Analyze]: a second loop here would drift
+// silently, a query for a word plainly in the document returning nothing.
 func Terms(query string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -218,22 +192,17 @@ func Terms(query string) []string {
 	return out
 }
 
-// A Reading is how a text's words are read where a search asks the text itself,
-// which no index holds, whether it holds a query's terms ([Reading.Find],
-// [Reading.FindIn], [Reading.MayHold]): as it is written ([Plain]), or through
-// the escapes a JSON text writes its strings in ([JSON]). A query's own terms
-// are read as written, whatever the text is ([Terms]): they are what somebody
-// typed.
+// A Reading is how a text's words are read where a search asks the text itself
+// ([Reading.Find], [Reading.FindIn], [Reading.MayHold]): as written ([Plain]),
+// or through the escapes a JSON text writes its strings in ([JSON]). A query's
+// own terms are always read as written ([Terms]).
 //
-// A READING, NOT A SECOND TOKENIZER: however a text is read, a word is a run of
-// letters and digits, case folded, and a term a word of at least
-// [MinTermLength] bytes cut at [MaxTermLength]. A reading decides only which
-// character each of a text's bytes is part of ([Reading.char]), so the rules
-// of what a word is are written once.
+// A READING, NOT A SECOND TOKENIZER: it decides only which character each byte
+// is part of ([Reading.char]); what a word is ([MinTermLength],
+// [MaxTermLength]) is written once.
 //
-// The zero Reading, like any value but these, is no reading, and finds
-// nothing: a caller that never chose how its text is written would otherwise be
-// answered by a reading nobody chose.
+// The zero Reading is no reading and finds nothing, so a caller that never
+// chose one is not answered by a reading nobody chose.
 type Reading string
 
 const (
@@ -241,26 +210,18 @@ const (
 	// digit is one, whatever comes before it.
 	Plain Reading = "plain"
 
-	// JSON reads a JSON text — a document, or as much of one as was
-	// written — through the escapes its strings are written in, as a JSON
-	// decoder reads them: `\n`, `\r`, `\t`, `\b` and `\f` are the line
-	// breaks and spaces they stand for, `\"`, `\\` and `\/` the characters
-	// they escape, and `\u` and four hex digits the character they name, a
-	// surrogate pair's two halves as the one character they name together
-	// and a lone half as no character of a word. A backslash that opens
-	// none of those is itself.
+	// JSON reads a JSON text, or as much of one as was written, through
+	// its string escapes as a JSON decoder does: `\n`, `\r`, `\t`, `\b`,
+	// `\f` are the breaks they stand for, `\"`, `\\`, `\/` the characters
+	// they escape, `\u` and four hex digits the character they name (a
+	// surrogate pair as one character, a lone half as none of a word). A
+	// backslash that opens none of those is itself.
 	//
-	// A JSON TEXT'S WORDS ARE ITS STRINGS'. Read as written, a string's line
-	// break glued `\n` to the word after it, so `"cd repo\ngit push"` read as
-	// the words `cd`, `repo`, `ngit` and `push`, and `git` was in no word of
-	// a text that holds it: the first word of every line after the first,
-	// and every word after a tab, of a command, a file or an edit a tool was
-	// called with. Only the characters are decoded: a word's offset is where
-	// it begins in the text as written.
+	// A JSON TEXT'S WORDS ARE ITS STRINGS': read as written, `"cd repo\ngit"`
+	// has the word `ngit`. Offsets are those of the text as written.
 	//
-	// ONLY FOR A TEXT THAT IS JSON: read so, a text that writes a backslash as
-	// itself — a Windows path's `\new`, a regular expression's `\d+`,
-	// LaTeX's `\textbf` — loses the letter after it to an escape.
+	// ONLY FOR A TEXT THAT IS JSON: a text that writes a backslash as itself
+	// (a Windows path's `\new`, a regexp's `\d+`) loses the letter after it.
 	JSON Reading = "json"
 )
 
@@ -278,13 +239,10 @@ func (r Reading) Valid() bool { return slices.Contains(Readings, r) }
 // "deploy-pipeline". No terms at all are found nowhere: (-1, false), as a
 // query of no words matches nothing.
 //
-// THROUGH THE ONE TOKENIZER, for [Terms]' reason: a match decided by any other
-// reading of the text — a substring, another rule for case or for what splits
-// a word — is one a search through the index would not make, and a word
-// plainly in the text would be found by one and not by the other. And
-// STREAMING: it reads text once, holds no term of it past the comparison, and
-// stops as soon as every term has been seen, so a text of mebibytes costs one
-// pass and no allocation per word.
+// THROUGH THE ONE TOKENIZER, for [Terms]' reason: any other reading (a
+// substring, another case rule) would match differently from a search through
+// the index. And STREAMING: one pass, no term held past the comparison, a stop
+// once every term has been seen, so mebibytes cost no allocation per word.
 func (r Reading) Find(text string, terms []string) (first int, all bool) {
 	return r.FindIn(func(yield func(int, string) bool) { yield(0, text) }, terms)
 }
@@ -333,28 +291,16 @@ func (r Reading) FindIn(pieces iter.Seq2[int, string], terms []string) (first in
 
 // MayHold reports whether stretches cut from text could hold every one of
 // terms, as [Reading.FindIn] reads stretches: whether each term is inside a
-// word some stretch of text reads — whole, or as a piece of a longer word,
-// wherever in it the piece is. It is what a caller asks of a text before it
-// pays to cut the stretches — a redaction, say — and it decides nothing
-// itself: false says FindIn over any stretches of text finds not every term,
-// and true only that the stretches are worth reading.
+// word some stretch reads, whole or as a piece of a longer word. A caller asks
+// before paying to cut the stretches (a redaction, say): false says FindIn
+// finds not every term, true only that they are worth reading.
 //
-// A STRETCH CAN CUT A WORD SHORT, NEVER MAKE ONE UP — as [Plain] reads it. A
-// stretch of text — the words a redaction leaves of it between the markers it
-// writes, which it copies as they stand (internal/redact's OwnWords) — ends a
-// word of text where the stretch ends, so a term can be a stretch's whole word
-// and only a piece of the text's: `deploy` before a token the redaction takes
-// out, where the text as recorded reads `deployghp_…`, which the analyzer
-// reads as `deployghp`. [Reading.Find] of the text whole misses that term, so
-// a caller that asked it first decided on the text rather than on what its
-// reader is shown: the term was missed unless the text held it whole somewhere
-// else — inside a credential the redaction took out, say — and then found, so
-// what the redaction hid decided whether the reader was shown a hit. Every
-// word of a stretch is a piece of a word of text, so MayHold reads text's
-// words whole, at whatever length — a term a stretch's word is cut to past
-// [MaxTermLength] is that word's opening, still a piece of the text's. A
-// stretch [JSON] reads can also begin inside an escape, and read there a word
-// no reading of the text from its start does ([jsonMayHold]).
+// A STRETCH CAN CUT A WORD SHORT, NEVER MAKE ONE UP. A term can be a stretch's
+// whole word and only a piece of the text's: `deploy` before a redacted token,
+// where the text reads `deployghp`. Find of the whole text misses it, so what
+// the redaction hid would decide whether a hit is shown. MayHold thus reads the
+// text's words whole, at any length. A [JSON] stretch can also begin inside an
+// escape ([jsonMayHold]).
 func (r Reading) MayHold(text string, terms []string) bool {
 	switch {
 	case len(terms) == 0:
@@ -378,25 +324,14 @@ func (r Reading) MayHold(text string, terms []string) bool {
 // jsonMayHold is [Reading.MayHold] for [JSON]: whether each of terms is inside
 // a word some stretch of text reads, the stretch read from its first byte.
 //
-// A STRETCH CAN BEGIN INSIDE AN ESCAPE, where no word the text reads from its
-// start begins, and read what is left of the escape as written: begun after
-// the backslash of `\ngit`, it reads `ngit`; after the `\u` of `\u0041b`,
-// `0041b`; and at the second backslash of `\\u0041b`, which the text read from
-// its start takes for an escaped backslash and the word `u0041b`, it reads the
-// escape that backslash opens, and `ab`. Each such word begins with an
-// OPENING — an escape's body as written, after an escape the text's reading
-// decodes, or the character the escape names that a backslash the text's
-// reading takes for the second of a `\\` opens — and goes on as the word the
-// text reads on from where the opening ends, where the text's own reading of
-// those bytes ends too. So the text's words are read whole, as [Reading.words]
-// reads them, and beside them every opening and the word that follows it,
-// whose bytes are the text's word's own: a term only needs an opening where it
-// begins inside one, so each opening is asked only for the terms that could,
-// and each such term is followed on through the word after it a byte at a time
-// as the text's word is read. The text is read once.
-//
-// A stretch that ENDS inside an escape reads a word of the text cut short, or
-// an opening cut short, and makes none up.
+// A STRETCH CAN BEGIN INSIDE AN ESCAPE, where no word read from the text's
+// start begins, and read what is left of the escape as written: after the
+// backslash of `\ngit` it reads `ngit`, and at the second backslash of `\\` it
+// reads the escape that backslash opens. Each such word begins with an OPENING
+// and goes on as the word the text reads from where the opening ends. So words
+// are read whole beside every opening and its following word; each opening is
+// asked only for the terms that could begin inside it, followed a byte at a
+// time. One pass. A stretch that ENDS inside an escape reads a word cut short.
 func jsonMayHold(text string, terms []string) bool {
 	h := newHeldTerms(terms)
 	if h == nil {
@@ -861,25 +796,16 @@ func (p Profile) Score(idf float64, posting Posting, c Corpus) float64 {
 
 // Snippet is the best window of body text for a hit, cut to limit bytes.
 //
-// It centres on the first query term the body actually contains, because the
-// alternative (the document's opening) shows an agent the page's preamble
-// rather than the sentence that made it a hit, and a snippet that does not
-// contain the search term reads as a wrong result even when the ranking is
-// right. A WHOLE TERM FIRST, as [Reading.Find] finds one through the one
-// tokenizer, which is how a lexical search decided the hit: centred on the
-// first place the term occurred as a piece of a longer word, a snippet showed
-// "redeployment" for a hit on "deploy" — and not the sentence holding the
-// word, where that sentence was further on than the window reached. THEN A
-// WORD HOLDING ONE, where the body holds no term whole ([holding]): not every
-// hit handed a snippet was decided on whole terms — a hybrid search shows the
-// snippet of every candidate it fused, those only its semantic ranker found
-// among them, and with no stemming such a body often holds the query's words
-// only inside longer ones, "Deployments" for "deploy" — and centred on
-// nothing, such a snippet was the preamble again.
+// It centres on the first query term the body contains: the opening shows the
+// preamble. A WHOLE TERM FIRST, as [Reading.Find] finds one (how a lexical search
+// decided the hit): a piece of a longer word ("redeployment" for "deploy")
+// could centre away from the real sentence. THEN A WORD HOLDING ONE ([holding]):
+// a hybrid search snippets every candidate it fused, including those only the
+// semantic ranker found, and with no stemming such a body often holds the
+// query's words only inside longer ones.
 //
-// Cut on a RUNE boundary and, where one is near, on a word boundary. Bytes
-// rather than runes for the limit itself: this is a budget against a prompt,
-// and a prompt is billed in bytes on the wire.
+// Cut on a RUNE boundary and, where near, a word boundary. The limit is in
+// bytes, a budget against a prompt billed in bytes on the wire.
 func Snippet(body string, terms []string, limit int) string {
 	return SnippetFrom(body, limit, func(folded string) int {
 		if at, _ := Plain.Find(folded, terms); at >= 0 {
@@ -916,17 +842,15 @@ func holding(text string, terms []string) int {
 // SnippetFrom is [Snippet] centred on the word first finds: first is handed
 // body as the snippet is cut from it, its whitespace folded to single spaces,
 // and answers the byte offset of the word to centre on in that, or -1 for
-// none, which keeps the body's opening — as does an offset past the folded
-// body's end, which no word it handed out is at: a snippet is a reader's
-// glimpse of a hit, and a caller that mistook which text it was handed loses
-// the centring, never the answer it is part of.
+// none, which keeps the body's opening, as does an offset past the folded
+// body's end: a caller that mistook which text it was handed loses the
+// centring, never the answer.
 //
-// FOR A CALLER THAT DECIDED ITS HIT ON LESS THAN EVERY WORD OF THE BODY — the
-// words a redaction leaves between the markers it writes, say
-// ([Reading.FindIn]) — so its snippet shows the word the hit was found by:
-// centred by [Reading.Find] on the first term anywhere, it showed the same
-// letters in a marker before that word (`token` in `[REDACTED:github-token]`),
-// and in a body longer than the snippet left the word itself out.
+// FOR A CALLER THAT DECIDED ITS HIT ON LESS THAN EVERY WORD OF THE BODY (the
+// words a redaction leaves between its markers, [Reading.FindIn]), so the
+// snippet shows the word the hit was found by: [Reading.Find] could centre on
+// the same letters in a marker (`token` in `[REDACTED:github-token]`) and
+// leave the word itself out.
 func SnippetFrom(body string, limit int, first func(folded string) int) string {
 	body = strings.Join(strings.Fields(body), " ")
 	if body == "" || limit <= 0 {

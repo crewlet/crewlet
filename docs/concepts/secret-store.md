@@ -295,8 +295,8 @@ That makes the rotation a runbook with no window in it:
      for those values. Its dry run counts no person's values and no
      invitation either, for the same reason. **Ask Crewlet's
      conversations** are counted, through a running node, and left too: each
-     value leaves with its conversation, once it is untouched for
-     `assistant.retention_days` or its owner clears it, so the rekey says how
+     value leaves with its conversation, once it is untouched for 30 days
+     or its owner clears it, so the rekey says how
      many are still under an old key. A conversation still in use keeps what
      it sealed before step 3, so this count can stay above zero for as long
      as somebody keeps using a conversation started before the flip. **The

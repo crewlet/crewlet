@@ -145,24 +145,15 @@ func fleetPublisherLogging(t *testing.T, own *store.DB, l *fleetLog, c *clock,
 // A RESTORED USAGE LOG WHOSE DAYS MOVED AFTER THE RESTORE CONVERGES AFTER THE
 // REANCHOR.
 //
-// A broker restored from an older copy leaves the peer's rows ahead of the log;
-// its applier stops, and while it waits for its reanchor node-a goes on
-// publishing — yesterday's last turn arrives late, and a custody settle moves a
-// day five back. The peer's reanchor follows the restored log from its END, so
-// it never applies those records, and node-a sends neither day again: neither
-// moves any more. Without more, the peer holds both at their pre-restore value
-// for the 181 days the history keeps them.
-//
-// What reaches it is the rise in the peer's generation of the log: node-a
-// publishes every day its event log holds again — under operation ids no copy
-// before the rise carries, since the broker would collapse an unchanged day
-// onto the copy the peer skipped — and records the generations it answered, so
-// a restart does not answer the same rise again.
-//
-// Mutations, each checked red: no pass on a rise (the peer keeps both days
-// stale); ids that do not cover the generations (every resend collapses);
-// the pass recorded as answered before it settles (the restart's pass is
-// skipped); a restart that does not read what was answered (it passes again).
+// Days moved while the peer waits for its reanchor are never applied (it
+// follows the log from its END) and node-a sends them no more: both would stay
+// stale 181 days. What reaches the peer is the rise in its generation: node-a
+// republishes every day its event log holds, under operation ids no earlier
+// copy carries (the broker would collapse an unchanged day onto the skipped
+// copy), and records the generations answered so a restart does not repeat.
+// Mutations, each checked red: no pass on a rise; ids that do not cover the
+// generations; the pass recorded as answered before it settles; a restart
+// that does not read what was answered.
 func TestARestoredUsageLogConvergesAfterTheReanchor(t *testing.T) {
 	t.Parallel()
 	own, peer := openStore(t), openStore(t)
@@ -286,17 +277,16 @@ func TestAPassThatDidNotSettleIsAnsweredAgain(t *testing.T) {
 
 // A NODE JOINING IS NOT A REANCHOR.
 //
-// A data node that joins appears in the register at whatever generation its
-// donor's snapshot held, and it lacks nothing a tail could hold — so a node
-// first seen at zero starts no pass, and only a rise does: above the generation
-// a node was last answered at, or above zero for one first seen. A change that
-// rises nothing is recorded as answered, so the next start does not hold it
-// against the old one.
+// A joining data node appears at its donor snapshot's generation and lacks
+// nothing a tail could hold, so a node first seen at zero starts no pass; only
+// a rise does (above the generation last answered, or above zero for a node
+// first seen). A change that rises nothing is recorded as answered.
 //
 // AND A FIRST START CLAIMS NO REANCHOR: a node whose store records no pass
-// publishes every day once, which on a fresh node is nothing, and its line says
-// so rather than sending an operator after a reanchor nobody ran. Mutation:
-// log the reanchor's detail on every pass, and the first start's line claims one.
+// publishes every day once (nothing, on a fresh node), and its line says so
+// rather than sending an operator after a reanchor nobody ran.
+// Mutation: log the reanchor's detail on every pass, and the first start's
+// line claims one.
 func TestANodeJoiningIsNotAReanchor(t *testing.T) {
 	t.Parallel()
 	own, peer := openStore(t), openStore(t)

@@ -176,24 +176,15 @@ func waitForWaiters(t *testing.T, q *writeQueue, n int) {
 // ---- the queue, through the store ------------------------------------- //
 
 // WRITERS BEGIN IN THE ORDER THEY ASKED, pooled and pinned alike and from
-// every handle on the file: the fact the applier's drain rests on, because the
-// driver's own lock is a try-lock with a polling busy handler and serves
-// nobody in order.
+// every handle on the file: the applier's drain rests on it, since the driver's
+// lock is a try-lock with a polling busy handler. A transaction holds the lock,
+// the applier's pinned writer asks next, a pooled writer on a SECOND handle
+// asks after it, and the holder lets go: the applier goes first. NO WALL-CLOCK
+// ASSERTION: each writer is observed IN LINE before the next starts.
 //
-// A transaction holds the lock, the applier's pinned writer asks next, a
-// pooled writer on a SECOND handle to the same file asks after it, and the
-// holder lets go: the applier must go first. Before the queue, both would have
-// polled the driver's lock and whichever happened to wake in the gap won.
-//
-// NO WALL-CLOCK ASSERTION ANYWHERE IN IT. Each writer is observed to be IN
-// LINE before the next one is started, so the order under test is the order
-// they asked in by construction rather than by having slept long enough — the
-// property this file exists for is exactly the one a timing-dependent test
-// could not hold.
-//
-// Mutation: take the lock without the queue in either write path, or give
-// each handle a queue of its own, and a writer never appears in line; release
-// the waiters in any other order, and the rows land in it.
+// Mutation: take the lock without the queue in either write path, or give each
+// handle a queue of its own (a writer never appears in line); release the
+// waiters in any other order (the rows land in it).
 func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

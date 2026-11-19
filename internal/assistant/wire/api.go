@@ -25,10 +25,6 @@ type TurnRequest struct {
 	// Mode is what the question asks for; absent is [TurnAsk]. A
 	// [TurnBrief] needs the page context, which says what it covers.
 	Mode TurnMode `json:"mode,omitempty"`
-	// Deliberate is Think harder: this question runs on `assistant.deliberate`.
-	// Refused where the company sets none.
-	Deliberate bool `json:"deliberate,omitempty"`
-	// --- deep work (im-deep) ---
 	// Attachments are files the person uploaded to the conversation for
 	// this question, at most [AttachmentsPerTurn].
 	Attachments []uuid.UUID `json:"attachments,omitempty"`
@@ -127,10 +123,20 @@ type AuditReadRequest struct {
 	Reason          string `json:"reason"`
 }
 
-// ConversationList is the person's conversations, newest first.
+// ConversationList is the person's conversations, newest first: every one, or
+// those whose title holds the listing's search words.
 type ConversationList struct {
 	Conversations []ConversationSummary `json:"conversations"`
-	NextCursor    string                `json:"next_cursor,omitempty"`
+	// NextCursor continues the listing, null on its last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// ConversationRename names a conversation as a person wants it called:
+// `PATCH /assistant/conversations/{id}`. Title is 1 to [TitleMaxRunes] runes
+// with something besides spaces.
+type ConversationRename struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	Title           string `json:"title"`
 }
 
 // ConversationCreated answers a create.
@@ -140,18 +146,24 @@ type ConversationCreated struct {
 
 // ConversationSummary is one conversation in a list.
 type ConversationSummary struct {
-	ID        uuid.UUID `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID uuid.UUID `json:"id"`
+	// Title is null before the first question names the conversation.
+	Title *string `json:"title"`
+	// TitleSetBy is who named it, null while it has no title: a person's
+	// title is never replaced by one the engine writes.
+	TitleSetBy *TitleSource `json:"title_set_by"`
+	CreatedAt  time.Time    `json:"created_at"`
+	UpdatedAt  time.Time    `json:"updated_at"`
 	// LastActivityAt is when the conversation was last used (a turn opened,
 	// a message, a step, a card or a proposal recorded), the moment a listing
 	// is ordered by and so the one it shows. UpdatedAt also moves on a change
 	// that is not activity (a new title), so a list showing it disagrees with
 	// its own order.
 	LastActivityAt time.Time `json:"last_activity_at"`
-	// LastTurnState is the newest turn's state, absent before the first.
-	LastTurnState TurnState `json:"last_turn_state,omitempty"`
+	// LastTurnState is the newest turn's state, null before the first.
+	LastTurnState *TurnState `json:"last_turn_state"`
+	// OpenTurnID is the turn still running or parked, null for none.
+	OpenTurnID *uuid.UUID `json:"open_turn_id"`
 }
 
 // Transcript is a conversation as its owner reads it after a reload, and as
@@ -197,7 +209,6 @@ type Message struct {
 	// Page is the chip a user message was sent with, absent when the
 	// person sent it without the page.
 	Page *PageChip `json:"page,omitempty"`
-	// --- deep work (im-deep) ---
 	// Attachments are the files a user message was sent with.
 	Attachments []FileRef `json:"attachments,omitempty"`
 }
@@ -219,21 +230,29 @@ type AuditRead struct {
 }
 
 // ViewerAssistant is the `assistant` member of the `/viewer` answer, so the
-// Ask pill decides without a second request.
+// Ask pill and the page decide without a second request.
 type ViewerAssistant struct {
 	Available bool         `json:"available"`
 	Reason    ViewerReason `json:"reason,omitempty"`
-	// Model is what a [ViewerModelNotReady] reason means for this person,
-	// absent for every other reason.
-	Model *ModelNotice `json:"model,omitempty"`
-	// ReadsImages is whether a question's images are read: only deep work
-	// reads them, so false where the company has none, and the composer
-	// does not take them.
-	ReadsImages bool `json:"reads_images,omitempty"`
-	// Deliberate is whether the company sets a stronger chain a question can
-	// ask for ([TurnRequest.Deliberate]), so the composer offers Think
-	// harder only where a question asking it would be answered.
-	Deliberate bool `json:"deliberate,omitempty"`
+	// Model is the model Ask Crewlet runs on, null where none is assigned.
+	Model *ViewerModel `json:"model"`
+	// Notice is what a [ViewerModelNotReady] reason means for this person,
+	// null for every other reason.
+	Notice *ModelNotice `json:"notice"`
+	// CanAssign is whether this person may assign Ask Crewlet's model: they
+	// hold the company document's write, through which it is assigned.
+	CanAssign bool `json:"can_assign"`
+	// ReadsImages is whether a question's images are handed to the model:
+	// false where the assigned model's harness cannot take an image, and
+	// the composer does not take them then.
+	ReadsImages bool `json:"reads_images"`
+}
+
+// ViewerModel is a helper's model as anybody is shown it: its providers.llm
+// key and the model it names.
+type ViewerModel struct {
+	Key   string `json:"key" untrusted:"name"`
+	Label string `json:"label" untrusted:"name"`
 }
 
 // ModelNotice is the model problem a person is told before they ask: the

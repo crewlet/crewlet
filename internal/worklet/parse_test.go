@@ -340,3 +340,35 @@ func TestAWokenSeatReadsTheWholeComment(t *testing.T) {
 		t.Fatalf("a stated excerpt was replaced: %q", routed[0].Body)
 	}
 }
+
+// A FLOW NOTICE WRITES A ZERO INSTANT AS NONE. The estate's wire carries a
+// pointer at the zero instant as nil, so a notice parsed on either side of it
+// must read alike: both write no instant, and a real one writes itself.
+// Mutation: render a pointer at the zero instant as the year one and it fails.
+func TestAFlowNoticeWritesAZeroInstantAsNone(t *testing.T) {
+	t.Parallel()
+	zero, since := time.Time{}, time.Date(2026, 11, 19, 6, 0, 0, 0, time.UTC)
+	metadata := func(at, until *time.Time) map[string]string {
+		t.Helper()
+		record := parseRecord(&worklet.Notify{Kind: worklet.ChangeFlow, Snapshot: worklet.Snapshot{
+			Key: "ENG-1", Project: "ENG", Title: "wire it", Status: worklet.StatusInProgress,
+			Assignee: "cy", Flow: &worklet.FlowNotice{ID: "k", Told: "lee", Role: worklet.FlowToldLead,
+				State: worklet.FlowStuck, Since: at, Until: until}}})
+		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
+			t.Context(), delivery(t, record), registry(t, "cy", "lee"))
+		if err != nil || len(routed) != 1 || routed[0].To.Handle != "lee" {
+			t.Fatalf("the flow notice routed %+v (%v), want the lead alone", routed, err)
+		}
+		return routed[0].Metadata
+	}
+	absent, zeroed := metadata(nil, nil), metadata(&zero, &zero)
+	for _, key := range []string{worklet.MetaFlowSince, worklet.MetaFlowUntil} {
+		if absent[key] != "" || zeroed[key] != "" {
+			t.Errorf("%s reads %q absent and %q at the zero instant, want both empty",
+				key, absent[key], zeroed[key])
+		}
+	}
+	if got := metadata(&since, nil)[worklet.MetaFlowSince]; got != "2026-11-19T06:00:00Z" {
+		t.Errorf("a real instant reads %q", got)
+	}
+}

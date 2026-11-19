@@ -26,7 +26,6 @@ export const TAINT_SOURCE_WORDS: Readonly<Record<AssistantTaintSource, string>> 
   brand_voice: "the brand voice",
   api_answer: "records the API answered with",
   page_context: "the screen you have open",
-  deep_work: "a deep-work run's report",
   repo_file: "a file in a repository",
   repo_patch: "a file's changes in a repository",
   repo_commit: "a commit message",

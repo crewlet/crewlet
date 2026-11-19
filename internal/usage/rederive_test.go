@@ -395,18 +395,14 @@ func TestAnUnresolvedRederiveKeepsTheMark(t *testing.T) {
 	}
 }
 
-// A START DERIVES EVERY DAY THE NODE STILL OWED WHEN IT STOPPED — and nothing
-// older.
-//
-// A node down across more than one midnight comes back with the day it stopped
-// in older than yesterday, and the tail of that day — written after its last
-// tick — is in no published record. The store's watermark names it: after every
-// tick, the start of yesterday. It is not the NEWEST ROW the node holds:
-// anything written before the first tick makes that today — the custody keeper
-// writes and settles a batch the moment it attaches, and the scheduler's
-// catch-up records a fire — so a boot keyed on it would derive nothing older
-// than yesterday. A node that stopped a moment ago owes nothing
-// older than yesterday, and derives nothing older.
+// A START DERIVES EVERY DAY THE NODE STILL OWED WHEN IT STOPPED, and nothing
+// older. A node down across more than one midnight comes back with the day it stopped
+// in older than yesterday, its tail written after its last tick and in no
+// published record. The store's watermark names it: after every tick, the start
+// of yesterday. It is not the NEWEST ROW: anything written before the first
+// tick makes that today (the custody keeper settles a batch the moment it
+// attaches, the scheduler's catch-up records a fire). A node that stopped a
+// moment ago owes nothing older than yesterday.
 //
 // Mutation: derive the boot's day from the newest row, or ignore the
 // watermark, and the first case goes red; derive from anything older than it,
@@ -693,15 +689,12 @@ func TestATodaySettleDuringAnOlderPassCostsTheNextTickNothingOlder(t *testing.T)
 // A REVIEW THAT ARRIVES LATER MOVES ITS OWN DAY AND LEAVES THE TURN'S ALONE.
 //
 // A turn's review and its end routinely arrive in different custody batches,
-// kept apart. The day the turn ENDED states its reviews off the end alone — the
-// turn counts them as it runs — so a review settled later, on the day before,
+// kept apart. The day the turn ENDED states its reviews off the end alone (the
+// turn counts them as it runs), so a review settled later, on the day before,
 // changes that day's spend, which the mark republishes, and nothing about the
-// day the turn ended: no fingerprint it has to move, and no figure it would
-// otherwise have published short — or, counted a second time beside the end's
-// own tally, too high. The late review is the turn's own send-back, the one
-// its tally already counted, and the turn's day is derived again after it
-// lands, so a derivation that counted the review's record as well as the
-// tally would publish it.
+// day the turn ended. The late review is the send-back its tally already
+// counted, and the turn's day is derived again after it lands, so a derivation
+// that counted the review's record beside the tally would publish it too high.
 //
 // Mutation: add the turn's self_iterate review records to its sent-back count
 // beside its tally, and the turn's day goes to two send-backs.

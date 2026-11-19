@@ -42,6 +42,11 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 		// into anybody's inbox.
 		worklet.ChangeFileWritten: true,
 		worklet.ChangeFileRemoved: true,
+
+		// A flow notice tells the one person its duty chose
+		// ([worklet.Snapshot.Flow]), never the item's assignee, collaborators
+		// or watchers (ADR-0162).
+		worklet.ChangeFlow: true,
 	}
 	for _, kind := range worklet.ChangeKinds {
 		if got := kind.TaskCommit(); got == notTasks[kind] {
@@ -188,8 +193,9 @@ func reasonFor(kind worklet.ChangeKind) worklet.Reason {
 }
 
 // A ROUTABLE KIND AND A PROMPT FRAME ARE THE SAME SET, from the other side: a
-// kind the prompt renders and the parser drops is a wake nobody receives.
-func TestTheRoutableSetIsExactlyTheTwoKinds(t *testing.T) {
+// kind the prompt renders and the parser drops is a wake nobody receives. A
+// flow notice is about its item and renders the task's frame.
+func TestTheRoutableSetIsExactlyTheThreeKinds(t *testing.T) {
 	t.Parallel()
 	var routable []worklet.ObjectKind
 	for _, kind := range worklet.ObjectKinds {
@@ -198,7 +204,7 @@ func TestTheRoutableSetIsExactlyTheTwoKinds(t *testing.T) {
 		}
 	}
 	want := []worklet.ObjectKind{
-		worklet.KindTask, worklet.KindProject, worklet.KindPerson,
+		worklet.KindTask, worklet.KindProject, worklet.KindPerson, worklet.KindFlow,
 	}
 	want = slices.DeleteFunc(want, func(k worklet.ObjectKind) bool {
 		// A project's settings are read from describe_project rather

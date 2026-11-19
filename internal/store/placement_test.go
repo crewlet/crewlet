@@ -13,48 +13,15 @@ import (
 
 // EVERY TABLE IN THIS FILE ANSWERS "WHO HAS TO AGREE ON IT?" IN WRITING.
 //
-// This is the rule with every recorded incident in the repository behind it,
-// and it is not the one people quote. The quoted rule is that the stream is
-// the write-ahead log and this estate is derived state; the rule that keeps
-// breaking is its neighbour — anything the COMPANY has to agree on belongs in
-// the coordination store, never in a file one process owns exclusively.
+// Anything the COMPANY has to agree on belongs in the coordination store, never
+// in a file one process owns exclusively. Migrations 0010-0013 and 0028
+// repaired that five times: a table had a migration describing shared state and
+// a per-node placement, and nothing compared the two because the rule was prose.
 //
-// Migrations 0010 through 0013 and 0028 are five post-mortems of it, each
-// discovering that the last repair was incomplete — nine tables between them:
-//
-//   - 0010 moved `webhook_deliveries`, `rate_limits`, `config_activations`,
-//     `config_apply_status` and `turn_completions`. A vendor retrying a
-//     delivery reached whichever ingress node the load balancer picked and
-//     woke the same seat twice; four nodes ran four rate valves, so a seat
-//     capped at five a second emitted twenty; each node read its own apply
-//     status and drew a fleet of one; a redelivery that landed on a peer
-//     found no completion row and ran the turn a second time.
-//   - 0011 took the token counter.
-//   - 0012 took `a2a_channels`, and says in its own text that it "was the
-//     last of the tables migration 0010 should have taken".
-//   - 0013 said it again about the next one.
-//   - 0028 said it a fourth time, about `chat_thread_follows`: an inbound
-//     chat message is claimed by ONE node of a competing consumer group, so
-//     a follow recorded on the node that took the mention was invisible to
-//     the node that took the reply.
-//
-// Every one of those tables had a migration describing shared state and a
-// placement that was per node. Nothing compared the two, because the rule was
-// prose and prose is not compared to anything.
-//
-// # What this gate does, and what it deliberately cannot do
-//
-// It cannot tell that a table is in the wrong estate — that is a judgement
-// about what the table MEANS, and no walk over DDL reaches it. What it can do
-// is make the judgement un-skippable: every table this estate declares must
-// appear below with an answer and a reason, and the check is two-sided, so a
-// table added without one fails and an entry for a table that no longer exists
-// fails too. A new table's author writes the sentence, and a reviewer reads it
-// in the diff next to the migration. That is the whole mechanism, and it is the
-// one thing the five migrations above did not have.
-//
-// Nothing here binds the REPLICATED estate, which has its own gate one file
-// over: [TestOnlyTheApplierWritesTheReplicatedEstate].
+// The gate cannot judge what a table MEANS. It makes the judgement
+// un-skippable: every table appears below with an answer and a reason, two-sided,
+// so a table without one fails and so does an entry for a gone table. The
+// REPLICATED estate's gate is [TestOnlyTheApplierWritesTheReplicatedEstate].
 func TestEveryNodeTableSaysWhoHasToAgreeOnIt(t *testing.T) {
 	t.Parallel()
 
@@ -408,27 +375,15 @@ var nodeEstatePlacements = []placement{
 // THE NODE ESTATE'S ANSWERS AND THE PUBLISHED PAGE ARE THE SAME LIST.
 //
 // docs/concepts/architecture.md § "Where state lives" is what an operator
-// reads to find out where a fact of theirs is kept, and its first table is a
-// hand-maintained enumeration of this estate — which goes stale on the first
-// table somebody adds, silently, in the direction that matters least to the
-// person who added it and most to the person reading it. This is the guard, in
-// the idiom internal/events/categorydoc_test.go established for the event
-// categories: a narrative page bound to a declaration, failing both ways.
+// reads to find where a fact is kept, and its first table enumerates this
+// estate by hand, which goes stale on the first table somebody adds. This is
+// the guard, in the idiom of internal/events/categorydoc_test.go, failing both
+// ways.
 //
-// # The node estate only, and that is deliberate
-//
-// The page enumerates this estate table by table because a reader is looking
-// for one of a couple of dozen named things. It describes the REPLICATED estate by
-// family — "the tracker's own tables", "the knowledge base's" — because sixty
-// rows would be a schema dump rather than a map, and because a table there is
-// reached through a domain rather than named by an operator. Demanding every
-// one would make the page worse to read in exchange for a guarantee nobody
-// asked for.
-//
-// What that costs is stated rather than glossed: a new replicated table can
-// arrive without the page mentioning it. It is covered by the gate that
-// matters for it instead — a write to it fails
-// [TestOnlyTheApplierWritesTheReplicatedEstate] unless its author says why.
+// The node estate only, deliberately: the page describes the REPLICATED estate
+// by family, because sixty rows would be a schema dump. A new replicated table
+// can arrive unnamed there; [TestOnlyTheApplierWritesTheReplicatedEstate]
+// covers it instead, failing a write unless its author says why.
 func TestTheArchitecturePageNamesEveryNodeTable(t *testing.T) {
 	t.Parallel()
 

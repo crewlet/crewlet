@@ -145,6 +145,7 @@ const LOADERS = {
   brand: () => import("~/routes/brand/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
+  advisor: () => import("~/routes/advisor/index.ts"),
   "model-wizard": () => import("~/routes/settings/models/wizard/ModelWizard.tsx"),
   account: () => import("~/routes/account/index.ts"),
   signin: () => import("~/routes/signin/index.ts"),
@@ -173,6 +174,7 @@ type ScreenDir =
   | "home"
   | "inbox"
   | "me"
+  | "advisor"
   | "worklet"
   | "gitlet"
   | "atlas"
@@ -212,6 +214,11 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   home: "home",
   inbox: "inbox",
   me: "me",
+  // ASK CREWLET'S PAGE IS THE DRAWER'S CHUNK: one conversation, drawn by the
+  // same parts in either place (`assistant/chunk/Conversation.tsx`).
+  ask: "assistant",
+  advisor: "advisor",
+  "advisor-finding": "advisor",
   principles: "settings",
   brand: "brand",
   "brand-setup": "brand",
@@ -278,7 +285,6 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "mcp-tools": "settings",
   secrets: "settings",
   limits: "settings",
-  "ask-crewlet": "settings",
   spend: "spend",
   "spend-tasks": "spend",
   people: "settings",
@@ -291,7 +297,6 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   config: "settings",
   "code-settings": "settings",
   diagnostics: "settings",
-  advisor: "settings",
   backups: "settings",
   storage: "settings",
   account: "account",
@@ -308,6 +313,7 @@ export const CHUNKS: readonly Chunk[] = [
   "home",
   "inbox",
   "me",
+  "advisor",
   "settings",
   "model-wizard",
   "brand",
@@ -339,6 +345,7 @@ const CHUNK_LABELS: Readonly<
   home: "Home",
   inbox: "Inbox",
   me: "My work",
+  advisor: "Advisor",
   worklet: "Worklet",
   gitlet: "Gitlet",
   "gitlet-repo": "Gitlet repository",

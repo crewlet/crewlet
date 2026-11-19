@@ -10,32 +10,17 @@ import (
 	"sync/atomic"
 )
 
-// A node's REPLICATED ESTATE — everything a state log's applier derives — is a
-// file of its own beside the node's, and this file is that half of the store:
-// the slot the node keeps it open in, and the two handles the runtime hands
-// out on it.
+// A node's REPLICATED ESTATE, everything a state log's applier derives, is a
+// file beside the node's; this file holds the slot it is kept open in and the
+// two handles the runtime hands out. [OpenNode] opens only the node's own file;
+// the replicated one is opened on the handle it returns ([DB.OpenReplicated]):
 //
-// # Why it is opened on the node rather than with it
-//
-// [OpenNode] opens the node's own file and nothing else, and the replicated
-// file is opened on the handle it returns ([DB.OpenReplicated]), for three
-// reasons that each rule out opening both together:
-//
-//   - A NODE WITHOUT `data` HOLDS NONE. Its own file is scratch and it runs no
-//     applier, so it never opens this one, and a path that reaches for it is
-//     told [ErrNoEstate] rather than handed an empty database that reads as a
-//     company with nothing in it.
-//   - AN ADOPTION REPLACES THE FILE WHILE THE NODE RUNS: it closes it, renames
-//     a peer's snapshot over it and opens it again ([DB.CloseReplicated], then
-//     [DB.OpenReplicated]). The node's own file stays open throughout, so the
-//     two cannot share one lifetime.
-//   - ITS POOL IS SIZED BY WHAT RUNS ON IT: one pinned writer per log the
-//     engine applies there, which only the engine knows — internal/statelog
-//     imports this package, so the count is passed in rather than learned.
-//
-// What does not change is everything the package doc says about a FILE: it
-// is exclusively owned, migrated on open, written through the one FIFO line
-// its lock carries, and no transaction spans it and the node's own.
+//   - A node without `data` holds none: it is told [ErrNoEstate] rather than
+//     handed an empty database that reads as a company with nothing in it.
+//   - An adoption replaces the file while the node runs ([DB.CloseReplicated],
+//     rename, [DB.OpenReplicated]), so the two files cannot share a lifetime.
+//   - Its pool is sized by the writers the engine pins there, which only the
+//     engine knows: internal/statelog imports this package, so it is passed in.
 
 // replicatedReadFloor is the fewest ordinary readers the replicated estate's
 // pool holds beside the identity reserve and the writers its apply loops pin.
@@ -200,18 +185,15 @@ func (d *DB) replicatedOptions(logs int) Options {
 
 // ReplicatedDB answers the OPEN replicated estate, or [ErrNoEstate].
 //
-// NAMED FOR WHAT IT ANSWERS, beside [DB.Replicated] — which answers the
-// long-lived handle rather than the file — for the reason every gate that
-// reads this tree gives for itself: they match on names, and one name for both
-// would leave a gate unable to tell a holder that keeps the open file from one
-// that resolves it per call.
+// Named for what it answers, beside [DB.Replicated], which answers the
+// long-lived handle: gates match on names, and one name for both could not tell
+// a holder that keeps the open file from one that resolves it per call.
 //
-// NOT OPEN IS A STATE, NOT A BUG, as [ErrNoEstate] says: a node without
-// `data`, an adoption holding the file closed between its rename and its
-// reopen, and a node after [DB.Close] all answer it, and a goroutine already
-// in flight when any of those happened reaches here legitimately. Nothing
-// long-lived keeps the handle this returns — see [ReplicatedHandle] for what
-// it keeps instead.
+// NOT OPEN IS A STATE, NOT A BUG, as [ErrNoEstate] says: a node without `data`,
+// an adoption between its rename and its reopen, and a node after [DB.Close]
+// all answer it, and a goroutine in flight across any of them reaches it
+// legitimately. Nothing long-lived keeps the handle this returns; see
+// [ReplicatedHandle].
 func (d *DB) ReplicatedDB() (*DB, error) {
 	// WITHOUT THE LOCK, which is safe here as it is not for a change: a
 	// lookup that races a Close answers either the handle — which the
@@ -266,22 +248,15 @@ func (d *DB) forget(r *DB) {
 // ReplicatedHandle is the replicated estate AS A LONG-LIVED HOLDER KEEPS IT:
 // the node, resolved to the open file on every call and never captured.
 //
-// # Why it resolves every time
+// The file is replaced while the node runs (an adoption closes it, renames a
+// peer's artefact over it and reopens it), so a *DB captured at boot would keep
+// answering from a file no longer at that name. While no file is open every
+// call answers [ErrNoEstate].
 //
-// The file is replaced while the node runs: an adoption closes it, renames a
-// peer's artefact over it and opens it again, so the *DB is a different one
-// afterwards, and a holder that took the old one at boot would go on answering
-// from a file no longer at that name. Resolving on every call is what makes
-// the window honest instead — while there is no file open, every call answers
-// [ErrNoEstate].
-//
-// # Why a type of its own
-//
-// It is what the runtime HANDS the code that reads and writes the replicated
-// estate — the state log's framework and the domains' appliers and readers —
-// so that code never holds the node's handle for the purpose, and cannot
-// confuse the two: the node's handle has Read and Tx too, over a file with
-// none of the estate's tables in it.
+// It is its own type so the code that reads and writes the estate (the state
+// log's framework, the appliers and readers) never holds the node's handle for
+// the purpose: that one has Read and Tx too, over a file with none of the
+// estate's tables.
 type ReplicatedHandle struct{ node *DB }
 
 // Replicated is the handle a holder keeps on this node's replicated estate.

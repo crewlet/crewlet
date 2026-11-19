@@ -962,6 +962,32 @@ describe("the list", () => {
     }
   });
 
+  // THE ROW `#/inbox` OPENS BESIDE THE LIST TAKES ITS OWN ADDRESS, replacing the entry rather
+  // than pushing one, so it has a link and Back leaves the inbox in one step. Mutation: drop the
+  // replace, or push it, and this goes red.
+  test("the row the inbox opens by itself takes its own address in place of #/inbox", async () => {
+    const pushed = vi.spyOn(history, "pushState");
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        inbox: inboxes({ unread: [notice("r-1")] }),
+      },
+    });
+    await settle();
+    expect(location.hash).toBe("#/inbox/ask/c-12");
+    expect(pushed).not.toHaveBeenCalled();
+    const list = screen.getByRole("navigation", { name: "Inbox" });
+    expect(list.querySelector("[aria-current='true']")?.textContent).toContain(
+      "Hold the 2.4 release",
+    );
+  });
+
+  test("an empty inbox stays at #/inbox", async () => {
+    mount();
+    await settle();
+    expect(location.hash).toBe("#/inbox");
+  });
+
   test("j and k step through the rows, opening each in the pane", async () => {
     location.hash = "#/inbox/notice/r-1";
     mount({
@@ -4462,13 +4488,16 @@ describe("every item has its own address", () => {
     });
     await settle();
     await openUpdates();
+    // THE ROW THE GROUP OPENS is addressed in place of `#/inbox`, so pressing it is no move.
+    expect(location.hash).toBe("#/inbox/notice/r-1");
     const depth = history.length;
     expect(press("#/inbox/notice/r-1")).toBe(true);
     await settle();
+    expect(history.length).toBe(depth);
     expect(press("#/inbox/notice/r-3")).toBe(true);
     await settle();
     expect(location.hash).toBe("#/inbox/notice/r-3");
-    expect(history.length).toBe(depth + 2);
+    expect(history.length).toBe(depth + 1);
     act(() => history.back());
     await waitFor(() => expect(location.hash).toBe("#/inbox/notice/r-1"));
     await settle();
@@ -4484,11 +4513,11 @@ describe("every item has its own address", () => {
     fireEvent.keyDown(window, { key: "k" });
     await settle();
     expect(location.hash).toBe("#/inbox/notice/r-2");
-    expect(history.length).toBe(depth + 3);
+    expect(history.length).toBe(depth + 2);
     // THE OPEN ROW AGAIN is no move.
     expect(press("#/inbox/notice/r-2")).toBe(true);
     await settle();
-    expect(history.length).toBe(depth + 3);
+    expect(history.length).toBe(depth + 2);
   });
 
   test("a press with a modifier or the middle button is left to the browser, for a new tab", async () => {

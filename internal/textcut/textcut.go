@@ -30,7 +30,7 @@
 // What is left here is the cases where no reader takes the text for the whole
 // of something: a diagnostic or a process's tail past a transport ceiling, a
 // marked preview of what the reader can open (a search snippet, an inbox
-// excerpt), an identifier with a length limit — which keeps a digest of the
+// excerpt, a session's transcript entry), an identifier with a length limit — which keeps a digest of the
 // whole beside the cut, so two that shorten alike still differ — and
 // EMBEDDING INPUT, which no reader sees at all: its bound is the embedding
 // model's, its rule is internal/providers/embeddings (Opening for a caller
@@ -38,6 +38,11 @@
 // and it is unmarked because a marker there would be a token in the vector
 // rather than a note about one. Every cut is one of those, and a cut that is
 // none of them is the bug this package was written to remove.
+//
+// Budgets are BYTES, never runes: every bound here is a size something else
+// enforces. Text a model or a person acts on is never cut here; where a bound
+// is genuine it is rewritten to fit, refused naming the limit, or described by
+// its size.
 package textcut
 
 import "unicode/utf8"
@@ -49,17 +54,11 @@ const marker = "…"
 // Ellipsis is the common case: at most max bytes of CONTENT, cut on a rune
 // boundary, with a marker where it was cut.
 //
-// Where the budget is a ceiling something enforces rather than a guide, the
-// marker has to fit inside it — that is [Within].
-//
-// The marker matters wherever a reader could mistake the remainder for the
-// whole — a severed tool argument read as a different argument, an error whose
-// second half named the cause. It is NOT counted against max: the cap bounds
-// the content, and a caller that needs the total bounded should pass a smaller
-// max.
-//
-// ONE SPELLING of the marker, "…" rather than "...", because it is one rune
-// where the other is three and every caller here renders into a budget.
+// Where the budget is a ceiling something enforces, use [Within]. The marker
+// keeps a reader from mistaking the remainder for the whole (a severed tool
+// argument) and is NOT counted against max: a caller needing the total bounded
+// passes a smaller max. ONE SPELLING, "…" rather than "...": one rune where the
+// other is three, and every caller renders into a budget.
 func Ellipsis(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -69,26 +68,16 @@ func Ellipsis(s string, max int) string {
 
 // Within is at most max bytes INCLUDING the marker, cut on a rune boundary.
 //
-// [Ellipsis] deliberately does not count its marker against max — "the cap
-// bounds the content" — and that is right wherever the budget is advisory. It
-// is wrong wherever the budget is a CEILING somebody enforces: a tracker
+// [Ellipsis] does not count its marker against max, right where the budget is
+// advisory and wrong where it is a CEILING somebody enforces: a tracker
 // notification's excerpt is refused at MaxExcerpt by
 // [github.com/crewlet/crewlet/internal/worklet.Notify.Validate], so a marker
-// that pushed a cut excerpt three bytes over would turn every long comment
-// into a REFUSED WRITE rather than a marked one.
+// pushing a cut excerpt three bytes over would turn every long comment into a
+// REFUSED WRITE rather than a marked one.
 //
-// This existed by hand at four call sites before it had a name, each reducing
-// the budget and appending "…" itself — which is the shape this package was
-// written to end. Two of those four did not reduce the budget at all, so they
-// were Ellipsis with extra steps and could exceed their own limit.
-//
-// A max too small to hold the marker yields the marker ALONE rather than the
-// empty string, and that falls out of [Bytes] rather than being guarded for:
-// a non-positive budget there is already the empty string, so the marker is
-// what is left. It is the right answer either way — something was cut, and a
-// reader shown nothing cannot tell that from a value that was empty to begin
-// with — but it is worth saying, because it is the one case where the result
-// is longer than max.
+// A max too small to hold the marker yields the marker ALONE, not the empty
+// string (it falls out of [Bytes]): a reader shown nothing cannot tell a cut
+// from an empty value. It is the one case where the result exceeds max.
 func Within(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -133,23 +122,15 @@ func Bytes(s string, max int) string {
 // Tail is the LAST at most max bytes of s, starting on a rune boundary, with a
 // marker in front where it was cut.
 //
-// The mirror of [Ellipsis], for the one kind of text whose useful end is the
-// end: a process's own account of itself watched live — the last few KiB of a
-// running executor's activity log or its stderr, where what a watcher asks
-// is what it is doing now — and the end of one line too long to keep whole,
-// which is where a process says what went wrong. It is never how a whole log
-// is bounded for a record: that keeps whole lines from both ends and counts
-// the middle, because a log's opening is its plan and a cut to its end loses
-// it. The same two rules hold: the marker is not counted against max, because
-// the cap bounds the content, and the cut never lands inside a rune, because a
-// byte slice taken from the end begins mid-rune whenever the text is not ASCII
-// and a JSON encoder turns that partial rune into U+FFFD.
-//
-// It replaced a private rune-counting `tail` in the sandbox's harness
-// runner — a fifth copy of this package's rule, and the only one whose budget
-// was RUNES: the bound it enforced is an event's size, which is bytes, so a
-// "100 000 character" cap was anything from 100 KB to 400 KB on the wire
-// depending on the script the run's output was written in.
+// The mirror of [Ellipsis], for text whose useful end is the end: a process's
+// own account of itself watched live (the last KiB of a running executor's
+// activity log or stderr) and the end of a line too long to keep whole, where a
+// process says what went wrong. It is never how a whole log is bounded for a
+// record: that keeps whole lines from both ends and counts the middle, because
+// a log's opening is its plan. The same two rules hold: the marker is not
+// counted against max, and the cut never lands inside a rune (a slice taken
+// from the end begins mid-rune on non-ASCII text, which a JSON encoder turns
+// into U+FFFD). The budget is BYTES, not runes: the bound is an event's size.
 func Tail(s string, max int) string {
 	if len(s) <= max {
 		return s

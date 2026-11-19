@@ -39,22 +39,16 @@ type Revision struct {
 	CreatedAt time.Time
 
 	// CreatedBy is the revision's AUTHOR, CreatedByKind what sort of
-	// author, and OperatorID the credential it was written through — empty
-	// for a write no credential made. Three rather than the one this used
-	// to be, which held the credential and so named, for a revision written
-	// through a person's machine token, a token whose row the identity
-	// sweep collects a week after it lapses. See
-	// node migration `0047_identity_and_access.sql`.
+	// author, and OperatorID the credential it was written through, empty
+	// for a write no credential made. CreatedBy is not the credential: a
+	// token's row is swept a week after it lapses (migration
+	// `0047_identity_and_access.sql`).
 	//
-	// THE KIND IS [iam.ActorKind], the vocabulary every other trail in the
-	// engine records an author in, rather than a second one of this
-	// table's: a label alone cannot say whether a person or the engine
-	// wrote the revision — the name spaces overlap, and nothing stops a
-	// token being called after a node — so the writer states it at the
-	// write, where it is a fact. NEVER EMPTY: one of this build's kinds on
-	// every revision it writes, and on a copy of a fleet revision whatever
-	// kind the fleet's pointer carries — which may be one a newer build
-	// added, and arrives as itself ([Configs.SawFleet]).
+	// THE KIND IS [iam.ActorKind], the vocabulary every author trail uses: a
+	// label cannot say whether a person or the engine wrote it, since the
+	// name spaces overlap, so the writer states it at the write. NEVER
+	// EMPTY: on a copy of a fleet revision it is whatever kind the pointer
+	// carries, possibly one a newer build added ([Configs.SawFleet]).
 	CreatedBy     string
 	CreatedByKind iam.ActorKind
 	OperatorID    string
@@ -147,37 +141,16 @@ func (o Offer) Over(revisionID string) bool {
 
 // Configs is this node's config history and its three facts about it.
 //
-// # The company is the pointer; these are this node's own facts
+// The company is the fleet's activation pointer; this table holds what only
+// this node knows (migration 0052 split one `is_active` flag into these):
+//   - the BOOT row ([Configs.Boot]): what the node starts on. Online only the
+//     reconciler moves it, to a just-applied revision ([Configs.Serve]);
+//     offline, [Configs.Offer].
+//   - the FLEET's row ([Configs.Fleets]): the newest pointer revision opened
+//     ([Configs.SawFleet]), refused or not; what [Configs.Restorable] returns.
+//   - an OFFER: a boot row an offline command chose, the fleet not yet taken.
 //
-// WHICH revision is the company is the fleet's activation pointer, in
-// coordination, and nothing here answers it while the pointer can be read. What
-// this table holds is what only this node can know:
-//
-//   - the BOOT row ([Configs.Boot]): what this node starts on. Online it is
-//     moved by the reconciler alone, and only to a revision the engine has
-//     just applied ([Configs.Serve]), so a node never boots on a revision it
-//     refused. Offline, a command marks it ([Configs.Offer],
-//     [Configs.OfferStored]), because that is what an offline command is for.
-//   - the FLEET's row ([Configs.Fleets]): the newest pointer revision this
-//     node's reconciler opened ([Configs.SawFleet]), refused or not. It is
-//     what the node knows the company to be when the pointer is gone
-//     ([Configs.Restorable]) — a node that refused R must restore R, not the P
-//     it runs — and what an offline command builds on.
-//   - an OFFER: a boot row an offline command chose and the fleet has not
-//     taken, carrying the revision it was built on.
-//
-// These used to be one flag, `is_active`, and each reader took it for the fact
-// it needed: a peer marked the fleet's revision active as it fetched it,
-// before validating it, and booted on that refused revision at its next start;
-// a write marked itself active as the pointer moved, and a reconciler that had
-// read the pointer a moment earlier walked it back; an offline command marked
-// a revision active "now", and the next boot published it over a fleet that
-// had moved on. See node migration 0052.
-//
-// Single-tenant, like everything here: at most one boot row and one fleet's
-// row, each enforced by a partial unique index, and ZERO rows is a real state
-// rather than a failure — the engine boots, the API serves /config, and the
-// first import populates the company.
+// At most one boot and one fleet row; ZERO rows is a real state.
 type Configs struct{ db *DB }
 
 // Configs returns the company-config store backed by this database.
@@ -240,21 +213,14 @@ const raiseSQL = `UPDATE company_config SET activated_at = ?
 // Insert writes a new revision into the history, marking nothing, and returns
 // its id.
 //
-// # It stores the revision; it does NOT move the fleet's pointer
-//
-// The pointer is coordination state — its epoch is a fencing token every node
-// has to agree on — and this database is the node's own. So publishing is two
-// steps in two stores, and the ORDER is the safe one: the revision is stored
-// FIRST, then the caller points the fleet at it with coord.Plane.Activate. A
-// crash between them leaves a revision nothing points at, which is inert and
-// re-activatable; the other order would point a fleet at a revision nobody
-// can read.
-//
-// A revision the fleet takes becomes what this node BOOTS on only when its
-// reconciler has applied it ([Configs.Serve]): until then nothing has shown
-// that this node can run it. One that lost the activation's compare-and-set
-// stays here, readable and revertable, and nothing on this node treats it as
-// the company.
+// It does NOT move the fleet's pointer: that is coordination state (its epoch
+// is a fencing token) and this database is the node's own. Publishing is two
+// steps in two stores, in the safe ORDER: store first, then the caller points
+// the fleet at it with coord.Plane.Activate. A crash between leaves an inert,
+// re-activatable revision; the other order points a fleet at one nobody can
+// read. The node BOOTS on it only once its reconciler applied it
+// ([Configs.Serve]); a loser of the activation's compare-and-set stays here,
+// revertable, and is never treated as the company.
 func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
 	if err := written(r); err != nil {
 		return "", err
@@ -315,35 +281,15 @@ func (c *Configs) InsertOn(ctx context.Context, base, r Revision) (string, error
 // SawFleet records r as the fleet's revision as this node last saw it, keeping
 // a copy of it as history where this node holds none.
 //
-// The reconciler's verb, and only the reconciler's: it is called for every
-// pointer revision the tick has opened under this node's keyring, BEFORE it is
-// validated or built, because what it records is what the fleet is on — which
-// is true whether or not this build can run it. A node that refused R still
-// knows the company is R, and that is the revision it restores when the
-// pointer is gone ([Configs.Restorable]); the P it runs is what it boots on,
-// which this does not touch.
-//
-// AUTHENTICATED BY THE CALLER: r is a peer's body, and only one that opened
-// under the fleet's keyring may become this node's history.
-//
-// The row's instant rises to r.ActivatedAt and never falls, on the boot row as
-// on any other: a re-activation of the revision this node runs is the fleet's
-// whether or not this node applies it. What the boot row applied is
-// [Revision.ServedAt], which this does not touch.
-//
-// # The author is the ORIGIN's, never this node's
-//
-// The caller passes the author, kind, credential, source and creation instant
-// the fleet's pointer carries, so a revision reads the same on every node
-// rather than "peer" everywhere but the one it was written on. The kind is NOT
-// held to [iam.ActorKind.Valid] here, as a local write's is: an unknown kind
-// off the wire is a value, and refusing it would stop this node recording the
-// revision its fleet is on. But it must be SOME kind, as must the source and
-// both instants: the pointer always carries them, and a row missing one is a
-// guess on the audit screen. The credential alone may be empty — a revision no
-// credential wrote, the engine's own, names none. A row that is already here
-// keeps its body and its author: the row this node wrote, or kept first, is the
-// authority on that write.
+// The reconciler's verb alone, called BEFORE validation or build: it records
+// what the fleet is on whether or not this build can run it. AUTHENTICATED BY
+// THE CALLER: r is a peer's body, history only if opened under the fleet's
+// keyring. The instant only rises to r.ActivatedAt; ServedAt is untouched.
+// The author is the ORIGIN's, so a revision reads the same on every node. The
+// kind is NOT held to [iam.ActorKind.Valid] (refusing an unknown one would
+// stop recording the fleet's revision) but must be SOME kind, as must the
+// source and both instants; only the credential may be empty. A row already
+// here keeps its body and author.
 func (c *Configs) SawFleet(ctx context.Context, r Revision) error {
 	if err := fleetCopy(r, "recording the fleet's revision"); err != nil {
 		return err
@@ -378,16 +324,10 @@ func (c *Configs) SawFleet(ctx context.Context, r Revision) error {
 // node holds none, and raising the row's [Revision.ActivatedAt] to that instant
 // as [Configs.SawFleet] would.
 //
-// The reconciler's verb, called only once the engine has APPLIED r: that is the
-// whole of the guarantee that a node boots on something it can run. A revision
-// this node refused never gets here, so its next start boots on the one it
-// served instead, rather than being refused before the engine runs.
-//
-// It replaces an offline offer the fleet never took: the node runs the fleet's
-// revision now, and what an offline command chose stays as history. The caller
-// says so.
-//
-// The copy's author is the origin's, as [Configs.SawFleet] keeps it.
+// The reconciler's verb, called only once the engine has APPLIED r: that is
+// the guarantee a node boots on something it can run, so a refused revision
+// never gets here. It replaces an offline offer the fleet never took (kept as
+// history). The copy's author is the origin's, as [Configs.SawFleet] keeps it.
 func (c *Configs) Serve(ctx context.Context, r Revision) error {
 	if err := fleetCopy(r, "serving a revision"); err != nil {
 		return err
@@ -452,29 +392,17 @@ func (c *Configs) NoteActivation(ctx context.Context, revisionID string, at time
 }
 
 // Offer writes a new revision an offline command made and makes it what this
-// node boots on, as a choice the fleet has not taken yet, built on over. It
-// returns the revision's id.
+// node boots on, built on over, and returns its id.
 //
-// # The offline paths only
+// Offline paths only: the pointer cannot move, so the node publishes this at
+// its next start, as a compare-and-set against over (publishing over a
+// revision the fleet moved past rolled it back). An empty over.Base is a
+// change built on no company; over.Unconfirmed is the offer it replaced that
+// a start never confirmed. over.PlannedAt must be zero: only a boot plans. NO
+// ACTIVATION INSTANT: it comes from the first apply after publish.
 //
-// A command run while the engine is stopped cannot move the pointer, so what
-// it writes is a choice this node starts on and publishes at its next start.
-// It carries what it was built on — what this node knew the company to be when
-// the command ran ([Configs.Restorable]) — because the publish is a
-// compare-and-set against it: a change made on a node that was behind its
-// fleet is built on a revision the fleet has moved past, and publishing it
-// anyway rolled the fleet back to the stale document underneath it. An empty
-// over.Base is a change built on no company, and over.Unconfirmed the offer it
-// replaced, where a start had sent that one and never confirmed it
-// ([Offer.Unconfirmed]). over.PlannedAt must be zero: only a boot plans.
-//
-// NO ACTIVATION INSTANT: nothing has activated it. The boot passes the engine
-// none for an offer, and the instant comes from the first apply of the
-// activation that publishes it.
-//
-// ONE transaction covers clearing the old boot row and the insert. The partial
-// unique index refuses two boot rows, so a clear that landed without its
-// insert would leave this node with nothing to start on.
+// ONE transaction clears the old boot row and inserts: a clear without its
+// insert leaves nothing to start on.
 func (c *Configs) Offer(ctx context.Context, over Offer, r Revision) (string, error) {
 	if err := written(r); err != nil {
 		return "", err
@@ -546,19 +474,16 @@ func (c *Configs) OfferStored(ctx context.Context, revisionID string, over Offer
 }
 
 // PlanOffer records, on the offer the boot publish is about to publish, the
-// instant it will ask the pointer for and the revision it publishes over — the
-// one the pointer named, of the two [Offer.Over] accepts. See
+// instant it will ask the pointer for and the revision it publishes over (the
+// one the pointer named, of the two [Offer.Over] accepts). See
 // [Offer.PlannedAt].
 //
-// THE BASE IS SETTLED HERE: the pointer named over, so the fleet runs it, and
-// an unconfirmed offer the change was also safe over is no longer a candidate
-// — it landed and is over, or it never did and the fleet is on the base. A
-// change an offline command builds on this offer next has one base, not two.
+// THE BASE IS SETTLED HERE: the fleet runs over, so an unconfirmed offer is no
+// longer a candidate and the next offline change has one base, not two.
 //
-// [ErrNotOffered] when the revision is not this node's unpublished offer, with
-// nothing written: a plan recorded on any other row would say a publish of a
-// revision nobody offered was under way. A boot that holds the store from its
-// read, as `crewlet run` does, meets this only as a defect.
+// [ErrNotOffered], with nothing written, when the revision is not this node's
+// unpublished offer: a plan on any other row would claim a publish nobody
+// offered. A boot holding the store from its read meets this only as a defect.
 func (c *Configs) PlanOffer(ctx context.Context, revisionID string, at time.Time, over string) error {
 	return c.onOffer(ctx, revisionID, "plan",
 		`UPDATE company_config SET offered_at = ?, offered_over = ?, offered_unconfirmed = NULL
@@ -618,27 +543,18 @@ func (c *Configs) Fleets(ctx context.Context) (Revision, bool, error) {
 	return c.one(ctx, fleetsSQL)
 }
 
-// Restorable is the company as this node knows it, for when the pointer cannot
-// say: what the API answers with no pointer, what the boot republishes where
-// the fleet's pointer is gone, and what an offline command builds on.
+// Restorable is the company as this node knows it when the pointer cannot say
+// (the API's answer, the boot's republish, an offline command's base):
+//   - an OFFER built on the fleet's revision last seen ([Offer.Over]), or
+//     while none had been seen; one built on a revision the fleet moved past
+//     is not the company.
+//   - else the FLEET's revision last seen, even one this build refused: a
+//     node running P because it could not run R must not offer P, which
+//     would roll back every node that runs R.
+//   - else the boot row.
 //
-//   - An OFFER built on the fleet's revision this node last saw — its base,
-//     or the unconfirmed offer it replaced ([Offer.Over]) — or built while it
-//     had seen none: that is a change to the company somebody made here, on
-//     what they knew it to be.
-//   - Otherwise the FLEET's revision as this node last saw it — even one this
-//     build refused. A node that runs P because it could not run R must not
-//     offer P as the company: every node that could run R does, and P would
-//     roll them back.
-//   - Otherwise the boot row: a node that never saw a pointer runs what it was
-//     given.
-//
-// An offer whose base is not the fleet's revision is a change made on
-// something the fleet has moved past, and it is not the company.
-//
-// ONE SNAPSHOT for both rows, so a reconciler recording a new fleet revision
-// between the two reads cannot pair an offer with a fleet row it was never
-// compared with.
+// ONE SNAPSHOT for both rows, so a concurrent SawFleet cannot pair an offer
+// with a fleet row it was never compared with.
 func (c *Configs) Restorable(ctx context.Context) (Revision, bool, error) {
 	var boot, fleets Revision
 	var booted, seen bool
@@ -772,33 +688,14 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 // the fleet's revision as it last saw it, the chain of ancestors behind each,
 // and every revision activated since the cutoff, and reports how many went.
 //
-// # Why this table needs a sweep at all
+// The boot and fleet rows and their ancestors are kept by id, not date: a lost
+// boot row leaves nothing to start on, the fleet's row (often NOT the boot
+// row) is what the node restores, and deleting an ancestor breaks a revert.
+// A row is dated by the later of its creation and [Revision.ActivatedAt], so a
+// revision the fleet re-activated yesterday survives.
 //
-// Every node keeps its OWN copy of every revision it ever met, in an
-// append-only table, and nothing deleted from it — so a company that edits
-// its configuration daily accumulates a row per edit per node for the life of
-// the deployment, and each row is a copy of the whole document — every seat's
-// address among it, which this is what eventually removes.
-//
-// # What is kept whatever its age
-//
-// The boot row, because a node whose boot row went has nothing to start on;
-// the fleet's row, because it is what the node restores when the pointer is
-// gone, and it is often NOT the boot row — a node that refused the fleet's
-// revision runs an older one. And the chain behind each: deleting an ancestor
-// breaks a revert and a diff, and a company that has not changed its
-// configuration for a year has a revision OLDER than any horizon worth
-// setting. So both are excluded by id rather than by date.
-//
-// A row is dated by the later of its creation and the latest activation this
-// node knows of ([Revision.ActivatedAt]), so an old revision the fleet
-// re-activated yesterday is kept even before this node's reconciler has
-// recorded it as the fleet's — and even when it is the revision this node runs
-// and refused that re-activation.
-//
-// THE CHAINS ARE READ INSIDE THE TRANSACTION THAT DELETES, so a reconciler
-// moving either row between the read and the delete cannot have its new row's
-// ancestors swept on the strength of the old one's chain.
+// THE CHAINS ARE READ INSIDE THE DELETING TRANSACTION, so a moved row cannot
+// have its new ancestors swept on the old row's chain.
 func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 	var n int64
 	err := c.db.Tx(ctx, func(tx *sql.Tx) (err error) {
@@ -823,20 +720,15 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 		if len(keep) > 0 {
 			doomed += ` AND revision_id NOT IN (` + string(placeholders) + `)`
 		}
-		// THE SURVIVORS' PARENT POINTERS FIRST, and this is not tidiness:
-		// parent_revision_id is a real foreign key and this database runs
-		// with `PRAGMA foreign_keys = ON`, so deleting a row something
-		// still points at FAILS. Off-chain revisions point at each other
-		// — a reverted branch is exactly that shape — so a bare delete
-		// aborts the whole tick on the first row whose child has not gone
-		// yet, and the table never shrinks while the log says the sweep
-		// ran.
+		// THE SURVIVORS' PARENT POINTERS FIRST: parent_revision_id is a
+		// real foreign key (`foreign_keys = ON`), so deleting a row
+		// something still points at FAILS, and off-chain revisions (a
+		// reverted branch) point at each other. A bare delete would abort
+		// the tick on the first such row and the table would never shrink.
 		//
-		// NULLING IT IS THE TRUTHFUL REPAIR rather than a way round the
-		// constraint: the ancestor is gone, so a pointer at it is a lie,
-		// and the column is already nullable because the first revision
-		// ever written has no parent. The chain walk stops at a break for
-		// this reason among others.
+		// NULLING IS THE TRUTHFUL REPAIR: the ancestor is gone, and the
+		// column is already nullable for the first revision. The chain walk
+		// stops at a break for this reason among others.
 		if _, err = tx.ExecContext(ctx,
 			`UPDATE company_config SET parent_revision_id = NULL
 			 WHERE parent_revision_id IN (
@@ -861,16 +753,12 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 // keptIn is every revision the sweep may not delete by id: the boot row, the
 // fleet's row and every ancestor each reaches through parent_revision_id.
 //
-// STOPS AT THE FIRST BREAK rather than reporting one. A chain is broken from
-// the start on every revision this node holds as a copy of the fleet's — the
-// pointer carries no parent, because it would name a revision the copying node
-// may never have held — and a sweep may already have cut an older one. That is
-// an ordinary state rather than damage, so the sweep protects what it can
-// reach and lets the horizon cover the rest.
-//
-// A VISITED SET, because a cycle in parent pointers would otherwise be an
-// infinite loop inside a maintenance tick. Nothing writes one, which is
-// exactly why nothing would notice it.
+// STOPS AT THE FIRST BREAK rather than reporting one: a copy of a fleet
+// revision has no parent (the pointer carries none, it might name a revision
+// this node never held) and a sweep may have cut an older one. That is
+// ordinary, so the sweep protects what it reaches and the horizon covers the
+// rest. A VISITED SET, because a parent cycle would loop a maintenance tick
+// forever and nothing writes one, so nothing would notice.
 func keptIn(ctx context.Context, tx *sql.Tx) ([]string, error) {
 	var keep []string
 	seen := map[string]bool{}

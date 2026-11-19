@@ -11,18 +11,11 @@ import (
 // THE IN-FLIGHT ROWS A NODE WROTE BEFORE THE KEYED TABLE ARE CARRIED ACROSS, and
 // an entry that names no row is not.
 //
-// Node migration 0048 moves each batch's identities out of the JSON list 0038
-// kept on the batch's row and into `custody_unsettled_rows`, one row each. A
-// node that upgrades with batches in flight has to come out of it with exactly
-// those rows still out of every count — and an entry missing either half of
-// its identity, which no writer ever made, names no row: it is dropped rather
-// than carried, so it can neither take a row out of a count nor refuse the
-// migration over a key the table cannot hold. Each half of the guard is held
-// here by an entry sharing the OTHER half with a row this node keeps.
-//
-// The case puts the estate back as 0047 left it — the batch table in 0038's
-// shape with its list, the keyed tables absent, 0048 unrecorded — and runs the
-// migrator, which is the only thing that ever applies the file.
+// Migration 0048 moves batch identities from 0038's JSON list into
+// `custody_unsettled_rows`, keeping exactly those rows out of counts. An entry
+// missing either half of its identity (no writer made one) is dropped, so it
+// neither takes a row out of a count nor refuses the migration. Each guard half is held by an entry sharing the OTHER half with a
+// kept row. The case restores the estate as 0047 left it and runs the migrator.
 //
 // Mutation: drop either half of the back-fill's `IS NOT NULL` guard, and the
 // migration refuses the entry; carry nothing across, and the in-flight row is
