@@ -2229,7 +2229,7 @@ hook receipts), 2^13 of the records and call ids it files; and for the take's
 scrub, 256 KiB of each line, JSON value or stretch of text it redacts as one,
 four times the longest line of 99 in 100 real threads: at its worst about 5 MiB
 for a collection's read and 13 MiB for a take's, whose redaction holds each
-stage's window, so a node scrubs at most 27 takes at once
+stage's window, so a node scrubs at most 26 takes at once
 (`SessionTakesAtOnce`), and a take past them waits within its own wait and is
 refused if it runs out. A read past its
 base waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a

@@ -261,8 +261,8 @@
 // scrub writes it, where no string decodes past its length, read as above; 9
 // to 10 MiB without the meter's line; 0.52 to 0.58 s, its heap peaking at 25
 // to 33 MiB at the default GOGC, 50 loaded), so every take holds one of
-// [SessionTakesAtOnce] (27), a pool of its own sized so the takes at their
-// base hold 324 MiB at most, within those 341.
+// [SessionTakesAtOnce] (26), a pool of its own sized so the takes at their
+// base hold 338 MiB at most, within those 341.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
