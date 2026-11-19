@@ -206,9 +206,21 @@ func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes
 // as executorkeep.UnkeptReasonMaxBytes). Redacted first, because a token
 // straddling the cut would survive as an unrecognisable fragment; cut after
 // every redaction, because a marker can be longer than what it replaces and a
-// cut text redacted again can read a partial marker as a value. A reader that
-// redacts again re-applies this whole rule, as the publish does.
-func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
+// cut text redacted again can read a partial marker as a value. The cut reads
+// one byte past its bound, so only that much of the redaction is kept
+// ([redact.Prefix]). A reader that redacts again re-applies this whole rule.
+func boundReason(why string, bound int) string {
+	opening, _ := redact.Prefix(why, bound+1)
+	return textcut.Within(opening, bound)
+}
+
+// clippedRedacted is text redacted whole, then clipped as a record's
+// diagnostic ([events.ClipDiagnostic]), keeping only as much of the redaction
+// as the clip reads ([redact.Prefix]).
+func clippedRedacted(text string) string {
+	opening, _ := redact.Prefix(text, events.MaxDiagnosticBytes+1)
+	return events.ClipDiagnostic(opening)
+}
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: the engine
 // compactor's compact.MaxChunks pieces of compact.ChunkBytes, 2 MiB; past it
@@ -346,7 +358,7 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
 	// AND WHY THE PUSH RECORD WAS UNREAD, built from Gitlet's answer: redacted
 	// and held to a record's diagnostic bound.
-	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
+	result.PushedUnread = clippedRedacted(result.PushedUnread)
 	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
 	// that one is ([fitOpened]).
 	result.Opened = fitOpened(result.Opened)
@@ -518,13 +530,16 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 	}
 	rewritten, cost, err := c.condense.Condense(ctx, run, part, text, budget)
 	*spent = spent.Plus(cost)
+	var detail string
 	if err == nil {
-		if rewritten = redact.Secrets(rewritten); len(rewritten) <= budget {
-			return rewritten, true
+		// The whole redaction's size decides; only an opening one byte past
+		// budget is kept, all a refused rewrite needs ([redact.Prefix]).
+		redacted, whole := redact.Prefix(rewritten, budget+1)
+		if whole <= budget {
+			return redacted, true
 		}
-	}
-	detail := "the rewrite, redacted, came back past the bound"
-	if err != nil {
+		detail = fmt.Sprintf("the rewrite, redacted, came back at %d bytes, past the %d-byte bound", whole, budget)
+	} else {
 		detail = err.Error()
 	}
 	log.WarnContext(ctx, "sandbox_run_text_not_condensed", "turn_id", run.TurnID,

@@ -66,3 +66,24 @@ func TestAClippedDiagnosticStaysValidUTF8(t *testing.T) {
 		}
 	}
 }
+
+// A CLIPPED DIAGNOSTIC READS AT MOST ONE BYTE PAST ITS BOUND: it answers of a
+// text what it answers of the text's first MaxDiagnosticBytes+1 bytes, a
+// multibyte rune at the cut included, so a caller may clip an opening that
+// long (redact.Prefix's) in place of the whole.
+//
+// Mutation: clip only a text longer than MaxDiagnosticBytes+1, or let the cut
+// read further, and an opening is clipped otherwise than the whole.
+func TestAClippedDiagnosticReadsAtMostOneBytePastItsBound(t *testing.T) {
+	t.Parallel()
+	for lead := range utf8.UTFMax {
+		for _, unit := range []string{"x", "é", "日", "😀"} {
+			s := strings.Repeat("a", lead) + strings.Repeat(unit, events.MaxDiagnosticBytes/len(unit)+2)
+			opening := s[:events.MaxDiagnosticBytes+1]
+			if got, want := events.ClipDiagnostic(opening), events.ClipDiagnostic(s); got != want {
+				t.Errorf("%d bytes then %q: clipping the first %d bytes ends %q, the whole ends %q", lead,
+					unit, len(opening), got[max(0, len(got)-80):], want[max(0, len(want)-80):])
+			}
+		}
+	}
+}

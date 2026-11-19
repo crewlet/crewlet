@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -662,11 +661,9 @@ func (c SessionCapture) SavePoint() (int, bool) {
 
 // stampReason is why a capture came out as it did, as its stamp carries it:
 // redacted, and held to the bound the executor log holds the same words to
-// ([SessionCapture.Bounded]) — an error's text is the engine's and has no
-// bound of its own.
-func stampReason(why string) string {
-	return textcut.Within(redact.Secrets(why), executorkeep.UnkeptReasonMaxBytes)
-}
+// ([SessionCapture.Bounded]) by the rule every reason is ([boundReason]) — an
+// error's text is the engine's and has no bound of its own.
+func stampReason(why string) string { return boundReason(why, executorkeep.UnkeptReasonMaxBytes) }
 
 // newerThan reports whether c's place is after o's.
 func (c SessionCapture) newerThan(o SessionCapture) bool {
