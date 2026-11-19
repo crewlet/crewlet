@@ -602,11 +602,12 @@ type Lease struct {
 	// absent, and each reader states what absent means (placement reads
 	// absent roles as every role).
 	//
-	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: the twin hands
-	// back what was written while the KV store round-trips JSON (an int
-	// reads back as float64, a []string as []any), and both conform. Read
-	// it as placement.rolesFromMeta does: accept either shape, and treat
-	// anything else as absent.
+	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: both stores hand
+	// back what a JSON round trip leaves, not what was written (an int
+	// reads back as float64, a []string as []any), the twin putting every
+	// meta through one at the door (coord/memory's wireCopy). Read it as
+	// placement.rolesFromMeta does: accept either shape, and treat anything
+	// else as absent.
 	Meta map[string]any
 }
 
