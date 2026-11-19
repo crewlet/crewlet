@@ -82,6 +82,7 @@ var documented = []documentedDetector{
 	{ClassRoundCap, sourceRuns, roundCap},
 	{ClassBudgetStopped, sourceStops, budgetStopped},
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
+	{ClassAlarmNoop, sourceLedger, alarmNoop},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -101,6 +102,10 @@ var stallWords = map[Class]said{
 	ClassWorkHeldByPerson: {"Agent work that needs no decision waits behind a person.",
 		"Agents could do this work now, but it waits on an item that waits on a person: their answer " +
 			"to a question on it, or the item they hold. It moves when they do."},
+	ClassAlarmNoop: {"An agent was woken on the engine's alarms for turns that changed nothing.",
+		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
+			"alarm another agent already answers still starts a turn here, and half or more of these " +
+			"changed nothing."},
 	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
 		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
 			"in a repository whose branch requires no check every merge waits on a person."},

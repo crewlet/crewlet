@@ -66,6 +66,9 @@ type Reader interface {
 	// Signature is a cheap read of everything the setup group reads, which
 	// changes when any of it does.
 	Signature(ctx context.Context) (string, error)
+	// Week reads the week [from, to) a report is written for: its numbers,
+	// and the sources it could not read.
+	Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error)
 }
 
 // Observed is one reading of the company.
@@ -109,6 +112,12 @@ type Log interface {
 	RecordRun(ctx context.Context, r Run) error
 	// Expire publishes the day's retention at now, once a day.
 	Expire(ctx context.Context, now time.Time) error
+	// Report is the report of week, nil where none was written.
+	Report(ctx context.Context, week string) (*advisor.Report, error)
+	// Tally counts the findings of [from, to).
+	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
+	// WriteReport writes a week's report, once.
+	WriteReport(ctx context.Context, r advisor.Report) error
 }
 
 // Request is a person's Run now.
@@ -180,6 +189,8 @@ type Duty struct {
 	Zone  func() *time.Location
 
 	signature string
+	// reported is the week whose report this holder saw written.
+	reported string
 }
 
 // Serve runs the duty until ctx ends.
@@ -245,13 +256,55 @@ func (d *Duty) Step(ctx context.Context) error {
 	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
 	if !rules && !model {
-		return nil
+		return d.report(ctx, now)
 	}
 	if err == nil {
 		d.signature = signature
 	}
 	run := d.run(ctx, now, rules, model, trigger, "", d.NewID())
-	return errors.Join(d.Log.RecordRun(ctx, run), d.Log.Expire(ctx, now))
+	return errors.Join(d.Log.RecordRun(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
+}
+
+// report writes the last whole week's report once it is due: on the Monday
+// after it at [advisor.ReportHour], after the run that hour's step made, so the
+// model's pass has run first. A week whose report is written is left alone.
+func (d *Duty) report(ctx context.Context, now time.Time) error {
+	week, from, to, due := advisor.ReportWeek(now, d.Zone())
+	if now.Before(due) || d.reported == week {
+		return nil
+	}
+	written, err := d.Log.Report(ctx, week)
+	if err != nil {
+		return fmt.Errorf("read the report of %s: %w", week, err)
+	}
+	if written != nil {
+		d.reported = week
+		return nil
+	}
+	metrics, unread, err := d.Read.Week(ctx, from, to)
+	if err != nil {
+		return fmt.Errorf("read the week %s: %w", week, err)
+	}
+	tally, err := d.Log.Tally(ctx, from, to)
+	if err != nil {
+		return fmt.Errorf("count the findings of %s: %w", week, err)
+	}
+	live, err := d.Log.Live(ctx)
+	if err != nil {
+		return fmt.Errorf("read the open findings for %s: %w", week, err)
+	}
+	before, _, _, _ := advisor.ReportWeek(from, d.Zone())
+	last, err := d.Log.Report(ctx, before)
+	if err != nil {
+		return fmt.Errorf("read the report of %s: %w", before, err)
+	}
+	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
+		Unread: unread, Tally: tally, Top: advisor.TopOf(live)}
+	if err := d.Log.WriteReport(ctx, r); err != nil {
+		return fmt.Errorf("write the report of %s: %w", week, err)
+	}
+	d.reported = week
+	return nil
 }
 
 // slot is the latest model pass start at or before now, on the company clock.

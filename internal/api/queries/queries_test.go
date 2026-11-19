@@ -281,7 +281,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_access": "admin", "go_live_review": "admin",
+		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_reports": "admin", "advisor_report": "admin", "advisor_access": "admin", "go_live_review": "admin",
 		"diagnostics_insights": "admin",
 		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",

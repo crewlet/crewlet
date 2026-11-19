@@ -21,6 +21,8 @@ type LogReads interface {
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
+	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
+	Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (advisordomain.Tally, error)
 }
 
 // LogWrites is the advisor log's write side as the duty writes it.
@@ -31,6 +33,7 @@ type LogWrites interface {
 	Move(ctx context.Context, c advisordomain.Call, key string, m advisordomain.Move, ifMatch uint64) (statelog.Result, error)
 	RecordRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRecord) (statelog.Result, error)
 	Expire(ctx context.Context, c advisordomain.Call, day time.Time, e advisordomain.Expiry) (statelog.Result, error)
+	WriteReport(ctx context.Context, c advisordomain.Call, r advisordomain.Report) (statelog.Result, error)
 }
 
 // Engine is who the duty writes as: the engine itself, never a person.
@@ -276,6 +279,45 @@ func (l advisorLog) Expire(ctx context.Context, now time.Time) error {
 	return err
 }
 
+// Report is the report of week as the log keeps it, nil where none was written.
+func (l advisorLog) Report(ctx context.Context, week string) (*advisor.Report, error) {
+	row, written, err := l.reads.Report(ctx, week, statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil || !written {
+		return nil, err
+	}
+	return ReportOf(row)
+}
+
+// ReportOf is a report row as it was written.
+func ReportOf(row advisordomain.ReportRow) (*advisor.Report, error) {
+	var r advisor.Report
+	if err := json.Unmarshal(row.Body, &r); err != nil {
+		return nil, fmt.Errorf("duty: decode the report of %s: %w", row.Week, err)
+	}
+	r.Week, r.From, r.To = row.Week, row.From, row.To
+	return &r, nil
+}
+
+// Tally counts the findings of [from, to).
+func (l advisorLog) Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error) {
+	t, err := l.reads.Tally(ctx, from, to, statelog.Freshness{Level: statelog.ReadSession})
+	return advisor.Tally{Opened: t.Opened, Resolved: t.Resolved, Applied: t.Applied, Dismissed: t.Dismissed}, err
+}
+
+// WriteReport writes a week's report once; a week another holder wrote is done.
+func (l advisorLog) WriteReport(ctx context.Context, r advisor.Report) error {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	_, err = l.writes.WriteReport(ctx, l.call("advisor_report"),
+		advisordomain.Report{Week: r.Week, From: r.From, To: r.To, Body: body})
+	if errors.Is(err, advisordomain.ErrExists) {
+		return nil
+	}
+	return err
+}
+
 // StoredOf is rows as Reconcile reads them, each body decoded.
 func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 	out := make([]advisor.Stored, 0, len(rows))
@@ -290,7 +332,7 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 		}
 		out = append(out, advisor.Stored{ID: r.ID, Version: r.KeyVersion, State: advisor.State(r.State),
 			Revision: r.Revision, EffectDueAt: r.EffectDueAt, AppliedFix: r.AppliedFix, Ineffective: ineffective,
-			Reason: advisor.CloseReason(r.CloseReason), ClosedAt: r.ClosedAt,
+			Reason: advisor.CloseReason(r.CloseReason), ClosedAt: r.ClosedAt, OpenedAt: r.OpenedAt,
 			Observation: o, Body: r.Body})
 	}
 	return out, nil

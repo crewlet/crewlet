@@ -1,10 +1,11 @@
 /**
  * The Advisor's findings as its duty keeps them (ADR-0164): `GET
- * /advisor/findings`, `GET /advisor/findings/{id}`, `GET /advisor/runs/latest`
- * and `GET /advisor/notices`, and the writes `POST /advisor/runs` and `POST
+ * /advisor/findings`, `GET /advisor/findings/{id}`, `GET /advisor/runs/latest`,
+ * `GET /advisor/notices`, `GET /advisor/reports` and `GET
+ * /advisor/reports/{week}`, and the writes `POST /advisor/runs` and `POST
  * /advisor/findings/{id}/decision`. The engine's shapes are in
- * `internal/api/queries` (advisorlog.go, advisorrun.go). A nullable field is
- * always sent, as `null` where it has no value.
+ * `internal/api/queries` (advisorlog.go, advisorrun.go, advisorreport.go). A
+ * nullable field is always sent, as `null` where it has no value.
  */
 
 import type {
@@ -252,4 +253,59 @@ export interface AdvisorRecheck {
  */
 export interface AdvisorAppliedReport {
   digest: string;
+}
+
+/** The span a week's report covers, from its Monday to the next. */
+export interface AdvisorPeriod {
+  from: string;
+  to: string;
+}
+
+/** One week's report as a list of them shows it. */
+export interface AdvisorReportSummary {
+  /** The ISO week, such as `2026-W47`: the report's id. */
+  week: string;
+  period: AdvisorPeriod;
+  written_at: string;
+  opened: number;
+  resolved: number;
+  applied: number;
+  dismissed: number;
+}
+
+/** `GET /advisor/reports`: a page of weeks, the newest first. */
+export interface AdvisorReportList {
+  reports: AdvisorReportSummary[];
+  next_cursor: string | null;
+}
+
+/** One number of a week, with the week before's beside it where that week's report has it. */
+export interface AdvisorMetric {
+  key: string;
+  label: string;
+  value: number;
+  unit: AdvisorFactUnit;
+  was: number | null;
+}
+
+/** An open finding as a report names it, kept as it read when the report was written. */
+export interface AdvisorReportFinding {
+  id: string;
+  class: string;
+  severity: AdvisorSeverity;
+  title: string;
+  subject: string;
+  item: string;
+}
+
+/**
+ * `GET /advisor/reports/{week}`: one week's report. `unread` names the sources
+ * whose numbers are left out; `summary` is the model's, `null` where none was
+ * written.
+ */
+export interface AdvisorReport extends AdvisorReportSummary {
+  metrics: AdvisorMetric[];
+  unread: string[];
+  top: AdvisorReportFinding[];
+  summary: string | null;
 }

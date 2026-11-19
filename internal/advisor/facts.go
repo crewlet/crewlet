@@ -37,6 +37,7 @@ var factWords = map[string]factWord{
 	"absorbed":       {"Wakes for changes already read", UnitCount},
 	"addressed":      {"Notices put to the person", UnitCount},
 	"agent_comments": {"Agent comments", UnitCount},
+	"alarm_turns":    {"Turns an alarm woke", UnitTurns},
 	"agents":         {"Agents", UnitCount},
 	"agents_open":    {"Open items all agents hold", UnitItems},
 	"answers":        {"Answers", UnitCount},

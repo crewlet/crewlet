@@ -32,6 +32,8 @@ type AdvisorLog interface {
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
+	Reports(ctx context.Context, cursor string, limit int, fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
+	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
 }
 
 // advisorFresh is what every advisor read reads at: this node's copy, which a

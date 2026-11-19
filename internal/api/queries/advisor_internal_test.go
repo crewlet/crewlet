@@ -206,6 +206,12 @@ func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisor
 func (noticeLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (noticeLog) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
+	return nil, "", nil
+}
+func (noticeLog) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
+	return advisordomain.ReportRow{}, false, nil
+}
 
 // `alarms` IS NAMED UNREAD ONCE, whether the latest run could not read this
 // node's evaluation, the fleet's marks could not be read, or both; and what

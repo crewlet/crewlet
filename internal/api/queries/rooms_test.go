@@ -104,6 +104,12 @@ func (emptyAdvisor) PendingRequests(context.Context, statelog.Freshness) ([]advi
 func (emptyAdvisor) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (emptyAdvisor) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
+	return nil, "", nil
+}
+func (emptyAdvisor) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
+	return advisordomain.ReportRow{}, false, nil
+}
 
 // everySeam is a Sources with every seam present, which is what makes the
 // registry list everything this build can answer.

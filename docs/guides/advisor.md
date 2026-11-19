@@ -27,6 +27,7 @@ One server of the fleet at a time runs the Advisor, holding a lease it renews ev
 - **Its rules**, every hour, and at once when the setup they read changes: a new revision of the company, a seat paused or resumed, an integration's reconcile. One run reads the company document, the integrations' last reconcile, the seats' pauses, the atlas and the last 7 days of work, and runs every rule over them.
 - **Its model**, once a day at 06:00 on the company clock, where `advisor.model` names one ([Found by the Advisor's model](#found-by-the-advisors-model)).
 - **Run now**, from any server: the run is asked for on the Advisor's log and the server holding the lease takes it within a minute, everything at once.
+- **Its weekly report**, on Monday at 06:00 on the company clock, after that hour's model pass ([The weekly report](#the-weekly-report)).
 
 ## A finding's life
 
@@ -121,7 +122,7 @@ And one is yours to fix, read from the pull requests your work waited on: **pull
 
 ## Work that stalls where nothing else says so
 
-Six more are read from the week's records, each the owner's (`costs`), each with its numbers and records, and the fix the engine can build where one exists. They are read with no model call, as every finding above is.
+Seven more are read from the week's records, each the owner's (`costs`), each with its numbers and records, and the fix the engine can build where one exists. They are read with no model call, as every finding above is.
 
 | Finding | Listed when (last 7 days, or now) | The fix |
 |---|---|---|
@@ -131,6 +132,7 @@ Six more are read from the week's records, each the owner's (`costs`), each with
 | Open work waits on one item (`work.bottleneck`), one per item | An open item an agent holds, or nobody does, that 5 or more open items wait on, directly or through each other. | Open the item: move it first, or take off the waits that need not be there. |
 | Agent work that needs no decision waits behind a person (`work.held_by_person`), one per item | An item a person holds (it is theirs, or a question on it waits on their answer) that 3 or more items agents hold, with no question of their own open, wait on. The item names it and how many open questions hold it. | Open the item: answer what it waits on, or take the wait off the work behind it. |
 | Merges a delegate allowed went to a person because the branch requires no check (`merge.no_required_checks`), one per repository | 3 or more merges into one repository that a [delegate](delegated-decisions.md) allowed were put to a person because its branch requires no check, so nothing shows the change passed CI. Each request is counted once, however many delegates answered it. | On GitHub, the repository's branch settings: run CI on its pull requests and require that check, or name the check in the rule's `required_checks`. On Gitlet, open `code.repos` and require a check on the protected branch. |
+| An agent was woken on the engine's alarms for turns that changed nothing (`wake.alarm_noop`), one per agent | Two or more agents hold the health grant (`health_tools`), so an alarm wakes each of them, and this one's alarm-woken turns numbered 10 or more, half or more of them committing nothing. The agent whose alarm turns changed the most keeps the watch and is never listed, nor is a company's only watcher: an alarm that fires too often is a finding of its own. The item says how many alarm turns, how many changed nothing, and what they spent. | Take the health grant off this agent (`health_tools: false`); the agent whose alarm turns changed the most keeps it and still wakes on every alarm. The finding is fixed once the grant is off, and is checked over the next 7 days. |
 
 If a server cannot read the week's budget refusals or its merge decisions, the answer's `unread` names `budget_stops` or `merges`, and their findings are left out.
 
@@ -195,6 +197,16 @@ Once it is sent, the page reports it (`POST /advisor/findings/{id}/applied`). Th
 
 A fix that is not a change (opening a page or a setting, a step outside the engine, an atlas tool call, a draft with Ask Crewlet) is re-checked the same way before you act on it, and nothing is sent by the engine.
 
+## The weekly report
+
+Every Monday the Advisor writes one report of the week before, Monday to Monday on the company clock, and keeps it as written for 26 weeks, so it says what was true of that week however the list has moved since. A report holds:
+
+- **The week's numbers**, each beside the week before's where that week has a report: turns started, turns that committed nothing, tokens, alarm turns that changed nothing and their tokens, turns refused on a budget, and runs ended on their round cap. A source that could not be read is named in the report's `unread` and its numbers are left out, never counted as nothing.
+- **What became of the findings**: how many the week opened, resolved, had a fix applied to, and dismissed.
+- **The open findings that cost the most** when it was written, five at most, the most severe first and then the longest open.
+
+A server that was down on Monday writes the report when the Advisor next runs that week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
+
 ## What never happens on its own
 
 The engine does not grant access, change a model, move or remove a schedule, edit a policy or close anything because of a finding. The Advisor keeps findings and nothing else; a fix is sent by a person (ADR-0115).
@@ -209,6 +221,6 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.co
 
 Or with `crewlet doctor`, which reads every open finding and prints the classes, subjects by kind and ordinal, and counts (`-words` adds the handles and the reasons), and exits 2 while a finding blocks the company, or 1 while the latest run could not read a source or the Advisor has not run yet, so a block it holds is never passed over ([CLI reference](../reference/cli.md#crewlet-doctor)).
 
-`GET /advisor/findings` answers a page of findings, the open ones by default, the most costly first, with the open ones counted by severity and the latest run; `GET /advisor/findings/{id}` one finding with its history; `GET /advisor/runs/latest` the latest run; `POST /advisor/runs` runs everything now; and `POST /advisor/findings/{id}/decision` snoozes, dismisses, reopens or marks a finding useful ([API reference](../reference/api-endpoints.md)). A run's `unread` names each source it could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers, reviews and notices), `ledger` (the agents' turns by what woke them and what they did), `pauses` (the seats' pauses), `runs` (the week's failed executor runs), `budget_stops` (the week's budget refusals), `merges` (the week's merge decisions), `fires` (the week's schedule fires and what their turns wrote), `alarms` (the node's alarm table has not been evaluated yet, as right after a start) and `atlas` (the company's atlas). The findings of a source it could not read are neither confirmed nor resolved by that run.
+`GET /advisor/findings` answers a page of findings, the open ones by default, the most costly first, with the open ones counted by severity and the latest run; `GET /advisor/findings/{id}` one finding with its history; `GET /advisor/runs/latest` the latest run; `GET /advisor/reports` and `GET /advisor/reports/{week}` the [weekly reports](#the-weekly-report); `POST /advisor/runs` runs everything now; and `POST /advisor/findings/{id}/decision` snoozes, dismisses, reopens or marks a finding useful ([API reference](../reference/api-endpoints.md)). A run's `unread` names each source it could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers, reviews and notices), `ledger` (the agents' turns by what woke them and what they did), `pauses` (the seats' pauses), `runs` (the week's failed executor runs), `budget_stops` (the week's budget refusals), `merges` (the week's merge decisions), `fires` (the week's schedule fires and what their turns wrote), `alarms` (the node's alarm table has not been evaluated yet, as right after a start) and `atlas` (the company's atlas). The findings of a source it could not read are neither confirmed nor resolved by that run.
 
 `GET /advisor/notices` answers the [platform notices](#platform-notices), `{"notices": [...], "unread": [...]}`, the longest-standing first. A notice is `{"class", "subject", "since", "nodes", "alarm", "finding"}`: the finding's class and subject, or `alarm` with the alarm's kind as the subject's `name`, or `conversation.held` with the seat and the conversation; `finding` is the finding whose fix ends it, `{id, title, fix}`, or `null`. A notice an alarm raised also carries the alarm's `title` and `person`, what is wrong and what to do in words for a company owner. Its `unread` adds `alarms` where the fleet's alarms could not be read or a live node has not evaluated its own yet, `holds` where the conversations the engine holds could not be read, and `findings` where the Advisor's own list could not be read.

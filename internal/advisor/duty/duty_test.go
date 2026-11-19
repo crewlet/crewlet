@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ type fakeLog struct {
 	recorded  []advisor.Transition
 	runs      []duty.Run
 	expired   int
+	// reports is every week's report written, tally what Tally answers, and
+	// order what was written, a run or a report, in the order it was.
+	reports map[string]advisor.Report
+	tally   advisor.Tally
+	order   []string
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -47,6 +53,28 @@ func (l *fakeLog) Record(_ context.Context, t advisor.Transition, _ time.Time) e
 func (l *fakeLog) RecordRun(_ context.Context, r duty.Run) error {
 	l.runs = append(l.runs, r)
 	l.requested = nil
+	l.order = append(l.order, "run")
+	return nil
+}
+
+func (l *fakeLog) Report(_ context.Context, week string) (*advisor.Report, error) {
+	r, ok := l.reports[week]
+	if !ok {
+		return nil, nil
+	}
+	return &r, nil
+}
+
+func (l *fakeLog) Tally(context.Context, time.Time, time.Time) (advisor.Tally, error) {
+	return l.tally, nil
+}
+
+func (l *fakeLog) WriteReport(_ context.Context, r advisor.Report) error {
+	if l.reports == nil {
+		l.reports = map[string]advisor.Report{}
+	}
+	l.reports[r.Week] = r
+	l.order = append(l.order, "report:"+r.Week)
 	return nil
 }
 
@@ -55,6 +83,8 @@ type fakeReader struct {
 	observed  []advisor.Observation
 	signature string
 	reads     int
+	metrics   []advisor.Metric
+	weeks     []advisor.Span
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
@@ -63,6 +93,12 @@ func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) 
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
+
+// Week answers the metrics it holds, and records the period it was asked for.
+func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
+	r.weeks = append(r.weeks, advisor.Span{From: from, To: to})
+	return r.metrics, []string{}, nil
+}
 
 // fakeModel counts its passes.
 type fakeModel struct{ passes int }
@@ -191,5 +227,75 @@ func TestAConditionThatEndedIsResolvedWithoutAnybodyAsking(t *testing.T) {
 	}
 	if got := l.runs[0].Count(advisor.StepClose); got != 1 {
 		t.Errorf("the run counts %d closes, want 1", got)
+	}
+}
+
+// openFinding is an open finding of severity on seat, opened at opened.
+func openFinding(t *testing.T, id string, severity advisor.Severity, seat string, opened time.Time) advisor.Stored {
+	t.Helper()
+	f := advisor.Finding{Class: advisor.ClassRoundCap, Severity: severity, Source: advisor.SourceEvidence,
+		Title: "Runs ended on their cap.", Item: "2 runs", Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: seat},
+		Fix: advisor.Fix{Kind: advisor.FixNone}}
+	o := advisor.Observe(f, advisor.Span{From: opened.Add(-advisor.Window), To: opened}, "")
+	return advisor.Stored{ID: id, State: advisor.StateOpen, OpenedAt: opened, Observation: o}
+}
+
+// THE WEEKLY REPORT COUNTS WHAT THE WEEK OPENED, RESOLVED AND APPLIED: on the
+// Monday after it, after that hour's model pass, once; with the week's numbers
+// beside the week before's and the open findings that cost the most, the
+// most severe first. Mutation: write it before the hour, write it again on
+// the next tick, or drop the week before's numbers, and a check fails.
+func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) {
+	t.Parallel()
+	monday := time.Date(2030, 1, 14, 0, 0, 0, 0, time.UTC)
+	l := &fakeLog{tally: advisor.Tally{Opened: 4, Resolved: 2, Applied: 1, Dismissed: 1},
+		reports: map[string]advisor.Report{"2030-W01": {Week: "2030-W01",
+			Metrics: []advisor.Metric{{Key: "turns_nothing", Value: 25}}}}}
+	for i := range 6 {
+		l.live = append(l.live, openFinding(t, "costs-"+strconv.Itoa(i), advisor.SeverityCosts, "dev",
+			monday.Add(-time.Duration(6-i)*time.Hour)))
+	}
+	l.live = append(l.live, openFinding(t, "blocks", advisor.SeverityBlocks, "qa", monday.Add(-time.Hour)))
+	r := &fakeReader{signature: "r1", metrics: []advisor.Metric{{Key: "turns_nothing", Label: "Turns that committed nothing",
+		Value: 40, Unit: advisor.UnitTurns}}}
+	c := &clock{now: monday.Add(5*time.Hour + 59*time.Minute)}
+	d := newDuty(l, r, &fakeModel{}, c)
+	step(t, d)
+	if _, written := l.reports["2030-W02"]; written {
+		t.Fatal("the report was written before its hour")
+	}
+	c.now = monday.Add(6*time.Hour + time.Minute)
+	step(t, d)
+	report, written := l.reports["2030-W02"]
+	if !written {
+		t.Fatalf("no report at its hour; wrote %v", l.order)
+	}
+	if last := l.order[len(l.order)-2:]; last[0] != "run" || last[1] != "report:2030-W02" {
+		t.Errorf("wrote %v, want the hour's run before the report", l.order)
+	}
+	if !report.From.Equal(monday.AddDate(0, 0, -7)) || !report.To.Equal(monday) ||
+		len(r.weeks) != 1 || !r.weeks[0].From.Equal(report.From) || !r.weeks[0].To.Equal(report.To) {
+		t.Errorf("the report covers %s to %s, read %+v; want the week before Monday", report.From, report.To, r.weeks)
+	}
+	if report.Tally != l.tally {
+		t.Errorf("the report counts %+v, want %+v", report.Tally, l.tally)
+	}
+	if m := report.Metrics; len(m) != 1 || m[0].Value != 40 || m[0].Was == nil || *m[0].Was != 25 {
+		t.Errorf("the metrics are %+v, want 40 beside last week's 25", m)
+	}
+	var top []string
+	for _, f := range report.Top {
+		top = append(top, f.ID)
+	}
+	if want := []string{"blocks", "costs-0", "costs-1", "costs-2", "costs-3"}; strings.Join(top, ",") != strings.Join(want, ",") {
+		t.Errorf("the top is %v, want %v", top, want)
+	}
+	writes := len(l.order)
+	c.now = monday.Add(7 * time.Hour)
+	step(t, d)
+	again := newDuty(l, r, nil, c)
+	step(t, again)
+	if n := strings.Count(strings.Join(l.order[writes:], " "), "report:"); n != 0 {
+		t.Errorf("the week's report was written %d more times", n)
 	}
 }

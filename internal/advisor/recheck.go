@@ -1,6 +1,7 @@
 package advisor
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -114,8 +115,14 @@ func WithoutIneffective(f Finding, ineffective []string) Finding {
 
 // Holds reports whether entity, an entity as the configuration answers it,
 // already holds every field ch would write: what an applied change leaves.
+// The change is read back through the entity's own type, so a field it sets
+// to the value the type leaves out (a grant turned off) holds once absent.
 func Holds(entity any, ch Change) (bool, error) {
-	after, err := Changed(entity, ch)
+	changed, err := Changed(entity, ch)
+	if err != nil {
+		return false, err
+	}
+	after, err := asTypeOf(entity, changed)
 	if err != nil {
 		return false, err
 	}
@@ -124,6 +131,28 @@ func Holds(entity any, ch Change) (bool, error) {
 		return false, err
 	}
 	return reflect.DeepEqual(before, after), nil
+}
+
+// asTypeOf is fields decoded into a fresh value of entity's struct type and
+// answered as that value's fields; fields themselves for an entity that is
+// no struct.
+func asTypeOf(entity any, fields map[string]any) (map[string]any, error) {
+	t := reflect.TypeOf(entity)
+	if t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return fields, nil
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	fresh := reflect.New(t).Interface()
+	if err := json.Unmarshal(raw, fresh); err != nil {
+		return nil, err
+	}
+	return asFields(fresh)
 }
 
 // Changed is entity with ch applied as a person sends it: ch.Merge merged
