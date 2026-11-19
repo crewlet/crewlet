@@ -408,69 +408,11 @@ const transcriptNoteRoom = 1 << 10
 // whole one; a single line past its half keeps its own start (or end), on a
 // character, marked. A transcript that fits is carried as it is.
 func boundTranscript(text string) (string, int, int) {
-	text = redact.Secrets(text)
-	if len(text) <= MaxRunTextBytes {
-		return text, 0, 0
-	}
-	lines := strings.SplitAfter(text, "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	head, size := 0, 0
-	for head < len(lines) && size+len(lines[head]) <= transcriptHeadBytes {
-		size += len(lines[head])
-		head++
-	}
-	tail, size := len(lines), 0
-	for tail > head && size+len(lines[tail-1]) <= transcriptTailBytes {
-		size += len(lines[tail-1])
-		tail--
-	}
-
-	// What lies between the halves; the text is past the budget, so there is
-	// always some. A half that kept no whole line keeps its edge line's start
-	// or end instead.
-	middle := lines[head:tail]
-	const marker = "…"
-	var startOf, endOf string
-	if head == 0 {
-		// Within the half with room for the line break it ends on, so a
-		// line that did not fit whole is always marked as kept in part.
-		startOf = textcut.Within(strings.TrimRight(middle[0], "\n"), transcriptHeadBytes-1) + "\n"
-	}
-	if tail == len(lines) {
-		endOf = textcut.Tail(middle[len(middle)-1], transcriptTailBytes-len(marker))
-	}
-	dropped := 0
-	for _, line := range middle {
-		dropped += len(line)
-	}
-	// Bytes kept of a partial line are not left out; the marker each carries
-	// is not content, so it is not counted against what was.
-	if startOf != "" {
-		dropped -= len(startOf) - len(marker)
-	}
-	if endOf != "" {
-		dropped -= len(endOf) - len(marker)
-	}
-	// Lines kept in part are not lines left out: one when only one edge line
-	// was partial or the text is that one line, two when both edges were.
-	partial := 0
-	if startOf != "" {
-		partial++
-	}
-	if endOf != "" && (startOf == "" || len(middle) > 1) {
-		partial++
-	}
-	whole := len(middle) - partial
-
-	var b strings.Builder
-	b.WriteString(strings.Join(lines[:head], ""))
-	b.WriteString(startOf)
-	b.WriteString(elidedNote(whole, partial, dropped))
-	b.WriteString(endOf)
-	b.WriteString(strings.Join(lines[tail:], ""))
-	return b.String(), whole, dropped
+	// ONE implementation of the rule: the halves hold the text, so they
+	// answer it whatever its length.
+	var halves TranscriptHalves
+	_, _ = halves.WriteString(redact.Secrets(text))
+	return halves.Bounded()
 }
 
 // elidedNote is the line standing where a transcript's middle was left out:
