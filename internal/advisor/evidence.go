@@ -95,10 +95,12 @@ type Evidence struct {
 	Waiting map[string]int
 	// Episodes is every alarm episode on any node that stood in the window.
 	Episodes []AlarmEpisode
+	// Skips is every scheduled run the dispatch ledger skipped in the window.
+	Skips []ScheduleSkip
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread, EpisodesUnread                                     bool
+	StopsUnread, MergesUnread, EpisodesUnread, SkipsUnread                        bool
 }
 
 // source is the record a detector reads.
@@ -123,6 +125,8 @@ const (
 	sourceMerges
 	// sourceEpisodes is the advisor log's alarm history, [Evidence.Episodes].
 	sourceEpisodes
+	// sourceSkips is the schedules' skipped runs, [Evidence.Skips].
+	sourceSkips
 )
 
 // unread reports whether ev could not read src.
@@ -146,6 +150,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.MergesUnread
 	case sourceEpisodes:
 		return ev.EpisodesUnread
+	case sourceSkips:
+		return ev.SkipsUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -332,6 +338,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.EpisodesUnread {
 		answer.Unread = append(answer.Unread, UnreadEpisodes)
+	}
+	if ev.SkipsUnread {
+		answer.Unread = append(answer.Unread, UnreadSkips)
 	}
 	return answer
 }

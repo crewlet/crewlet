@@ -38,6 +38,8 @@ var factWords = map[string]factWord{
 	"addressed":      {"Notices put to the person", UnitCount},
 	"agent_comments": {"Agent comments", UnitCount},
 	"waits_day":      {"Waits in the last day", UnitCount},
+	"paused_skips":   {"Runs skipped while the agent was paused", UnitCount},
+	"missed_skips":   {"Runs missed while no server ran the schedules", UnitCount},
 	"minutes":        {"Minutes waited this week", UnitMinutes},
 	"quick_clears":   {"Alarms gone within ten minutes", UnitCount},
 	"alarm_turns":    {"Turns an alarm woke", UnitTurns},

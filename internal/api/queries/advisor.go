@@ -214,6 +214,10 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_alarm_episodes_unreadable", "error", err.Error())
 		ev.EpisodesUnread = true
 	}
+	if ev.Skips, err = s.scheduleSkips(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_schedule_skips_unreadable", "error", err.Error())
+		ev.SkipsUnread = true
+	}
 	return ev
 }
 
