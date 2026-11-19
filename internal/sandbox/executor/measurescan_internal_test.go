@@ -17,7 +17,7 @@ import (
 // scanner's reading is held to ([meterExport]'s figure).
 func decodedExportInput(r io.Reader) (int64, error) {
 	dec := json.NewDecoder(r)
-	if err := expectDelim(dec, '{'); err != nil {
+	if err := decodedDelim(dec, '{'); err != nil {
 		return 0, err
 	}
 	var last int64
@@ -32,11 +32,11 @@ func decodedExportInput(r io.Reader) (int64, error) {
 			}
 			continue
 		}
-		if err = expectDelim(dec, '['); err != nil {
+		if err = decodedDelim(dec, '['); err != nil {
 			return 0, err
 		}
 		for dec.More() {
-			if err = expectDelim(dec, '{'); err != nil {
+			if err = decodedDelim(dec, '{'); err != nil {
 				return 0, err
 			}
 			var w openCodeMeasuredWire
@@ -61,7 +61,7 @@ func decodedExportInput(r io.Reader) (int64, error) {
 					return 0, err
 				}
 			}
-			if err = expectDelim(dec, '}'); err != nil {
+			if err = decodedDelim(dec, '}'); err != nil {
 				return 0, err
 			}
 			m, _, err := w.message()
@@ -72,7 +72,7 @@ func decodedExportInput(r io.Reader) (int64, error) {
 				last = n
 			}
 		}
-		if err = expectDelim(dec, ']'); err != nil {
+		if err = decodedDelim(dec, ']'); err != nil {
 			return 0, err
 		}
 	}
@@ -84,6 +84,19 @@ func decodedExportInput(r io.Reader) (int64, error) {
 func exportFigure(t *testing.T, r io.Reader) (int64, error) {
 	read, err := meterExport(t.Context(), r, "2.3.0")
 	return read.figure, err
+}
+
+// decodedDelim reads the decoder's next token, which must be want: the
+// oracle's own, apart from the walk's, which reads a jsontext decoder.
+func decodedDelim(dec *json.Decoder, want json.Delim) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if got, ok := tok.(json.Delim); !ok || got != want {
+		return fmt.Errorf("the export holds %T where %q belongs", tok, string(want))
+	}
+	return nil
 }
 
 // decodedSkip passes over the decoder's next value, a token at a time.

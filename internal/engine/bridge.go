@@ -36,7 +36,9 @@ import (
 // none, and failing the resume would lose the whole turn. Every other field is
 // the log's, carried as is for the readers [runner.BridgedCall] names (a zero
 // start is "not measured", a left-out value keeps its marker); the round is not
-// set here, since the runner states it from the run's record.
+// set here, since the runner states it from the run's record. The
+// arguments' text rides unchanged beside them ([runner.BridgedCall.ArgsText]):
+// an OpenCode reading keys a call by it, never by the decoded map.
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -69,6 +71,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Approved:    call.Approved,
 			HeldID:      call.HeldID,
 			CallID:      call.CallID,
+			ArgsText:    call.Args,
 		})
 	}
 	return out

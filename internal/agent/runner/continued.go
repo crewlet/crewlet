@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // A RELAUNCH THAT CONTINUES ITS TURN'S SESSION, and what its run is told.
@@ -619,74 +621,39 @@ func (read *heldReading) thins() bool {
 }
 
 // callKey is the key a reading of a session harness wrote names call by, and
-// whether call carries one this build asks a reading by: THE ONE PLACE a call's
-// key and its validity are decided, per harness, which the ask's rules (an
-// asked call's key valid, and carried by no other call of the round) and the
-// telling's lookup of the reading both read ([Runner.holdingsAsk],
-// [heldReading.holds]), so neither names the field a harness's key is in.
-//
-//   - CLAUDE CODE'S: the id its harness gave the call ([BridgedCall.CallID]),
-//     under which its session files the call's use and its result, valid where
-//     the log keeps it (sandbox.ValidCallID). The reader refuses a whole ask
-//     in which an asked id is not one the log keeps.
-//   - EVERY OTHER HARNESS'S: none, so no call of its is asked and every one is
-//     told. This build reads no session another harness wrote (the executor's
-//     ReadHoldings refuses one too), and no relaunch of one asks: its first
-//     request is not this build's to judge ([firstRequest.judges]). The
-//     OpenCode reader adds OpenCode's here: a call's place in its round's log
-//     ([BridgedCall.Appended]), non-zero and carried by no other call, beside a
-//     non-zero admission place ([BridgedCall.Seq]), its calls carrying no id
-//     (sandbox.BridgeCall.CallID is empty on every one), as claudeResumeRead
-//     names the releases Claude Code's reading reads.
+// whether call carries one this build asks a reading by: THE ONE PLACE a
+// call's key and its validity are decided, per harness, which the ask's rules
+// and the telling's lookup both read ([Runner.holdingsAsk], [heldReading]).
+// Claude Code's is the id its harness gave the call ([BridgedCall.CallID]),
+// valid where the log keeps it (sandbox.ValidCallID). OpenCode's, whose calls
+// carry no id, is the call's place in its round's log ([BridgedCall.Appended])
+// in decimal, valid beside an admission place ([BridgedCall.Seq]) and never
+// for a call a person's approval held, which the reader refuses to be asked
+// and whose part answers with the held answer (the executor's
+// openCodeHoldingsRead names the releases read). Every other harness's: none.
 func callKey(harness string, call BridgedCall) (string, bool) {
-	if harness == sandbox.ClaudeCodeHarness {
+	switch harness {
+	case sandbox.ClaudeCodeHarness:
 		return call.CallID, sandbox.ValidCallID(call.CallID)
+	case sandbox.OpenCodeHarness:
+		return strconv.Itoa(call.Appended), call.Appended > 0 && call.Seq > 0 && !call.Held
 	}
 	return "", false
 }
 
 // holdingsAsk is what a relaunch asks a reading of what the session harness
 // wrote holds of round ([sandbox.HoldingsAsk]), told as from and owed say
-// ([sessionHolds.keptCalls], the one expression the telling then tells by),
-// for release, the release that wrote the session ([SessionBasis.Release]);
-// and each asked call's outcome as the ask carries it, by its key ([callKey]),
-// which the telling looks the reading up by ([heldReading]).
-//
-// CALLS: every call the round's log lists, in the order the bridge admitted
-// them, but the ones a person approved, which the engine made on its host and
-// which no session holds (the call a lead tells, and one an earlier answer
-// approved, carry no key either); each by its key and its outcome as the log
-// keeps it. A call in flight has no outcome, so it is no call of the ask.
-//
-// ASKED, exactly the calls the telling would otherwise tell in the list after
-// the point or the owed reads ([Runner.calledAfter]), where the reader can
-// name them:
-//
-//  1. not a skipped meta-tool's, which no list tells;
-//  2. not held at the point ([heldAt]), the save point holding it already;
-//  3. neither late nor abandoned, which a telling decides ([heldByTelling])
-//     and no reading, the rest told under words of their own;
-//  4. its key valid ([callKey]): the reader refuses the whole ask where an
-//     asked call's id is not one the log keeps, so a call without one is told;
-//  5. its key carried by no other call of round, listed or in flight: the
-//     reader sees only the ask's calls, and an id two calls carry names
-//     records nobody can say are whose, so both are told.
-//
-// An owed read is asked too: it is held only where its records, live and the
-// log's, are in the session, the one thing a holding certifies, and else told.
-// A skill load a harness's hook reported carries no key, so it is told, and
-// the guard never arms it through a reading.
-//
-// What it does not carry yet is the OpenCode reader's to add, read by that
-// reader alone: each call's place before the brief told it (Before), the
-// calls in flight and the ones the log dropped by identity with whether only
-// failures (Unlisted), the arguments' text (ArgsText) and the OpenCode-only
-// arguments key, the run's start handed by HoldingsOf (RunStart), and each
-// call's place in the log (Appended), admission place (Seq), tool (Name),
-// digest (Digest) and whether a person's approval held it, its arguments
-// withheld and its output the held answer (Held, never [heldAt]'s point). The
-// Claude Code reader reads only ID, Asked, Failed, Output and OutputBytes,
-// every one of which is filled.
+// ([sessionHolds.keptCalls]), for release, the session's writer; and each
+// asked call by its key ([callKey]), which the telling looks the reading up
+// by. Its calls are every listed call but those a person approved (made on
+// the engine host, held by no session), by key, outcome, place, tool, digest,
+// a held call marked, and, for OpenCode alone, the arguments' key
+// ([openCodeArgsKey]); its Unlisted the calls in flight and the log's dropped
+// tally, never the late dropped count, which that tally holds already. A call
+// is asked where its telling would list it and the reader can name it: none
+// a skipped meta-tool's, held at the point ([heldAt]), or late or abandoned,
+// which a telling decides ([heldByTelling]), and its key valid and carried by
+// no other call of round.
 func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed []int,
 	release string) (sandbox.HoldingsAsk, map[string]sandbox.LoggedCall) {
 
@@ -703,7 +670,11 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 		}
 		key, valid := callKey(harness, call)
 		logged := sandbox.LoggedCall{ID: key, Failed: call.Failed, Output: call.Result,
-			OutputBytes: call.OutputBytes}
+			OutputBytes: call.OutputBytes, Appended: call.Appended, Seq: call.Seq, Name: call.Name,
+			Digest: call.Digest, Held: call.Held}
+		if harness == sandbox.OpenCodeHarness {
+			logged.Args = openCodeArgsKey(call)
+		}
 		logged.Asked = !slices.Contains(r.cfg.SkipNames, call.Name) && !heldAt(call, from, owed) &&
 			!call.Late && !call.Abandoned && valid && carried[key] == 1
 		if logged.Asked {
@@ -711,7 +682,31 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 		}
 		ask.Calls = append(ask.Calls, logged)
 	}
+	for _, call := range round.unfinished {
+		ask.Unlisted = append(ask.Unlisted, sandbox.CallIdentity{Name: call.Name, Digest: call.Digest,
+			InFlight: true})
+	}
+	for _, e := range round.elided {
+		ask.Unlisted = append(ask.Unlisted, sandbox.CallIdentity{Name: e.Name, Digest: e.Digest,
+			OnlyFailed: e.Failed == e.Calls && e.Unfinished == 0})
+	}
 	return ask, asked
+}
+
+// openCodeArgsKey is call's arguments' key as its log keeps their text
+// ([BridgedCall.ArgsText]), Whole only where that text states them: kept
+// whole, not withheld, read by the bridge, decoding as toolargs.Key decodes
+// it, and not "" unless the call carries a digest, since "" is the empty
+// object only for an admitted call.
+func openCodeArgsKey(call BridgedCall) sandbox.ArgsKey {
+	if call.ArgsBytes != 0 || call.Withheld || call.ArgsUnread || call.ArgsText == "" && call.Digest == "" {
+		return sandbox.ArgsKey{}
+	}
+	sum, err := toolargs.Key([]byte(call.ArgsText))
+	if err != nil {
+		return sandbox.ArgsKey{}
+	}
+	return sandbox.ArgsKey{Whole: true, Sum: sum}
 }
 
 // heldReading asks the turn's launcher which of round's calls the cut-off kept

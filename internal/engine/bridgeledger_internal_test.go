@@ -760,3 +760,19 @@ func TestACallNobodyWaitedForThatLandsOnNoRecordIsNamedAtWarning(t *testing.T) {
 		t.Errorf("the call its harness was handed was said as %v, want it at debug alone\n%s", ordinary, logs)
 	}
 }
+
+// A LOGGED CALL CARRIES THE LOG'S ARGUMENT TEXT, unchanged, beside the map it
+// decodes to: an OpenCode reading keys a call by that text, which the map
+// cannot give back (it reads "", unreadable text and a call's own spelling
+// alike).
+//
+// Mutation: rebuild the text from the decoded map, and this goes red.
+func TestALoggedCallCarriesTheLogsArgumentText(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{`{"b": 1, "a":"é"}`, "", "not json"} {
+		got := bridgedCalls([]sandbox.BridgeCall{{Name: "echo", Args: text, Digest: "d"}})
+		if got[0].ArgsText != text {
+			t.Errorf("the call carries %q; want the log's text %q", got[0].ArgsText, text)
+		}
+	}
+}
