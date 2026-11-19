@@ -78,20 +78,15 @@ func unusedLines(logs *syncBuffer) []string {
 }
 
 // A BRIEF TOLD BY A READING IS HANDED ONLY TO A BOX THAT ANSWERS ITS RELEASE.
-// The reading was read for the release that wrote the session, and what a
-// session holds is what the release that resumes it hands its model: so a box
-// whose harness answers exactly that release is handed the brief told by the
-// reading for that box (the same-box one in the box the session was last
-// worked in, the new-box one in any other), and its told set rides the launch;
-// a box answering another release, even one the archive's writer names, or a
-// release this build cannot read, is handed the brief told by the save point,
-// which tells more, its told set riding the launch, and the launch says why
-// once, naming both releases. The session is continued either way.
-//
-// Mutation: compare the reading's release with the archive's writer rather than
-// the box's answer, hand the brief told by the reading whatever the box
-// answers, record the save point's told set beside the reading's brief, or log
-// nothing, and a case goes red.
+// A session holds what the release that resumes it hands its model, so a box
+// whose harness answers the release the reading was read for gets the reading's
+// brief (same-box where last worked in, else new-box), its told set riding the
+// launch; a box answering another release (even the archive writer's) or an
+// unreadable one gets the save point's brief, which tells more, and the launch
+// says why once, naming both releases. The session continues either way.
+// Mutation: compare the reading's release with the archive's writer, hand the
+// reading's brief whatever the box answers, record the save point's told set
+// beside it, or log nothing: red.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.T) {

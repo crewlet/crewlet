@@ -34,77 +34,30 @@ const (
 )
 
 // DefaultScheduleTimeout caps a single scheduled turn: its whole wall clock,
-// from the moment the fire's turn begins, its executor's run included — the
-// run carries the same instant on its row, and the poll ends one that
-// outlasts it (internal/agent/turn's Settings.Deadline).
+// its executor's run included (internal/agent/turn's Settings.Deadline).
 //
-// A scheduled turn is a ritual — post a standup, compile a weekly report —
-// not open-ended work, and the cap exists so a wedged one releases its seat
-// long before the next fire rather than holding it until someone notices. So
-// it sits well above a slow ritual, and hitting it means stuck, not busy.
-//
-// # What a ritual's turn is
-//
-// Every agent seat's executor is its harness's own run in a box, so the
-// turn is that run and what surrounds it: the turn-start prefetch, whose
-// blocks run side by side, each auxiliary call held to thirty seconds
-// (internal/agent/prefetch's AuxTimeout), and on a seat's first turn its
-// onboarding pass; the launch — the box started, a container within the local
-// backend's two-minute control bound with a cold image pull inside it
-// (internal/sandbox's ControlTimeout), an e2b box within its one-minute
-// client bound, a direct box at once, and the seat's setup applied, each
-// command allowed [DefaultSetupTimeoutSeconds] though the git-auth recipe
-// takes seconds; the run — for a ritual, read what it needs, post once and
-// submit, some five to ten of its harness's rounds at the twenty to sixty seconds
-// a round the shipped Claude Code example sizes its own round cap by, so ten
-// minutes at the slow end; and the reviewer, one harness run on the engine host.
-// About a quarter of an hour for a slow ritual that is not stuck, and a
-// reviewer's send-back runs the executor again in the same box, its setup
-// spared.
-//
-// # Half an hour
-//
-// Twice that, so a send-back still fits. Not more, because a longer cap is
-// not free: a seat takes no other work while its run works, so the messages
-// sent to a seat whose ritual is wedged wait until the cap ends it. Half an
-// hour still frees a daily or weekly ritual's seat hours before its next
-// fire; a schedule that fires more often than that sits out the cap behind a
-// wedged turn, its fires queued on the seat's inbox, unless it sets a
-// timeout_seconds below its period.
-//
-// The three minutes this replaces were sized for an executor that ran in the
-// engine's own loop, "comfortably above a normal multi-phase turn"; around a
-// run in a box they ran out inside one setup command's own allowance, so a
-// scheduled run could be ended before it had done anything.
+// A ritual that is not stuck spends about a quarter of an hour: prefetch, box
+// launch and setup ([DefaultSetupTimeoutSeconds] per command), five to ten
+// harness rounds, and the reviewer. Half an hour is twice that, so a
+// send-back still fits. Not more: a seat takes no other work while its run
+// works, so a schedule firing more often than the cap sits it out with fires
+// queued, unless it sets a timeout_seconds below its period.
 // TestADefaultScheduleCapOutlastsTheTurnBeforeItsRun (internal/engine) holds
-// the order against the bounds a turn spends before its run, which live in
-// packages that know nothing of schedules. A judgment without production
-// data.
+// the order. A judgment without production data.
 const DefaultScheduleTimeout = 30 * time.Minute
 
 // ScheduleNameMaxBytes bounds a schedule's name AS ITS CONVERSATION'S KEY
 // SPELLS IT: escaped as a URL path segment is, a space, a slash and every byte
-// of a letter outside ASCII written as three (internal/notify's
-// ScheduleConversation). Every fire is filed under that key on its runner
-// seat's executor log, which refuses a key longer than its bound
-// (internal/executordomain's ConversationKeyMaxBytes, 512) rather than cut one
-// — a cut key would merge two conversations — so a fire's session and its
-// ending would be kept nowhere.
+// of a non-ASCII letter written as three (internal/notify's
+// ScheduleConversation). The executor log refuses a key past its bound
+// (internal/executordomain's ConversationKeyMaxBytes, 512) rather than cut
+// one, which would merge two conversations.
 //
-// FOUR HUNDRED BYTES: a fire's key spends at most seventy-nine before the name
-// — `schedule/`, a scope of four, a unit's key of at most sixty-four bytes of a
-// grammar no escape touches (a seat's agent id is thirty-six), and two
-// separators — so four hundred leaves the log's bound room to spare. It admits
-// any name of a hundred and thirty-three bytes, whatever it holds; any name of
-// up to four hundred that escapes nothing (ASCII letters and digits, `-`, `.`,
-// `_` and `~`, and the `:`, `@`, `&`, `=`, `+` and `$` a path segment keeps);
-// and so every Kubernetes object name (at most 253 bytes of lowercase letters,
-// digits, `-` and `.`), which is why crewlet-operator's Schedule, named by its
-// object, needs no bound of its own. A longer name that escapes is refused:
-// forty-five Japanese characters are 135 bytes, and 405 escaped.
-// internal/schedule's TestTheLongestScheduleNameFitsTheLogsKey holds the
-// longest key a company admits to the log's bound, and
-// TestAScheduleNameIsBoundedAsItsKeySpellsIt this bound to the Kubernetes one.
+// FOUR HUNDRED BYTES: a key spends at most seventy-nine before the name. It
+// admits any name of 133 bytes, any of up to 400 that escapes nothing, and so
+// every Kubernetes object name (253 at most), which is why crewlet-operator's
+// Schedule needs no bound of its own. TestTheLongestScheduleNameFitsTheLogsKey
+// (internal/schedule) and TestAScheduleNameIsBoundedAsItsKeySpellsIt hold it.
 const ScheduleNameMaxBytes = 400
 
 // Schedule is recurring work a seat or a unit owns, fired on a cron
@@ -281,13 +234,10 @@ func (s Schedule) cronGrammar(owner string) error {
 // schedules sharing one would each suppress the other's fire at the same
 // minute.
 //
-// ONE MESSAGE PER DUPLICATED NAME, naming every schedule that carries it, the
-// same shape as every other duplicate rule in this package. The pairwise
-// check this replaced reported a name used three times as two collisions,
-// and counted every blank name as a duplicate of the others, repeating a
-// mistake [Schedule.Validate] had already reported once per schedule. It is
-// reported at the owner's `schedules` list, since it is about several of its
-// elements at once.
+// ONE MESSAGE PER DUPLICATED NAME, naming every schedule that carries it, as
+// every other duplicate rule here does. Blank names are not duplicates of each
+// other ([Schedule.Validate] already reports them). It is reported at the
+// owner's `schedules` list, since it concerns several elements at once.
 func validateSchedules(owner string, schedules []Schedule) []fieldError {
 	var out []fieldError
 	positions := make([]int, len(schedules))

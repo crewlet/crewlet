@@ -169,25 +169,16 @@ func TestTheTranscriptRidesTheLaunchsRecordRedacted(t *testing.T) {
 
 // A BOX THAT PRINTS ITS TOKENS PERSISTS NONE OF THEM.
 //
-// A harness debugging its own setup prints its environment or its MCP
-// configuration, and both hold its run's per-run tokens: the telemetry
-// endpoint's in the endpoint's path, the tool bridge's in the bridge's URL.
-// Either is a credential — the bridge's calls the seat's own tools as the seat
-// — and no node that collects the run holds the tokens its launch minted (the
-// row carries none), so they are redacted by their SHAPE, the version every
-// runtoken opens with, which internal/redact knows. A runner redacts what it
-// collects; this holds the boundary the records leave by, the publish, with a
-// runner that redacted nothing: every record the coordinator publishes for the
-// run (its report, its transcript, its failure, its question, and the answer
-// it resumes the turn with) carries the marker and none of the tokens. A
-// question is redacted where its ask is recorded ([Ask.Redacted]), so the
-// question's case asks through the store with the tokens in its context.
+// A harness printing its environment or MCP configuration prints the run's
+// per-run tokens (telemetry endpoint's, the bridge's), credentials no collecting
+// node holds, so they are redacted by their SHAPE (internal/redact). With a
+// runner that redacted nothing, every record the coordinator publishes carries
+// the marker and no token. A question is redacted where its ask is recorded
+// ([Ask.Redacted]), so its case asks through the store.
 //
-// Mutation: skip the coordinator's redaction of a box's report and failure —
-// where they are fitted ([Coordinator.fitText]) and where they are published
-// (collectedRecord's), each enough alone — or the ask's where it is recorded,
-// and the report's, the failure's and the question's records carry the
-// tokens; drop the run-token rule from internal/redact, and every case does.
+// Mutation: skip redaction where a report or failure is fitted
+// ([Coordinator.fitText]) or published (collectedRecord's), each enough alone,
+// or the ask's; drop the run-token rule from internal/redact and all go red.
 func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	t.Parallel()
 	const engine = "https://engine.example.com"

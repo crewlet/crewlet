@@ -132,19 +132,15 @@ type Run struct {
 // and a dispatcher that could also delete rows is a dispatcher whose blast
 // radius nobody can see from its type.
 type Claimer interface {
-	// Claim atomically records a fire, reporting whether THIS call wrote
-	// the row.
+	// Claim atomically records a fire, reporting whether THIS call wrote the
+	// row. True means the caller owns the fire and dispatches it; false means
+	// the identity already existed (another node's tick, or a pre-restart
+	// run) and the caller must not.
 	//
-	// True means the caller owns the fire and must go on to dispatch it.
-	// False means the identity already existed — another node's tick, or a
-	// pre-restart run, already handled it — and the caller must not.
-	//
-	// An error is UNKNOWN, and callers fail CLOSED on it: not knowing
-	// whether a fire was already claimed has exactly one safe answer, and
-	// it is "do not fire". That polarity is the opposite of the completion
-	// ledger's, deliberately — that one asks "has this work been done", so
-	// its safe answer is to re-run; this one asks "may I start", so its
-	// safe answer is to wait for the next tick.
+	// An error is UNKNOWN, and callers fail CLOSED on it: "do not fire" is the
+	// one safe answer. That is the opposite polarity of the completion
+	// ledger's, which asks "has this work been done" and so re-runs; this asks
+	// "may I start" and so waits for the next tick.
 	Claim(ctx context.Context, run Run) (bool, error)
 
 	// MinuteClaimed reports whether ANY identity of this minute is claimed:
@@ -180,19 +176,15 @@ type Ledger interface {
 	// Purge drops rows whose FiredAt is strictly before `before`, returning
 	// how many went.
 	//
-	// The cutoff is an INSTANT rather than an age because the caller owns
-	// the policy, and here the policy has a floor that is not obvious: the
-	// ledger is a claim table first and an audit record second, so nothing
-	// may be deleted while a tick could still evaluate the fire it records.
-	// That floor is the catchup window's upper clamp (see
-	// [Scheduler.RetentionFloor]). Sweeping inside it does not merely lose
-	// history, it lets that fire run a second time.
+	// The cutoff is an INSTANT because the caller owns the policy, which has a
+	// floor: the ledger is a claim table first and an audit record second, so
+	// nothing may go while a tick could still evaluate the fire it records. That
+	// floor is the catchup window's upper clamp ([Scheduler.RetentionFloor]);
+	// sweeping inside it lets that fire run a second time.
 	//
-	// Dropping a row MUST drop its claim key with it. A purge that kept the
-	// key would go on refusing a fire the store has no evidence of, which
-	// is worse than never sweeping at all because the refusal is silent.
-	// The same holds for [Claimer.MinuteClaimed]: a minute whose every row
-	// went reads unclaimed.
+	// Dropping a row MUST drop its claim key with it, or the purge keeps
+	// silently refusing a fire the store has no evidence of. Likewise a minute
+	// whose every row went reads unclaimed in [Claimer.MinuteClaimed].
 	Purge(ctx context.Context, before time.Time) (int, error)
 }
 

@@ -38,25 +38,18 @@ func readingOf(records map[string]CallRecords) SessionHoldings {
 	return SessionHoldings{Read: true, Kind: HoldingsByID, Calls: records}
 }
 
-// A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT. The session holds a call's
-// logged result where the reading counted records naming it in one thread
-// alone, one use and one result there, the result live, its failure the log's
-// and its text the log's, every byte of an output the log kept whole and the
-// size and opening of one it cut; then it is held, an output the log cut as
-// much as one it kept whole. Anything else is told, in the main list: a call
-// no record names, one whose id the log never recorded, records in two
-// threads, a use or a result missing or repeated, a result before a restart, a
-// failure the log and the session do not share, either way, a text of another
-// length, a whole output's text otherwise anywhere, past its opening among it,
-// a cut output's text that opens otherwise, content that is no text, a log
-// whose kept opening is shorter than the digest or whose size is no size; and
-// every call of no reading, or of a reading of a kind this build does not
-// read, which is by_id alone.
-//
-// Mutation: hold a call whose failure the session and the log do not share,
-// measure a cut output by what the log kept of it rather than by its whole
-// size, or compare a whole output by its opening alone, and a case goes red;
-// drop any other condition and its case goes red.
+// A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT: where the reading counted
+// records naming it in one thread alone, one use and one result there, the
+// result live, its failure and text the log's, every byte of an output kept
+// whole and the size and opening of one cut. Anything else is told, in the main
+// list: no record or an unrecorded id, records in two threads, a use or result
+// missing or repeated, a result before a restart, an unshared failure, a text
+// of another length or otherwise, content that is no text, a kept opening
+// shorter than the digest, a size that is no size; and every call of no reading
+// or a kind other than by_id.
+// Mutation: hold a call with an unshared failure, measure a cut output by what
+// the log kept, or compare a whole output by its opening alone: red; drop any
+// other condition and its case is red.
 func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01H8xQ"

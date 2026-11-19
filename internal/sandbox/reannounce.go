@@ -4,26 +4,15 @@ import "time"
 
 // # A job is announced once, and again on a schedule
 //
-// The waiter announces a job's completion when its poll finds the job over,
-// and the seat's holder claims it, collects it and resumes its turn. A job
-// its holder does not resume at once (its gate refused it, its resume was
-// held for a model's limit or handed back for a retry) stays running on its
-// row, and the waiter's next poll finds it over again. It used to be
-// announced again on every poll: on a live company a finished health check
-// whose review met a model's weekly limit was announced 6280 times in 27
-// hours, each one a record in the event store and on the dashboard's feed.
-//
-// The pattern is the provider park notices' (parknotice.go in the engine): a
-// notice goes out once per change, not once per pass. Here the change is a
-// new job ([PendingRun.LaunchID]), so the events copy of a completion, the
-// record that the job finished, is published once per job. The seat still has
-// to hear about a job it did not resume, because what made it wait may clear
-// with nothing to say so; but the condition that will re-fire it when it does
-// is the holder's own ([Coordinator.Readmit]: a provider park's release, a
-// budget window's turn, a pause lifted), and the waiter's repeat is only the
-// backstop for a clearing nothing signals. So it repeats on a doubling
-// schedule, from one poll interval to [reannounceCeilingPolls] of them, to the
-// seat's control topic alone.
+// A job its holder does not resume at once stays running on its row, and each
+// poll finds it over again; announcing every time would write an event record
+// per poll. As with the provider park notices (parknotice.go in the engine), a
+// notice goes out once per change, here a new job ([PendingRun.LaunchID]): the
+// events copy of a completion is published once per job. The seat still hears
+// of a job it did not resume, since what made it wait may clear silently: the
+// holder's own conditions re-fire it ([Coordinator.Readmit]), and the repeat
+// is the backstop, on a doubling schedule from one poll interval to
+// [reannounceCeilingPolls], to the seat's control topic alone.
 
 // reannounceCeilingPolls is the most poll intervals a job its holder has not
 // resumed waits between two announcements: twenty, five minutes at

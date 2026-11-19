@@ -157,16 +157,11 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 // TestANilSeatYieldsNoSubject pins the deliberate empty return, and pins WHY
 // it is not "crewlet.agent..inbox".
 //
-// That string is a real, publishable subject with no subscriber. A caller
-// that lost the seat's id would publish into it and the event would be
-// swallowed: no error at the producer, no delivery at the consumer, and a
-// seat that simply never wakes. Returning "" makes the caller's mistake
-// something a caller can test for.
-//
-// The property is asserted for every id-derived name, not just the inbox,
-// because a caller that guards the subject and not the group would attach a
-// consumer named "agent-" to the right topic — one durable subscription
-// shared by every seat that lost its id.
+// That string is a real, publishable subject with no subscriber: a caller that
+// lost the seat's id would see no error and the seat would never wake. ""
+// makes the mistake testable. Asserted for every id-derived name, since a
+// caller guarding the subject but not the group would attach a consumer named
+// "agent-", one durable subscription shared by every seat that lost its id.
 func TestANilSeatYieldsNoSubject(t *testing.T) {
 	t.Parallel()
 
@@ -317,20 +312,14 @@ func TestMailboxSeatNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 // that every backend already depends on.
 //
 // `agent-` + X and `agent-` + Y + `-control` are the same string whenever X is
-// Y + "-control". No pair of seat IDS reaches that — a uuid never ends in
-// "-control" — but the grammar is what a backend keys on, and the property it
-// must not assume is that a group name alone identifies a subscription.
-//
-// What makes it harmless is that a subscription is identified by the (topic,
-// group) PAIR, and the two pairs differ in their topic. JetStream's
-// consumerName hashes the pair for exactly this reason. A backend that ever
-// keyed a subscription on the group ALONE would collapse two subscriptions
-// onto one mailbox, which is the failure this note exists to prevent.
-//
-// Asserted over the GRAMMAR rather than over two seats, because the seat ids
-// that used to demonstrate it were handles. Do not read the absence of a
-// colliding pair of ids as the collision being gone: it is a property of the
-// token space, and the token space is not this package's to promise.
+// Y + "-control". No pair of seat IDS reaches that (a uuid never ends in
+// "-control"), but a backend must not assume a group name alone identifies a
+// subscription. It is harmless because the (topic, group) PAIR does, and the
+// topics differ; JetStream's consumerName hashes the pair for that reason. A
+// backend keying on the group ALONE would collapse two subscriptions onto one
+// mailbox. Asserted over the GRAMMAR, not two seats: no colliding pair of ids
+// does not mean the collision is gone, and the token space is not this
+// package's to promise.
 func TestGroupNamesAreNotUniqueOnTheirOwn(t *testing.T) {
 	t.Parallel()
 
@@ -357,23 +346,14 @@ func TestGroupNamesAreNotUniqueOnTheirOwn(t *testing.T) {
 }
 
 // TestDeadLetterIsInjectiveOverArbitraryPairs pins that no two distinct
-// subscriptions share a dead-letter subject — over the pairs the CONTRACT
-// accepts, not merely over the names this grammar happens to mint.
+// subscriptions share a dead-letter subject, over the pairs the CONTRACT
+// accepts, not just the names this grammar mints: EnsureSubscription takes any
+// (topic, group), and a dot join aliases ("a.b", "c") with ("a", "b.c"),
+// mixing two subscriptions' poison (the conformance suite's group "h.i").
 //
-// The narrower property was the trap. EnsureSubscription takes whatever
-// (topic, group) a caller passes, and the conformance suite now subscribes
-// with the dotted group "h.i" on purpose, because a backend was aliasing
-// distinct pairs one layer up. A dot-joined "dlq." + topic + "." + group
-// aliases the moment either half contains a dot: ("a.b", "c") and
-// ("a", "b.c") were one subject. Two subscriptions' poison in one place, with
-// nothing to separate it — a dead letter carries the original event, not the
-// subscription that gave up on it.
-//
-// BOUNDARY: injectivity here rests on a 48-bit digest, so it is
-// probabilistic rather than structural. That is the same bound the durable
-// consumer name in internal/queue/jetstream runs on, sized against a real
-// ceiling of hundreds of subscriptions. The READABLE head is lossy by design
-// and proves nothing on its own — two pairs may well share it.
+// BOUNDARY: injectivity rests on a 48-bit digest, probabilistic not
+// structural, the bound the durable consumer name in internal/queue/jetstream
+// runs on. The READABLE head is lossy by design; two pairs may share it.
 func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	t.Parallel()
 
@@ -411,21 +391,16 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	subjects, groups = distinct(subjects), distinct(groups)
 
 	seen := map[string][2]string{}
-	// The DIGEST is asserted separately from the whole subject, and the
-	// separate assertion is the load-bearing one. The readable head is a
-	// second thing that varies with the pair, so whole-subject injectivity
-	// can hold while the digest itself aliases — measured: a digest taken
-	// over group+topic with no separator between them ("a"+"b" and
-	// "ab"+"") is invisible through the subject, because the heads "b.a"
-	// and "_.ab" still differ. That leaves the doc comment's claim that no
-	// two pairs share a digest untested, and the head is documented as
-	// lossy and truncatable, so it is exactly the half that may stop
-	// separating them.
+	// The DIGEST is asserted separately from the whole subject, and that is the
+	// load-bearing assertion: the head also varies with the pair, so
+	// whole-subject injectivity can hold while the digest aliases (one over
+	// group+topic with no separator, "a"+"b" and "ab"+"", hides behind the
+	// differing heads "b.a" and "_.ab"). The head is lossy and truncatable, so
+	// it is the half that may stop separating pairs.
 	//
-	// AND OVER BOTH OF A PAIR'S SUBJECTS, its poison's and its unhandled
-	// deliveries' (topics.Unhandled), in one space: a pair's unhandled copy
-	// on another pair's poison subject would be replayed as the wrong
-	// subscription's, or poison replayed as a healthy delivery.
+	// AND OVER BOTH OF A PAIR'S SUBJECTS, poison's and unhandled
+	// (topics.Unhandled), in one space: an unhandled copy on another pair's
+	// poison subject would replay as the wrong subscription's.
 	digests := map[string][2]string{}
 	pairs := 0
 	for _, subject := range subjects {

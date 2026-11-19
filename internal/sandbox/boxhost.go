@@ -18,32 +18,16 @@ import (
 
 // Who may touch a box.
 //
-// # A local box is its launching node's
-//
-// A box in a `direct` or `container` cell is a process tree or a container on
-// the host of the node that launched it ([PendingRun.LaunchNode]), and no
-// other node can reach it: asked for by id anywhere else, the local backend
-// finds no such box and says it is gone ([ErrBoxGone]). The run outlives that
-// fact — the seat it belongs to can move to another node while the job is
-// still working (a rebalance, a drain), and its tool calls follow the seat
-// through the bridge — so every touch of the box itself is made on its host:
-//
-//   - THE POLL, THE KEEPALIVE AND THE PAUSE REAPER are the launching node's
-//     own waiter ([DrivesLocal]), on every node, whoever holds the fleet's
-//     waiter duty; the duty's waiter drives only the boxes every node reaches
-//     ([DrivesRemote]).
-//   - THE COLLECTION is made by the seat's holder, which claims the
-//     completion and resumes the turn — and where that is not the box's host,
-//     the part that reads the box is ASKED of the host ([BoxReader]) and the
-//     rest, the part a model may write, is made here ([Coordinator.collect]).
-//     So is a stopped run's read of what it spent.
-//   - THE RECLAIM of a box its row no longer names is the host's: its own
-//     waiter reclaims every box on its host whose run no longer names it
-//     ([Waiter.sweep]), and a node that ends such a run, or relaunches it,
-//     leaves the box to it and tells it to look now ([Nudge]).
-//
-// A box in a cell every node reaches (`e2b`) is touched wherever the work is,
-// as it always was.
+// A `direct` or `container` box lives on its launching node's host
+// ([PendingRun.LaunchNode]); elsewhere it is gone ([ErrBoxGone]). The seat can
+// move mid-job, so every touch of the box is made on its host:
+//   - poll, keepalive and pause reaper: the host's own waiter ([DrivesLocal]);
+//     the fleet's duty waiter drives only `e2b` boxes ([DrivesRemote]).
+//   - collection and a stopped run's spend read: by the seat's holder, which
+//     ASKS the host for the box-reading part ([BoxReader]) and makes the part a
+//     model may write ([Coordinator.collect]).
+//   - reclaim of a box its row no longer names: the host's waiter
+//     ([Waiter.sweep]), nudged by a node ending or relaunching the run ([Nudge]).
 
 // BoxRead is which read of a box a node asks its host to make.
 type BoxRead string
@@ -214,27 +198,18 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 	return false
 }
 
-// BoxReadAnswerShare is the part of what its asker waits that a host's read may
-// take, counted from the moment the request reaches the host on the host's own
-// clock ([BoxReadRequest.AnswerBudget]), leaving the rest for the answer to
-// cross the broker before the asker stops listening: [answerShare], a tail's,
-// which a tail's owner applies to the wait its request carries the same way.
+// BoxReadAnswerShare is the part of its asker's wait a host's read may take,
+// counted from the request's arrival on the host's own clock
+// ([BoxReadRequest.AnswerBudget]), leaving the rest for the answer to cross the
+// broker: [answerShare], a tail's.
 //
-// THE QUARTER LEFT HOLDS THE CROSSINGS ALONE. Two clocks' distance needs none
-// of it, since the host counts the wait on its own clock from the request's
-// arrival, and nor does a wait for one of the host's reads at once, which is
-// counted against the share (internal/engine's box reads). What is left is the
-// request's two hops at the slowest pace the engine allows ([objstore.PaceFor]:
-// under a mebibyte, thirty seconds a hop) and the reply's two at the broker's
-// ceiling (eight mebibytes, four minutes a hop): nine minutes in all, against
-// more than nineteen, the quarter of the shortest wait a read asks at its
-// budget — an uncapped collection's, about seventy-eight minutes. An absolute
-// margin for the crossings would shorten a dead host's wait by about ten
-// minutes of those seventy-eight, at the cost of a second rule beside the
-// tail's for the same question, so the share stays the tail's.
-// A wait its asker's own context cuts far below its budget leaves a quarter no
-// share could fill at that pace; that is the cut's own defect, not the share's
-// (crewlet/crewlet#1405).
+// THE QUARTER LEFT HOLDS THE CROSSINGS ALONE: clock distance and waits for the
+// host's own reads need none of it. The request's two hops at the slowest pace
+// ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
+// ceiling (four minutes a hop) are nine minutes, against over nineteen in the
+// quarter of the shortest budget (an uncapped collection's 78). An absolute
+// margin would be a second rule beside the tail's. A wait cut far below budget
+// by its asker's context is that cut's defect (crewlet/crewlet#1405).
 const BoxReadAnswerShare = answerShare
 
 // BoxReadChannel names the signed channel a box read crosses
@@ -243,19 +218,17 @@ const BoxReadAnswerShare = answerShare
 // carries out for another.
 const BoxReadChannel = "sandbox.box_read"
 
-// BoxReadClockAllowance is how far apart the box-read channel allows the asking
-// and the answering node's clocks to stand (internal/signedask's
-// ClockAllowance): the most any two of the fleet's machines stand apart while
-// no node raises `clock_skew` ([objstore.AssumedClockSkew], twice). A host
-// ahead of its asker by up to that still takes the read, whose length the
-// request's own wait sets on the host's clock ([BoxReadRequest.BudgetMS]).
-// Past it, the host's clock is one the operator must fix, and the read is
-// refused as one whose asker has gone.
+// BoxReadClockAllowance is how far apart the box-read channel allows the two
+// nodes' clocks to stand (internal/signedask's ClockAllowance): the most any
+// two machines stand apart while no node raises `clock_skew`
+// ([objstore.AssumedClockSkew], twice). A host ahead of its asker by up to that
+// still takes the read, whose length the request's wait sets on the host's
+// clock ([BoxReadRequest.BudgetMS]); past it the operator must fix the clock.
 //
-// What the two hours cost is a replay window two hours longer, at a node that
-// restarted inside it and so forgot the ids it took, for a read the run's row
-// licenses anyway ([Coordinator.ReadHostedBox]): a replayed collection, stop or
-// loss is made only where the row is still in the state that read is made in.
+// The cost is a replay window two hours longer at a node that restarted and
+// forgot its ids, for a read the run's row licenses anyway
+// ([Coordinator.ReadHostedBox]): a replay is made only in the state that read
+// is made in.
 const BoxReadClockAllowance = 2 * objstore.AssumedClockSkew
 
 // BoxReadWireVersion is the request and reply shape this build speaks, and the
@@ -307,19 +280,15 @@ type BoxReadRequest struct {
 func (r BoxReadRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
 // AnswerBudget is how long the host may read for a request that reached it
-// waited ago, both on the host's own clock: what is left of its share, which
-// is [BoxReadAnswerShare] of the wait the request carried, counted from its
-// arrival — so whatever the read waited for one of the host's reads at once,
-// it ends by the arrival plus that share, and the last quarter of its asker's
-// wait is left whole for the request's and the answer's crossings. A share of
-// what the asker still waits instead would end a read that waited later the
-// longer it waited: at the waiting bound's end, three quarters of the way
-// through its asker's wait, it would read on for three quarters of the last
-// quarter, leaving a sixteenth of the wait for the crossings, under the nine
-// minutes [BoxReadAnswerShare] counts for them at the slowest pace, and the
-// host would take a session out of the box for an asker that had gone. Zero
-// once the share is spent. Not ok for a request that carries no wait, or one too
-// long to be a duration, which a host refuses as another build's.
+// waited ago, both on the host's clock: what is left of [BoxReadAnswerShare] of
+// the carried wait, counted from arrival, so the read ends by arrival plus that
+// share whatever it waited for, and the last quarter stays whole for the
+// crossings. A share of what the asker still waits would end later the longer
+// the read waited: at the waiting bound's end it would leave a sixteenth of the
+// wait for the crossings, under the nine minutes [BoxReadAnswerShare] counts,
+// and the host would take a session out of the box for an asker that had gone.
+// Zero once the share is spent. Not ok for a request carrying no wait, or one
+// too long to be a duration, which a host refuses as another build's.
 func (r BoxReadRequest) AnswerBudget(waited time.Duration) (time.Duration, bool) {
 	if r.BudgetMS <= 0 || r.BudgetMS > int64(math.MaxInt64/time.Millisecond) {
 		return 0, false
@@ -336,15 +305,12 @@ func (r BoxReadRequest) Unread() []string { return r.unread }
 // members no field declares ([BoxReadRequest.Unread]).
 //
 // RECORDED RATHER THAN REFUSED HERE, so the request still decodes with the node
-// and the turn it names, and the host it names can log what it refused and for
-// which run; the host refuses it (internal/engine's box reads), as a data node
-// refuses an estate request whose arguments hold a key its build does not
-// declare (internal/estate's wire rule) rather than run it without them. WHICH
-// members are declared is the decoder's own answer, asked one member at a time
-// under its rule for a member no field declares, never a list of names kept
-// here beside the fields or a second spelling of how it matches them. The
-// request has no nested object, so its top-level members are all there is to
-// name.
+// and turn it names and the host can log what it refused and for which run; the
+// host refuses it (internal/engine's box reads), as a data node refuses an
+// estate request with an undeclared key (internal/estate's wire rule). WHICH
+// members are declared is the decoder's own answer, asked one member at a time,
+// never a list of names kept beside the fields. The request has no nested
+// object, so its top-level members are all there is.
 func (r *BoxReadRequest) UnmarshalJSON(data []byte) error {
 	type declared BoxReadRequest // the fields alone, without this method
 	if err := json.Unmarshal(data, (*declared)(r)); err != nil {
@@ -675,25 +641,18 @@ func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed 
 		announcedAfter(deliveredIn(ctx), run.Launch.HostStoreSilentSince)
 }
 
-// ReadHostedBox makes, for the node that asked, the read of a box on this
-// node's host ([BoxReader]): the run's row read again here, and the read made
-// only where the row still licenses it.
+// ReadHostedBox makes, for the asking node, the read of a box on this host
+// ([BoxReader]), the run's row read again here.
 //
-// THE ROW IS THE LICENSE, not the request. The read is made only for the job
-// and the box the asker named, on a run whose box this node launched, in the
-// state the read is made in: a collection's on a run whose completion is
-// claimed ([StatusResumed]), a stop's on a run whose stop is decided and not
-// yet read, and a loss's on a run whose loss is decided and whose box is unread
-// ([Coordinator.capturesLoss]): its job's session not settled by a take that
-// ended it, or a hook's served note unconfirmed; beside a session still being
-// kept, the loss's read stands by for it. So a request — even a replayed or a
-// forged one past the channel's own checks — can make no read the run's own
-// protocol is not making: no running job's box is paused under it, and no job
-// ended that is not already decided stopped or lost, or claimed past its turn's
-// cap — as this node's clock reads the row's, or as the job's record says an
-// earlier collection of it found it ([LaunchRecord.EndedAtDeadline]) — a stop's
-// and a loss's read end the job first, and a collection's a job still working
-// past its cap ([Coordinator.endJob]), on its host, the one node that can.
+// THE ROW IS THE LICENSE, not the request: only for the job and box named, on a
+// run whose box this node launched, in the state the read is made in: a
+// collection's on a claimed completion ([StatusResumed]), a stop's on a decided,
+// unread stop, a loss's on a decided loss with an unread box
+// ([Coordinator.capturesLoss]). So even a replayed or forged request makes no
+// read the run's own protocol is not making: no running job's box is paused and
+// no job ended that is not decided stopped or lost, or claimed past its cap (by
+// this node's clock or [LaunchRecord.EndedAtDeadline]). A stop's or loss's read
+// ends the job first, a collection's one past its cap ([Coordinator.endJob]).
 func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandboxID string,
 	read BoxRead) (Result, bool, error) {
 
