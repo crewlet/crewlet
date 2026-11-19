@@ -5160,6 +5160,13 @@ span.list-position-step {
 .task-flags {
   flex-wrap: wrap;
 }
+/* The rail's flow: the badge, then why it holds on the next line. */
+.task-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
 .task-readonly {
   margin: 0;
 }

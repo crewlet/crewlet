@@ -178,7 +178,19 @@ async function mount(
       });
     }
     if (what === "work_workload") {
-      return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
+      return Promise.resolve({
+        rows: [
+          {
+            handle: "swe",
+            open: 4,
+            blocked: 1,
+            overdue: 0,
+            flow: { working: 1, blocked: 0, waiting: 1, held: 0, due: 0, stuck: 1, moving: 0 },
+            load: 2,
+          },
+        ],
+        flow_live: true,
+      });
     }
     if (what === "executors") return Promise.resolve({ runs: durable });
     if (what === "work_item_turns") {
@@ -242,6 +254,15 @@ test("an operator sees the node that holds the seat and since when", async () =>
   const { asked } = await mount(OPERATOR);
   expect(asked).toContain("fleet");
   expect(screen.getByText(/node-2/)).toBeTruthy();
+});
+
+// A SEAT'S OPEN WORK SAYS WHAT WANTS IT NOW (ADR-0162): its load, then what
+// waits or sticks, so a desk of parked work does not read as a busy one.
+test("a seat's open work names its load and what keeps the rest from moving", async () => {
+  await mount(OPERATOR);
+  expect(
+    screen.getByText("4 tasks · 2 to move now · 1 waiting · 1 stuck · 1 blocked"),
+  ).toBeTruthy();
 });
 
 // AT MOST THREE READS PER OPEN, in the heaviest case: an operator, a seat
