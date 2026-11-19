@@ -1376,8 +1376,14 @@ type loggedRun struct {
 
 func mustLogged(t *testing.T, s sandbox.PendingStore, turnID string) loggedRun {
 	t.Helper()
-	run := mustGet(t, s, turnID)
-	log, err := s.BridgeLog(t.Context(), run)
+	return mustLoggedIn(t.Context(), t, s, turnID)
+}
+
+// mustLoggedIn is mustLogged under ctx, as mustGetIn is mustGet.
+func mustLoggedIn(ctx context.Context, t *testing.T, s sandbox.PendingStore, turnID string) loggedRun {
+	t.Helper()
+	run := mustGetIn(ctx, t, s, turnID)
+	log, err := s.BridgeLog(ctx, run)
 	if err != nil {
 		t.Fatalf("read the log of %s: %v", turnID, err)
 	}

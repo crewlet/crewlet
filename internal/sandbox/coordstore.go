@@ -569,7 +569,7 @@ func (l BridgeLog) opened(launch string, o logOpening) (BridgeLog, []BridgeCall)
 		if !read {
 			return next, nil
 		}
-		return next.carried(l, *o.told)
+		return l.carried(next, *o.told)
 	}
 	next := l
 	next.Launch = launch
@@ -597,7 +597,7 @@ func (l BridgeLog) opened(launch string, o logOpening) (BridgeLog, []BridgeCall)
 // with the calls next lists, all carried, which the opening walked. See the
 // package doc, "A call that outlives its round's collection is a late call of
 // the round after".
-func (next BridgeLog) carried(l BridgeLog, read LogRead) (BridgeLog, []BridgeCall) {
+func (l BridgeLog) carried(next BridgeLog, read LogRead) (BridgeLog, []BridgeCall) {
 	next.AbsorbedCalls = unreadAbsorbed(l.Absorbed(), read.Absorbed)
 	for _, call := range l.Calls {
 		if call.Appended <= read.Took || call.Approved {

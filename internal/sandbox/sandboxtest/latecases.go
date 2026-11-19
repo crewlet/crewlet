@@ -791,7 +791,7 @@ func testAnEarlierRoundsCallMovesNoPlaceOfTheRound(t *testing.T, s sandbox.Pendi
 		if opened.OpenedAfter != 3 {
 			t.Errorf("the answer's relaunch numbers its calls after %d, want 3", opened.OpenedAfter)
 		}
-		if cut := mustLogged(t, s, turn).Log.AnsweredThrough; cut != 3 {
+		if cut := mustLoggedIn(ctx, t, s, turn).Log.AnsweredThrough; cut != 3 {
 			t.Errorf("the answer cut the round at %d, want 3, the asking job's last place", cut)
 		}
 	})
@@ -819,11 +819,11 @@ func testAnEarlierRoundsCallMovesNoPlaceOfTheRound(t *testing.T, s sandbox.Pendi
 			!ok {
 			t.Fatalf("RecordHeldResult = %v, %v", ok, err)
 		}
-		i := slices.IndexFunc(mustLogged(t, s, turn).Log.Calls, func(c sandbox.BridgeCall) bool { return c.Approved })
+		i := slices.IndexFunc(mustLoggedIn(ctx, t, s, turn).Log.Calls, func(c sandbox.BridgeCall) bool { return c.Approved })
 		if i < 0 {
 			t.Fatal("the round's log does not list the approved call")
 		}
-		if seq := mustLogged(t, s, turn).Log.Calls[i].Seq; seq != 4 {
+		if seq := mustLoggedIn(ctx, t, s, turn).Log.Calls[i].Seq; seq != 4 {
 			t.Errorf("the approved call is at place %d, want 4, after the sent-back job's last", seq)
 		}
 	})
