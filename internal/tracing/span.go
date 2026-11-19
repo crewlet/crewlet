@@ -13,28 +13,17 @@ import (
 
 // The bridge between OTel's carrier and this engine's.
 //
-// # Two representations of one fact, and why both stay
-//
-// OTel carries a span in `context.Context`; Crewlet carries `trace_id` /
-// `span_id` / `parent_span_id` in the event envelope, which is what reaches
-// `crewlet_events`, `GET /events/trace/{id}` and the dashboard's trace tree.
-// Neither can replace the other: a `context.Context` does not survive a
-// JetStream publish, and three hex strings do not carry a live span. So this
-// file is the ONE place they are converted, in both directions, and no other
-// package builds a `TraceContext` by hand.
-//
-// # Why a span is allowed in context.Context at all
-//
-// Almost nothing in this engine travels ambiently: a turn's inputs are
-// arguments, because a goroutine SHARES whatever context it captured, forever,
-// including after the turn that created it has finished. A live span is
-// admitted anyway, on the three tests anything ambient here has to pass — it
-// is IMMUTABLE, its consumer is a LEAF (the tracer), and when it is absent it
-// degrades to a no-op span rather than to wrong behaviour.
-//
-// There is also no alternative. OTel has no other carrier, and putting a live
-// span on `TurnContext` would be exactly the "a goroutine captures turn state
-// and outlives the turn" bug that the argument-passing rule exists to prevent.
+// Two representations of one fact, both kept: OTel carries a span in
+// `context.Context`; Crewlet carries `trace_id` / `span_id` / `parent_span_id`
+// in the event envelope (`crewlet_events`, the dashboard's trace tree). A
+// context does not survive a JetStream publish, and three hex strings do not
+// carry a live span. This file is the ONE place they are converted, both ways.
+
+// A span may ride context.Context because it passes the three tests anything
+// ambient must: it is IMMUTABLE, its consumer is a LEAF (the tracer), and absent
+// it degrades to a no-op. Turn inputs stay arguments, since a goroutine keeps
+// whatever context it captured past the turn; a span on `TurnContext` would be
+// that bug.
 
 // parentKey carries the id of the span that is the CURRENT span's parent.
 //
@@ -48,13 +37,12 @@ type parentKey struct{}
 // Start opens a span and makes its ids available to everything below it — the
 // tracer, and every log line that passes a context.
 //
-// One call does both because two calls is one call that gets forgotten: the
-// engine's log lines and its spans are read together during an incident, and a
-// span whose ids never reached the logs is exactly the correlation this whole
-// change exists to provide.
+// One call does both because two calls is one that gets forgotten: logs and
+// spans are read together in an incident, and a span whose ids never reached
+// the logs breaks that correlation.
 //
-// The returned context carries the span, its parent id, and the logging
-// binding. Callers MUST end the span; the ordinary shape is:
+// The returned context carries the span, its parent id and the logging
+// binding. Callers MUST end the span:
 //
 //	ctx, span := tracing.Start(ctx, "engine", "agent.turn")
 //	defer span.End()
@@ -105,14 +93,13 @@ func TraceOf(ctx context.Context) events.TraceContext {
 // opened beneath it become children of the span that caused them rather than
 // new roots.
 //
-// The restored context is marked REMOTE, which is what makes the sampler treat
-// the upstream decision as authoritative (see [sampler]): a node that re-decided
-// sampling for a trace already in flight is how half a tree goes missing.
+// The restored context is marked REMOTE, so the sampler treats the upstream
+// decision as authoritative (see [sampler]): re-deciding sampling mid-trace
+// loses half a tree.
 //
-// An unusable id returns ctx unchanged rather than erroring. This is fed by the
-// wire, and some wakes carry no trace — one published outside any span, such
-// as an A2A ask or reply or an answer to a sandbox question — and the honest
-// answer for one of those is a new root, not a refusal to run the turn.
+// An unusable id returns ctx unchanged rather than erroring: the wire feeds
+// this, and some wakes (an A2A ask or reply, a sandbox answer) carry no trace.
+// A new root is the honest answer, not a refused turn.
 func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	traceID, err := trace.TraceIDFromHex(tc.TraceID)
 	if err != nil {

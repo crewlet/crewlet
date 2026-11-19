@@ -12,17 +12,12 @@ import (
 
 // THE EVENT RECORD'S WIRE NAMES ARE THE DASHBOARD'S.
 //
-// This struct is what /events, /events/{id} and /events/trace/{id} answer
-// with. It carried no JSON tags at all, so Go marshalled it as ID, Type,
-// Source, Time, TraceID, Payload — and the client reads id, type, source,
-// timestamp, trace_id, payload. Every one of those screens rendered a blank
-// event with an empty payload, and nothing failed: the fields were simply not
-// the ones being read.
+// /events, /events/{id} and /events/trace/{id} answer with this struct and the
+// client reads id, type, source, timestamp, trace_id, payload off it. A wrong
+// name renders a blank event with an empty payload and fails nothing.
 //
-// A shape test rather than a screen test, because that is where the mistake
-// is invisible. Nothing in Go notices a field name; only a reader on the other
-// end of the wire does, and by then it renders as "this event has nothing in
-// it" rather than as an error.
+// A shape test rather than a screen test: only the reader on the other end of
+// the wire notices a field name, and it shows "nothing in it", not an error.
 func TestAnEventRecordMarshalsWithTheNamesTheClientReads(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(store.EventRecord{

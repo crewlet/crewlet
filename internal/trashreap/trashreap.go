@@ -106,20 +106,14 @@ type Source interface {
 // reaper's: the assistant's conversations, kept `assistant.retention_days` after
 // they were last used, beside a trash every other source keeps thirty days.
 //
-// OPTIONAL, and asked at every pass rather than once, because the term is
-// company configuration that an apply may change while the duty runs. A term
-// under [MinTerm] fails that source's pass and purges nothing: the floor is
-// the reaper's guard against a mistake destroying what people expected to keep,
-// whichever source states the term.
+// OPTIONAL, and asked at every pass, because an apply may change the term. A
+// term under [MinTerm] fails that source's pass and purges nothing: the floor
+// guards against a mistake destroying what people expected to keep.
 //
-// A TERM MAY BE UNKNOWN, and Term then answers why. The assistant's is the
-// term of the revision the fleet's activation pointer names, which a node that
-// does not run that very revision cannot know, and a term guessed in its
-// place is one the company may have lengthened: every item between the two
-// would be purged for good. An unknown term fails that source's pass the way a
-// term under the floor does, and purges nothing of it, so what it would have
-// purged waits for a pass that can read the term. The other sources keep the
-// reaper's term and are reaped as ever.
+// A TERM MAY BE UNKNOWN, and Term then answers why: the assistant's is the term
+// of the revision the activation pointer names, unknowable to a node not running
+// it, and a guessed term the company has lengthened would purge items for good.
+// The pass fails like one under the floor; other sources are reaped as ever.
 type Termed interface {
 	Term(ctx context.Context) (time.Duration, error)
 }

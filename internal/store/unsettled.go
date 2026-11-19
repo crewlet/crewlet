@@ -11,55 +11,28 @@ import (
 
 // A ROW A NODE HOLDS IS NOT ALWAYS A ROW IT KEEPS.
 //
-// Every row of this node's own is written once, here, by the node that
-// published it — but a node without `data` hands its events to the data nodes
-// in batches (internal/observe's custody), and a batch whose claim failed is
-// written by a second keeper before the first has learned it is not its own to
-// keep. Until that first node settles the batch, two logs hold the same row,
-// and a fleet adding two nodes' counts counts it twice.
-//
-// So every read that COUNTS — the outcome counts, the axis's bars and facets, a
-// trace's and a turn's extent, a turn's sums, a usage day — counts the rows
-// this node KEEPS, and does one of two things with the rows it holds of a
-// batch it has written and not settled ([EventLog.WriteCustody]), depending on
-// who reads the count:
-//
-//   - A count that is ANSWERED — to a fleet read, whose asker sums every
-//     data node's answer — names those rows beside the count, as
-//     [UnsettledRow]s: by identity, with whatever each count needs to add the
-//     row in. The asker asks every data node which of the named rows it keeps
-//     ([EventLog.KeptRows]) and counts each once (internal/eventfan). The
-//     named rows are read in the SAME SNAPSHOT as the count they are taken out
-//     of: read apart, a batch settled between the two is counted as kept and
-//     named as unsettled, or neither. [unsettledSQL] is the read.
-//   - A count that is PUBLISHED — a usage day, summed across nodes by every
-//     reader of the replicated history ([DB.UsageForDay]) — leaves them out
-//     and names nothing, because no reader of a published day can ask a node
-//     which of its rows it keeps: the day has to BE the rows it keeps.
-//     [keptRowSQL] is the predicate.
-//
-// ONE TABLE AND ONE KEY for both: what makes a row unsettled is a property of
-// the row and not of the question, so `custody_unsettled_rows` — one row per
-// identity of a batch in flight, keyed on the log's own `(event_time,
-// event_id)` — is the only place either shape finds it. [unsettledSQL] drives
-// a seek of the log from each of its rows; [keptRowSQL] seeks it from each row
-// counted, and [EventLog.KeptRows] from each row named. A count that took its own route
-// to the custody tables is a count whose idea of "unsettled" could drift from
-// its neighbours'.
+// A failed-claim custody batch (internal/observe) is also written by a second
+// keeper, so until it settles a fleet sum counts its rows twice. Every COUNT
+// counts the rows this node KEEPS and treats those of a batch it wrote and not
+// settled ([EventLog.WriteCustody]) by who reads it:
+//   - ANSWERED to a fleet read: names them as [UnsettledRow]s in the SAME
+//     SNAPSHOT (read apart, a settling batch is counted kept and named, or
+//     neither); the asker counts each once ([EventLog.KeptRows]). [unsettledSQL].
+//   - PUBLISHED ([DB.UsageForDay]): leaves them out, as no reader can ask a
+//     node what it keeps. [keptRowSQL].
+// One table, `custody_unsettled_rows`, serves both.
 
 // UnsettledRow is one row this node holds of a custody batch it has written and
 // not settled: its identity in the event log — `(Time, ID)`, the table's
 // primary key, to the store's microsecond — and what each count adds it in by.
 //
-// ONE TYPE FOR EVERY COUNT, each reading the fields it needs: the outcome
-// counts read the type and the app, the axis the category and the failed flag,
-// a turn's sums its turn, its type, its tokens and its duration, and a trace's
-// or a turn's extent nothing but the identity. The fields are the columns the
-// counts' own statements read, so a row is added back by the rule that counted
-// it ([EventHistogram.Count], [TurnPartial.Add], [NotificationOutcomes.Add]).
-//
-// ON THE WIRE between nodes (internal/eventfan), where every field but the
-// identity is omitted when empty: a count reads only the fields it adds by.
+// ONE TYPE FOR EVERY COUNT, each reading the fields it needs (outcome counts:
+// type and app; the axis: category and failed; a turn's sums: turn, type,
+// tokens, duration; an extent: the identity alone). The fields are the columns
+// the counts' own statements read, so a row is added back by the rule that
+// counted it ([EventHistogram.Count], [TurnPartial.Add],
+// [NotificationOutcomes.Add]). On the wire (internal/eventfan) every field but
+// the identity is omitted when empty.
 type UnsettledRow struct {
 	Time time.Time `json:"time"`
 	ID   string    `json:"id"`
@@ -107,26 +80,18 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// unsettledSQL is the rows of every custody batch this node has written and not
-// settled that `where` selects, and its arguments — every column an
-// [UnsettledRow] carries.
+// unsettledSQL is the rows of every unsettled custody batch this node wrote
+// that `where` selects, and its arguments: every [UnsettledRow] column.
 //
-// `where` is a predicate over the event log written with its columns
-// UNQUALIFIED, the way every count's own statement writes it ([ListQuery]'s
-// filters, [TurnQuery]'s row terms): each column it names is the log's alone,
-// since the custody table has none of those names but the identity, which the
-// join equates, so one predicate counts the rows and narrows the rows named.
+// `where` is a predicate over the event log with UNQUALIFIED columns, as every
+// count writes it: the custody table shares no name but the identity, which
+// the join equates, so one predicate counts the rows and narrows those named.
 //
-// DRIVEN FROM THE IN-FLIGHT IDENTITIES: each is a seek of the log by its
-// primary key, and CROSS JOIN fixes that order, so the planner cannot walk the
-// count's rows and probe the identities for each
-// (TestTheCustodyReadsSeekTheLogByIdentity). That costs one seek per identity
-// in flight, whatever the count's own window — a few normally, and tens of
-// thousands after a coordination outage leaves batches unsettled (about 12 ms
-// per count beside fifty thousand, measured). Driven from the identities on
-// purpose all the same: the broad counts — the axis over the thirty-day floor
-// — would otherwise read every row they count to probe the key, which is far
-// more than any backlog.
+// DRIVEN FROM THE IN-FLIGHT IDENTITIES: each is a seek of the log by primary
+// key, and CROSS JOIN fixes that order so the planner cannot walk the count's
+// rows and probe the identities (TestTheCustodyReadsSeekTheLogByIdentity). One
+// seek per identity in flight, whatever the window: a few normally, tens of
+// thousands after a coordination outage, still far less than the broad counts.
 func unsettledSQL(where []string, args []any) (string, []any) {
 	failed, failedArgs := failedRow(func(name string) string { return "e." + name })
 	query := `SELECT e.event_time, e.event_id, e.event_type, e.category,
@@ -182,22 +147,17 @@ func readUnsettled(ctx context.Context, q querier, where []string, args []any) (
 }
 
 // KeptRows answers which of some rows, named by identity, this node KEEPS:
-// holds in its log, and not as a row of a custody batch it has written and not
-// settled.
+// holds, and not as a row of an unsettled custody batch it wrote.
 //
 // The other half of every count's unsettled rows (see the file doc). A row one
-// node names unsettled may be kept by another — the batch's keeper, which
-// settled first — and that node's count already holds it, while one no node
-// keeps is in no count at all. So whoever sums the fleet asks every data node
-// this about the rows named unsettled, and counts a row once unless a node that
-// keeps it counted it already. Only the identity of each row is read. ONE
-// STATEMENT for the rows held and the batches unsettled — each named row a seek
-// of the log, and its in-flight key probed from it ([keptRowSQL]) — so the two
-// are one snapshot, for the counts' own reason, and the cost is the rows named
-// rather than the backlog in flight: read whole into a set, as it was, the
-// in-flight table cost every fleet read about 170 ms beside the fifty thousand
-// identities a coordination outage leaves. The answer is never nil, and each
-// row in it carries its identity alone.
+// node names unsettled may be kept by another; one no node keeps is in no
+// count. So whoever sums the fleet asks every data node this and counts a row
+// once unless a keeper counted it already.
+//
+// ONE STATEMENT for rows held and batches unsettled (each named row a seek of
+// the log, its in-flight key probed from it, [keptRowSQL]) gives one snapshot
+// and costs the rows named, not the backlog. The answer is never nil; each row
+// carries its identity alone.
 func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]UnsettledRow, error) {
 	out := []UnsettledRow{}
 	if len(named) == 0 {
@@ -230,25 +190,16 @@ func (l *EventLog) KeptRows(ctx context.Context, named []UnsettledRow) ([]Unsett
 	return out, nil
 }
 
-// keptRowSQL is a predicate over the event log under the alias `e`, which
-// every usage statement gives it, that holds for a row this node KEEPS: every
-// row it holds but those of a custody batch it has written and not settled.
+// keptRowSQL is a predicate over the event log under the alias `e` that holds
+// for a row this node KEEPS: every row but those of an unsettled custody batch
+// it wrote. It is how a PUBLISHED count obeys the file doc's rule.
 //
-// It is how a count that is PUBLISHED rather than answered obeys the rule the
-// file doc states. Counted as held, a batch two data nodes wrote before either
-// settled it was in both nodes' days, and once the loser's copy was deleted the
-// double count stayed in the history of any day the publisher no longer
-// re-derived.
-//
-// A SEEK OF THE IN-FLIGHT KEY FROM EACH ROW COUNTED, which costs the same
-// whether a few identities are in flight or fifty thousand: the
-// `custody_unsettled_rows` key leads with the log's own `(event_time,
-// event_id)`, so the anti-join is a covering-index probe per row
-// (TestEveryUsageCountSeeksItsWindow). The obvious alternative — an
-// uncorrelated `NOT IN` over the batches' JSON — is read once and then checks
-// every counted row against the whole of it, measured at 2.4 s for one
-// fingerprint of a five-thousand-row day beside ten thousand identities in
-// flight, which a coordination store away for a few minutes leaves behind.
+// A SEEK OF THE IN-FLIGHT KEY FROM EACH ROW COUNTED, at the same cost for a few
+// identities or fifty thousand: the `custody_unsettled_rows` key leads with the
+// log's `(event_time, event_id)`, so the anti-join is a covering-index probe
+// (TestEveryUsageCountSeeksItsWindow). An uncorrelated `NOT IN` over the
+// batches' JSON checks every row against the whole set (2.4 s for a day of five
+// thousand rows beside ten thousand identities in flight).
 const keptRowSQL = `NOT EXISTS (SELECT 1 FROM custody_unsettled_rows AS u
 	         WHERE u.row_time = e.event_time AND u.row_id = e.event_id)`
 

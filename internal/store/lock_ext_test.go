@@ -119,19 +119,14 @@ func TestTwoHandlesInOneProcessShareTheLock(t *testing.T) {
 // HOLD KEEPS THE CLAIM WHILE THIS PROCESS HAS NO HANDLE, and the engine's
 // later open shares it rather than taking a second.
 //
-// This is what `crewlet run` does across the gap between reading the store to
-// decide what to boot on and opening it for the engine seconds later: an
-// offline command landing in that gap — another OS process opening the same
-// file — would replace the very row the boot already decided on, and the fix
-// is for the boot to keep the claim the whole way. So the claim excludes a
-// second process even with no handle open here (the boot's window), a handle
-// opened here afterwards shares it (the engine's own open), and only the last
-// of claim-and-handle releasing frees it (the engine running).
+// This is `crewlet run`'s gap between reading the store to decide what to boot
+// on and opening it for the engine. The claim must exclude a second process
+// with no handle open here, a handle opened afterwards must share it, and only
+// the last of claim-and-handle releasing frees it.
 //
-// Mutations, each run red: make [store.Hold] give the claim back before it
-// returns, and the second process opens the file the boot holds; return the
-// bare release rather than its [sync.OnceFunc], and the second release frees
-// the file under the engine's open handle.
+// Mutations, each run red: have [store.Hold] give the claim back before it
+// returns; return the bare release rather than its [sync.OnceFunc], and the
+// second release frees the file under the engine's open handle.
 func TestHoldKeepsTheClaimForABootWithNoHandle(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")

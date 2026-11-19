@@ -56,17 +56,11 @@ func heldAndNamed(t *testing.T, at time.Time) *store.EventLog {
 // THE AXIS TAKES OUT WHAT IT HOLDS UNSETTLED, AND ADDED BACK IT IS THE AXIS OF
 // EVERY ROW HELD — bar for bar, failed share for failed share, facet for facet.
 //
-// A node's part of the axis counts the rows it keeps and names the rows of a
-// custody batch it has written and not settled, for whoever sums the fleet to
-// count once. The two counts it holds differ in exactly what a named row has to
-// say for itself: the bars are cut over the snapped window and narrowed by the
-// category, and the facets over the window that was asked for, with the
-// category lifted. So each named row, counted back in by
-// [store.EventHistogram.Count], must land where each statement put it — and the
-// part with every name added back is the part the same log answers once the
-// batch is settled as its own. Asked over a window whose bottom edge cuts
-// inside a bucket, so a row the bars count lies outside the facets' window,
-// and narrowed to a category, so a row the facets count is in no bar.
+// The bars are cut over the snapped window and narrowed by category; the facets
+// over the asked window with the category lifted. So each named row, counted
+// back in by [store.EventHistogram.Count], must land where each statement put
+// it, and the part with every name added back equals the settled log's answer.
+// Asked with the window cutting a bucket and narrowed to a category.
 //
 // Mutation: count a named row in its facet whatever its instant, or in a bar
 // whatever its category, or count it failed whatever it carries, and one of the
@@ -133,12 +127,11 @@ func TestTheAxisNamesWhatItHoldsUnsettled(t *testing.T) {
 // A TURN'S SHARE TAKES OUT WHAT IT HOLDS UNSETTLED, from its sums alone, and
 // added back it is the share of every row held.
 //
-// The share's sums — phases, tokens, the cache's share of them, the duration —
-// are what a fleet adds across nodes, so they count the rows the node keeps,
-// and the rows of a custody batch in flight are named with what each sum adds;
-// every other aggregate is a minimum, a maximum or a union, which a row held
-// twice cannot move, and keeps every row held. Which turns the page lists is
-// read in the same snapshot.
+// The share's sums (phases, tokens, cache share, duration) are what a fleet
+// adds across nodes, so they count the rows the node keeps and name the rows of
+// a custody batch in flight with what each sum adds; every other aggregate is
+// a minimum, maximum or union, which a row held twice cannot move, and keeps
+// every row held. The page's listing is read in the same snapshot.
 //
 // Mutation: drop a sum from [store.TurnPartial.Add], or take the named rows out
 // of the whole partial rather than its sums, and the share counted back in

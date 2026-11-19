@@ -206,18 +206,16 @@ func TestTheLiveAndStoredProducersAgreeOnAPhase(t *testing.T) {
 
 // A COLLECTED LAUNCH IS COUNTED AS THE EXECUTOR'S SPEND.
 //
-// A launch's own record is the only place its tokens reach a reader: the
-// executor's resumed record states the executor's round with no tokens, and
-// nothing else carries the run's. So the record has to fold through the
-// stored rollup and the live one alike — under the executor's phase, since it
-// names none of its own and what it spent is the executor's, and under its own
-// model and price. A record either producer dropped would be a run's whole
-// spend missing from the screen that exists to show spend; one either filed
-// under a phase of its own would be drawn as spend nobody's executor made.
+// A launch's own record is the only place its tokens reach a reader (the
+// executor's resumed record states its round with no tokens), so it must fold
+// through the stored rollup and the live one alike, under the executor's phase
+// (it names none) and its own model and price. A dropped record is a run's
+// whole spend missing from the screen that shows spend; one filed under a
+// phase of its own is spend nobody's executor made.
 //
 // Mutation: leave a launch out of the store's spend types, or out of the live
-// projection's, and that producer's rollup has no execute row; file it under
-// no phase, and the row is the unknown one.
+// projection's, and that rollup has no execute row; file it under no phase,
+// and the row is the unknown one.
 func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 	t.Parallel()
 	payload, err := json.Marshal(types.ExecutorCollected{

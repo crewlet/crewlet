@@ -11,42 +11,16 @@ import (
 
 // NOTHING ISSUES A STATEMENT ON THE REPLICATED ESTATE'S POOL.
 //
-// The replicated estate's database is reached for the length of one operation
-// — [store.ReplicatedHandle.DB], [store.DB.ReplicatedDB] — and it answers
-// [store.ErrNoEstate] rather than a database whenever the estate is not open:
-// on a node without `data`, while an adoption holds it closed between its
-// rename and its reopen, and after the node's Close. A caller that goes on to
-// `SQL()` on what it was answered has taken the pool itself, and on the nil a
-// failed lookup leaves behind that is a NIL `*sql.DB`: the statement does not
-// answer an error, it dereferences nil three frames inside database/sql and
-// takes the process down.
-//
-// Six call sites had that shape once, and the one that fired did so in the
-// trim's own tick, which runs on a timer against an estate a shutdown is
-// closing:
-//
-//	database/sql.(*DB).conn(0x0, …)
-//	worklet.Evictions(…)
-//	engine.(*retention).tombstones(…)
-//
-// Every one of them now goes through Read or Tx on the handle, which answer
-// ErrNoEstate. A caller in flight then reaches a closed estate honestly, and
-// every one of these readers already had a branch for an unreadable one.
-//
-// A STRUCTURAL TEST, because the defect is structural: a behavioural one would
-// have to close the estate underneath a running loop at the instant it issues
-// a statement, which is a race a test can only lose reliably.
-//
-// # What it follows, and how far
-//
-// The estate's database is answered alongside an error, so it can never be
-// chained into `.SQL()`: it is always bound to a name first. The walk records,
-// per top-level declaration, every name bound to what `.DB()`,
-// `.ReplicatedDB()` or `.OpenReplicated(…)` answered, and reports that name's
-// `.SQL()` anywhere in the same declaration — a closure inside it included,
-// which is where a goroutine outliving the check would take it. A name bound in
-// one declaration and used in another is beyond it, and a shadowed one is
-// reported: the safe direction, for the reason the applier gate gives.
+// The replicated estate's database ([store.ReplicatedHandle.DB],
+// [store.DB.ReplicatedDB]) answers [store.ErrNoEstate] when the estate is not
+// open (no `data`, an adoption between rename and reopen, after Close); `SQL()`
+// on the answer is a NIL `*sql.DB` dereferenced inside database/sql, taking the
+// process down. Callers use Read or Tx on the handle.
+// STRUCTURAL, because a behavioural test would have to close the estate at the
+// instant a loop issues a statement: per top-level declaration the walk records
+// each name bound to `.DB()`, `.ReplicatedDB()` or `.OpenReplicated(…)` and
+// reports its `.SQL()` in the same declaration, closures included. Use in
+// another declaration is beyond it; a shadowed name is reported, the safe side.
 func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 	t.Parallel()
 

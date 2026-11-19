@@ -163,12 +163,10 @@ func TestASurvivorsParentPointerIsClearedWhenItsParentGoes(t *testing.T) {
 // REVISION ACTIVATED INSIDE THE WINDOW SURVIVE THE SWEEP; nothing else past the
 // horizon does.
 //
-// The fleet's row is usually the boot row, and the case this guards is the one
-// where it is not: a node that refused the fleet's revision runs an older one,
-// and the fleet's is what it restores when the pointer is gone — swept, the
-// node would restore the older revision it runs over every node that runs the
-// newer. And an old revision the fleet re-activated yesterday is the company,
-// whatever its creation says, before this node's reconciler has recorded it.
+// The fleet's row is not the boot row when a node refused the fleet's
+// revision: swept, the node would restore the older revision it runs over every
+// node on the newer. And an old revision the fleet re-activated yesterday is
+// the company whatever its creation says, before the reconciler recorded it.
 //
 // Mutation: drop the fleet's row from the kept set, or the activation term
 // from the sweep's predicate, and a kept row here goes.
@@ -335,17 +333,10 @@ func TestTheSweepRunsWithNothingToBootOn(t *testing.T) {
 
 // AND A REVISION THAT NAMES ITSELF AS ITS PARENT TERMINATES THE SWEEP.
 //
-// # Why this is reachable rather than paranoia
-//
-// A copy of a fleet revision takes BOTH the id and the parent id from its
-// caller — the pointer's record, not a row this node minted — and nothing in
-// the schema forbids a row from naming itself. A self-referencing row
-// satisfies the foreign key, because the row it points at exists.
-//
-// What that costs without a visited set is not a wrong answer: it is an
-// infinite loop inside a maintenance tick, holding the sweep for ever on a
-// node that otherwise looks healthy. Nothing writes one today, which is
-// exactly why nothing would notice it.
+// A copy of a fleet revision takes both its id and parent id from the
+// pointer's record, and a self-referencing row satisfies the foreign key. Without
+// a visited set that is an infinite loop inside a maintenance tick on a node
+// that looks healthy; nothing writes one today, so nothing would notice.
 func TestTheSweepTerminatesOnARevisionThatIsItsOwnParent(t *testing.T) {
 	t.Parallel()
 	c := configsFor(t)

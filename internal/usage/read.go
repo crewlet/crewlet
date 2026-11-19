@@ -238,15 +238,13 @@ const (
 // a `usage_schedule_runs` row aliased `r`, with [fireOutcomeArgs] bound to it.
 //
 // THE LEDGER'S WORD, UNLESS THE FIRE WAS NOT RUN. The scheduler's node records
-// what it did, which for a fire it sent is `fired`; the seat's node records a
-// fire it set aside because a later fire of the schedule ran in its place, in
-// its own schedule-day (`usage_schedule_superseded`). The two are usually
-// different nodes, and the second is filed on the day the seat came back
-// rather than the day of the fire, so they are joined here, by the fire's
-// trace, at read time: the one place both halves are, whichever nodes and
-// days published them. Only a SENT row can be superseded, by the cron or on a
-// person's ask: both wait in the seat's inbox under the schedule's one
-// partition, and the seat runs the latest of them. A skip was never sent.
+// `fired` for a fire it sent; the seat's node records a fire it set aside
+// because a later fire of the schedule ran in its place, in its own
+// schedule-day (`usage_schedule_superseded`), filed on the day the seat came
+// back. The two are usually different nodes, so they are joined here by the
+// fire's trace at read time, the one place both halves are. Only a SENT row can
+// be superseded: sends wait in the seat's inbox under the schedule's one
+// partition, and the seat runs the latest. A skip was never sent.
 const fireOutcomeSQL = `CASE WHEN r.outcome IN (?, ?) AND r.trace_id != '' AND EXISTS (
 		SELECT 1 FROM usage_schedule_superseded AS s WHERE s.trace_id = r.trace_id)
 	THEN ? ELSE r.outcome END`
@@ -261,15 +259,13 @@ func fireOutcomeArgs() []any {
 // schedule's through `usage_schedule_runs_schedule_idx` (replicated 0076),
 // each walked in the page's own order and stopped at the page.
 //
-// EVERY DATA NODE'S FIRES, which is the domain's point: a schedule fires on
-// whichever node holds its duty (a duty takes `workers`, which takes `data`),
-// and the company's account of its schedules is the union — including a node
-// that has since left. The horizon is the applier's (181 days); nothing older
-// is here to page to.
+// EVERY DATA NODE'S FIRES: a schedule fires on whichever node holds its duty,
+// so the company's account is the union, including a node that has left. The
+// horizon is the applier's (181 days).
 //
-// THE ONE READ OF A FIRE'S HISTORY. The company feed, the schedules' recent
-// runs and one schedule's own history all page it, so a fire reads as the
-// same outcome on every surface that shows it ([fireOutcomeSQL]).
+// THE ONE READ OF A FIRE'S HISTORY: the company feed, the schedules' recent
+// runs and one schedule's history all page it, so a fire reads as the same
+// outcome on every surface ([fireOutcomeSQL]).
 func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	[]ScheduleRun, bool, error) {
 

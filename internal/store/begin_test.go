@@ -14,28 +14,17 @@ import (
 )
 
 // A FOREIGN COMMIT CANNOT ABORT A WRITE TRANSACTION BETWEEN ITS READ AND ITS
-// WRITE, which is the shape every state-log applier has and the one the
-// driver's own begin does not survive.
+// WRITE, the shape of every state-log applier, which the driver's own begin
+// does not survive.
 //
-// # What this is protecting
+// Turso's BeginTx execs a plain DEFERRED "BEGIN", under which a transaction
+// that READS then WRITES is aborted by any commit anywhere in the file
+// ("database snapshot is stale"), replaying a four-thousand-row batch each time.
 //
-// Turso's BeginTx discards its options and execs a plain, DEFERRED "BEGIN".
-// Under that begin a transaction that READS and then WRITES is aborted by any
-// commit landing anywhere in the file in between — including into a table it
-// never names — with "database snapshot is stale". The applier reads the rows
-// below its batch, decides, then writes, so under contention it was being
-// aborted and REPLAYING a four-thousand-row batch, once per foreign commit,
-// with nothing but a WARN to say so.
-//
-// # Why it drives the driver directly rather than DB.Tx
-//
-// Two reasons, and both are about making the claim falsifiable. The retry loop
-// sits above DB.Tx and would hide an abort behind a second attempt, so the
-// assertion has to be the ERROR rather than a count. And the CONTROL — the
-// deferred begin still aborting — is what stops this passing vacuously the
-// day the driver gains MVCC and the hazard disappears; running both modes
-// through the same wrapper is the only way to state "this one aborts and this
-// one does not" as one fact.
+// It drives the driver directly, not DB.Tx, whose retry loop would hide an
+// abort: the assertion is the ERROR, not a count. The CONTROL (the deferred
+// begin still aborting) stops it passing vacuously the day the driver gains
+// MVCC.
 func TestTheImmediateBeginIsWhatSurvivesAForeignCommit(t *testing.T) {
 	t.Parallel()
 	db := openBeginStore(t)
@@ -240,15 +229,12 @@ func openBeginStore(t *testing.T) *store.DB {
 // again afterwards.
 //
 // [store.ReplicatedReader] is handed to every reader of the replicated estate
-// on the strength of being unable to write, and an estate written anywhere but
-// its applier diverges from every peer that holds it — silently, since the rows
-// look right on the node that wrote them. A type with no Tx method keeps a
-// caller from asking for a write transaction; it does not keep a statement
-// inside a read's own transaction from writing, and one did: an INSERT through
-// a reader's Read committed. So the engine refuses it — and the refusal must
-// not outlive the read, because pools hand the same connections to reads,
-// writes, migrations and copies alike. ONE CONNECTION, so every step below is
-// on the connection the read left behind.
+// on the strength of being unable to write, and an estate written outside its
+// applier diverges silently. A type with no Tx method does not keep a
+// statement inside a read's own transaction from writing (an INSERT through
+// Read committed), so the engine refuses it, and the refusal must not outlive
+// the read: pools hand connections to reads, writes, migrations and copies.
+// ONE CONNECTION, so every step is on the one the read left behind.
 func TestAReadTransactionRefusesAWrite(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

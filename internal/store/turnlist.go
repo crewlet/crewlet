@@ -14,57 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The list of turns, which is the one view of a working company that did not
-// exist.
+// The list of turns: one row per turn, a GROUP BY over the event log's columns
+// (`turn_id`, phase numbers), not a fold over payloads. Only facts the
+// COMPLETION event knows (duration, intent, item, ENDED) use `json_extract`,
+// each CASE gated on event type: a turn has a completion per segment.
 //
-// # There was no list of turns anywhere
-//
-// A turn is the unit of work this engine does: a wake, a decision, some tool
-// rounds, a reply. Everything else is a projection of one — the spend rollup,
-// the seat page, the item's history — and none of them is a list of them. The
-// dashboard faked one by paging the raw event feed sixty-one times and folding
-// the rows in the browser, which is slow, wrong at the page boundary (a turn
-// straddling two pages appeared twice), and capped at whatever the caller gave
-// up on.
-//
-// # It is an aggregate over columns, not over payloads
-//
-// Migration 0015 promoted a phase's numbers out of its payload — the model,
-// the phase, the iteration and the three token counts are columns now — and
-// 0018 indexed `turn_id`. So one row per turn is a GROUP BY over narrow
-// values, not a fold over documents.
-//
-// The exception is the facts that only the COMPLETION event knows: how long
-// the turn took, what it set out to do, the item it was charged to, and
-// whether it ENDED. Those are read with `json_extract` from the completion
-// rows, which is why every such CASE is gated on the event type rather than
-// applied to every row — a turn has a completion per segment and sixty
-// phases.
-//
-// # A completion is not always an end
-//
-// A turn that launches its detached executor PARKS: the segment
-// that launched it publishes `turn_completed` with `suspended: true`, and the
-// same turn id completes again — possibly on another node, possibly after a
-// restart — when the run is collected and the loop resumes. So one turn can
-// hold several completion records, and "a completion exists" is not "the turn
-// finished". Read that way, this list called a parked turn complete the
-// moment it parked and reported the first segment's duration as the whole
-// turn's. The NEWEST completion decides what the turn is now — finished, or
-// parked waiting for its run — and the duration is the sum of every segment's
-// own measurement, which is the time the turn spent working rather than the
-// time it spent waiting. A completion that did not park names no `suspended`
-// (the flag is omitempty) and folds as an end.
-//
-// # A lost run ends the turn that was waiting for it
-//
-// A parked turn resumes only when its run is collected, and a run that is LOST
-// — its box unreachable, its claim stranded, its conversation gone — is settled
-// like any other lost turn, announced by `executor_failed` and never
-// resumed. Read by the completions alone that turn was parked for good: the
-// failure is therefore an end, dated when it was announced, and the newest end
-// still decides — a run that failed while still launching is followed by its
-// turn's own completion, which is newer.
+// A completion is not always an end: a turn that launches its detached
+// executor PARKS (`turn_completed` with `suspended: true`) and the same turn id
+// completes again when the run is collected, maybe on another node. The NEWEST
+// completion decides finished or parked; duration sums every segment's own
+// measurement. A LOST run (`executor_failed`) never resumes, so it is an end
+// dated when announced; the newest end still decides.
 
 // The event types this fold is keyed on, taken from the payload types
 // themselves rather than spelled here: a literal would be the one place the
@@ -76,32 +36,18 @@ var (
 	agentTurnEnded = types.AgentTurnCompleted{}.EventType()
 )
 
-// failedRow is the per-row predicate "this event reports a failure", and it is
-// [types.Failed]'s rule written for SQL rather than a fourth answer to the same
-// question.
+// failedRow is the per-row predicate "this event reports a failure": the rule
+// of [types.Failed] written for SQL, not a fourth answer to the same question.
 //
-// THE TAG IS ONLY HALF OF IT. The writer stamps `failed` from a payload field,
-// and the four types that ARE a failure by their very name carry no such field:
-// llm_unavailable, budget_exhausted, turn.guard_breach and executor_failed.
-// Those are precisely the records a turn that died BEFORE completing a phase
-// leaves behind — a seat refused at the budget gate, a chain whose every model
-// was down, a breached guard — so on the tag alone this aggregate answered "not
-// failed" for a turn that never ran, listing it as clean with no completion
-// record, which the dashboard draws identically to a turn still in flight. The
-// event reader already applies the rule ([EventLog] stamps Failed on read) and
-// so does the live projection, which is the disagreement types.Failed's own doc
-// warns about.
+// The tag is only half of it. The writer stamps `failed` from a payload field,
+// but llm_unavailable, budget_exhausted, turn.guard_breach and executor_failed
+// are failures by name and carry none. They are what a turn that died BEFORE
+// completing a phase leaves behind; on the tag alone it would list as clean.
+// The names come from [types.FailureEventNames], never a literal.
 //
-// The names come from the catalogue rather than a literal, for the reason the
-// two event types above are taken from their payload types: a spelling written
-// here is the one place a wire name silently stops matching. Through
-// [types.FailureEventNames], which is the accessor that exists because this is
-// the caller that has to ENUMERATE the set rather than test one value against
-// it — the map behind it is unexported, so there is no second way in.
-//
-// `col` qualifies each column for whichever FROM the caller built — the
-// listing's predicate joins the party table when it narrows by a related agent
-// ([ListQuery.predicate]) — and is nil where the statement reads the log alone.
+// `col` qualifies each column for the caller's FROM (the listing joins the
+// party table, [ListQuery.predicate]); nil where the statement reads the log
+// alone.
 func failedRow(col func(string) string) (string, []any) {
 	if col == nil {
 		col = func(name string) string { return name }
@@ -263,21 +209,16 @@ type Turn struct {
 	// that record's alone ([turnFailedRow]).
 	Failed bool `json:"failed"`
 
-	// Error and ErrorKind are WHY IT FAILED: the message and the class of a
-	// failure record of this turn's own, empty for a turn that carried none. The
-	// turn's own completion speaks first (its `error` is the failure that
-	// ended it), then any other failed record (a failed phase, a provider
-	// chain that ran out, a breached guard), so a turn that died before it
-	// completed still says why. The kind is the record's `error_kind`, or
-	// the failure's own event type for the four types that ARE a failure
-	// (llm_unavailable, budget_exhausted, turn.guard_breach,
+	// Error and ErrorKind are WHY IT FAILED, from a failure record of this
+	// turn's own, empty if none. The turn's own completion speaks first, then
+	// any other failed record (phase, exhausted chain, breached guard), so a
+	// turn that died before completing still says why. The kind is the
+	// record's `error_kind`, or its event type for the four types that ARE a
+	// failure (llm_unavailable, budget_exhausted, turn.guard_breach,
 	// executor_failed).
 	//
-	// ON THE ROW, so whoever may read the row reads why it failed: the
-	// seat's trail, decided before the listing is read. Before this field
-	// the reason was only in the turn's raw events, an administrator's
-	// read, and a lead reading their agent's failed turn, or the
-	// assistant asked why one failed, could say only that it had.
+	// ON THE ROW, so whoever may read the row reads why: the raw events are an
+	// administrator's read.
 	Error     string `json:"error,omitempty"`
 	ErrorKind string `json:"error_kind,omitempty"`
 
@@ -588,22 +529,15 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 // TurnPartial is what ONE event log holds of one turn: the aggregate [Turn] is
 // folded from, before it is folded.
 //
-// # Why a turn has partials at all
-//
-// A turn's events are written to the event log of the node that PUBLISHED
-// them, and a turn is not always published by one node: a turn parked on a
-// detached executor resumes wherever its seat is held when the run is
-// collected, which after a restart or a placement move is another node. So
-// the fleet's row for that turn is spread across two logs, and folding each
-// half into a finished [Turn] loses exactly what the whole needs — whether a
-// turn is complete is decided by which of its NEWEST end and its NEWEST park
-// is later, and two booleans computed apart cannot be compared.
-//
-// So a partial keeps every aggregate in the form its SQL computed it — sums,
-// minimums, maximums and the two instants — and [CombineTurnPartials] applies
-// the same aggregates across logs. It is the wire shape `internal/eventfan`
-// carries between nodes, which is why every field is tagged: two builds read
-// it, and it evolves additively.
+// A turn parked on a detached executor resumes wherever its seat is held when
+// the run is collected, possibly another node, so its events are spread across
+// two logs. Folding each half into a finished [Turn] would lose what the whole
+// needs: completeness is decided by whether the NEWEST end or the NEWEST park
+// is later, which two booleans computed apart cannot compare. So a partial
+// keeps every aggregate as its SQL computed it (sums, minimums, maximums, the
+// two instants) and [CombineTurnPartials] applies the same aggregates across
+// logs. It is the wire shape `internal/eventfan` carries; every field is
+// tagged because two builds read it and it evolves additively.
 type TurnPartial struct {
 	TurnID    string    `json:"turn_id"`
 	WorkKey   string    `json:"work_key,omitempty"`
@@ -889,29 +823,15 @@ func laterOf(a, b *time.Time) *time.Time {
 // TurnPartials is [EventLog.Turns] before the fold: this log's share of every
 // turn the query selects.
 //
-// With [TurnQuery.IDs] set it is the OTHER question a fleet asks — "your share
-// of exactly these turns" — which is how a turn selected on one node is made
-// whole from every other: the turn-level narrowing (a model, a work item, a
-// failure, the cursor) was already decided where the turn was selected, and
-// applying it again here would drop the half of the turn that did not match
-// it. The ROW-level filters — the seat and the work key — still apply,
-// because they narrow which records are folded, and a node answering a share
-// without them would fold rows the selecting node did not.
+// With [TurnQuery.IDs] set it answers "your share of exactly these turns": turn-
+// level narrowing (model, item, failure, cursor) was decided where the turn was
+// selected, and reapplying it would drop the half that did not match. ROW-level
+// filters (seat, work key) still apply, as they decide which records fold.
+// more reports turns past the page ([pastPage]); a share is never more.
 //
-// more reports that this log holds turns past the page — see [pastPage]. A
-// share is never a page and is never more: it answers every turn it names.
-//
-// # The window is measured from q.At, which is the CALLER's instant
-//
-// For [EventLog.PhaseTokens]' reason: the caller labels its answer with
-// [TurnQuery.Window], and the label is only true of the rows beneath it when
-// both are ONE evaluation of the window. A fleet pins every node's share to
-// the asker's instant through it, so two nodes whose clocks differ fold one
-// window rather than two; a zero At — a caller that labels nothing — is now,
-// read once for the whole answer.
-//
-// THE SHARE SAYS NOTHING ABOUT WHETHER THIS LOG LISTS THE TURN, which is the
-// question [EventLog.ListedTurns] answers beside it.
+// The window is measured from q.At, the CALLER's instant (see
+// [EventLog.PhaseTokens]), so skewed clocks fold one window; zero At is now,
+// read once. Whether this log LISTS the turn is [EventLog.ListedTurns].
 func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []TurnPartial, more bool, err error) {
 	limit := q.Limit
 	switch {
@@ -1020,13 +940,12 @@ func (q TurnQuery) readsBack() bool {
 // no cursor and no page size. Nil IDs ask about nothing, and the answer is
 // never nil.
 //
-// A fleet asks it beside a turn's shares, because the node a turn is LISTED by
-// is the one place its listing can resume from. A turn resumed across nodes is
-// selected by each node on its own half, so one half can fail a filter the
-// whole passes — the clean half of a turn that failed later, the half that
-// names no item of a turn that found its item at the end — and a cursor at that
-// half's start is a position no node's page reaches. Answered by the page's own
-// statement, so a filter added to the page is a filter this answers by.
+// A fleet asks it beside a turn's shares, because the node that LISTS a turn is
+// the one place its listing can resume from. A turn resumed across nodes is
+// selected on each node's own half, which can fail a filter the whole passes
+// (the clean half of a later failure), and a cursor at that half's start is a
+// position no page reaches. It runs the page's own statement, so a new page
+// filter applies here too.
 func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, error) {
 	out := []string{}
 	if len(q.IDs) == 0 {
@@ -1132,21 +1051,17 @@ const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_
 	cache_read_tokens, cache_write_tokens, model, spend_stage`
 
 // partialsSQL is the statement [EventLog.TurnPartials] and
-// [EventLog.ListedTurns] run and its arguments, asked at `at`, for a page
-// (`probe` turns, one past it), a share or the named turns a page selects — a
-// function of its own so its plan can be read back for exactly the statement
-// that runs (TestEveryGroupedReadSeeksItsFiltersIndex,
-// TestEveryTurnFilterSeeksItsIndex).
+// [EventLog.ListedTurns] run, asked at `at`, for a page (`probe` turns, one past
+// it), a share or the named turns a page selects, a function of its own so
+// TestEveryGroupedReadSeeksItsFiltersIndex and TestEveryTurnFilterSeeksItsIndex
+// read back the plan of what runs.
 //
-// THE ROWS ARE SELECTED IN A DERIVED TABLE and folded outside it — see
-// [EventLog]. Grouped over the table itself, the turn list narrowed to a unit
-// of work — the turn page's attempts, on every node — intersected
-// schema/0029's index with every row id of the thirty-day floor's range.
-//
-// A PAGE READ FROM A SPAN reads the rows from `from` rather than from the
-// window's floor, and lists only the turns whose folded rows all lie in the span
-// ([EventLog.pageOfTurns]); a zero `from`, or one at or below the floor, is the
-// whole window.
+// THE ROWS ARE SELECTED IN A DERIVED TABLE and folded outside it ([EventLog]):
+// grouped over the table itself, a turn list narrowed to a unit of work
+// intersected schema/0029's index with every row id of the thirty-day range.
+// A PAGE READ FROM A SPAN reads rows from `from` and lists only turns whose
+// folded rows all lie in it ([EventLog.pageOfTurns]); zero or at-floor `from`
+// is the whole window.
 func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time.Time) (string, []any) {
 	shares := read == readShare
 	// A SHARE IS NOT A WINDOW: the turns were selected where they were

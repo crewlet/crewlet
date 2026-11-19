@@ -131,18 +131,15 @@ func PhaseBand(phase string) Band {
 
 // key is the group a cell falls in, and whether it falls in one at all.
 //
-// A THREE-VALUED ANSWER flattened to two, and the false is load-bearing:
-// GroupWorker leaves out every cell that is not an auxiliary worker's, and a
-// cell with no worker is not "the unknown worker" — it is a phase that has
-// nothing to do with this grouping and belongs in no band of the chart. Every
-// other dimension is present on every cell, so the empty ones become "unknown"
-// the way the rollup's do.
+// The false is load-bearing: GroupWorker leaves out every cell that is not an
+// auxiliary worker's, and a cell with no worker is not "the unknown worker"
+// but belongs in no band. Every other dimension is present on every cell, so
+// empty ones become "unknown" as the rollup's do.
 //
-// A SEAT AND A UNIT ARE BANDED BY IDENTITY — the seat's agent id (a person's
-// [PersonKey]), the unit's key — and never by name, because two seats or two
-// units may share a name and a band keyed on it was both of them, while one
-// seat renamed inside the window was two bands. [GroupRow.Label] is what a band
-// is called.
+// A SEAT AND A UNIT ARE BANDED BY IDENTITY (the seat's agent id, a person's
+// [PersonKey], the unit's key), never by name: two seats may share a name, and
+// one seat renamed inside the window would be two bands. [GroupRow.Label] is
+// what a band is called.
 func (g Group) key(c Cell, seats Seats) (string, bool) {
 	switch g {
 	case GroupPhase:

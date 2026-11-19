@@ -143,20 +143,18 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 	return out, mark
 }
 
-// A NODE'S DAY IS THE ROWS IT KEEPS — never a custody batch it has written and
-// not settled, which may be another data node's to keep.
+// A NODE'S DAY IS THE ROWS IT KEEPS, never a custody batch written and not
+// settled, which may be another data node's to keep.
 //
-// Until a batch settles, two logs can hold its rows, and every reader of the
-// replicated history sums the nodes' days: counted as held, a stateless node's
-// spend was billed twice, and once the loser's copy was deleted the double
-// count stayed in the history of every day the publisher no longer looked at.
-// So the batch counts in neither the day nor its fingerprint until it settles;
-// kept, it counts, and the fingerprint moves so today's publisher derives it
-// again; not kept, its rows go and nothing ever counted them.
+// Until a batch settles, two logs can hold its rows and every reader sums the
+// nodes' days: counted as held, the spend is billed twice, and the double count
+// stays in every day the publisher no longer looks at. So the batch counts in
+// neither the day nor its fingerprint until it settles; kept, it counts and the
+// fingerprint moves so the publisher derives it again.
 //
-// Every statement a day is derived from is exercised — the spend, the ended
-// turns, the reads, a person's spend, a unit repository's reads — so leaving
-// the predicate off any one of them fails here.
+// Every statement a day is derived from is exercised (spend, ended turns,
+// reads, a person's spend, a unit repository's reads), so leaving the
+// predicate off any one fails here.
 func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 	t.Parallel()
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
@@ -305,20 +303,16 @@ func TestATurnsFiguresAreReadOffTheRecordThatEndsIt(t *testing.T) {
 
 // A TURN WHOSE END STATES NO TALLY IS READ OFF ITS RECORDS, NOT AS ZEROS.
 //
-// Every `turn_completed` a build before [types.TurnTally] wrote — every one in
-// a data node's log at the upgrade, every one a peer still on that build
-// publishes during a rolling upgrade, and the end of a turn such a build parked
-// — carries no `turn`. Read as a turn that measured nothing, the first
-// derivation after the upgrade published every such turn as zero-length,
-// unreviewed and unfailed over the history the old build had published, for
-// the 181 days the history keeps it. So such a turn is folded from its records
-// by its id, as that build folded every turn: every segment's duration (the
-// parked one's included), whether its final summary failed, and what each of
-// its reviews decided — a review on the day before included. A turn whose end
-// does state a tally on the same day is still read off the tally alone.
+// Every `turn_completed` a build before [types.TurnTally] wrote (in a log at
+// the upgrade, or from a peer on that build in a rolling upgrade) carries no
+// `turn`. Read as a turn that measured nothing, it would publish zero-length,
+// unreviewed and unfailed over history kept 181 days. So such a turn is folded
+// from its records by its id: every segment's duration (the parked one's
+// included), whether its final summary failed, and what each review decided,
+// one on the day before included. A turn stating a tally is read off it alone.
 //
-// Mutation: read an untallied turn's figures off its (absent) tally, or drop
-// any one fold of [DB.usageLegacyTurns], and this names the figure.
+// Mutation: read an untallied turn off its absent tally, or drop any one fold
+// of [DB.usageLegacyTurns], and this names the figure.
 func TestATurnWhoseEndStatesNoTallyIsReadOffItsRecords(t *testing.T) {
 	t.Parallel()
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)

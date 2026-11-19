@@ -38,23 +38,15 @@ import (
 
 // files is the whole tree.
 //
-// `all:` so directories whose names begin with _ or . are included too: the
-// default embed pattern silently skips them, and a stylesheet under one would
-// be missing from the binary with nothing failing until a browser asked for it.
+// `all:` so directories beginning with _ or . are included: the default embed
+// pattern silently skips them, and nothing fails until a browser asks.
+// THE BRAND MARK IS UNDER dashboard/ TOO, the only copy: the build emits it
+// from `@crewlethq/icons` (`dashboard/vite.config.ts`, `brandAssets`).
 //
-// THE BRAND MARK IS UNDER dashboard/ TOO, and it is the only copy. The build
-// emits `crewlet-icon.svg` and `favicon.ico` from `@crewlethq/icons`, the
-// package that owns the mark (`dashboard/vite.config.ts`, `brandAssets`), so
-// the tab icon, the rail's lockup and the GitHub App landing page are one
-// drawing from one source. A second copy used to sit one directory up, named
-// by a pattern of its own, and two copies of one drawing are two files that
-// drift silently.
-//
-// A NEW TOP-LEVEL ASSET WOULD NEED A NEW PATTERN HERE, and
-// TestEveryStaticFileIsInTheBinary is what says so — it walks this directory
-// on disk and fails on anything the embed did not take. The one tree it
-// excuses is protocol/, declared there (unembeddedTrees) with why, and held
-// the other way: a pattern that took it fails the same test.
+// A NEW TOP-LEVEL ASSET NEEDS A NEW PATTERN HERE, and
+// TestEveryStaticFileIsInTheBinary fails on anything on disk the embed did not
+// take. protocol/ is the one excused tree (unembeddedTrees), held the other
+// way: a pattern taking it fails too.
 //
 //go:embed all:dashboard all:artifacts
 var files embed.FS

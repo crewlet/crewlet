@@ -69,17 +69,15 @@ func (b EventBucket) Step() time.Duration {
 
 // MaxHistogramBuckets bounds one answer.
 //
-// A minute bucket over the log's whole 30-day retention is 43,200 bars, which
-// is neither drawable nor a question anybody asked. The cap is a REFUSAL
-// rather than a truncation: dropping the oldest bars silently would put a
+// A minute bucket over the 30-day retention is 43,200 bars, not drawable. The
+// cap is a REFUSAL, not a truncation: dropping the oldest bars would put a
 // month's heading over a day of them, and coarsening the bucket would answer a
-// different question from the one the axis is labelled with. 1,500 is a day of
-// minutes with room to spare, and two months of hours.
+// different question from the axis's label. 1,500 is a day of minutes, or two
+// months of hours.
 //
-// It counts the bars ONE NODE CUTS ([HistogramQuery.Window]) — a window the
-// history clips included its partial first bar, which the asker drops after
-// summing — because that is the number every build refuses at, and a cap one
-// build applied to a different count would refuse an answer its peers give.
+// It counts the bars ONE NODE CUTS ([HistogramQuery.Window]), the clipped
+// partial first bar included, because every build must refuse at the same
+// count or one would refuse an answer its peers give.
 const MaxHistogramBuckets = 1500
 
 // ErrHistogramSpan is returned for a window that would exceed the cap. It names
@@ -148,20 +146,16 @@ type EventBar struct {
 // EventHistogram is the whole axis.
 type EventHistogram struct {
 	// Bucket, Since and Until describe what this covers, so a reader
-	// looking at a bar knows what it is a bar of. Until is EXCLUSIVE,
-	// matching every other half-open window in this engine, and it is
-	// AHEAD OF NOW whenever the bucket in progress is one of the bars —
-	// which is every ask with no top edge. The last bar is a whole one
-	// like the rest and fills as the bucket does; an edge at `now` would
-	// be a bar whose height meant something different from its
-	// neighbours'.
+	// looking at a bar knows what it is a bar of. Until is EXCLUSIVE, like
+	// every half-open window here, and AHEAD OF NOW whenever the bucket in
+	// progress is a bar (every ask with no top edge): the last bar is whole
+	// and fills as the bucket does, where an edge at `now` would make its
+	// height mean something different.
 	//
-	// ONE NODE'S PART, as [EventLog.Histogram] answers it, begins at the
-	// bucket the history floor cuts when the floor clips the window, and
-	// that first bar counts only what lies above the floor — see
-	// [HistogramQuery.Window] for why a node cuts it. The axis a caller is
-	// shown has had it dropped ([EventHistogram.InsideHistory]), so every
-	// bar of it lies wholly inside the history.
+	// ONE NODE'S PART ([EventLog.Histogram]) begins at the bucket the
+	// history floor cuts, and that first bar counts only what lies above it
+	// (see [HistogramQuery.Window]). The shown axis has it dropped
+	// ([EventHistogram.InsideHistory]).
 	Bucket EventBucket `json:"bucket"`
 	Since  string      `json:"since"`
 	Until  string      `json:"until"`
@@ -183,18 +177,13 @@ type EventHistogram struct {
 	// window THAT WAS ASKED FOR — not the snapped one Since and Until report
 	// — with every filter applied EXCEPT the category itself.
 	//
-	// WITHOUT THE CATEGORY, because that is the only meaning a facet count
-	// can have: a chip says how many rows CHOOSING IT would show, and one
-	// counted through its own filter reads zero on every chip but the
-	// selected one. With it, a screen offering the category chips had to
-	// count them over the rows the browser happened to be holding — so a
-	// log reporting nine thousand events in its window offered a `system`
-	// chip reading 0, which is a false statement about somebody's company
-	// however carefully the caption hedges it.
+	// WITHOUT THE CATEGORY, the only meaning a facet count can have: a chip
+	// says how many rows CHOOSING IT would show, and one counted through its
+	// own filter reads zero on every chip but the selected one, a false
+	// statement about the company.
 	//
-	// Every category the window holds is a key; one with no rows is
-	// absent, and a caller rendering a closed set reads a missing key as
-	// the zero it is.
+	// Every category the window holds is a key; one with no rows is absent,
+	// and a caller rendering a closed set reads a missing key as zero.
 	ByCategory map[string]int `json:"by_category"`
 
 	// Unsettled is the rows ONE NODE'S PART holds of a custody batch it has
@@ -259,21 +248,13 @@ func (h *EventHistogram) Count(q HistogramQuery, r UnsettledRow, n int) {
 // Window reports the instants one node's part of the axis covers, after the
 // history floor.
 //
-// Total in both edges, like [PhaseTokenQuery.Window] and for the same reason:
-// the caller LABELS the answer, and an unbounded top edge is "up to now"
-// rather than the zero time. Both edges are snapped OUTWARD to the bucket, so
-// the first and last bars are whole ones rather than a partial bar at each end
-// whose height means something different from its neighbours'.
-//
-// THE FLOOR IS SNAPPED DOWN LIKE ANY OTHER BOTTOM EDGE, so a window the history
-// clips — the default one of every ask that names no `since` — begins at the
-// bucket the floor cuts, and that first bar is a PARTIAL one: it counts only
-// the rows above the floor. A node cuts it anyway: every node cuts this window
-// from the asker's pinned instant, and a fleet sums its nodes' bars INDEX BY
-// INDEX ([eventfan.MergeSeries]), so the parts share their edges by
-// construction. The partial bar is dropped once, from the sum
-// ([EventHistogram.InsideHistory]) — what a caller is shown begins at the first
-// whole bucket inside the history.
+// Total in both edges, like [PhaseTokenQuery.Window]: the caller LABELS the
+// answer, and an unbounded top edge is "up to now". Both edges snap OUTWARD to
+// the bucket, so end bars are whole. THE FLOOR SNAPS DOWN LIKE ANY BOTTOM EDGE,
+// so a clipped window begins at the bucket the floor cuts, a PARTIAL first bar.
+// Every node cuts it from the asker's pinned instant and a fleet sums bars INDEX
+// BY INDEX ([eventfan.MergeSeries]), so parts share edges; the partial bar is
+// dropped once, from the sum ([EventHistogram.InsideHistory]).
 func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	step := q.Bucket.Step()
 	floor := now.Add(-EventHistory)
@@ -281,14 +262,10 @@ func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	if since.IsZero() || since.Before(floor) {
 		since = floor
 	}
-	// THE EDGE THE SNAP IS MEASURED AGAINST, held separately from the
-	// query's own field because they are not the same value: an unbounded
-	// top edge means `now`, and a snap that compared its truncated result
-	// to the ZERO time never fired on exactly that caller. It rounded the
-	// top edge DOWN instead — so a series asked for "up to now" ended at
-	// the start of the bucket in progress, and every event of the current
-	// minute, hour or day was in no bar, out of Total, and absent from an
-	// axis whose own heading claimed to reach them.
+	// THE EDGE THE SNAP IS MEASURED AGAINST, held apart from the query's
+	// field: an unbounded top edge means `now`, and comparing the truncated
+	// result to the ZERO time would round the top DOWN, leaving every event
+	// of the bucket in progress in no bar and out of Total.
 	top := q.Until
 	if top.IsZero() {
 		top = now
@@ -324,23 +301,12 @@ func (b EventBucket) HistoryStart(at time.Time) time.Time {
 // `at`, without the bars that begin below the first whole bucket inside the
 // history ([EventBucket.HistoryStart]).
 //
-// A bar beginning below that bucket reaches below the floor, which every count
-// stops at, so its height is that of its upper part alone — the partial bar
-// the outward snap exists to prevent, labelled with the whole bucket while the
-// rows beneath the floor in it are still on disk (retention keeps a day past
-// it) and in no bar. [HistogramQuery.Window] still cuts it, for the reason it
-// gives; this is where it goes. Since is raised to that bucket, and Total and
-// Failed lose what the dropped bars counted, so they stay the sums of the bars.
-// A window lying WHOLLY below the bucket comes back empty there — Since and
-// Until both on it, no bars — rather than as a bar it cannot fill or the next
-// one, which nobody asked for.
-//
-// ByCategory is left as it is: it counts the window that was asked for, which
-// reaches down to the floor itself.
-//
-// The ASKER'S step, made once on the summed axis rather than by every node on
-// its part: a part is summed with its peers bar for bar, over the window
-// [HistogramQuery.Window] cuts.
+// Such a bar reaches below the floor, which every count stops at, so its height
+// is its upper part alone under the whole bucket's label. [HistogramQuery.Window]
+// still cuts it; this is where it goes, once, on the summed axis (parts are
+// summed bar for bar). Since is raised to that bucket, and Total and Failed lose
+// the dropped bars' counts. A window WHOLLY below it comes back empty (Since and
+// Until on it, no bars). ByCategory counts the window asked for, so it stays.
 func (h EventHistogram) InsideHistory(at time.Time) EventHistogram {
 	start := h.Bucket.HistoryStart(at)
 	drop := 0
@@ -509,21 +475,15 @@ func (q HistogramQuery) unsettledWhere(at time.Time) ([]string, []any) {
 
 // barsSQL is the statement [EventLog.Histogram] counts its bars with when it is
 // asked at `at`, and its arguments, beside the window the bars cover — a
-// function of its own, the window's cut included, so its plan can be read
-// back for exactly the statement that runs at every bucket width
-// (TestEveryGroupedReadSeeksItsFiltersIndex).
+// function of its own so TestEveryGroupedReadSeeksItsFiltersIndex reads the plan
+// of exactly the statement that runs. It counts THE WINDOW THE BARS COVER, not
+// the one asked for: edges snap to the bucket ([HistogramQuery.Window]).
 //
-// THE WINDOW THE BARS COVER, not the one that was asked for: the edges are
-// snapped to the bucket ([HistogramQuery.Window]), and counting rows outside
-// them would put events in no bar at all.
-//
-// It groups over the table itself, unlike [ListQuery.facetSQL], and still
-// seeks a filter's index. MEASURED, NOT REASONED: grouped by this expression
-// over `event_time`, the planner takes the filter's index range — with the
-// window's edges or with the floor alone — where a facet count grouped by a
-// column over the table intersected that index with the primary key's floor
-// range. Nothing promises a planner keeps either choice, so the gate reads the
-// plan back for the statement this returns, at every bucket width.
+// It groups over the table itself, unlike [ListQuery.facetSQL], and still seeks
+// a filter's index. MEASURED, NOT REASONED: grouped by this expression over
+// `event_time` the planner takes the filter's index range, where a facet count
+// grouped by a column intersected it with the primary key's floor range. Nothing
+// promises either choice stays, hence the gate.
 func (q HistogramQuery) barsSQL(at time.Time) (since, until time.Time, query string, args []any) {
 	step := q.Bucket.Step()
 	since, until = q.Window(at)
