@@ -1,6 +1,6 @@
 # Ask Crewlet
 
-Ask Crewlet is a panel in the dashboard where you ask questions
+Ask Crewlet is a page and a panel in the dashboard where you ask questions
 about your company in plain language and have changes prepared for you to
 approve. It answers from the same screens and records you can already open,
 and it prepares the same changes you could already make yourself.
@@ -23,6 +23,14 @@ Select **Ask** in the page bar, or press `Mod+.` (`Cmd+.` on a Mac, `Ctrl+.`
 elsewhere). The panel opens beside the screen you are on and stays open as you
 move around the dashboard. Drag its edge to make it wider or narrower; your
 browser remembers the width.
+
+**Ask Crewlet** in the sidebar (or `g q`) opens its own page: every
+conversation of yours beside the one open, newest first under the day you last
+used it, with a search of their titles. The page and the panel hold the same
+conversation, so an answer still coming in one is the same answer in the other;
+**Open in full page** in the panel's head takes the conversation there. On the
+page, the Ask button and `Mod+.` put you in its message box. A question asked
+on the page carries no screen with it.
 
 When the panel opens, it greets you and says what it can see on your behalf:
 the apps your permissions open. Below that, under **This page**, it offers a
@@ -234,11 +242,6 @@ image is refused: paste the text the image shows instead, or ask an
 administrator to turn on deep work. A question that reaches the engine with
 images all the same is answered with the same advice.
 
-**Think harder** on a hard question, where your company sets a stronger model:
-press it beside **Attach image** and the next question is answered by that
-model, which takes longer and costs more. It applies to that one question;
-press it again for another.
-
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.
@@ -297,8 +300,10 @@ Select **Stop** (or press `Esc`) while an answer is running to stop it.
 Stopping changes nothing: a proposal it had prepared is declined.
 
 The head of the panel has **New conversation**, **Conversations** (your
-history, with **Clear** to delete a conversation for good after you confirm)
-and **Close**. One answer runs at a time in a conversation.
+recent conversations, with **Delete** to delete the open one for good after you
+confirm), **Open in full page** and **Close**. Ask Crewlet's page lists every
+conversation, each with **Delete**. One answer runs at a time in a
+conversation.
 
 ## What it cannot do
 
@@ -365,7 +370,7 @@ The structural limits are why a model that is misled still cannot act on it.
 
 Your conversations belong to you. They are stored encrypted in the company's
 estate and are kept for **30 days** after you last used them, unless your
-company sets a different retention; then they are deleted. **Clear** deletes a
+company sets a different retention; then they are deleted. **Delete** deletes a
 conversation immediately. If your account is removed, all of your
 conversations are erased.
 

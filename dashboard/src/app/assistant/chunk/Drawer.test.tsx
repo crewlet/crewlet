@@ -25,6 +25,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
+import { on as onBus } from "../bus.ts";
 import { queueQuestion, takeQueuedQuestion } from "../control.ts";
 import {
   attachClosedFor,
@@ -129,7 +130,6 @@ function mount(
   model: AssistantModelProblem | null = null,
   admin = false,
   attach: AttachClosed | null = null,
-  deliberate = false,
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
@@ -146,7 +146,6 @@ function mount(
                 unavailable={unavailable}
                 model={model}
                 attach={attach}
-                deliberate={deliberate}
                 admin={admin}
                 onClose={() => {}}
                 initialFocus="composer"
@@ -256,31 +255,42 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
   );
 });
 
-// Think harder is offered only where the company sets a stronger chain, and
-// asks for it on the next question alone.
-test("Think harder sends the next question to the stronger chain, and only that one", async () => {
+// ASK CREWLET HAS ONE MODEL: no question asks for another, and the composer
+// offers no Think harder.
+test("a question runs on Ask Crewlet's one model, with no Think harder", async () => {
+  const sent = engine();
   mount();
   expect(screen.queryByRole("button", { name: "Think harder" })).toBeNull();
-  cleanup();
-
-  const sent = engine();
-  mount(null, null, false, null, true);
-  const harder = screen.getByRole("button", { name: "Think harder" });
-  expect(harder.getAttribute("aria-pressed")).toBe("false");
-  fireEvent.click(harder);
-  expect(harder.getAttribute("aria-pressed")).toBe("true");
 
   const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Which way should we route it?" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
   });
-  await waitFor(() => expect(sent.some((r) => r.url.endsWith("/turns"))).toBe(true));
   const turns = () => sent.filter((r) => new URL(r.url).pathname.endsWith("/turns"));
-  expect(JSON.parse(String(turns()[0]!.init.body))).toMatchObject({ deliberate: true });
-  expect(screen.getByRole("button", { name: "Think harder" }).getAttribute("aria-pressed")).toBe(
-    "false",
-  );
+  await waitFor(() => expect(turns()).toHaveLength(1));
+  expect(Object.keys(JSON.parse(String(turns()[0]!.init.body)))).not.toContain("deliberate");
+});
+
+// THE PAGE HOLDS THE SAME CONVERSATION: Open in full page goes to Ask
+// Crewlet's page on the one open here, and to a new one where none is.
+test("Open in full page opens Ask Crewlet's page on the drawer's conversation", async () => {
+  engine();
+  const opened: string[][] = [];
+  const stop = onBus("assistant.navigation.open", ({ path }) => opened.push([...path]));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Open in full page" }));
+  expect(opened).toEqual([["ask"]]);
+
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Which agents are stuck?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().id).toBe("403212ed-5a4a-586d-8af6-c62411a17c2f"));
+  fireEvent.click(screen.getByRole("button", { name: "Open in full page" }));
+  expect(opened.at(-1)).toEqual(["ask", "403212ed-5a4a-586d-8af6-c62411a17c2f"]);
+  stop();
 });
 
 test("a question past the length a turn takes is not sent", async () => {
@@ -459,7 +469,7 @@ test("an image dropped while the composer is closed is refused with the composer
   expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
 });
 
-test("the history offers Clear only for a conversation with something in it", async () => {
+test("the history offers Delete only for a conversation with something in it", async () => {
   const sent = engine();
   const answered = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
@@ -471,12 +481,12 @@ test("the history offers Clear only for a conversation with something in it", as
   mount();
   const history = screen.getByRole("button", { name: "Conversations" });
 
-  // AN EMPTY CONVERSATION HAS NOTHING TO CLEAR.
+  // AN EMPTY CONVERSATION HAS NOTHING TO DELETE.
   await act(async () => {
     fireEvent.click(history);
   });
   await waitFor(() => expect(screen.getByText("Your recent conversations")).toBeDefined());
-  expect(screen.queryByText("Clear this conversation")).toBeNull();
+  expect(screen.queryByText("Delete this conversation")).toBeNull();
   await act(async () => {
     fireEvent.click(history);
   });
@@ -492,11 +502,11 @@ test("the history offers Clear only for a conversation with something in it", as
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
   });
-  await waitFor(() => expect(screen.getByText("Clear this conversation")).toBeDefined());
+  await waitFor(() => expect(screen.getByText("Delete this conversation")).toBeDefined());
   expect(sent.length).toBeGreaterThan(0);
 });
 
-test("an empty conversation opened from the history offers no Clear", async () => {
+test("an empty conversation opened from the history offers no Delete", async () => {
   const EMPTY_ID = "5b0c7a52-41a3-4f0e-9d0e-2b8f1c3e9a10";
   const summary = {
     id: EMPTY_ID,
@@ -538,11 +548,11 @@ test("an empty conversation opened from the history offers no Clear", async () =
     fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
   });
   await screen.findByText("Your recent conversations");
-  expect(screen.queryByText("Clear this conversation")).toBeNull();
+  expect(screen.queryByText("Delete this conversation")).toBeNull();
 });
 
 // THE OPEN CONVERSATION CARRIES THE HISTORY'S CHECK, every other listed one
-// says it is not the current one, and Clear stays an action after the
+// says it is not the current one, and Delete stays an action after the
 // separator rather than an answer of the choice. Each is shown at the moment
 // the list is ordered by (last_activity_at), never the record's updated_at,
 // which a new title moves too. Mutation: drop `checked` from the listed
@@ -619,8 +629,8 @@ test("the history marks the open conversation and shows when each was last used"
   ]);
   expect(answers[1]!.textContent).toContain(relTime(open.last_activity_at, now));
   expect(answers[1]!.textContent).not.toContain(relTime(open.updated_at, now));
-  const clear = screen.getByRole("menuitem", { name: /Clear this conversation/ });
-  expect(clear.closest("[role='group']")).toBeNull();
+  const remove = screen.getByRole("menuitem", { name: /Delete this conversation/ });
+  expect(remove.closest("[role='group']")).toBeNull();
 });
 
 // AN ANSWER THAT ENDS BETWEEN TWO TICKS HAS JUST HAPPENED. The drawer kept a

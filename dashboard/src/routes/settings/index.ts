@@ -14,7 +14,6 @@ export { Principles } from "./principles/Principles.tsx";
 export { IntegrationPeek } from "./integrations/catalogue.tsx";
 export { Integrations } from "./integrations/Directory.tsx";
 export { Limits } from "./Limits.tsx";
-export { AssistantSettings } from "./AssistantSettings.tsx";
 export { ApiTokens, People, PersonPeek, ServiceAccounts } from "./Access.tsx";
 export { Models } from "./models/Models.tsx";
 export { CredentialPeek, Secrets } from "./Secrets.tsx";

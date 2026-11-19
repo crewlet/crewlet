@@ -366,7 +366,6 @@ export async function send(
   page: PageSnapshot | null,
   attachments: readonly AssistantFileRef[] = [],
   mode: AssistantTurnMode = "ask",
-  deliberate = false,
 ): Promise<void> {
   const key = newActOpID();
   const mine = generation;
@@ -388,7 +387,6 @@ export async function send(
         input: { text },
         page_context: page ? page.context : null,
         ...(mode === "ask" ? {} : { mode }),
-        ...(deliberate ? { deliberate: true } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.file_id) } : {}),
       },
       { id, opKey: key },
@@ -459,15 +457,15 @@ export async function openConversation(id: string): Promise<void> {
 }
 
 /**
- * What a Clear the engine did not take says: a condition of the node in the
+ * What a Delete the engine did not take says: a condition of the node in the
  * engine's words for it (`conditionWords`), which ask for a wait only where
  * one helps, and otherwise where to try again.
  */
-export function clearRefusal(err: unknown): string {
+export function deleteRefusal(err: unknown): string {
   const condition = err instanceof RestError ? conditionWords(err) : null;
   return condition === null
-    ? "The conversation could not be cleared. Try again from Conversations."
-    : `The conversation could not be cleared. ${condition}`;
+    ? "The conversation could not be deleted. Try again from Conversations."
+    : `The conversation could not be deleted. ${condition}`;
 }
 
 /** Remove the open conversation from the person's history, and go home. */
@@ -492,6 +490,18 @@ function rejoin(turnId?: string): void {
     `/assistant/conversations/${pathSegment(view.id)}/stream?${new URLSearchParams({ turn: turn.id })}`,
     turn.seq > 0 ? assistantEventId(turn.id, turn.seq) : undefined,
   );
+}
+
+/**
+ * Remove one of the person's conversations from their history. The open one
+ * leaves for the home, as Clear does; any other is simply gone.
+ */
+export async function deleteConversation(id: string): Promise<void> {
+  if (id === view.id) {
+    await clearConversation();
+    return;
+  }
+  await call("DELETE /assistant/conversations/{id}", null, { id });
 }
 
 /** The person's recent conversations, newest first. */

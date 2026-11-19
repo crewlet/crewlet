@@ -31,7 +31,6 @@ const PERSON: ViewerState = {
   assistant: "disabled",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
 };
 
 describe("a change to an artifact", () => {

@@ -212,6 +212,9 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   home: "home",
   inbox: "inbox",
   me: "me",
+  // ASK CREWLET'S PAGE IS THE DRAWER'S CHUNK: one conversation, drawn by the
+  // same parts in either place (`assistant/chunk/Conversation.tsx`).
+  ask: "assistant",
   principles: "settings",
   brand: "brand",
   "brand-setup": "brand",
@@ -278,7 +281,6 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "mcp-tools": "settings",
   secrets: "settings",
   limits: "settings",
-  "ask-crewlet": "settings",
   spend: "spend",
   "spend-tasks": "spend",
   people: "settings",

@@ -187,11 +187,11 @@ does not.
 4. **Apply the revision** (`crewlet config import`, or the dashboard's
    configuration editor). The next page load lights **Ask** for every person.
 
-An administrator can also change every setting of the block where it is read,
-on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
-its model chain and the stronger chain, the bounds of a turn, the tool
-families turned off, the hosts web research may read, and deep work. Each change is checked by the engine
-before it is saved, as a configuration edit is.
+An administrator can also choose the model on Ask Crewlet's own page
+(`#/ask`): the model named in the conversation's head is a picker for an
+administrator, listing the company's models, with each one that cannot run Ask
+Crewlet drawn disabled beside the engine's reason. The change is checked by the
+engine before it is saved, as a configuration edit is.
 
 `crewlet validate` and every `/config` write refuse a chain that breaks the
 rules above, naming the member and the field to change. A stored revision that
@@ -492,7 +492,7 @@ fleet's activation pointer names, and only on a node that runs that revision:
 a node that refused the fleet's revision, or booted on an offline import the
 fleet has not taken, purges no conversation for its age until it runs the
 fleet's, so a purge comes late rather than by a setting the company has since
-changed. **Clear** in the panel purges one at once.
+changed. **Delete** on Ask Crewlet's page or in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the

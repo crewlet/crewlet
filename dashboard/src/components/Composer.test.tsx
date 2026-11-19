@@ -49,7 +49,6 @@ const JANE: ViewerState = {
   assistant: "disabled",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
   chatVendors: [],
 };
 
