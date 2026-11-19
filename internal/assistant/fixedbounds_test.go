@@ -60,7 +60,7 @@ func TestATurnRunsUnderTheFixedBounds(t *testing.T) {
 	if len(proposals) != 1 || proposals[0].Card.Proposal == nil {
 		t.Fatalf("the turn proposed %+v", proposals)
 	}
-	wait := proposals[0].Card.Proposal.ExpiresAt.Sub(before)
+	wait := proposals[0].Card.Proposal.ExpiresAt.Sub(before) //fixedwait:stated both are the rig's clock, fixed until a test moves it
 	if wait < proposal.TTL-time.Minute || wait > proposal.TTL+time.Minute {
 		t.Errorf("the proposal waits %v, want %v", wait, proposal.TTL)
 	}
