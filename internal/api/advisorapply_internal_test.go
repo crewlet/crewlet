@@ -69,6 +69,18 @@ func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advis
 func (l *applyLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (l *applyLog) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
+	return nil, "", nil
+}
+func (l *applyLog) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
+	return advisordomain.ReportRow{}, false, nil
+}
+func (l *applyLog) Tally(context.Context, time.Time, time.Time, statelog.Freshness) (advisordomain.Tally, error) {
+	return advisordomain.Tally{}, nil
+}
+func (l *applyLog) WriteReport(context.Context, advisordomain.Call, advisordomain.Report) (statelog.Result, error) {
+	return statelog.Result{}, nil
+}
 func (l *applyLog) Key(context.Context, string, statelog.Freshness) (advisordomain.KeyRow, bool, error) {
 	return advisordomain.KeyRow{}, false, nil
 }
@@ -114,6 +126,9 @@ func (r applyReader) Observe(context.Context, time.Time) (duty.Observed, error) 
 	return duty.Observed{Observations: r.observed}, nil
 }
 func (applyReader) Signature(context.Context) (string, error) { return "", nil }
+func (applyReader) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, []string, error) {
+	return nil, nil, nil
+}
 
 // applyConfig is one seat entity at a tag, checked as refuse says.
 type applyConfig struct {

@@ -156,6 +156,8 @@ type Stored struct {
 	Reason   CloseReason
 	ClosedAt time.Time
 	ClosedBy string
+	// OpenedAt is when the episode opened.
+	OpenedAt time.Time
 	// Observation is what the episode's newest record observed.
 	Observation Observation
 	// Body is the observation as the store keeps it, compared byte for byte.

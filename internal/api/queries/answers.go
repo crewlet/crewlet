@@ -1140,6 +1140,8 @@ func Register(r *Registry, s Sources) {
 		r.Register("advisor_finding", Requires(iam.GrantAdmin), s.advisorFinding)
 		r.Register("advisor_run", Requires(iam.GrantAdmin), s.advisorRun)
 		r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
+		r.Register("advisor_reports", Requires(iam.GrantAdmin), s.advisorReports)
+		r.Register("advisor_report", Requires(iam.GrantAdmin), s.advisorReport)
 	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the

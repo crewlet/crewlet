@@ -26,6 +26,11 @@ const (
 // as the prefix of the change that woke it (fired, cleared).
 const alarmWake = types.OriginAlarm
 
+// alarmWoken reports whether the ledger's wake is an alarm's.
+func alarmWoken(wake string) bool {
+	return wake == alarmWake || strings.HasPrefix(wake, alarmWake+":")
+}
+
 // alarmTurns is one seat's started turns an alarm woke, how many of them
 // committed nothing, and what they spent.
 type alarmTurns struct {
@@ -39,8 +44,7 @@ func (a alarmTurns) changed() int64 { return a.turns - a.nothing }
 func alarmTurnsOf(ledger []usage.TurnLedgerRow) map[string]alarmTurns {
 	out := map[string]alarmTurns{}
 	for _, r := range ledger {
-		if types.WakeDisposition(r.Disposition) != types.DispositionStarted ||
-			(r.Wake != alarmWake && !strings.HasPrefix(r.Wake, alarmWake+":")) {
+		if types.WakeDisposition(r.Disposition) != types.DispositionStarted || !alarmWoken(r.Wake) {
 			continue
 		}
 		handle := r.Handle
