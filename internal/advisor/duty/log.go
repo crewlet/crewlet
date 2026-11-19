@@ -20,6 +20,7 @@ type LogReads interface {
 	Findings(ctx context.Context, f advisordomain.Filter, fresh statelog.Freshness) ([]advisordomain.FindingRow, string, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
+	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 }
 
 // LogWrites is the advisor log's write side as the duty writes it.
@@ -38,13 +39,22 @@ var Engine = iam.Actor{Name: "advisor", Kind: iam.ActorSystem}
 // LogOf is the advisor log as the duty reads and writes it, through reads
 // and writes, its operations minted on now.
 func LogOf(reads LogReads, writes LogWrites, now func() time.Time) Log {
-	return advisorLog{reads: reads, writes: writes, now: now}
+	return advisorLog{reads: reads, writes: writes, now: now, by: Engine}
+}
+
+// RecordFor publishes t, decided at now, as by: a step a person's re-check
+// took. Unlike the duty's, every refusal is returned, the caller's to answer.
+func RecordFor(ctx context.Context, reads LogReads, writes LogWrites, by iam.Actor, t advisor.Transition,
+	now time.Time) error {
+
+	return advisorLog{reads: reads, writes: writes, now: func() time.Time { return now }, by: by}.record(ctx, t, now)
 }
 
 type advisorLog struct {
 	reads  LogReads
 	writes LogWrites
 	now    func() time.Time
+	by     iam.Actor
 }
 
 // fresh is every read the duty makes: its own writes, read back on the node
@@ -52,7 +62,7 @@ type advisorLog struct {
 var fresh = statelog.Freshness{Level: statelog.ReadSession}
 
 func (l advisorLog) call(name string) advisordomain.Call {
-	return advisordomain.Call{By: Engine, OpID: statelog.NewOpID(l.now(), name)}
+	return advisordomain.Call{By: l.by, OpID: statelog.NewOpID(l.now(), name)}
 }
 
 // Live is every open and applied finding, as Reconcile compares them.
@@ -129,6 +139,13 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 	switch t.Step {
 	case advisor.StepOpen:
 		o := *t.Observed
+		key, held, err := l.reads.Key(ctx, o.Key(), fresh)
+		if err != nil {
+			return err
+		}
+		if held {
+			o.Finding = advisor.WithoutIneffective(o.Finding, key.Ineffective)
+		}
 		body, err := json.Marshal(o)
 		if err != nil {
 			return err
@@ -267,8 +284,12 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 		if err := json.Unmarshal(r.Body, &o); err != nil {
 			return nil, fmt.Errorf("duty: decode finding %s: %w", r.ID, err)
 		}
+		var ineffective []string
+		if r.IneffectiveFix != "" {
+			ineffective = []string{r.IneffectiveFix}
+		}
 		out = append(out, advisor.Stored{ID: r.ID, Version: r.KeyVersion, State: advisor.State(r.State),
-			Revision: r.Revision, EffectDueAt: r.EffectDueAt, AppliedFix: r.AppliedFix,
+			Revision: r.Revision, EffectDueAt: r.EffectDueAt, AppliedFix: r.AppliedFix, Ineffective: ineffective,
 			Reason: advisor.CloseReason(r.CloseReason), ClosedAt: r.ClosedAt,
 			Observation: o, Body: r.Body})
 	}

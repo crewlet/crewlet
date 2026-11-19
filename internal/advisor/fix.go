@@ -29,10 +29,10 @@ const (
 	FixOpenPage FixKind = "open_page"
 	// FixNone is the engine's or a vendor's own work: nothing for a person.
 	FixNone FixKind = "none"
-	// FixDraftWithAssistant is prose the engine cannot build (a policy):
-	// Ask Crewlet drafts it from Prompt, and its own preview (ADR-0051)
-	// binds the person's approval.
-	FixDraftWithAssistant FixKind = "draft_with_assistant"
+	// FixAskCrewlet is what the engine cannot build (a policy, a change
+	// whose fix did not take): Ask Crewlet drafts it from Prompt, and its
+	// own preview (ADR-0051) binds the person's approval.
+	FixAskCrewlet FixKind = "ask_crewlet"
 )
 
 // Fix is what fixes a finding. Options is always a list, empty for a fix
@@ -54,7 +54,7 @@ type Fix struct {
 	// what that page opens on: an item's key, a seat's handle.
 	Page   Page   `json:"page,omitempty"`
 	Target string `json:"target,omitempty"`
-	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
+	// Prompt is the question an ask_crewlet fix asks Ask Crewlet, in
 	// the engine's words: the evidence and the change to draft, nothing more.
 	Prompt string `json:"prompt,omitempty"`
 	// Act is the atlas tool call an atlas_act fix sends, once per entry.

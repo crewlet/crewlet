@@ -72,6 +72,10 @@ func (a *App) mountAdvisor(mux authz.Mux) error {
 		router.Handle("POST /advisor/runs", policy.Rewriting(), http.HandlerFunc(a.serveAdvisorRun)),
 		router.Handle("POST /advisor/findings/{id}/decision", policy.Rewriting(),
 			http.HandlerFunc(a.serveAdvisorDecision)),
+		router.Handle("POST /advisor/findings/{id}/recheck", policy.Rewriting(),
+			http.HandlerFunc(a.serveAdvisorRecheck)),
+		router.Handle("POST /advisor/findings/{id}/applied", policy.Rewriting(),
+			http.HandlerFunc(a.serveAdvisorApplied)),
 	)
 }
 

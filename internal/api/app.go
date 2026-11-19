@@ -73,6 +73,7 @@ type App struct {
 	advisor        AdvisorLog
 	advisorDuty    *duty.Duty
 	advisorFinding func(ctx context.Context, id string) (queries.AdvisorFinding, error)
+	advisorConfig  AdvisorConfig
 	stopAdvisor    func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
@@ -975,6 +976,9 @@ func New(opts Options) (*App, error) {
 	if a.advisor != nil {
 		a.advisorDuty = sources.AdvisorDuty(duty.LogOf(a.advisor, a.advisor, time.Now), advisorRT.AdvisorClaim())
 		a.advisorFinding = sources.AdvisorFindingOf
+		if sources.Config != nil {
+			a.advisorConfig = sources.Config
+		}
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
