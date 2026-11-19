@@ -5,25 +5,18 @@ import (
 	"sort"
 )
 
-// The two multipliers, and why conflating them is a real bug rather than a
-// tidiness.
+// The two multipliers, and why conflating them is a real bug.
 //
-// They multiply different things at different stages, and the plain reading of
-// "over-fetch" covers both:
-//
-//	SemanticOverfetch — the FILTER over-fetch: how many results the semantic
-//	half must RETURN, so that post-filtering still leaves a full page.
-//	BinaryOversample — the QUANTIZATION over-fetch: how many candidates stage
-//	one must CONSIDER, so that the exact rerank has the right documents to
-//	rank.
+// SemanticOverfetch is the FILTER over-fetch: how many results the semantic
+// half must RETURN so post-filtering still leaves a full page. BinaryOversample
+// is the QUANTIZATION over-fetch: how many candidates stage one must CONSIDER
+// so the exact rerank has the right documents.
 //
 //	stage-1 depth  = FuseN × SemanticOverfetch × BinaryOversample = 1 200
 //	returned depth = FuseN × SemanticOverfetch                    =   150
 //
-// Applying the RETURN ceiling to stage one gives an effective oversample of
-// 3.3×, and 2× measured 0.6552 recall against 1.0000 at 8× — so the two
-// ceilings are separate constants for the same reason the two multipliers
-// are.
+// The RETURN ceiling on stage one gives an oversample of 3.3×; 2× measured
+// 0.6552 recall against 1.0000 at 8×, so the ceilings are separate constants.
 const (
 	// FuseN is how many results each half contributes to the fusion.
 	FuseN = 50
@@ -59,29 +52,15 @@ const (
 
 // BinaryRecallFloor is the quality gate's floor, PER CORPUS SIZE.
 //
-// # Why a curve and not a scalar
-//
-// Recall from a sign code is a decreasing function of the corpus size: the
-// same generator family clears 0.98 comfortably at twenty thousand rows and
-// misses it by a wide margin at half a million. A single number would
-// certify the smallest system this engine runs on and say nothing about the
-// largest it claims to support — so the floor is declared at three sizes and
-// the value for a corpus in between is interpolated.
-//
-// Each value sits about a point of recall below what the seeded fixture
-// measures, and the point is seed variance rather than slack. THEY ARE
-// DECIDED VALUES RATHER THAN MEASURED ONES, and saying so is the point: a
-// floor a first run defines cannot fail on that run. What makes them
-// defensible is that synthetic isotropic clusters UNDERSTATE real 1-bit
-// recall — real embedding spectra are heavy-tailed, and that anisotropy is
-// exactly what binary quantization exploits — so a real corpus is expected to
-// clear them, and one that does not is the signal the gate exists for.
-//
-// The escalation is decided in advance rather than discovered: raise
-// [BinaryOversample] first, which measured free in latency; if that does not
-// reach it, the documented fallback is an int8 first stage, as a code change
-// in the same commit that changes the model default and never as a runtime
-// knob.
+// Recall from a sign code falls with corpus size (0.98 is easy at twenty
+// thousand rows, missed widely at half a million), so a scalar would certify
+// only the smallest system: the floor is declared at three sizes and
+// interpolated between. THEY ARE DECIDED VALUES, NOT MEASURED ONES, each about
+// a point below the seeded fixture (seed variance): a floor a first run defines
+// cannot fail on it. Synthetic isotropic clusters UNDERSTATE real 1-bit recall,
+// so a real corpus should clear them and one that does not is the signal.
+// Escalation: raise [BinaryOversample] first (free in latency), else an int8
+// first stage as a code change with the model default, never a runtime knob.
 var BinaryRecallFloor = map[int]float64{
 	20_000:  0.98,
 	120_000: 0.93,
@@ -230,22 +209,14 @@ func MissRanks(got, want []int) []int {
 // topK keeps the best depth of an arbitrary stream, by score descending with
 // the index breaking ties.
 //
-// # Why a bounded heap and not a sort
+// A bounded heap, not a sort: the gate's ground truth is the exact top of a
+// half-million-row corpus per query, and O(N log depth) beats O(N log N) by
+// about eight at depth 150; `crewlet search eval` runs the same selection.
 //
-// The gate's ground truth is the exact top of a half-million-row corpus,
-// asked once per query — a full sort is O(N log N) per query where the answer
-// needs O(N log depth), and at a depth of 150 that is a factor of eight in
-// the dominant cost of the whole quality gate. It matters in production for
-// the same reason: `crewlet search eval` runs the same selection over an
-// operator's own corpus.
-//
-// THE TIE BREAK IS THE INDEX, and it is not cosmetic. Hamming distance over a
-// 3072-bit code takes at most 3 073 distinct values whatever the corpus size,
-// so ties are the common case rather than the corner — and the SQL that does
-// this in the database orders by `vector_distance_cos(bits, :qb), source_id`
-// for exactly that reason. Without a declared tie break the candidate pool
-// would depend on the scan's own row order, and two nodes would rerank
-// different pools.
+// THE TIE BREAK IS THE INDEX, not cosmetic: Hamming distance over a 3072-bit
+// code takes at most 3 073 values, so ties are common, and the SQL orders by
+// `vector_distance_cos(bits, :qb), source_id` for that reason. Without it the
+// pool would follow scan row order and two nodes would rerank different pools.
 type topK struct {
 	depth int
 	worst entries

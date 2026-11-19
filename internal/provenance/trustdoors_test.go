@@ -84,6 +84,11 @@ var trustDoors = map[string]trustDoor{
 	"internal/events/types/a2a.go:colleagueLabel": {hosted, []string{
 		"internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords",
 	}},
+	// A due item's wait, in the words of whoever set it on the item.
+	"internal/events/types/task.go:waitLabel": {hosted, []string{
+		"internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords",
+		"internal/pickup.TestADueItemIsHandedToABusySeatOnItsLane",
+	}},
 	// The page text a comment's wake quotes, an artifact's file nobody named.
 	"internal/artifactsdomain/prompt.go:Build": {hosted, []string{
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",

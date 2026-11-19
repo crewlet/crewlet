@@ -473,11 +473,10 @@ func groupCountsStatement(axis groupAxis, set taskSet) (string, []any) {
 // groupRows reads one group's own page: the ordinary flat statement narrowed
 // to one value ([columnSet]), so one sort and one row shape serve both.
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
-	set taskSet, terms []sortTerm, limit int,
-	dayStart time.Time) ([]TaskRow, error) {
+	set taskSet, terms []sortTerm, limit int, at rowsAt) ([]TaskRow, error) {
 
 	rows, _, err := readTasks(ctx, tx, columnSet(axis, key, set), terms,
-		limit, dayStart)
+		limit, at)
 	return rows, err
 }
 
@@ -654,7 +653,7 @@ func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
 // one window function ranking every row in the corpus on every board poll.
 func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, set taskSet,
-	terms []sortTerm) (grouped, error) {
+	terms []sortTerm, at rowsAt) (grouped, error) {
 
 	// THE GATE BEFORE ANY WORK, even compiling the axis: it exists to
 	// refuse that cost.
@@ -701,7 +700,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 			continue
 		}
 		rows, err := groupRows(ctx, tx, axis, groups[i].Key, set,
-			terms, rowsPer, q.DayStart)
+			terms, rowsPer, at)
 		if err != nil {
 			return grouped{}, err
 		}
@@ -712,7 +711,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// THE SECOND AXIS IS THE FIRST AGAIN, inside this column; one
 		// level only, since a board draws swimlanes, not a tree.
 		inner, innerDropped, err := readSubgroups(ctx, tx, q, fields, axis,
-			groups[i].Key, set, terms, rowsPer)
+			groups[i].Key, set, terms, rowsPer, at)
 		if err != nil {
 			return grouped{}, err
 		}
@@ -725,7 +724,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 // readSubgroups is the second axis within one column.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	set taskSet, terms []sortTerm, rowsPer int) ([]Group, int, error) {
+	set taskSet, terms []sortTerm, rowsPer int, at rowsAt) ([]Group, int, error) {
 
 	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
@@ -753,7 +752,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	}
 	for i := range counts {
 		rows, err := groupRows(ctx, tx, inner, counts[i].Key, scoped,
-			terms, rowsPer, q.DayStart)
+			terms, rowsPer, at)
 		if err != nil {
 			return nil, 0, err
 		}

@@ -102,6 +102,9 @@ type AnsweredAnswer struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every ask's item here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // answeredAsksFrom and answeredAsksWhere are the closed asks put to one
@@ -174,7 +177,8 @@ func (r *Reader) AnsweredAsks(ctx context.Context, q DecisionsQuery, now time.Ti
 	case q.Handle == "":
 		return AnsweredAnswer{}, invalid("an answered read names nobody")
 	}
-	out := AnsweredAnswer{Since: now.Add(-AnsweredWindow).UTC()}
+	flow := r.flowAt(now)
+	out := AnsweredAnswer{Since: now.Add(-AnsweredWindow).UTC(), FlowLive: flow.live()}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// THE DOMAIN, for [Reader.Decisions]' reason: an ask can be on any
@@ -191,7 +195,7 @@ func (r *Reader) AnsweredAsks(ctx context.Context, q DecisionsQuery, now time.Ti
 			return err
 		}
 		if out.Asks, out.Truncated, err = readAnswered(ctx, tx, q.Handle, out.Since,
-			anchor.At); err != nil {
+			rowsAt{dayStart: anchor.At, flow: flow}); err != nil {
 			return err
 		}
 		out.LogSeq, out.AppliedThrough, err = readCheckpoint(ctx, tx)
@@ -210,8 +214,8 @@ func (r *Reader) AnsweredAsks(ctx context.Context, q DecisionsQuery, now time.Ti
 }
 
 // readAnswered reads one page of the closed asks put to this person.
-func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
-	dayStart time.Time) ([]AnsweredAsk, bool, error) {
+func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since time.Time,
+	at rowsAt) ([]AnsweredAsk, bool, error) {
 
 	rows, err := tx.QueryContext(ctx, answeredStatement, handle,
 		store.EncodeTime(since), MaxAnswered+1)
@@ -255,7 +259,7 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 	if truncated {
 		pending, closings = pending[:MaxAnswered], closings[:MaxAnswered]
 	}
-	asks, err := askRowsOf(ctx, tx, pending, dayStart, 0, false)
+	asks, err := askRowsOf(ctx, tx, pending, at, 0, false)
 	if err != nil {
 		return nil, false, err
 	}

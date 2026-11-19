@@ -50,21 +50,17 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 	return ""
 }
 
-// ToolStateOf is whether the seat with handle can use its credential through
-// a tool on lane right now, as the access route reports it: off while the seat
-// or its account is off; live or waiting where a per-seat server reads the
-// lane's credential, or where the lane's tool is a CLI in the seat's box whose
-// credentials the engine sets there ([LaneSpec.BoxEnv], [BoxDefaults]),
-// waiting until the credential is sealed; server_off where every such server
-// is turned off; and otherwise builtin for Jira and Confluence, whose
-// credential the engine's own tools read, and no_server for the rest. SSH is
-// builtin whatever the servers: its tools are the engine's own `ssh_read` and
-// `ssh_operate`, which issue the seat's certificate at use.
+// ToolStateOf is whether the seat with handle can use its credential through a
+// tool on lane right now: off while the seat or its account is off; live or
+// waiting where a per-seat server reads the lane's credential, or the lane's
+// tool is a CLI in the seat's box with engine-set credentials ([LaneSpec.BoxEnv],
+// [BoxDefaults]), waiting until sealed; server_off where every such server is
+// off; else builtin for Jira and Confluence and no_server for the rest. SSH is
+// builtin whatever the servers (`ssh_read`, `ssh_operate`).
 //
-// A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): it
-// starts for nobody, so a lane whose only server is off is not live however
-// well its credential is sealed. Jira and Confluence stay builtin then, since
-// the engine's own tools read their credential with or without a server.
+// A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): a lane
+// whose only server is off is not live however well sealed; Jira and Confluence
+// stay builtin, their credential being read by the engine's own tools.
 func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have Observed) ToolState {
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff

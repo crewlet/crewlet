@@ -58,24 +58,12 @@ type Record struct {
 
 // Source is the write path a stored secret arrived by, stamped by that path.
 //
-// # A fact of the write path, never a claim of the request
-//
-// It was a word the caller chose: `PUT /secrets/{name}?source=` stored
-// whatever it was sent and `crewlet secrets set -source` sent whatever it was
-// given, so any holder of the write could stamp any word — and a client that
-// judged which rows were its own by the word read a row somebody else wrote
-// over, under that client's word, as still its own. Provenance the writer
-// picks answers nothing. Who wrote a row is what the author and the
-// credential say, both taken from the credential the write authenticated with
-// ([Author]); the source says only which path carried it, and each path
-// stamps its own constant below.
-//
-// # Closed, and refused at the write
-//
-// The set is the paths, so it is closed, and [CheckSource] refuses any other
-// word at every store's write. The type alone cannot: an untyped string
-// constant converts to a Source wherever one is expected, so
-// `"gitlab-provision"` compiled as one and, unchecked, was stored as one.
+// Never a word the caller picks: a client judging its own rows by a
+// writer-chosen word would take a row somebody overwrote as still its own. Who
+// wrote a row is [Author]; the source says only which path carried it, each
+// path stamping its own constant. The set is closed and [CheckSource] refuses
+// any other word at every store's write; the type alone cannot, as an untyped
+// string constant converts to a Source.
 type Source string
 
 const (
@@ -146,27 +134,16 @@ func CheckSource(s Source) error {
 		"records one of %s, stamped by the path that wrote it", string(s), words.Or(Sources))
 }
 
-// Author is who writes a secret: the three facts every other trail in the
-// engine records beside a change — the NAME the change is attributed to, what
-// KIND of author that is, and the CREDENTIAL the write was made through.
+// Author is who writes a secret: the NAME the change is attributed to, its
+// KIND, and the CREDENTIAL the write was made through.
 //
-// # Why two names and not one
+// Two names because a credential alone loses the owner: a person's machine
+// token would record `pat:<id>`, and that row is swept a week after it
+// expires. An investigation asks both "who" and "how".
 //
-// The store used to record one, and it was the credential: right for a Tier A
-// token, whose name is its credential, and a loss for everybody else. A person
-// writing through their own machine token was recorded as `pat:<id>`, and the
-// token's row — the one thing that says whose it was — is swept a week after
-// it expires, so the credential's name outlived the only record of its owner.
-// The author is whose authority was exercised; the credential is what it was
-// exercised through; a trail that can answer only one of "who" and "how"
-// cannot answer an investigation, which asks both.
-//
-// # Why it restates iam.Actor rather than importing it
-//
-// This package imports nothing from the rest of the engine, which is what lets
-// config depend on it. So the shape is restated as strings, and the surface
-// that holds a principal fills it from internal/iam's ActorFor — the one
-// function every trail's author comes from.
+// It restates iam.Actor as strings because this package imports nothing from
+// the engine, which is what lets config depend on it; the surface that holds a
+// principal fills it from internal/iam's ActorFor.
 type Author struct {
 	// Name is the author: the seat's handle for a person (every person
 	// holds one) or a credential bound to a seat, the login of a credential
@@ -216,23 +193,15 @@ var ErrInvalidName = errors.New(
 // MaxValueBytes bounds one secret's value, in bytes, in every store and on
 // every path that writes one.
 //
-// The largest real credential this engine handles is a service-account JSON
-// key or a PEM private key, which are a few kilobytes; 64 KiB is an order of
-// magnitude above that and still finite. Every path that writes a value is an
-// operator's or the engine's own, so this bounds a mistake rather than an
-// attacker — a `curl -d @big.tar` or a `crewlet secrets set X < big.tar` typo
-// is refused rather than sealed.
+// A service-account JSON or PEM key is a few kilobytes; 64 KiB is an order of
+// magnitude above, bounding a mistake (a `curl -d @big.tar` typo), not an
+// attacker.
 //
-// ONE LIMIT, HERE, because a value reaches the store by more than one path
-// and every reader of a revealed value through a node is sized from this one
-// number. A revealed value is read back — by `crewlet secrets get -reveal`, a
-// provisioning sink and a run resolving a company document through a node —
-// to the length this allows once spelled in the characters JSON escapes
-// longest. It was the API route's alone, so a `crewlet secrets set` run with
-// the engine stopped, which writes the fleet's store directly, stored a value
-// of any size, and a value past this limit can be longer, in those
-// characters, than any answer those readers take: a credential stored and
-// possibly unreadable through the node.
+// ONE LIMIT, enforced in every store (including `crewlet secrets set` with the
+// engine stopped, which writes the fleet's store directly), because every
+// reader of a revealed value through a node is sized from it, in the
+// characters JSON escapes longest. A larger value would be stored yet
+// unreadable through the node.
 const MaxValueBytes = 64 << 10
 
 // ErrValueTooLarge reports a value longer than [MaxValueBytes].
