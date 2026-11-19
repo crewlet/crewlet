@@ -18,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -704,9 +705,9 @@ func TestACancelledPollFreesItsWaiter(t *testing.T) {
 	}
 }
 
-// A READ'S BODY IS CAPPED: a read names a turn's notes — a few hundred bytes —
-// and a body far past that is refused before the inbox is asked, as one naming
-// no note or more notes than a turn takes is.
+// A READ'S BODY IS CAPPED: a read names what one job can be owed — a couple
+// of kilobytes — and a body far past that is refused before the inbox is
+// asked, as one naming no note is.
 func TestAReadBodyIsCapped(t *testing.T) {
 	t.Parallel()
 	f := newSteerFixture(t, time.Minute)
@@ -726,10 +727,6 @@ func TestAReadBodyIsCapped(t *testing.T) {
 	if got := post(`{"ids":[]}`); got != http.StatusBadRequest {
 		t.Errorf("a read naming nothing answered %d, want 400", got)
 	}
-	eleven := `{"ids":["1","2","3","4","5","6","7","8","9","10","11"]}`
-	if got := post(eleven); got != http.StatusBadRequest {
-		t.Errorf("a read naming eleven notes answered %d, want 400", got)
-	}
 	if got := post(`{"ids":["n-1"]}`); got != http.StatusNoContent {
 		t.Errorf("a read answered %d, want 204", got)
 	}
@@ -744,6 +741,43 @@ func TestAReadBodyIsCapped(t *testing.T) {
 			t.Errorf("a GET of read answered %d, want 405", res.StatusCode)
 		}
 		_ = res.Body.Close()
+	}
+}
+
+// A READ NAMING EVERYTHING ONE JOB CAN BE OWED IS TAKEN: a turn's notes and
+// the job's own items. OpenCode's plugin confirms every note it owes in one
+// read and sends that read again on every retry, so a read refused for its
+// count would confirm nothing more for the rest of the run. One more is
+// refused before the inbox is asked.
+func TestAReadNamingEveryNoteAndItemOneJobCanOweIsTaken(t *testing.T) {
+	t.Parallel()
+	f := newSteerFixture(t, time.Minute)
+	url := mcpbridge.SteerURL(f.url) + "/read"
+	post := func(ids []string) int {
+		body, err := json.Marshal(map[string][]string{"ids": ids})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := f.server.Client().Post(url, "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	owed := steer.MaxTurnNotes + sandbox.MaxJobItems
+	ids := make([]string, owed+1)
+	for i := range ids {
+		ids[i] = "n-" + strconv.Itoa(i+1)
+	}
+	if got := post(ids); got != http.StatusBadRequest {
+		t.Errorf("a read naming %d notes, one past what a job can be owed, answered %d, want 400", len(ids), got)
+	}
+	if got := post(ids[:owed]); got != http.StatusNoContent {
+		t.Errorf("a read naming the %d notes and items a job can be owed answered %d, want 204", owed, got)
+	}
+	if reads := f.inbox.readIDs(); len(reads) != 1 || !slices.Equal(reads[0], ids[:owed]) {
+		t.Errorf("the inbox was asked to read %v, want the one read of %d", reads, owed)
 	}
 }
 

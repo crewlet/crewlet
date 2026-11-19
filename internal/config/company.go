@@ -38,22 +38,17 @@ type Company struct {
 	Vision   string   `yaml:"vision,omitempty" json:"vision,omitempty" desc:"Longer statement of where the company is going."`
 	Policies []string `yaml:"policies,omitempty" json:"policies,omitempty" desc:"Company-wide rules injected into every seat's prompt."`
 
-	// Timezone is the company's ONE clock, as an IANA name; empty is UTC.
-	// Read it through [Company.Location].
+	// Timezone is the company's ONE clock, as an IANA name; empty is UTC. Read
+	// it through [Company.Location].
 	//
-	// Every calendar edge the engine cuts is cut on it: where "today",
-	// "this week" and "this month" begin for a `due=` filter, a due band, a
-	// row's overdue mark and a person's own day; the instant a relative date
-	// ("next Friday") or an all-day date resolves to; and the wall clock a
-	// schedule that names no zone of its own fires on. One clock, and a
-	// top-level field rather than a setting of any one subsystem, because
-	// the three this replaced (Worklet's own clock, the scheduler's
-	// default zone and the UTC every other day boundary assumed) disagreed
-	// about where one company's day began (ADR-0018).
+	// Every calendar edge is cut on it: where "today", "this week" and "this
+	// month" begin (due filters, bands, overdue marks, a person's day), what a
+	// relative or all-day date resolves to, and the wall clock of a schedule
+	// naming no zone. Top-level because separate clocks disagreed about where a
+	// company's day began (ADR-0018).
 	//
-	// A clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES only: no
-	// duration is measured against it, because a duration measured on a
-	// wall clock changes length twice a year.
+	// For AUTHORED INSTANTS AND CALENDAR BOUNDARIES only: a duration measured
+	// on a wall clock changes length twice a year.
 	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty" desc:"The company's one clock, an IANA zone (default UTC): where its days and weeks begin, what a relative or all-day date resolves to, and what a schedule naming no zone fires on."`
 
 	// Integrations is how external events REACH agents and how
@@ -166,25 +161,17 @@ type Company struct {
 	// unbounded linger reintroduces mid-drain redelivery.
 	NotificationCoalesceWindowSeconds float64 `yaml:"notification_coalesce_window_seconds,omitempty" json:"notification_coalesce_window_seconds,omitempty" js:"min=0;max=60" desc:"Inbox linger before dispatch, 0..60s. 0 adds no latency."`
 
-	// NotificationCoalesceMaxBatch caps the events collected into one
-	// DRAIN, before it is partitioned by conversation — so it bounds a
-	// digest as a consequence (a digest can never exceed it) and it bounds
-	// the drain itself, which has to fit the broker's ack budget alongside
-	// a whole turn. A larger backlog arrives as successive capped drains
-	// rather than one unbounded megaprompt.
+	// NotificationCoalesceMaxBatch caps the events collected into one DRAIN,
+	// before partitioning by conversation. It bounds a digest too (a digest
+	// never exceeds a drain) and keeps the drain within the broker's ack budget
+	// beside a whole turn; a larger backlog arrives as successive capped
+	// drains.
 	//
-	// Per drain rather than per digest, and the difference is visible: a
-	// drain spanning several conversations shares the cap between them, so
-	// 24 events over 4 conversations at 20 is two drains and 8 turns rather
-	// than 4. Raise it for a company whose seats routinely serve several
-	// busy threads at once.
-	// Capped at 100: the digest IS the trigger, and a trigger is re-sent to
-	// the model on every round of the tool loop — so a constituent count is
-	// really a multiplier on the dominant repeated content of a turn. Five
-	// times the default leaves room for a genuinely busy thread; past it,
-	// one turn is reasoning over a hundred messages at once and successive
-	// capped batches are strictly better than one megaprompt, which is the
-	// cap's whole purpose.
+	// Per drain, not per digest: a drain spanning conversations shares the cap,
+	// so 24 events over 4 conversations at 20 is two drains and 8 turns, not 4.
+	//
+	// Capped at 100: the digest IS the trigger, re-sent every round of the tool
+	// loop, so past that successive batches beat one megaprompt.
 	NotificationCoalesceMaxBatch int `yaml:"notification_coalesce_max_batch,omitempty" json:"notification_coalesce_max_batch,omitempty" js:"min=1;max=100" desc:"Events drained into one batch before partitioning by conversation, 1..100. Bounds a digest too, since a digest cannot exceed a drain."`
 
 	// Workers are the reusable delegate templates a seat's executor hands
@@ -294,88 +281,44 @@ var clockMovesAdvice = says("The company's time zone changes",
 var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Validate reports every Tier B rule this config breaks, joined: the runnable
-// rules and the admission rules both.
+// and the admission rules both.
 //
-// It is the check for a document somebody SUBMITS: a PUT, a PATCH, a
-// per-entity write, a setup write, `crewlet config import` and `crewlet
-// validate`. A revision being APPLIED is held to the runnable rules only; see
-// [Company.ValidateRunnable].
+// It is the check for a document somebody SUBMITS (a write, `crewlet config
+// import`, `crewlet validate`) and validates the ORG too, as duplicate handles
+// and human-seat violations surface only when the hierarchy is built. A
+// revision being APPLIED gets [Company.ValidateRunnable] only.
 //
-// It validates the ORG as well: building the hierarchy is where duplicate
-// handles, unrunnable schedules and human-seat rule violations surface, and
-// a config that parses into a company nobody can run has not been validated.
-//
-// The CHARTER's rules are not among them: they judge what a write changes
-// against the revision it replaces rather than the document it leaves, so an
-// old fault never refuses an unrelated write. Every writer asks
-// [Company.ValidateCharterChange] beside this.
+// The CHARTER's rules judge a write against the revision it replaces, so an old
+// fault never refuses an unrelated write; every writer also asks
+// [Company.ValidateCharterChange].
 func (c *Company) Validate() error {
 	o, index := c.organization()
 	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))
 }
 
-// ValidateRunnable reports only the RUNNABLE rules: everything a running
-// company depends on, which is every rule except the admission ones.
+// ValidateRunnable reports only the RUNNABLE rules: every rule except the
+// admission ones.
 //
-// It is the check for a revision about to be APPLIED (a node's reconcile
-// tick, a boot from the store, a reload and a revert) and for building an
-// epoch. A revision is admitted under the rules of the build that wrote it,
-// and the admission set is the part of the rule set a build is free to
-// change: a later build may add a rule or relax one, and during a rolling
-// upgrade this build applies the revisions a newer peer admitted. Nothing
-// about RUNNING depends on an admission rule, so applying under the runnable
-// rules only is what keeps one build of a rolling upgrade from refusing a
-// revision its peer admitted — which would split the fleet's epoch. The
-// admission violations are reported by [Company.ValidateAdmission] as
-// warnings instead, and the next write that keeps them is refused.
+// It is the check for a revision about to be APPLIED (reconcile, boot, reload,
+// revert) and for building an epoch. During a rolling upgrade this build
+// applies revisions a newer peer admitted under admission rules a build is free
+// to change; nothing about RUNNING depends on them, so applying under runnable
+// rules only keeps this build from refusing them and splitting the fleet's
+// epoch. [Company.ValidateAdmission] reports them as warnings.
 func (c *Company) ValidateRunnable() error {
 	o, index := c.organization()
 	return index.locate(c.validateRunnable(o))
 }
 
-// ValidateAdmission reports only the ADMISSION rules: the rules a submitted
-// document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate unit keys, a unit reference on a seat
-// declared inside a unit of a different key and a schedule's cron the grammar
-// refuses (see [org.Organization.ValidateAdmission], which also says why no
-// NAME is held unique), a unit with no id, duplicate sandbox setup step names
-// within one list, a code access tier or a GitHub App on a human seat
-// ([Company.validateHumanSeatCode]), the health grant on a human seat
-// ([Company.validateHumanSeatGrants]), an avatar the dashboard cannot draw or
-// one on a human seat ([Company.validateAvatars]), a providers.llm key outside
-// its grammar or sharing another's credential bundle variable
-// ([Company.validateLLMKeys]), a providers.llm entry's credential configured
-// where its harness never reads it or handed over under a variable name no
-// store can hold
-// ([LLMProvider.validateCredentials]), a model with no provider segment on a
-// harness that reads one ([LLMProvider.validateModel]), a setup step writing a
-// file a box it reaches refuses ([Company.validateSetupFileHomes]), an
-// executor box's `optional_keys` entry leaving nothing out
-// ([Company.validateRunOptionalKeys]), a variable the engine sets in a box
-// itself written into one of the envs a box's is made of, a check's secrets
-// among them ([Company.validateReservedSandboxEnv]), two units declaring one
-// channel on Chatlet ([Company.validateUnitRooms]),
-// and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
-// `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
-// out, one http header spelled two ways where nothing says which is sent, two
-// seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key. And every name and address an MCP server entry or an
-// `mcp_env` block for it holds that no client can use
-// ([Company.validateMCPNames]), the `assistant:` block ([Company.validateAssistant]),
-// whose chain is held to its rules again wherever it is handed out, and the
-// per-seat access rules ([Company.validateSeatAccess]): every seat block says
-// whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages. And Gitlet's policy
-// bounds: at most [CodeMaxRepos] repositories, a retention of at most
-// [CodeMaxDeletedRetentionDays], and at most [CodeMaxRemoteCredentials]
-// declared remote credentials of at most [CodeMaxRemoteCredentialHosts] hosts
-// each (see [Code.validateAdmission]). And the community MCP registry's
-// address ([Company.validateMCPRegistry]), which only a search reads. And an
-// executor box's listing of an MCP server any tool of which is held back from
-// the agents ([Company.validateBoxToolLevels]), which the box would reach
-// past the engine. And every `mcp_limits` block that holds nothing back or
-// names a level a limit cannot hold a tool at, and a box listing of a server a
-// seat's limits hold a tool of back ([Company.validateMCPLimits]).
+// ValidateAdmission reports only the ADMISSION rules: those a submitted
+// document is refused for and a stored revision is merely warned about. They
+// are the validators [Company.validateAdmission] joins, each documented on its
+// own. [org.Organization.ValidateAdmission] says why no NAME is held unique,
+// [Code.validateAdmission] holds Gitlet's policy bounds ([CodeMaxRepos],
+// [CodeMaxDeletedRetentionDays], [CodeMaxRemoteCredentials],
+// [CodeMaxRemoteCredentialHosts]), [Company.validateFileRules] the
+// WHOLE-DOCUMENT rules, and [Company.validateAssistant] the `assistant:` block,
+// whose chain is held again wherever it is handed out.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -410,25 +353,14 @@ func (c *Company) validateUnitIDs() error {
 // host: its code access tier (`code`) and its own GitHub App
 // (`integrations.github`).
 //
-// A person acts on every code host as their own identity — a bound token on
-// Gitlet, their login, `contact.github_login`, on GitHub — so both
-// are agent settings. A seat's `code.access` is how much of a repository the
-// seat may do on Gitlet, which caps nothing for a person: the native
-// grant gives a person maintain through their token. A seat's `integrations.github` is the bot identity an
-// agent acts as, and every engine path that creates, installs or reconciles
-// an app skips a human seat. Either block therefore reads as a working
-// setting and does nothing, which is the silence the org model's human-seat
-// rule exists to end for every other agent-only field.
+// A person acts on every code host as their own identity, so both are agent
+// settings: `code.access` caps nothing for a person and every engine path that
+// makes an app skips a human seat. Either block reads as working and does
+// nothing.
 //
-// CHECKED HERE rather than beside that rule in [org.Role.Validate], although
-// the runtime seat carries both ([org.Role.CodeAccess], [org.Role.GitHub]):
-// that rule is a RUNNABLE one, and this is an ADMISSION rule, because nothing
-// about running depends on either — nothing running reads a tier off a human
-// seat, and every path that would act on an app skips one — so a stored
-// revision carrying one runs as it did. That is also what lets a later build
-// relax one — a tier that caps a person is the plausible relaxation — while
-// this build, applying the revision its newer peer admitted during a rolling
-// upgrade, runs it rather than refusing it and splitting the fleet's epoch.
+// An ADMISSION rule, not RUNNABLE beside [org.Role.Validate]: nothing running
+// reads either ([org.Role.CodeAccess], [org.Role.GitHub]) off a human seat, so
+// a stored revision carrying one runs as before and a newer peer may relax one.
 func (c *Company) validateHumanSeatCode() error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -457,16 +389,13 @@ func (c *Company) validateHumanSeatCode() error {
 // validateHumanSeatGrants refuses on a human seat what only an agent's role
 // carries: the health grant (`health_tools`).
 //
-// The grant decides an AGENT on the verbs that name it, in place of their
-// class (internal/authz); a person is decided by their own permissions — the
-// health tools are admin's — and is never woken by an engine wake. So the
-// field on a human seat reads as a working setting and does nothing, which is
-// the silence the human-seat rules exist to end.
+// The grant decides an AGENT on the verbs that name it (internal/authz); a
+// person is decided by their own permissions and is never woken by an engine
+// wake, so the field reads as a working setting and does nothing.
 //
-// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
-// about running reads a grant off a human seat — the chart answers it for an
-// agent only — so a stored revision carrying one runs as it did, and this
-// build applies whatever its newer peer admitted.
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: the chart
+// answers a grant for an agent only, so a stored revision carrying one runs as
+// before.
 func (c *Company) validateHumanSeatGrants() error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -484,18 +413,15 @@ func (c *Company) validateHumanSeatGrants() error {
 // validateSetupStepNames refuses two sandbox setup steps of one name in the
 // same list: `providers.sandbox.setup`, or one seat's `sandbox.setup`.
 //
-// A step's name is its IDENTITY. Its env and files are credentials, and a
-// config read masks them, so sending the read back restores each step's
-// masks from the stored step of the same name. Two steps sharing a name
-// give the restore nothing to tell them apart by, and it refuses to guess:
-// every write carrying that list would then be refused with a standing mask
-// on credentials nobody edited. A name is also what a setup failure and its
-// log line point at, and a duplicate points at two steps.
+// A step's name is its IDENTITY. Its env and files are credentials a config
+// read masks, and sending the read back restores each step's masks from the
+// stored step of the same name. Duplicates give the restore nothing to tell
+// them apart by, and it refuses to guess: every write carrying that list would
+// be refused. A name is also what a setup failure points at.
 //
-// An ADMISSION rule rather than a runnable one, because nothing about running
-// depends on it: duplicate names still apply every step in order. Compared as
-// the exact string the restore matches on, and a blank name is skipped: the
-// step's own rule already refuses it.
+// An ADMISSION rule: duplicates still apply every step in order. Compared
+// exactly as the restore matches; a blank name is skipped, its own rule refuses
+// it.
 func (c *Company) validateSetupStepNames() error {
 	var p problems
 	if c.Providers.Sandbox != nil {
@@ -550,20 +476,15 @@ func uniqueSetupStepNames(path Path, steps []SandboxSetupStep) error {
 func (c *Company) validateRunnable(o *org.Organization) error {
 	var p problems
 
-	// An UNRESOLVED REDACTION MASK, first, because it is the one fault here
-	// that comes from this process rather than from the document's author.
-	// A credential still holding the marker means a config read was edited
-	// and sent back, and the mask could not be matched to what it hid: a
-	// member that is NEW or RENAMED has no prior value of its own, and a
-	// member whose identity the stored revision does not give to exactly one
-	// member (a duplicate, or an empty one) cannot be matched without
-	// guessing. Storing it silently would hand a provider the literal
-	// "__redacted__" as an API key, and the failure would surface hours later
-	// as an authentication error naming nothing about where it came from.
-	//
-	// The message names every cause, because the restore does not record
-	// which one applied and an operator reading only "new or renamed" about
-	// a unit they did neither to has nothing to act on.
+	// An UNRESOLVED REDACTION MASK, first: the one fault here that comes from
+	// this process, not the author. A credential still holding the marker means
+	// a config read was edited and sent back and the mask could not be matched
+	// to what it hid: a NEW or RENAMED member has no prior value, and one the
+	// stored revision does not identify exactly (a duplicate, or empty) cannot
+	// be matched without guessing. Storing it would hand a provider the literal
+	// "__redacted__" as an API key, failing hours later with an error naming
+	// nothing of its origin. The message names every cause, as the restore
+	// records none.
 	for _, path := range c.UnresolvedMasks() {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q: a masked credential could "+
@@ -595,25 +516,18 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Artifacts.validate(field("artifacts")))
 	p.wrap(c.Diagnostics.Insights.validate(field("diagnostics.insights")))
 
-	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
+	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED. Datadog's fallback
+	// takes a seat handle or DatadogIgnore, so a seat of that name would be
+	// silenced by its own name; only here is it caught, as the parser sees the
+	// two as one string.
 	//
-	// Datadog's fallback takes a seat handle or DatadogIgnore, and a company
-	// with a seat of that name would have it silenced by its own name: every
-	// alert meant for it dismissed, on a screen reporting the configuration
-	// exactly as written. Refusing the name is the only place this can be
-	// caught, because by the time the parser reads a fallback the two are
-	// the same string.
-	//
-	// AND THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is
-	// the only routing floor in this file, and the two ways it silently
-	// fails are a handle no seat has — resolving to nothing, one
-	// `notification_undeliverable` warning per untagged alert, for ever —
-	// and one naming a HUMAN seat, which resolves fine and is then dropped
-	// as a self-action. Both read as correct configuration on every screen,
-	// which is the state the field exists to prevent. This is the only
-	// place either can be caught: the parser deliberately does not consult
-	// the roster (a bad monitor TAG must stay visible as the operator's
-	// typo it is), and the setup form is one of three write paths.
+	// AND THE FALLBACK MUST NAME SOMEBODY WHO CAN BE WOKEN. `route_to` is the
+	// only routing floor, and it fails silently on a handle no seat has (one
+	// `notification_undeliverable` warning per untagged alert, for ever) and on
+	// a HUMAN seat (dropped as a self-action). Only here can either be caught:
+	// the parser does not consult the roster (a bad monitor TAG must stay
+	// visible as the typo it is), and the setup form is one of three write
+	// paths.
 	fallback := ""
 	if dd := c.Integrations.Datadog; dd != nil && dd.Enabled {
 		fallback = strings.TrimSpace(dd.RouteTo)
@@ -892,17 +806,13 @@ func (c *Company) JiraHeldBy() TrackerBackend {
 //
 // The scope is the ONLY thing that narrows the query-time search, and it is
 // role-independent on purpose: a unit's own space is IDENTITY (where its page
-// activity routes, where it writes) and letting an identity double as a read
-// scope is how an agent ends up unable to read the page it was told to
-// follow.
+// activity routes, where it writes), and as a read scope it would leave an
+// agent unable to read the page it was told to follow.
 //
-// Empty is unscoped. On Doclet that means the whole company, because the
-// engine IS the boundary: every reader is a seat of one company and there is
-// no second account to launder a read through. On Confluence it
-// means whatever the asking seat's own account can read, which is why a
-// credential-less seat searching unscoped there gets nothing: an unscoped
-// query on a shared admin token would show one seat pages its own user never
-// could.
+// Empty is unscoped. On Doclet that is the whole company: the engine IS the
+// boundary. On Confluence it is whatever the asking seat's own account can
+// read, so a credential-less seat gets nothing: an unscoped query on a shared
+// admin token would show it pages its own user never could.
 type Knowledge struct {
 	// Backend is which knowledge base this company runs.
 	//
@@ -1067,20 +977,17 @@ type IssueReports struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Send anonymous reports of engine defects to the project's issue tracker. Each is a typed record: never a name, a message, a path, an address or anything else of the company's."`
 }
 
-// Inbox is the founder's policy over a person's inbox: the notices every
-// domain that keeps one (Worklet and Gitlet) writes to each person its
-// changes concern.
+// Inbox is the founder's policy over a person's inbox: the notices every domain
+// that keeps one (Worklet and Gitlet) writes to each person its changes
+// concern.
 //
 // # Why at the top of the company, and not under the tracker
 //
-// A person's inbox is not one domain's. Worklet's notices are one source
-// of it, and every domain whose changes are a person's news keeps its own
-// under the same rules (internal/inbox) — so a horizon held by one domain's
-// block left every other source's notices with a horizon of their own, or of
-// nobody's, and one person's inbox aging out on as many clocks as it has
-// sources. It is the split ADR-0018 ended for the company's clock, which also
-// started as the tracker's own setting; the `tracker:` block keeps nothing of
-// a person's inbox at all.
+// A person's inbox is not one domain's: every domain whose changes are a
+// person's news keeps notices under the same rules (internal/inbox). A horizon
+// held by one domain's block left other sources on a horizon of their own or of
+// nobody's, so one inbox aged out on as many clocks as it has sources (the
+// split ADR-0018 ended for the company's clock).
 type Inbox struct {
 	// RetentionDays is how long a person's inbox keeps a notice.
 	//
@@ -1182,25 +1089,16 @@ const DefaultSkillsContainer = "TS"
 const DefaultRootSpace = "HOME"
 
 // SkillsContainerKey is the container tool skills live in, or "" for a company
-// that has turned them off — or has no knowledge base to hold them.
+// that has turned them off or has no knowledge base to hold them.
 //
-// UPPER, because every container comparison is case-insensitive and a config
-// written in lower case must not silently mean a different container from the
-// same word written in upper.
+// UPPER, because container comparison is case-insensitive and a lower-case
+// config must not silently mean another container.
 //
-// # The empty string is an ANSWER, not an absence
-//
-// A company whose ordinary work container happens to be `TS` would otherwise
-// have it silently dropped from every knowledge search and every routing
-// decision, with no way to say so — the default reserving a real key is the
-// cost of having a default at all. `skills_container: ""` is how an operator
-// says "no container is reserved": every consumer already reads "" as "no
-// exclusion and no sync", so the switch is this accessor and nothing else.
-//
-// ON THE COMPANY rather than on the block, because the answer depends on
-// whether there is a knowledge base at all: `backend: none` has no container
-// to name, and answering "TS" would have the engine watching a container
-// nothing holds.
+// The empty string is an ANSWER, not an absence: a company whose ordinary work
+// container is `TS` would otherwise have it silently dropped from every
+// knowledge search and routing decision. `skills_container: ""` reserves no
+// container; every consumer reads "" as no exclusion and no sync. ON THE
+// COMPANY, not the block: `backend: none` has no container to name.
 func (c *Company) SkillsContainerKey() string {
 	if c.KnowledgeBackendFor() == KnowledgeNone {
 		return ""
@@ -1256,37 +1154,17 @@ func (c *Company) VectorsEnabled() bool {
 }
 
 // validateProviderKeys holds the rule that a seat may only name a model the
-// company actually has.
+// company has.
 //
-// Without it a typo is invisible and permanent. `llm_review: claude-sonet`
-// resolves through the runtime's fallback — per-phase, then the role's default
-// chain, then the "default" key, then the first provider configured — so the
-// seat boots, thinks, and bills, on a model the operator never chose. Nothing
-// downstream can catch it: the fallback exists precisely so a role that names
-// NOTHING still runs, and from inside resolution a name that misses and a name
-// that was never written are the same absence.
+// Without it a typo is invisible and permanent: `llm_review: claude-sonet`
+// resolves through the runtime's fallback (the role's chain, "default", the
+// first provider), so the seat boots and bills on a model nobody chose.
 //
-// Applied to EVERY seat in the document, at any depth, and to every field each
-// writes: the fields are [Company.ProviderReferences]'s, so the rule, a
-// removal and the account of who uses an entry read one list. Each typo is
-// reported at the field the operator typed it in. Validating the RESOLVED
-// chain instead would hide half of them: the flat field wins over the
-// mapping, so a typo inside `llm.review` under a role that also sets
-// `llm_review` never appears in the resolved value at all, and it is still a
-// typo, still in the file, and still what the operator will edit next.
-//
-// NOT THE ASSISTANT'S FIELDS: its chain is held by [Company.validateAssistant]
-// at admission and again wherever it is handed out ([Company.AssistantChain]),
-// because nothing about running a seat depends on it, and this is a runnable
-// rule.
-//
-// Skipped entirely when providers.llm is empty. A company with no models is a
-// documented authoring state (an org chart written before the credentials
-// exist, and what a company created from the dashboard is until one is added),
-// and it runs: every node applies it and places its seats, and each seat holds
-// its work until a revision adds a provider. Rejecting every role's key
-// against an empty map would turn that supported flow into a wall of errors
-// about models the author has not added yet.
+// Applied to EVERY seat at any depth and every field each writes
+// ([Company.ProviderReferences]'s), reported where typed; the RESOLVED chain
+// would hide a typo in `llm.review` under a role also setting `llm_review`,
+// which wins. NOT THE ASSISTANT'S ([Company.validateAssistant]). Skipped when
+// providers.llm is empty, a documented authoring state that runs.
 func (c *Company) validateProviderKeys() error {
 	var p problems
 	if len(c.Providers.LLM) == 0 {
@@ -1311,41 +1189,18 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
-// DeclaresIntegration reports whether this company still uses the named
-// external surface at all.
+// DeclaresIntegration reports whether this company uses the named surface.
 //
-// # Why it lives on the whole document rather than on Integrations
+// On the whole document, not Integrations: for Slack every agent carries its
+// own app (`role.integrations.slack`) and the company-level `slack:` block may
+// never be written, so asked of the block a company with seven working apps
+// answers "no". Its one caller then deletes the surface's fleet status row,
+// Slack's only record of the base its Request URLs were set against: the one
+// warning that a moved address stranded every app.
 //
-// For seven of the eight it IS a question about the `integrations:` block, and
-// putting it there would be tidier. For Slack it is not: every agent carries
-// its own app under `role.integrations.slack`, and the company-level `slack:`
-// block holds working-indicator settings that a company using Slack heavily
-// may never write. Asked of the block alone, a company with seven working
-// Slack apps answers "no".
-//
-// That answer is not academic. Its one caller deletes a surface's fleet status
-// row on false, and Slack's row is the only place the engine records the public
-// base its Request URLs were set against — the single warning an operator ever
-// gets that a moved address has stranded every agent's Slack app, since Slack
-// serves no way to read that URL back. So the wrong answer here silently
-// removes the warning from exactly the surface that cannot self-heal.
-//
-// # Keyed on the surface's own string, not on its type
-//
-// The names are integration.Kind's values, and this takes a plain string so the
-// config tier does not import the package that defines them. An exhaustiveness
-// test over integration.Kinds lives where both are already in scope, so a
-// surface added there and forgotten here fails a suite rather than answering
-// false for ever.
-//
-// # What it must NOT be used for
-//
-// A surface that has a reconcile pass. This asks about the DOCUMENT; a pass
-// asks a richer question about the integration, and every one of them reads
-// `enabled: false` as not configured where this sees a block and says yes. Two
-// authorities that disagree on a paused integration is a status row flapping
-// between them, which is why the reconcile loop asks this only about the
-// surfaces that have no pass.
+// It takes integration.Kind's values as a plain string, so config imports
+// nothing; a test over integration.Kinds catches a surface forgotten here. Not
+// for a surface with a reconcile pass, which reads `enabled: false` as off.
 func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
@@ -1396,22 +1251,15 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // EachRole yields EVERY seat in the company, with the path an operator typed:
 // the top-level `roles:` and every seat inside `units:`, to any depth.
 //
-// It exists because the walk was written inline once and covered only the
-// top-level list, so a cross-field rule silently exempted every seat that
-// belonged to a unit — which, in a company with an org chart, is most of them.
-// A rule that holds for a seat in `roles:` and not for the identical seat one
-// level down is not a rule, and the seats it missed are exactly the ones whose
-// mistakes have no run-time symptom to find them by.
+// One walk, so a cross-field rule cannot exempt the seats in units (most of
+// them, with an org chart) while holding for the same seat in `roles:`.
 //
-// AN ITERATOR rather than a callback, so a caller looking for ONE seat can
-// stop at it: the engine's per-seat sandbox lookup ran the whole org chart to
-// the end on every launch because a callback has no way to say "found it".
+// AN ITERATOR rather than a callback, so a caller looking for ONE seat can stop
+// at it.
 //
-// EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
-// looked up by handle at every executor launch, and a lookup that stopped at
-// the top level answered nil for every seat in a unit — so each of them ran
-// its box without the setup, env and tool servers its block declared. One
-// walker, so the two can never disagree about which seats exist.
+// EXPORTED because the ENGINE needs the same walk: a lookup of a seat's sandbox
+// block by handle that stopped at the top level answered nil for every seat in
+// a unit, so its box ran without its setup, env and tool servers.
 func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
@@ -1439,25 +1287,17 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 	}
 }
 
-// SandboxPlacements is every cell an executor run could ACTUALLY land in,
-// each mapped to the path of the first thing that named it.
+// SandboxPlacements is every cell an executor run could ACTUALLY land in, each
+// mapped to the path of the first thing that named it.
 //
-// ONE COMPUTATION, TWO CALLERS, and they have to agree or the company is
-// refused for a rule the engine then breaks anyway. Validation requires a
-// container image only where a container is reached; the engine builds a
-// backend only for what is reached. Built eagerly from the catalogue instead,
-// the engine constructed a container backend for a company whose runs all go
-// direct — and failed the apply demanding an image the validator had just
-// refused as a field nothing would read.
+// ONE COMPUTATION, TWO CALLERS, and they must agree or the company is refused
+// for a rule the engine then breaks anyway: validation requires a container
+// image only where a container is reached, and the engine builds a backend only
+// for what is reached.
 //
-// The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: it is where a
-// run on an entry that names no cell goes, including an entry a founder
-// points a seat at later, editing Tier B live, so a company must be able to
-// run it before one does.
-//
-// AND EVERY CELL A CHECK MAY RUN IN, on a company hosting code
-// ([Company.checkPlacements]): a check's box is made from this same catalogue,
-// on a Gitlet node, so its cell needs its backend built as a seat's does.
+// The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: a run on an
+// entry naming no cell goes there. So is EVERY CELL A CHECK MAY RUN IN, on a
+// company hosting code ([Company.checkPlacements]).
 func (c *Company) SandboxPlacements() map[Placement]string {
 	reached := c.seatPlacements()
 	for _, placed := range c.checkPlacements() {
@@ -1632,20 +1472,15 @@ type executorSeat struct {
 	named bool
 }
 
-// executorSeats yields every agent seat with the executor chain it resolves
-// to, in [Company.EachRole]'s order — resolved by [phase.Resolve] over the
-// seat as the engine builds it, from the company's providers in declaration
-// order, which is the very call the engine's phase registry resolves a
-// launch's chain through. ONE RESOLUTION, so the seats validation refuses
-// and the chain a launch walks cannot disagree; a second copy of the rule
-// here was once held to the registry by a test that never called it.
+// executorSeats yields every agent seat with the executor chain it resolves to,
+// in [Company.EachRole]'s order, by [phase.Resolve] over the seat as the engine
+// builds it: the very call the engine's phase registry resolves a launch's
+// chain through, so validation and a launch cannot disagree.
 //
-// A HUMAN SEAT IS SKIPPED. It is addressable and never spawned, so it runs no
-// phase — and resolved, its empty `llm` falls to the company's fallback entry,
-// which would then count as reached by a seat that never runs: a company was
-// refused for a box its founder's seat would never open. NOTHING is yielded
-// for a company with no providers.llm, which is valid — an org chart written
-// before its credentials — and runs no executor at all.
+// A HUMAN SEAT IS SKIPPED. It is never spawned, and resolved, its empty `llm`
+// falls to the fallback entry, which would count as reached by a seat that
+// never runs and refuse a company for a box nobody opens. NOTHING is yielded
+// for a company with no providers.llm, which is valid and runs no executor.
 func (c *Company) executorSeats() iter.Seq[executorSeat] {
 	return func(yield func(executorSeat) bool) {
 		order := c.Providers.ProviderOrder()
@@ -1734,24 +1569,15 @@ func (c *Company) describeChain(chain []string) string {
 // validateExecutors refuses an agent seat whose executor chain has no member
 // that can run it.
 //
-// Every agent seat's executor is its harness's own agentic run, and only a
-// harness with an in-box runner can be one ([ExecutorHarnesses]). A launch walks the
-// seat's chain for its first such member that is not sitting out and skips
-// the rest, so a chain with NONE never launches: the seat is placed, takes
-// its work, and fails every turn at launch. RUNNABLE for that reason — no
-// turn of that seat runs — where a chain that merely carries a non-runner
-// beside a runner is valid and only advised about
+// Only a harness with an in-box runner can be an executor
+// ([ExecutorHarnesses]). A launch walks the chain for its first such member not
+// sitting out, so a chain with NONE takes work and fails every turn at launch:
+// RUNNABLE. A non-runner beside a runner is valid, only advised about
 // ([Company.executorWarnings]).
 //
-// Reported where the remedy is written. A chain read off the seat's own `llm`
-// is refused there. A seat naming no configured key runs on the company's
-// fallback entry (the one called "default", else the first declared), which
-// is ONE entry for every such seat, so it is refused once, at that entry's
-// `harness`, naming the first seat that falls to it and how many more. Both
-// remedies are named because both are real: the entry can move to a harness
-// that runs, or the seat's `llm` can point at one that does — and the other
-// harness stays the seat's reviewer, workers or side passes through llm_review,
-// llm_subagent, llm_auxiliary or llm_judge, which any harness can serve.
+// Reported where the remedy is written: a chain from the seat's own `llm`
+// there; seats on the fallback entry ("default", else the first) once, at its
+// `harness`, naming the first seat and how many more.
 func (c *Company) validateExecutors() error {
 	var p problems
 	type fallen struct {
@@ -1884,19 +1710,16 @@ func (c *Company) validateSandboxPlacement() error {
 	p.wrap(c.validateCheckPlacement())
 
 	if catalogue == nil {
-		// EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so a company with
-		// one to run and a model to run it on cannot run without the
-		// catalogue: every such seat would take its work and fail every
-		// turn at launch. ONE refusal, at the block that is missing,
-		// naming the first such seat — a problem per seat would bury the
-		// one edit to make under the seats that need it.
+		// EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so a company with one to
+		// run and a model to run it on cannot run without the catalogue: every
+		// such seat would fail every turn at launch. ONE refusal, at the
+		// missing block, naming the first such seat; a problem per seat would
+		// bury the one edit to make.
 		//
-		// Not asked of a company with no providers.llm: that is an org
-		// chart written before its credentials, which runs and holds
-		// every seat's work until a revision adds a model, and the
-		// catalogue with it. Asked only of an ABSENT block: a present one
-		// that configures nothing is refused at this same path by its own
-		// rule.
+		// Not asked of a company with no providers.llm: that runs and holds
+		// every seat's work until a model is added. Asked only of an ABSENT
+		// block: a present one that configures nothing is refused at this path
+		// by its own rule.
 		first, more := "", 0
 		for seat := range c.executorSeats() {
 			if first == "" {

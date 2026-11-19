@@ -35,19 +35,13 @@ const (
 
 // holdBytes is H, how far the keys' stage lets the text run past a window
 // before it decides the window whatever the claims there say: the claims'
-// lag, a step, a piece and the longest marker a rule writes for every rule
-// in the table, the term the stream's memory figure counts for the keys'
-// stage waiting on its claims ([keyStage.frontier]). Every token's and AWS
-// secret's claim is known within it ([ruleStage.markerToStepAt]), and so is
-// every run's end but a Google token's before dots that run on past it, which
-// a window decided early read otherwise only over the dots ([keyStage.ended]);
-// so a window it decides early can be wrong only on what the password's
-// reader, or an AWS secret's quoted key, decides past it.
-//
-// A smaller H holds less of the text and decides more windows early, so more
-// texts are refused ([ErrDecidedEarly]); a larger one the reverse. At this one
-// no text the package's corpus, its generators or its benchmark writes
-// decides a window early.
+// lag, a step, a piece and the longest marker a rule writes, the term the
+// stream's memory figure counts for the keys' stage waiting on its claims
+// ([keyStage.frontier]). Every token's and AWS secret's claim is known within
+// it ([ruleStage.markerToStepAt]), so a window decided early can be wrong only
+// on what the password's reader, or an AWS secret's quoted key, decides past
+// it. A smaller H refuses more texts ([ErrDecidedEarly]), a larger one fewer;
+// at this one no text of the package's corpus, generators or benchmark is.
 var holdBytes = sync.OnceValue(func() int {
 	longest := 0
 	for _, r := range rules() {
@@ -109,39 +103,16 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
 // the writer it was made with, in one pass and bounded memory, or refuses it.
-// For every text, however it is cut into writes: it holds no more than its
-// stages' windows; whether it refuses depends on the text alone; and where
-// Close answers nil, what it wrote, put together, is exactly [Secrets] of
-// everything written to it, which redacting again changes as it would change
-// Secrets': not at all, but for what Secrets' own doc names.
+// However the text is cut into writes, it holds no more than its stages'
+// windows (output trails them; nothing is written before [wholeBytes]), whether
+// it refuses depends on the text alone, and where Close answers nil it wrote
+// exactly [Secrets] of the text. Writes to its writer cut at any byte.
 //
-// A REFUSAL IS [ErrDecidedEarly], from Close and from every write once the
-// stream finds it: its keys' stage decided a window before what the rules
-// claim there was known, and a claim it read came otherwise. What the stream
-// wrote is then not the text redacted, and may hold what the redaction takes
-// out, so the caller must neither keep nor show any of it. Only a text built
-// against the password's rule, or an AWS secret's quoted key, beside a key's
-// armour is refused (the package doc's "A text that arrives in pieces").
-//
-// HOW THE TEXT IS CUT INTO WRITES CHANGES NOTHING IT DOES: it hands its stages
-// the text a piece at a time at the text's own offsets, each piece ending at a
-// multiple of [pieceBytes], and carries what a write leaves short of the next
-// ([pipeline.feed]), so every stage is handed the same pieces, and steps where
-// it steps, however the text arrives.
-//
-// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, whatever the
-// text: its keys' stage holds a text no further past a window than the claims'
-// lag ([holdBytes]) before it decides the window, so a text of any length, a
-// whole PDF's base64 on one line of a transcript, is redacted without being
-// held whole. What it writes trails what it is written by those windows:
-// nothing is written until a text passes [wholeBytes], which a shorter one is
-// redacted whole by, and then each stage writes on what it decides as it
-// decides it, the last some MiB behind. Close writes the rest.
-//
-// A WRITE TO ITS WRITER IS CUT AT ANY BYTE, inside a rune too: each is a piece
-// of the redacted text, and the pieces put together are text. A writer that
-// reads each as text of its own, a JSON string's encoder, holds a rune's first
-// bytes until the rest come.
+// A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
+// stage decided a window before the rules' claims there were known. What was
+// written may then hold what redaction takes out, so the caller must neither
+// keep nor show it. Only a text built against the password's rule or an AWS
+// secret's quoted key, beside a key's armour, is refused.
 type Stream struct {
 	w      io.Writer
 	err    error
@@ -313,16 +284,11 @@ func newPipeline(out func(string), keys bool, hold int) *pipeline {
 // that is a multiple of pieceBytes, what is written past the last such offset
 // carried until the next is written or the text ends ([pipeline.close]).
 //
-// AT THE TEXT'S OWN OFFSETS, NOT THE WRITE'S. Cut from each write's start, the
-// pieces were the caller's: where a stage's input ended after each, and so
-// when each stage stepped and what the next held when it stepped, followed how
-// the text was cut into writes. What a stage decides never did, but whether a
-// claims stage steps at a marker ([ruleStage.markerToStepAt]) and whether the
-// keys' stage decides a window before its claims are known turn on what a
-// stage holds when it is handed a piece, so cut by the writes, two readings
-// of one text, a gzip reader's reads following a pipe's, could part on them.
-// Cut here, every stage is handed the same pieces of a text however it
-// arrives.
+// AT THE TEXT'S OWN OFFSETS, NOT THE WRITE'S: cut from each write's start,
+// when each stage stepped and what the next held would follow how the text was
+// cut into writes, and whether a claims stage steps at a marker
+// ([ruleStage.markerToStepAt]) or the keys' stage decides a window early turns
+// on that, so two readings of one text could part.
 func (p *pipeline) feed(b []byte) {
 	if n := len(p.carry); n > 0 {
 		k := min(len(b), pieceBytes-n)
@@ -781,34 +747,17 @@ func (s *ruleStage) resume(pos int, eof bool) {
 }
 
 // markerToStepAt is the marker a claims stage, or an AWS secret's reader,
-// steps at short of a step ([ruleStage.stepAtMarker]): the last it holds
-// whole past where it resumes, where that marker is open, the run it stands
-// for still being read upstream, or what the stage holds past where it
-// resumes stands for more of the text as written than a step and a piece of
-// text with no marker in it do.
-//
-// WHY IT STEPS AT ALL. A marker stands for a run of any length, so a stage
-// that waits for a step of its own input waits on as much of the text as
-// written as the markers in it stand for: behind a run being read upstream,
-// for the run's whole length, and over tokens a rule before it collapsed, for
-// the collapse times a step. Where it waits, the claims it has yet to make
-// wait, and the keys' stage waits on them, holding the text. Stepping here, a
-// stage decides up to less than a step and a piece of the text as written
-// behind its input's end, so every token's and AWS secret's claim is known
-// within the claims' lag of where it lies, and so is every run's end but a
-// Google token's before the dots it may end on: those are counted while they
-// run, the token running on through them where a byte of its own follows, and
-// its end is set only once a byte outside its class does
-// ([ruleStage.carryToken]): before the dots, as far past where it lies as they
-// run, which no step bounds. A window decided early that read the token open
-// read it otherwise only from that end on, over the dots, so that is all the
-// end is checked over ([keyStage.ended]).
-//
-// NEVER THE PASSWORD'S READER: its decisions read [MaxReach] past a key in its
-// own input, past a marker, which stands for any length of the text as
-// written, so what it holds before a marker is decided only with what follows
-// the marker. And never a rule over what the keys' stage writes, which claims
-// nothing and steps on its own input as it always has.
+// steps at short of a step ([ruleStage.stepAtMarker]): the last it holds whole
+// past where it resumes, where that marker is open (its run still being read
+// upstream) or what the stage holds stands for more of the text as written
+// than a step and a piece do. A marker stands for a run of any length, so a
+// stage waiting for a step of its own input would wait on the whole run, and
+// the keys' stage would hold the text meanwhile. Stepping here, every token's
+// and AWS secret's claim is known within the claims' lag, and so is every
+// run's end but a Google token's before its dots ([ruleStage.carryToken],
+// [keyStage.ended]). NEVER THE PASSWORD'S READER: it reads [MaxReach] past a
+// key in its own input, past a marker standing for any length, so what it
+// holds before a marker is decided only with what follows it.
 func (s *ruleStage) markerToStepAt() (edit, bool) {
 	if s.raw == nil || s.mode == reads || s.in.eof {
 		return edit{}, false
@@ -836,11 +785,9 @@ func (s *ruleStage) markerToStepAt() (edit, bool) {
 // one), nor an AWS secret's separator or value ([awsSecretByte]), nor an
 // armour's label, which a run's end and a value's read past their dashes
 // ([pemArmour]); so the window up to the `[`, the bracket included, decides
-// it as the whole input does, and a pattern that holds where its input ends
-// does not hold there. And no decision begins inside a marker: an AWS
-// secret's key a marker spells is followed by the `]`, which no separator
-// takes. A run the stage reads on ends at the `[` too, so the window carries
-// it to its end.
+// it as the whole input does. No decision begins inside a marker either: an
+// AWS secret's key a marker spells is followed by the `]`, which no separator
+// takes. A run the stage reads on ends at the `[` too.
 func (s *ruleStage) stepAtMarker(m edit) {
 	lo := max(s.in.base, s.pos-stageReach)
 	text := s.in.window(lo, m.end)
@@ -1582,17 +1529,14 @@ type keyObserver struct {
 // A WINDOW DECIDED EARLY IS CHECKED BY THE CLAIMS THAT COME AFTER IT. The keys'
 // stage decides a window once the text has run [holdBytes] past it, whatever
 // its claims' frontier says ([keyStage.frontier]), so the claims over it may
-// still change: a claim is handed, or one of its ends set, more than the hold
-// past where it lies, a LATE change, and only a late change can concern a
-// window so decided. The window's answers depend on the claims over its
-// footprint alone, and on nothing else, so a late change that meets it is
-// a MISS: the window may have decided otherwise than the whole text does,
-// and the stream is refused ([ErrDecidedEarly]). A claim the window read open
-// read as running past it ([keyStage.claimsIn]), so its end set inside the
-// window is checked over the stretch from that end to where the window read
-// it to, the one stretch its answers could read otherwise ([keyStage.ended]).
-// One that meets none decided what the whole text does, by induction over
-// the windows in order.
+// still change: a claim handed, or an end set, more than the hold past where
+// it lies is a LATE change, the only kind that can concern such a window. Its
+// answers depend on the claims over its footprint alone, so a late change that
+// meets it is a MISS and the stream is refused ([ErrDecidedEarly]). A claim
+// the window read open read as running past it ([keyStage.claimsIn]), so its
+// end set inside the window is checked over the stretch from that end to where
+// the window read it to ([keyStage.ended]). One that meets none decided what
+// the whole text does, by induction over the windows in order.
 
 // handed checks a claim handed at a, its extent ending at end (-1 while to
 // come), a word's value ending at value, against the windows decided early;
@@ -1628,49 +1572,18 @@ func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
 	}
 }
 
-// ended checks the end e set on a claim against each window decided early
-// that it ends inside, kept in k.early as its start, its end hi and its
-// footprint: the window read the claim open, as running to one past hi
-// ([keyStage.claimsIn]), so it is a miss where [e, hi+1), the stretch the
-// claim was read to cover and does not, meets the footprint. A
-// window the claim ends past read it as the whole text does, clipped to the
-// same end.
-//
-// NOT FROM WHERE THE CLAIM BEGINS, though it covers [a, e) too: over [a, e)
-// the window answered as it would have with the claim ending at e. Its
-// answers read the claims through three questions, each over the range or
-// the place it asks of, which the footprint holds ([claims.asked]); each
-// answer the same, the next question is the same, and the window decides
-// as the whole text does wherever the footprint stays short of e.
-//
-//   - [claims.any] and [claims.names] ask whether what the claims cover
-//     takes any of [start, end). The claim read open and the claim ending at
-//     e cover the same of a range that ends at or before e. Where e is at or
-//     before the window's start, the whole text's reading leaves the claim
-//     out, and [e, hi+1) holds the window whole.
-//   - [claims.shortOfNames] asks [within] whether a place falls strictly
-//     inside a range of what names, and where that range begins. For a place
-//     before e, both readings of the claim run past it, and a range merges
-//     with the claim before the place only by beginning before it, where the
-//     two readings are the same claim: the same range, from the same start.
-//   - A password's value is the one claim [claims.build] reads other than as
-//     the stretch it covers: a block read forward from a BEGIN that holds its
-//     key takes a value that runs past the block, keeping the key and
-//     separator alone, so a value read open is cut to them, and one ending at
-//     e inside the block is kept whole. The two differ from where the value
-//     begins to e, before e. But the window that read that block forward asked
-//     of the claims at the block's end ([claims.shortOfNames]), at or past e,
-//     so its own footprint meets [e, hi+1): it was decided early, since the
-//     value's end was not known; it waits still, since the reader's frontier
-//     stands inside the value ([keyStage.settle]); and it read the value
-//     open, or the value was handed after it, late, and missed there over
-//     all the value covers ([keyStage.handed]). So that end is a miss there.
-//
-// Counted from a, the check refused every window that asked of the claim
-// before e alone: a Google token on a key's line whose end before the dots
-// it may end on is set only once they stop ([ruleStage.carryToken]) was
-// refused where the dots ran past the hold, though the window asked of
-// nothing from e on and decided as the whole text does.
+// ended checks the end e set on a claim against each window decided early that
+// it ends inside, kept in k.early as its start, end hi and footprint. The
+// window read the claim open, as running to one past hi ([keyStage.claimsIn]),
+// so it is a miss where [e, hi+1), the stretch the claim was read to cover and
+// does not, meets the footprint ([claims.asked]). One the claim ends past read
+// it as the whole text does. Not from where the claim begins: before e the
+// window answered as with the claim ending at e, since [claims.any],
+// [claims.names] and [claims.shortOfNames] agree there. The exception is a
+// password's value read forward from a BEGIN ([claims.build]), cut to key and
+// separator when open, whole when it ends inside the block; that window asked
+// at the block's end, so its footprint meets [e, hi+1) ([keyStage.settle]).
+// Counting from a would refuse windows that asked only before e.
 func (k *keyStage) ended(c *claimSource, e int) {
 	if o := k.observe; o != nil && o.changed != nil {
 		o.changed(c, e)
@@ -1829,21 +1742,13 @@ func (k *keyStage) step() bool {
 // readArmours reads the blocks of the armours that begin in [k.read, readTo)
 // beside c, early where it is still to be known, and keeps them as read.
 //
-// A SPAN AN EARLY WINDOW READS ENDING AT OR BEFORE ITS START, or beginning
+// A span an early window reads that ends at or before its start, or begins
 // before what the stage has written, is a reading of claims the whole text
-// does not have: a token's run ends at an armour's dashes
-// ([ruleStage.carryToken]), so no claim the whole text has covers a block's
-// end from before its start. It is a miss, and is never written: written, it
-// would slice the text backwards.
-//
-// The second comes of no reading the code makes now: a span begins at a
-// BEGIN the window reads, at or past where it reads from, or within [keyReach]
-// before an END it reads, and the stage writes no further than keyReach short
-// of where it reads from ([keyStage.step]); [claims.shortOfNames] moves a
-// span's end alone. It is checked all the same, at the one place a reading of
-// claims the whole text does not have is written, since a span that began
-// before what is written would panic the stage, and with it the goroutine the
-// stream runs in.
+// does not have (a token's run ends at an armour's dashes, so no claim covers
+// a block's end from before its start; [ruleStage.carryToken]). It is a miss
+// and is never written: no code reads one now, but the check stays at the one
+// place such a span would be written, since it would slice the text backwards
+// and panic the stage and the goroutine the stream runs in.
 func (k *keyStage) readArmours(text string, lo, readTo int, c *claims, early bool) {
 	r := keyReading{open: -1, forward: k.forwardIn(lo)}
 	for _, e := range k.closed {

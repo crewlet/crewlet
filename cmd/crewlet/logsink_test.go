@@ -110,37 +110,18 @@ func keepProcessLog(t *testing.T) {
 	})
 }
 
-// scrubGitEnv removes from the environment environ lists every variable the
-// suite must not read from the person running it: every one whose name
-// begins GIT_, and SSH_ASKPASS.
+// scrubGitEnv removes from the environment environ lists every variable the suite
+// must not read from the person running it: every GIT_* name, and SSH_ASKPASS.
 //
-// The operator CLI runs the OPERATOR's git, in the operator's environment, by
-// design (why cmd/ is outside gitproc's exec gate), so every git a case starts
-// through the CLI inherited the environment of whoever ran `go test`, and a
-// case's verdict was a fact about their shell rather than about the CLI:
-// GIT_CONFIG_COUNT, KEY_n and VALUE_n and GIT_CONFIG_PARAMETERS are
-// configuration outranking every file (credential.interactive=false, which a
-// git from 2.46 obeys, failed the terminal-prompt case on any git newer than
-// the one it was written on); GIT_DIR, GIT_INDEX_FILE and GIT_WORK_TREE are
-// exported by git to its hooks, so to a `make check` a pre-commit hook runs;
-// GIT_EXEC_PATH chooses the programs git runs; GIT_ASKPASS, SSH_ASKPASS and
-// GIT_TERMINAL_PROMPT answer or forbid a prompt in the person's place; and
-// GIT_TRACE*, GIT_SSH* and GIT_PROTOCOL change what git does and prints. One
-// prefix rather than a list of the variables that bit: git reads a new GIT_
-// name in most releases, and a list is a fact about the git it was written
-// against. SSH_ASKPASS is the one ASKER outside it, read by the ssh git runs
-// and by git itself, as its last asker before the terminal.
-//
-// That is git's VARIABLES, and only them. What git reads beside them — its
-// configuration and attribute FILES, found through HOME and XDG_CONFIG_HOME;
-// the locale; curl's proxy variables — the scrub leaves, because the suite
-// needs them for everything that is not git (HOME and XDG_CACHE_HOME name the
-// store's per-user cache): the operator's git a case starts is given its own
-// by [hermeticGitIn], and the sign-off gate's suite pins its own the same way
-// (scripts/check-signoff_test.sh).
-//
-// A function of the environment's two operations rather than of the process,
-// so its case can plant an environment ([TestTheSuiteReadsNoGitEnvironment]).
+// The operator CLI runs the OPERATOR's git in their environment (why cmd/ is
+// outside gitproc's exec gate), so a case's verdict was a fact about their shell:
+// GIT_CONFIG_* and GIT_CONFIG_PARAMETERS outrank every file; GIT_DIR and friends
+// reach `make check` from a pre-commit hook; the askpass, prompt, GIT_EXEC_PATH,
+// GIT_TRACE*, GIT_SSH* and GIT_PROTOCOL variables change what git runs and asks.
+// One prefix, not a list, since git reads new GIT_ names in most releases.
+// Only git's VARIABLES: its config files (HOME, XDG_CONFIG_HOME), the locale and
+// curl's proxies stay, and the git a case starts gets its own by [hermeticGitIn].
+// Takes the environment's two operations so its case can plant one.
 func scrubGitEnv(environ func() []string, unsetenv func(string) error) error {
 	for _, kv := range environ() {
 		name, _, _ := strings.Cut(kv, "=")
@@ -173,20 +154,18 @@ var plantedGitEnv = []string{
 	"SSH_ASKPASS=/bin/false",
 }
 
-// THE SUITE READS NO GIT VARIABLE OF THE PERSON RUNNING IT ([scrubGitEnv]).
-// The other half of what git reads from them — its configuration and
-// attribute files, the locale, curl's proxies — is pinned on the operator's
-// git itself, and held by [TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine].
+// THE SUITE READS NO GIT VARIABLE OF THE PERSON RUNNING IT ([scrubGitEnv]). The
+// other half (config and attribute files, the locale, curl's proxies) is pinned on
+// the operator's git itself, held by
+// [TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine].
 //
 // Two halves. The scrub over a planted environment removes exactly the git
-// variables and keeps everything else, in order — the near misses included:
-// GITHUB_ACTIONS is not GIT_, and SSH_AUTH_SOCK is not the asker. And this
-// suite started again with that environment planted: its case sees none of
-// it, and sees the rest — which is what fails if TestMain stops applying the
-// scrub, or applies it to something other than the process.
-//
-// Mutation: scrub only GIT_CONFIG_* → GIT_DIR is kept, both halves red.
-// Mutation: drop the scrub from TestMain → the second half red.
+// variables and keeps everything else in order, near misses included
+// (GITHUB_ACTIONS is not GIT_, SSH_AUTH_SOCK is not the asker). And this suite
+// started again with that environment planted sees none of it and sees the rest,
+// which fails if TestMain stops applying the scrub, or applies it elsewhere.
+// Mutation: scrub only GIT_CONFIG_* → GIT_DIR is kept, both halves red; drop the
+// scrub from TestMain → the second half red.
 func TestTheSuiteReadsNoGitEnvironment(t *testing.T) {
 	if os.Getenv(gitEnvProbeEnv) != "" {
 		// THE CHILD: what reached a case once TestMain ran. Judged by the

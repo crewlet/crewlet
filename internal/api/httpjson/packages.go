@@ -2,22 +2,17 @@ package httpjson
 
 import "sync"
 
-// goPackages is the name of every Go package in this module that has non-test
-// sources, which is what a leading "name: " in an error's text is: the package
-// prefix Go errors carry ("statelog: node-4 may not be evicted"). [Sentence]
-// leaves such a prefix lowercase, because capitalising it names a package that
-// does not exist, and stripping it is the source's job rather than the
-// boundary's.
+// goPackages is the name of every Go package in this module with non-test
+// sources: what a leading "name: " in an error's text is ("statelog: node-4
+// may not be evicted"). [Sentence] leaves such a prefix lowercase, because
+// capitalising it names a package that does not exist.
 //
-// A TABLE, HELD TO THE TREE: TestThePackagePrefixesAreTheModulesPackages
-// reads every package clause in the module and fails, naming the difference,
-// when a package is added, renamed or removed without this table following.
+// HELD TO THE TREE: TestThePackagePrefixesAreTheModulesPackages fails when a
+// package is added, renamed or removed without this table following.
 //
-// BUILT THE FIRST TIME A SENTENCE READS IT, NOT AT INIT. A map literal at
-// package level is built by the package's init, which every process that
-// links httpjson pays, every push's git hook among them, and cmd/crewlet's
-// TestTheHookPaysLittleForTheEnginesInit holds the module's init to a budget
-// it sat at the edge of. Only a sentence with a prefix needs the table.
+// BUILT ON FIRST USE, NOT AT INIT: a package-level map literal is built by the
+// init every process linking httpjson pays (every push's git hook), and
+// cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit holds init to a budget.
 var goPackages = sync.OnceValue(func() map[string]bool {
 	return map[string]bool{
 		"a2a": true, "a2atest": true, "accessdomain": true, "activityline": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,

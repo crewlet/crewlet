@@ -12,27 +12,16 @@ import (
 
 // What each scalar of a document is decoded INTO, found before the decoder runs.
 //
-// # Why two readings need the Go type ahead of the decoder
+// The decoder says what a scalar became, never what it was about to become.
+// Two readings are decided before it runs, walking the node beside the type
+// the decoder will read it into, by its rules for which key lands where:
 //
-// The decoder answers what a scalar became and never what it was about to
-// become, and two readings have to be decided before it runs:
-//
-//   - a Tier A `${VAR}` is substituted before anything is decoded (see
-//     [ParseBootstrap]), and what the substituted text MEANS depends on where
-//     it lands. Into a text field it is text, whatever it looks like; into a
-//     number or a switch it is read exactly as the same characters written
-//     there would be, so `port: ${API_PORT}` is `port: 8080` and not the
-//     string "8080" a number field refuses;
-//   - a fractional number bound for an integer field is TRUNCATED by the
-//     decoder without a word — `api.port: 8080.9` ran as 8080, and
-//     `max_iterations: 3.7` as 3 — so it has to be refused before the
-//     decoder gets the chance to drop what the author wrote; and a number
-//     that is not FINITE (YAML's `.nan` and `.inf`) is read into a
-//     fractional field as exactly what it spells, past every bound a
-//     validator then checks it against (see [refuseNonFinite]).
-//
-// They walk the node beside the type the decoder will read it into, with the
-// decoder's own rules for which key lands in which field.
+//   - a Tier A `${VAR}` is substituted before decoding ([ParseBootstrap]); into
+//     a text field it stays text, into a number or switch it reads as the same
+//     characters written there (`port: ${API_PORT}` is `port: 8080`);
+//   - a fractional number for an integer field is TRUNCATED silently
+//     (`api.port: 8080.9` ran as 8080) so it is refused first, as is a
+//     non-FINITE one (`.nan`, `.inf`; see [refuseNonFinite]).
 
 // unmarshalerType is the interface of a type whose YAML reading is its own.
 var unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
@@ -199,26 +188,18 @@ func refuseFractions(node *yaml.Node, t reflect.Type) problems {
 	return out
 }
 
-// refuseNonFinite is every number node holds that is not finite — YAML's
-// `.nan`, `.inf` and `-.inf`, in any of their spellings — where t takes a
-// fractional one, as faults on the nodes that carry them, in the coordinates of
-// node as [refuseFractions]' are.
+// refuseNonFinite is every number node holds that is not finite (YAML's
+// `.nan`, `.inf`, `-.inf`, in any spelling) where t takes a fractional one,
+// as faults on the nodes that carry them, in [refuseFractions]' coordinates.
 //
-// THE DECODER READS ONE FAITHFULLY, and nothing after it can be trusted to
-// notice. Every bound a validator holds a number to is a comparison, and NaN
-// fails every comparison it is put to, so `lease_ttl_seconds: .nan` passed
-// "must not be negative" and `notification_coalesce_window_seconds: .nan`
-// passed "0..60"; an infinity passes every lower bound. Each is then converted
-// to a duration, a conversion Go leaves undefined for both — on amd64 the
-// result is the most negative duration there is — so a node ran its leases,
-// its timeouts and its windows on a value nobody wrote. No setting in either
-// tier has a meaning for one, so it is refused here, once, for every field,
-// rather than by a check each validator would have to remember. A whole-number
-// field needs nothing of the kind: the decoder refuses a non-finite number
-// there itself.
-//
-// A Tier A reference is substituted before this runs ([ParseBootstrap]), so a
-// `${VAR}` resolving to `.nan` is refused too, at the line that names it.
+// THE DECODER READS ONE FAITHFULLY, and nothing after it notices. NaN fails
+// every comparison, so `lease_ttl_seconds: .nan` passed "must not be
+// negative" and an infinity passes every lower bound; converting either to a
+// duration is undefined in Go (on amd64 the most negative one), so a node ran
+// leases and timeouts on a value nobody wrote. No setting has a meaning for
+// one, so it is refused here, once, for every field. A whole-number field
+// needs nothing: the decoder refuses a non-finite number there. A Tier A
+// `${VAR}` resolving to `.nan` is refused too, as it is substituted first.
 func refuseNonFinite(node *yaml.Node, t reflect.Type) problems {
 	var out problems
 	eachScalar(node, t, nil, func(n *yaml.Node, into reflect.Type, _ Path) {

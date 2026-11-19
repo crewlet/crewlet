@@ -13,15 +13,12 @@ import (
 // notices arrived, and the subject and reason of the newest — and the broker's
 // instant its push is timed from, which is no content either.
 //
-// It rides a socket frame to whoever watches that seat, and what it is for is
-// telling a screen to re-read the inbox through the SAME question, and the
-// same authority, as the poll it replaces. A field carrying an excerpt, a title
-// or an author would be a read path around that authority — so the set of
-// fields is held here, and adding one is a decision somebody has to make in
-// this file. The source is the fifth because a node relays each domain's
-// movements from its own sound copy, and a screen composes its inbox from
-// every domain's; the instant is the sixth because the socket's push is timed
-// from it (internal/objectives' change visibility).
+// It tells a screen to re-read the inbox through the SAME question and
+// authority as the poll it replaces; an excerpt, title or author would be a
+// read path around that authority, so the field set is held here. The source
+// is the fifth because a node relays each domain's movements from its own
+// sound copy; the instant is the sixth because the push is timed from it
+// (internal/objectives' change visibility).
 func TestAMovementCarriesIdentifiersOnly(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
@@ -50,22 +47,14 @@ func TestAMovementCarriesIdentifiersOnly(t *testing.T) {
 // A BATCH ANNOUNCES EACH PERSON ONCE, NAMING ITS DOMAIN AND ITS NEWEST NOTICE,
 // TIMED FROM ITS OLDEST.
 //
-// The store re-runs a transaction body that failed transiently, so a note
-// kept per call would announce the re-run's notice twice: notes are keyed on
-// the notice row's own key. An import that files a hundred notices for one
-// person is one movement of a hundred, naming the newest by position and,
-// among equals, by record id — never a map's iteration order, or one batch
-// would highlight a different subject on every node. An ARRIVAL outranks a
-// purge's removal whatever their positions, because a deleted notice is
-// nothing to point at, and a removal counts nothing. The movement is timed from
-// the OLDEST instant among its notes — one push answers every record the batch
-// routed to that person, and they waited longest for the first — whatever
-// note names its subject. And a drained batch is empty, or the next commit
-// announces this one's again.
+// Notes are keyed on the notice row's own key, so a re-run transaction body
+// does not announce twice. The newest is named by position, then record id,
+// never map order. An ARRIVAL outranks a purge's removal (a deleted notice is
+// nothing to point at, and counts nothing). The movement is timed from the
+// OLDEST note, which waited longest. A drained batch is empty.
 //
 // Mutation: key notes per call, let a removal count, drop the arrival rule,
-// time a movement from its newest note, or keep the notes after Drain, and a
-// step fails.
+// time from the newest note, or keep notes after Drain, and a step fails.
 func TestABatchAnnouncesEachPersonOnceWithItsNewestNotice(t *testing.T) {
 	t.Parallel()
 	at := func(sec int64) time.Time { return time.Unix(1_700_000_000+sec, 0).UTC() }

@@ -747,19 +747,16 @@ func TestABoxReadAnotherBuildCannotReadWholeReadsNothing(t *testing.T) {
 
 // A HOST TAKES EVERY BOX READ AS IT ARRIVES. Its registration is wider than the
 // reads it makes, so no read waits unseen in the broker's buffer where its
-// wait goes uncounted: a read past those it makes at once waits inside the
-// answer, handed what is left of its share once it is held, so it ends at the
-// arrival plus the share whatever it waited and its asker's last quarter stays
-// whole for the crossings; one whose share runs out while it waits is answered
-// busy then, before its asker stops listening; and a read past those waiting
-// is answered busy at once. Busy is a host that did not answer, the host
-// there.
+// wait goes uncounted: a read past those made at once waits inside the answer,
+// handed what is left of its share, so it ends at the arrival plus the share
+// whatever it waited and its asker's last quarter stays whole for the
+// crossings; one whose share runs out while waiting is answered busy then,
+// before its asker stops listening; one past those waiting is answered busy at
+// once. Busy is a host that did not answer.
 //
-// Mutation: drop the waiting bound, hand a read that waited its whole share
-// from the slot, or a share of what its asker still waits (which ends it
-// later the longer it waited), wait for a slot with no end, or register no
-// wider than the reads held and waiting, and a read past them waits, is handed
-// the wrong time, or its asker hears silence at its wait's end.
+// Mutation: drop the waiting bound, hand a waited read its whole share or a
+// share of what its asker still waits, wait for a slot with no end, or
+// register no wider than the reads held and waiting: red.
 func TestAHostTakesEveryBoxReadAsItArrives(t *testing.T) {
 	t.Parallel()
 	const wait = 2 * time.Second

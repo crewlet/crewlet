@@ -12,28 +12,14 @@ import (
 //
 // # Why a template rather than a prompt written per call
 //
-// The executor could always write a worker's whole system prompt inline, and
-// it still can. What it could not do was write the SAME one twice. Every
-// spawn was a fresh improvisation: a different tool list, a different notion
-// of what "done" meant, a different shape of answer coming back. That is
-// expensive in a way nothing measured — the parent paid for a prompt it had
-// already written on the previous turn, and read back prose it then had to
-// re-parse into whatever it needed.
-//
-// A template moves the stable half into config, where a founder can read it,
-// edit it live and version it with the rest of the company: the persona, the
-// tool grant, the model, and the SHAPE OF THE ANSWER. What stays per call is
-// the only thing that genuinely varies — the task.
+// Inline prompts were never the SAME twice: each spawn improvised its tools and
+// answer shape. A template moves the stable half into config (persona, tool
+// grant, model, SHAPE OF THE ANSWER); only the task varies.
 //
 // # The template is a request, not a grant
-//
-// A template naming a tool does not confer it. Every name still passes
-// through the sub-agent package's Permit, against the PARENT'S own live tool
-// list and the engine-control denylist, so a template cannot widen a seat's
-// reach beyond what the seat already has. That is deliberate: `workers:` is
-// founder-owned Tier B config, and Tier B must never be a privilege
-// escalation path. A template that names a tool its caller lacks simply has
-// that name rejected, and the rejection is reported.
+// Every named tool passes the sub-agent package's Permit against the PARENT'S
+// live tool list and the engine-control denylist: `workers:` is Tier B, never a
+// privilege escalation path.
 
 // workerKey is the template-name grammar.
 //
@@ -63,19 +49,16 @@ type Worker struct {
 	// boundary and cannot weaken it by forgetting to.
 	SystemPrompt string `yaml:"system_prompt" json:"system_prompt" js:"required" desc:"The worker's persona and standing instructions. The runtime preamble is appended."`
 
-	// Tools is the allowlist this worker asks for. Empty means it runs
-	// with no tools at all, which is the right shape for a summariser or a
-	// drafter — a worker with no tools cannot go looking for anything, and
-	// that bound is worth having on purpose.
+	// Tools is the allowlist this worker asks for. Empty means no tools at all,
+	// the right shape for a summariser or a drafter: a worker with no tools
+	// cannot go looking for anything.
 	//
-	// ABSENT AND EMPTY ARE THE SAME THING here, unlike a delegate task's
-	// own `tools`, where nil means "take the template's". A template has
-	// nothing to inherit from, so there is no third state to express — and
-	// the store round trip normalises `[]` to absent, which would make the
-	// difference unrepresentable even if there were.
+	// ABSENT AND EMPTY ARE THE SAME THING here, unlike a delegate task's own
+	// `tools`, where nil means "take the template's". A template has nothing to
+	// inherit from, and the store round trip normalises `[]` to absent anyway.
 	//
-	// Every name is still filtered through the worker grant at spawn time;
-	// see this file's own header.
+	// Every name is still filtered through the worker grant at spawn time; see
+	// this file's own header.
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty" desc:"Tools this worker asks for. Still filtered against the caller's own tools at spawn."`
 
 	// Model is the providers.llm key this worker runs on. Empty takes the
@@ -90,19 +73,14 @@ type Worker struct {
 	// and a task cannot disagree about what an over-ask means.
 	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Tool rounds this worker may run; 0 takes the runtime cap."`
 
-	// Output is the JSON Schema the worker's `submit_result` publishes,
-	// so the answer comes back as fields rather than prose.
+	// Output is the JSON Schema the worker's `submit_result` publishes, so the
+	// answer comes back as fields rather than prose the PARENT must re-parse at
+	// the cost of another model call. Absent takes the default result shape
+	// (internal/agent/subagent).
 	//
-	// The point is what the PARENT does next. A worker that returns
-	// `{"verdict": "...", "citations": [...]}` hands the executor
-	// something it can act on directly; one that returns three paragraphs
-	// hands it a re-parsing job that costs another model call to get
-	// wrong. Absent takes the default result shape — see
-	// internal/agent/subagent.
-	//
-	// A map rather than a typed schema builder because it IS a JSON Schema
-	// and the model receives it verbatim; anything else would be a second
-	// grammar to keep in step with the first.
+	// A map rather than a typed schema builder because it IS a JSON Schema and
+	// the model receives it verbatim; anything else is a second grammar to keep
+	// in step with the first.
 	Output map[string]any `yaml:"output,omitempty" json:"output,omitempty" desc:"JSON Schema for this worker's structured answer. Absent takes the default shape."`
 }
 

@@ -5,7 +5,7 @@
 // # Writes and verbs here, reads in the question registry
 //
 // What each model is doing is a question (`llm_entries`, `llm_runners`,
-// `llm_models`, `llm_device_sign_in`, internal/api/queries), answered once for
+// `llm_models`, `llm_device_sign_in`, `llm_check`, internal/api/queries), answered once for
 // REST and the socket. What changes something is a route here, one verb per
 // route, mounted through [authz.Router]:
 //
@@ -18,7 +18,8 @@
 //     recency, the assistant on approval): runtime state, no config or
 //     credential. A check, or a credential test, of a DRAFT entry asks
 //     `config.write` and `secrets.write` on top ([mayRunDraft]): a draft runs
-//     what a write would;
+//     what a write would, so a credential test's `dry_run` is not a check in
+//     ADR-0055's sense;
 //   - `POST .../device-sign-in` and `DELETE /llm/device-sign-ins/{id}` are
 //     `secrets.write`: a sign-in mints a login.
 //
@@ -26,10 +27,15 @@
 //
 // A check with its smoke calls outlasts the two minutes of silence a proxy in
 // front of the API is told to allow ([CheckBudget]), so `POST .../check`
-// starts it on the node that takes the request and answers `202` with it
+// starts it ([Engine.StartModelCheck]) on the node that takes the request and answers `202` with it
 // running — `200` where it ended within the engine's short hold — and the
 // page reads how it ended at `GET .../check`, which any node answers from the
-// coordination store's record of it ([coord.ModelCheck]).
+// coordination store's record of it ([coord.ModelCheck]). The route renders
+// the doctor's answer within the record's bound ([boundedAnswer]), a second
+// ask while one runs is handed it or refused `409 check_in_progress`, and a
+// stopping node answers `503` at the drain's wait ([StoppingRetryAfter], held to api.DrainRetryAfter).
+// A DRAFT entry is validated by the config surface's own dry run
+// (`configapi.Service.CheckEntity`), so one rule decides it there and here.
 //
 // # A credential is tested before it is stored
 //
@@ -37,15 +43,26 @@
 // home for one one-turn call (decision D2), and sealed only if the vendor
 // signed it in; a 429 proves it authenticated. A refused value is never
 // stored, so the credential the model signs in with keeps signing it in.
-// Then, in the setup writer's order, the value is sealed and the revision
-// that reads it re-activated (ADR-0070), so the answer can name the epoch
-// every node reads it at.
+// Then, in the setup writer's order, the value is sealed (source `models`) and
+// the revision that reads it re-activated once, held to `If-Match` (ADR-0070), so the answer can name the epoch
+// every node reads it at. A refusal is `422 credential_rejected`, and
+// `If-None-Match: *` refuses a name already stored.
+//
+// # The engine is a consumer interface
+//
+// [Engine] carries this package's own result types and sentinels and is
+// adapted from the engine where the API is wired, so no engine package is
+// imported here. A device sign-in's end is the engine's row
+// (`device_sign_in_ended`), published where the session ran, not an audit
+// entry of a route.
 //
 // # Every call is audited, refused ones included
 //
 // Each route records one `model_acted` (internal/events/types) with what
 // became of it, the status and the refusal code read off the answer the
-// route wrote, so no route can forget to and no refusal goes unrecorded. A
+// route wrote, so no route can forget to and no refusal goes unrecorded: each
+// route's router renders its refusal through the audit, the guard's own
+// included. A
 // credential call names the secret NAMES it touched, never a value.
 package llmapi
 

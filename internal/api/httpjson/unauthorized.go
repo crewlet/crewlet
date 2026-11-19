@@ -10,16 +10,14 @@ import (
 // What `unauthorized` says, which depends on the rule that refused.
 //
 // `unauthorized` is EVERY refusal the authority table makes, and most of the
-// rules behind one are not about a permission at all: a verb only an agent's
-// seat makes, one made as a seat by a credential acting as none, an account
-// that is not active, a proof of identity older than the verb allows. One
-// sentence naming every permission told every one of those callers to go
-// and ask an admin for access — which, holding admin already, they had — while
-// the refusal's own `reason` beside it said something else. So the sentence
-// FOLLOWS THE REASON, and names a permission only where one is the remedy:
-// the grants a rule names beside a relation it refused (a lead's row, an
-// author's, somebody's own record) admit the caller through the admin path, so
-// those name it; the rest do not, and say what does clear them.
+// rules behind one are not about a permission: a verb only an agent's seat
+// makes, a credential acting as no seat, an inactive account, a proof of
+// identity older than the verb allows. One sentence naming a permission would
+// send those callers to ask an admin, contradicting the refusal's own
+// `reason`. So the sentence FOLLOWS THE REASON and names a permission only
+// where one is the remedy (the grants a rule names beside a relation it
+// refused admit the caller through the admin path); the rest say what clears
+// them.
 
 // situated are the codes whose sentence depends on what the refusal says
 // about itself, each with the function that chooses it from the detail.

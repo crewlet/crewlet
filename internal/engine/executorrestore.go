@@ -16,42 +16,24 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A SESSION, CONTINUED BY A TURN'S NEXT LAUNCH, as the engine wires it
-// (internal/sandbox's restore.go has the mechanism): the turn's own kept
-// session, by its relaunches, and the session its conversation's last turn
-// left, by its first launch and by a relaunch of a turn that has kept none.
+// A turn's next launch continues a session (internal/sandbox's restore.go has
+// the mechanism): the turn's own kept one on a relaunch, else the one its
+// conversation's last turn left.
 //
-// THE ROWS ARE READ THROUGH THE ESTATE ROUTER'S READS, wherever the seat runs: a
-// seats-only node holds no log, and the capture a relaunch continues may be one
-// another node's keep recorded, which a read at `linearizable` waits for or asks
-// a data node for. The session's sealed object is fetched and opened through
-// the domain's session store, over the Tier A keyring, on whichever node
-// launches.
-//
-// WHICH SESSION A LAUNCH CONTINUES is asked before its runner builds the run's
-// surface and briefs ([agentLauncher.ProbeSession]): a turn's first launch, the
-// head its dispatch read (conversation.go), answered with no read at all; a
-// relaunch, the kept capture of the job it follows, else the base the turn's
-// first launch froze where the turn has kept nothing — each where the runner of
-// a member of the seat's chain restores it. WHICH MEMBER TAKES IT, AND WHETHER
-// THE SEAT'S BUDGET CAN CARRY IT, are the launch's to decide, once the briefs
-// that continue it exist ([agentLauncher.launch], [launchFloor]): the member is
-// picked once, as it launches, and the context the session sends first is known
-// here, the brief beside it only once the runner has written it.
-//
-// WHAT A CUT-OFF KEPT SESSION HOLDS is read for the relaunch that continues
-// it, once its runner has the round's calls in hand and before it writes the
-// briefs ([agentLauncher.SessionHoldings]): through the runner of the member
-// driving the harness that wrote the session, for the release that wrote it
-// ([runner.SessionBasis.Release]), and logged whatever it answers. The briefs
-// told by it ride beside the others to the sandbox layer ([sandboxSession]),
-// which hands them only to a box of that release, and the launch's floor
-// counts them and drops them alone where the seat's budget cannot carry them
-// ([agentLauncher.continuedFloor]).
-//
-// WHAT A READER OF A SESSION IS TOLD A RELAUNCH WOULD DO is asked of the node
-// holding the seat ([Engine.RelaunchTargets]): the member that node would launch
-// a relaunch on now, as its own bench of spent plans has it.
+// Rows are read through the estate router wherever the seat runs: a seats-only
+// node holds no log, and the capture may be another node's keep, which a
+// `linearizable` read waits for. The sealed object opens through the domain's
+// session store over the Tier A keyring. Which session a launch continues is
+// asked before the runner builds briefs ([agentLauncher.ProbeSession]); which
+// member takes it, and whether the budget can carry it, once they exist
+// ([agentLauncher.launch], [launchFloor]).
+
+// What a cut-off kept session holds is read before the briefs are written
+// ([agentLauncher.SessionHoldings]), through the runner of the harness that
+// wrote it, for its release ([runner.SessionBasis.Release]). The briefs told by
+// it go to a box of that release only ([sandboxSession]); the floor drops them
+// alone where the budget cannot carry them ([agentLauncher.continuedFloor]).
+// A reader's answer to what a relaunch would do is [Engine.RelaunchTargets].
 
 // executorRestore is the engine's part of continuing a turn's kept session
 // ([sandbox.SessionRestore]).
@@ -221,31 +203,24 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
+		// AND THE LATE CALLS IT HOLDS ONLY AS THAT BRIEF'S COUNT, which it is
+		// credited no telling of.
+		LateOwed: slices.Clone(captured.LateOmitted),
 	}
 }
 
 var _ runner.HoldingsAsker = (*agentLauncher)(nil)
 
-// SessionHoldings answers which of the round's calls ask marks asked the
-// cut-off kept session basis names holds ([runner.HoldingsAsker]), as
-// [sandbox.Coordinator.HoldingsOf] reads it off the capture the turn's run
-// record keeps, through the runner of the seat's chain that drives the
-// harness that wrote the session ([chainRestorers.reader]); and logs what it
-// answers: `executor_session_holdings_read` with how many asked calls the
-// reading held and told, how many distinct subagents a told call is under,
-// and the release it was read for, beside one
-// `executor_session_subagent_unreported` per such subagent; or
-// `executor_session_holdings_unread`, saying why, where it read none, and
-// then answers the zero value.
-//
-// THAT HARNESS'S RUNNER AND NO OTHER: what a session holds is read by the
-// runner of the harness that wrote it, which is also the one
-// [sandbox.ContinuityOf] still continues the turn's row with, and one runner
-// drives each harness. The first member's runner, of another harness,
-// refuses the session.
-//
-// NEVER AN ERROR TO THE RUNNER: every failure is no reading, and the relaunch
-// is told every call after the session's save point, which is never wrong.
+// SessionHoldings answers which of the round's asked calls the cut-off kept
+// session basis names holds ([runner.HoldingsAsker]), as
+// [sandbox.Coordinator.HoldingsOf] reads it off the turn's capture through the
+// runner of the chain member driving the harness that wrote it
+// ([chainRestorers.reader]); another harness's runner refuses the session. It
+// logs `executor_session_holdings_read` (with one
+// `executor_session_subagent_unreported` per subagent under a told call) or
+// `executor_session_holdings_unread` with why. Never an error to the runner:
+// every failure is no reading, and the relaunch is told every call after the
+// save point, which is never wrong.
 func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.SessionBasis,
 	ask sandbox.HoldingsAsk) sandbox.SessionHoldings {
 
@@ -273,7 +248,7 @@ func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.Sessio
 	}
 	log.InfoContext(ctx, "executor_session_holdings_read", "seat", l.seat.Handle(), "turn_id", l.turn.RunID,
 		"asked", asked, "held", held, "told", asked-held, "unreported", len(unreported), "writer", ask.Resumer,
-		"outcome", readOutcome(held, len(unreported)))
+		"compacted", holdings.Compacted, "outcome", readOutcome(held, len(unreported)))
 	// ONE LINE PER SUBAGENT, never per call: its calls are told under one
 	// heading, and the line says why the session does not hold its report.
 	for _, agent := range unreported {
@@ -562,18 +537,14 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 }
 
 // sandboxSession is the session a launch continues in the sandbox layer's
-// terms, nil where it continues none: a relaunch's kept capture, with the brief
-// for the box the session was last worked in and the one for any other, each
-// where the sandbox layer hands it; or the session the turn's conversation's
-// last turn left, which the sandbox layer reads off the turn's record as its
-// first launch froze it and continues only in a box of its own, with the one
-// brief for that. Either with what its briefs left out of the round the launch
-// carries on, which the launch records where it hands one ([sandbox.BriefTold]).
-// Beside a kept capture's two briefs, the two told by a reading where the
-// runner wrote them ([runner.SessionContinuation.Exact]), with their release
-// and what they left out, handed only to a box of that release, and the two
-// for a box whose release the resume was not read in, or the mark that the
-// floor dropped them ([runner.SessionContinuation.Unheld]); never beside a base.
+// terms, nil where it continues none: a relaunch's kept capture, with a brief
+// for the box it was last worked in and one for any other; or the session the
+// conversation's last turn left (a base), continued only in a box of its own
+// with the one brief. Either carries what its briefs left out of the round
+// ([sandbox.BriefTold]). A kept capture also carries the two briefs told by a
+// reading ([runner.SessionContinuation.Exact]), handed only to a box of their
+// release, and the two for any other release or the mark that the floor dropped
+// them ([runner.SessionContinuation.Unheld]); never beside a base.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	switch {
 	case s == nil:

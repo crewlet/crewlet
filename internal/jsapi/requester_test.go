@@ -23,16 +23,14 @@ func (*answering) RequestWithContext(context.Context, string, []byte) (*nats.Msg
 // client that answers requests itself is listed through the client.
 //
 // A Meta puts its pages on the client it is built over where the client
-// answers requests itself — a test's fake, which answers them inside a
-// synctest bubble — and on the client's connection otherwise. Every client
-// the engine builds comes from [API.Client] and is the vendored library's,
-// which answers none, so a listing reaches the broker on the connection: a
-// library release that gave its client a RequestWithContext would turn every
-// listing onto that method unannounced, and this case is where it shows.
+// answers requests itself (a test's fake, in a synctest bubble), else on the
+// client's connection. Every client [API.Client] builds is the library's and
+// answers none: a release giving it a RequestWithContext would turn every
+// listing onto that method unannounced, and this case shows it.
 //
-// Mutation: put the pages on the client's connection whatever the client,
-// and a fake's never reach the fake; put them anywhere but the connection,
-// and the engine's never reach the broker.
+// Mutation: put the pages on the connection whatever the client, and a fake's
+// never reach the fake; anywhere but the connection, and the engine's never
+// reach the broker.
 func TestTheEnginesClientsAreListedThroughTheirConnections(t *testing.T) {
 	t.Parallel()
 	nc := new(nats.Conn)

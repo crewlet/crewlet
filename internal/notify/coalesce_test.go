@@ -201,19 +201,13 @@ func TestConstituentsAreOrderedByTheirTimestamps(t *testing.T) {
 // past that threshold, and a person typing a burst produces far more than
 // three messages anyway.
 func TestATieKeepsTheDeliveredOrder(t *testing.T) {
-	// The SHAPE here is the whole test, and it is not obvious.
+	// The SHAPE is the whole test. A burst that is the ENTIRE input pins
+	// nothing at any size: pdqsort checks for an already-ordered run first and
+	// an all-equal slice is one, so an unstable sort returns it untouched too.
 	//
-	// A burst that is the ENTIRE input pins nothing, at any size: Go's
-	// pdqsort checks for an already-ordered run first, and an all-equal
-	// slice IS one, so it returns before partitioning and an unstable sort
-	// gives the same answer as a stable one. Measured — twenty, a hundred
-	// and a thousand tied elements all come back untouched.
-	//
-	// What separates the two sorts is a tie sitting inside input that
-	// genuinely has to be partitioned. That is also the real delivery: a
-	// broker partition arrives in whatever order it arrives in — sorting it
-	// is the point — so a burst of same-stamped messages is bracketed by
-	// events that are out of chronological order around it.
+	// What separates the sorts is a tie inside input that genuinely has to be
+	// partitioned, which is also the real delivery: a burst of same-stamped
+	// messages is bracketed by events out of chronological order.
 	const burst = 18
 	evs := []types.ExternalNotification{note("straggler", "delivered first, happened last", "comment")}
 	when := []time.Time{t0.Add(2 * time.Hour)}

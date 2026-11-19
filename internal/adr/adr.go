@@ -46,7 +46,6 @@
 package adr
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -239,18 +238,20 @@ func Load(root string) ([]Record, error) {
 // the body cannot become a field. A record whose header is interrupted is a
 // record whose later fields are invisible, which is why the heading and the
 // block are read together rather than by grepping the whole file.
+//
+// THE RECORD IS READ WHOLE, so a field's line is as long as its value: a
+// line scanner's cap (64 KiB by default) would refuse a record whose
+// Enforced-by lists more gates than fit under it.
 func parse(path, name string, number int) (Record, error) {
-	f, err := os.Open(path) //nolint:gosec // a path this package built from its own directory listing
+	raw, err := os.ReadFile(path) //nolint:gosec // a path this package built from its own directory listing
 	if err != nil {
-		return Record{}, fmt.Errorf("adr: open %s: %w", name, err)
+		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	rec := Record{Number: number, File: name, Fields: map[string]string{}}
-	scan := bufio.NewScanner(f)
 	inHeader := false
-	for scan.Scan() {
-		line := strings.TrimRight(scan.Text(), " \t")
+	for line := range strings.Lines(string(raw)) {
+		line = strings.TrimRight(line, " \t\r\n")
 		if rec.ID == "" {
 			m := heading.FindStringSubmatch(line)
 			if m == nil {
@@ -282,9 +283,6 @@ func parse(path, name string, number int) (Record, error) {
 		if inHeader && strings.TrimSpace(line) != "" {
 			break
 		}
-	}
-	if err := scan.Err(); err != nil {
-		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
 	if rec.ID == "" {
 		return Record{}, fmt.Errorf("adr: %s has no %s heading, so "+

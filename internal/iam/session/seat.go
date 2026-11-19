@@ -6,38 +6,18 @@ import (
 	"fmt"
 )
 
-// THE SECOND TABLE: which seat a validated person acts as.
+// THE SECOND TABLE: which seat a validated person acts as. A binding resolves
+// against the RUNNING ORG; a seat missing from it is either
+// GONE or not a human seat (403 NAMING THE SEAT, never a silent fall-through to
+// a seatless principal, which would read as a person with nothing assigned) or
+// this node CANNOT ANSWER (no company yet, lookup failed): 503.
 //
-// A person's identity is on the iam log and their seat is a seat of the
-// company this node is running — the organisation of the configuration epoch
-// it applied. So a binding resolves against the RUNNING ORG, and a seat missing
-// from it is one of two answers:
+// THERE IS NO "NOT YET" ROW: nodes apply the activation pointer within seconds.
 //
-//   - the seat is GONE, or it is not a human seat: the company this node runs
-//     does not hold it as one. 403 NAMING THE SEAT — never a silent
-//     fall-through to a seatless principal, which would reach every
-//     person-scoped read as an empty answer and look like a person with
-//     nothing assigned to them.
-//   - this node CANNOT ANSWER: it runs no company yet, or the lookup failed.
-//     503.
-//
-// THERE IS NO "NOT YET" ROW. The org changes only when a revision is
-// activated, and every node applies the activation pointer within seconds of
-// it moving; the window in which a node that has not applied a revision adding
-// a seat answers 403 for that seat is that short, and it is not worth a
-// position on every binding and a comparison on every request.
-//
-// AND THE SEATLESS ARM IS RESERVED FOR A ROW THAT HOLDS NO BINDING. The org is
-// never consulted for it: its login is the handle, which is exactly why
-// internal/iam makes a login and a seat handle disjoint by grammar — the two
-// namespaces meet in one author column and neither may be mistaken for the
-// other. Who lands on it is a SERVICE ACCOUNT or a Tier A token's machine row
-// left unbound — never a PERSON, who holds a human seat for as long as they
-// are here (internal/iamdomain's ADR-0032) — and this table cannot tell a
-// person from a machine anyway ([PersonRow] carries no kind), so it is the
-// directory's writer, not this table, that keeps a person off it. Every
-// binding the directory WRITES names a human seat, so the gone arm below is
-// reached by a revision that took the seat away.
+// THE SEATLESS ARM IS FOR A ROW THAT HOLDS NO BINDING, the org never consulted
+// (logins and seat handles are disjoint by grammar): a SERVICE ACCOUNT or
+// unbound machine row, never a PERSON (ADR-0032), which the directory's writer
+// keeps off it.
 
 // Chart is what the organisation this node is running says about one seat —
 // the org chart of the configuration epoch it applied.

@@ -1311,26 +1311,63 @@ test("a change row folds by its own width in a 370 px card at 1440 px", async ()
   }
 });
 
-// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words.
-// Mutation: draw the pickers boxed, and their floors wrap them under the tabs.
-test("the changes' head keeps its pickers on the state tabs' row at 1440 px", async () => {
+// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words, in every
+// filter state, so the list does not jump.
+// Mutations: box the pickers, give them their words' width as a basis, or let every one shrink.
+test.each(["#/gitlet", "#/gitlet?needs=me", "#/gitlet?owner=jane&state=all"])(
+  "the changes' head keeps its pickers on the state tabs' row at 1440 px (%s)",
+  async (hash) => {
+    await page.viewport(1440, 900);
+    listed = [carded(42)];
+    counted = { live: 5, open: 4, draft: 1, merged: 54, closed: 3 };
+    location.hash = hash;
+    mount(<Changes />, 1150);
+    await eventually(() =>
+      expect(document.querySelector(".code-changes-head")?.textContent).toContain("54"),
+    );
+    if (hash !== "#/gitlet") {
+      await eventually(() =>
+        expect(document.querySelector(".code-changes-head")?.textContent).toContain("Every state"),
+      );
+    }
+    const tabs = document
+      .querySelector<HTMLElement>('.code-changes-head [aria-label="Change state"]')!
+      .getBoundingClientRect();
+    // A HELD PICKER'S REASON is a hidden sibling of its control, no picker of its own.
+    const pickers = [
+      ...document.querySelector<HTMLElement>(".code-changes-head__pickers")!.children,
+    ].filter((el) => el.getBoundingClientRect().width > 1);
+    expect(pickers.length).toBe(6);
+    for (const picker of pickers) {
+      const at = picker.getBoundingClientRect();
+      expect(at.top, picker.textContent ?? "").toBeLessThan(tabs.bottom);
+    }
+    // NO PICKER LOSES A WORD to make the row: the Repository field gives up its slack.
+    for (const label of document.querySelectorAll<HTMLElement>(
+      ".code-changes-head__pickers .crewlet-select__label",
+    )) {
+      expect(label.scrollWidth, label.textContent ?? "").toBeLessThanOrEqual(label.clientWidth);
+    }
+  },
+);
+
+// WHERE ITS ROWS FOLD the pickers take a line of their own, never a squeeze beside the tabs.
+// Mutation: drop the fold's flex-basis, and the pickers stay on the tabs' row cut to dots.
+test("the changes' head puts its pickers under the tabs where its rows fold", async () => {
   await page.viewport(1440, 900);
   listed = [carded(42)];
   counted = { live: 5, open: 4, draft: 1, merged: 54, closed: 3 };
-  location.hash = "#/gitlet";
-  mount(<Changes />, 1150);
+  location.hash = "#/gitlet?needs=me";
+  mount(<Changes />, 760);
   await eventually(() =>
-    expect(document.querySelector(".code-changes-head")?.textContent).toContain("54"),
+    expect(document.querySelector(".code-changes-head")?.textContent).toContain("Every state"),
   );
   const tabs = document
     .querySelector<HTMLElement>('.code-changes-head [aria-label="Change state"]')!
     .getBoundingClientRect();
-  const pickers = document.querySelector<HTMLElement>(".code-changes-head__pickers")!.children;
-  expect(pickers.length).toBe(6);
-  for (const picker of pickers) {
-    const at = picker.getBoundingClientRect();
-    expect(at.top, picker.textContent ?? "").toBeLessThan(tabs.bottom);
-  }
+  const group = document.querySelector<HTMLElement>(".code-changes-head__pickers")!;
+  expect(group.getBoundingClientRect().top).toBeGreaterThanOrEqual(tabs.bottom);
+  expect(group.scrollWidth).toBeLessThanOrEqual(group.clientWidth);
 });
 
 /** Every option of the open list, once it holds `count`. */

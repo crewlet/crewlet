@@ -3,19 +3,14 @@ package config
 import "github.com/crewlet/crewlet/internal/toolname"
 
 // Learning configures the agent-learning subsystem: what a seat remembers
-// from a turn, what it distils into reusable skills, and what it eventually
-// forgets.
+// from a turn, distils into reusable skills, and eventually forgets.
 //
-// It needs a store and an embedding provider. With either missing the
-// engine logs a disabled notice and skips registering the learning tools
-// rather than failing — a company without embeddings still runs, it just
-// does not recall.
+// It needs a store and an embedding provider; with either missing the engine
+// logs a disabled notice and skips the learning tools rather than failing.
 //
-// Every block here is a master switch plus a handful of thresholds. The
-// thresholds are the interesting part: each one trades recall against cost,
-// and a wrong one is not a crash but a slow drift (a synthesis threshold
-// too low drafts a skill from every turn; a compaction age too aggressive
-// deletes the fidelity the synthesizer needs).
+// Each threshold trades recall against cost, and a wrong one is a slow drift,
+// not a crash: too low a synthesis threshold drafts a skill from every turn,
+// too aggressive a compaction age deletes fidelity the synthesizer needs.
 type Learning struct {
 	// Enabled is the master switch for the whole subsystem.
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Master switch for agent learning (default on)."`

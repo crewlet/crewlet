@@ -337,16 +337,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 // pipeline is the node's upload pipeline, or the refusal of a node that cannot
 // build one, rendered.
 //
-// EVERY ROUTE THAT CALLS IT IS TOLD THE SAME, so it names what they share — a
-// check of a page and a publish of an edit move no bytes, and were told this
-// node took no uploads.
+// EVERY ROUTE THAT CALLS IT IS TOLD THE SAME, so it names what they share: a
+// check of a page and a publish of an edit move no bytes.
 //
 // WHY IS THE LOG'S, AND NO WAIT CLEARS IT: the engine builds the pipeline once
-// for the life of the process, so a node that could not — no object store, no
-// coordination store, an embedded runtime it could not read — answers the same
-// after every wait, and the error naming which is a configuration's, for
-// whoever runs the node. It was the answer's detail, after "this node takes no
-// artifact uploads: ", under a Retry-After of two seconds.
+// per process, so a node that could not (no object store, no coordination
+// store, an unreadable embedded runtime) answers the same after every wait, and
+// the error naming which is a configuration's, for whoever runs the node.
 func (s *Service) pipeline(w http.ResponseWriter, r *http.Request) (Pipeline, bool) {
 	p, err := s.uploads()
 	if err != nil {

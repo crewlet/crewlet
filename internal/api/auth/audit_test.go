@@ -133,18 +133,15 @@ func TestARefusedBearerIsCountedAndNeverPublished(t *testing.T) {
 
 // A CREDENTIAL AN UNGUARDED ROUTE CARRIES IS NOT A FAILED SIGN-IN.
 //
-// The Forge relay posts every Jira and Confluence delivery to /webhooks/forge
-// with its own `Authorization: Bearer <JWT>`, which that route verifies against
-// the relay's keys and which no Tier A entry will ever match. Counted at the
-// resolution, each delivery was a bearer failure — a DIFFERENT value each
-// time, so the relay's address climbed toward a spray's distinct-name count
-// every minute. The same holds for a browser loading the sign-in page with a
-// cookie signed under a retired key, and for an open socket re-checking its
-// credential: none of them is somebody's attempt to authenticate here.
+// The Forge relay posts each delivery to /webhooks/forge with its own
+// `Authorization: Bearer <JWT>`, which that route verifies and no Tier A entry
+// matches; counted, each would be a bearer failure with a DIFFERENT value, so
+// the relay's address would climb toward a spray's distinct-name count. Likewise
+// a retired-key cookie on the sign-in page and an open socket re-checking its
+// credential: none is an attempt to authenticate here.
 //
-// Mutation: count the refusal inside Resolve (where it was) and every arm
-// below counts one; count it before the middleware's Unguarded check and the
-// first two do.
+// Mutation: count the refusal inside Resolve and every arm below counts one;
+// count it before the middleware's Unguarded check and the first two do.
 func TestACredentialNoGuardReliedOnIsNotAFailedAttempt(t *testing.T) {
 	t.Parallel()
 	tr := newAuditTrail(t)

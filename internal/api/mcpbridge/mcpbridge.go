@@ -482,9 +482,10 @@
 // on the record by its identity and its outcome unknown.
 //
 // WHAT A LATER RUN OF THE WORK IS TOLD. A call so recorded is held by no save
-// point, so every continuation of its round built after it landed is told its
-// result from the run's log (ADR-0073), while the session that made it holds
-// the ending's answer, never the call's output.
+// point, so the job working on its round is handed its result from the run's
+// log as it lands, and every continuation of the round built after it is told
+// it but one of a session that took it (ADR-0073), while the session that made
+// it holds the ending's answer, never the call's output.
 //
 // # The end's bound
 //

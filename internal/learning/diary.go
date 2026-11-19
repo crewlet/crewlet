@@ -28,20 +28,16 @@ const (
 
 // MaxContentChars bounds one written diary note, for EVERY writer.
 //
-// A note is meant to be re-read in a later turn's prompt, so its cost is paid
-// on every turn that recalls it, not once — and it is read back into the
-// relevance filter's candidate pool as well, which is what makes an unbounded
-// row a bound on nothing. Two thousand characters is a long paragraph and a
-// short page; past that the model is writing a document, and a document
-// belongs in the knowledge base where colleagues can read it too.
+// A note is re-read in later turns' prompts, so its cost is paid on every turn
+// that recalls it, and it enters the relevance filter's candidate pool too.
+// Two thousand characters is a long paragraph; past that the model is writing
+// a document, which belongs in the knowledge base where colleagues can read it.
 //
-// HERE rather than beside either writer. There are two — the reflect_and_persist
-// tool and the post-turn PersistDecider — and they disagreed: the tool refused
-// an over-long note naming the limit, while the decider wrote whatever the
-// classifier produced. One store, one rule, stated where the store is. The two
-// writers still differ in what they DO about it, and that difference is
-// deliberate: a model holding the text can tighten it and retry, so the tool
-// refuses; the decider has no one to ask, so it skips and says so.
+// HERE rather than beside either writer (the reflect_and_persist tool and the
+// post-turn PersistDecider): one store, one rule, stated where the store is.
+// The writers differ in what they DO about it, deliberately: a model holding
+// the text can tighten it and retry, so the tool refuses; the decider has no
+// one to ask, so it skips and says so.
 const MaxContentChars = 2000
 
 // DiaryEntry is one private observation a seat made about its own work.
@@ -125,20 +121,15 @@ func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
 // Write records one observation.
 //
 // EMBEDDED IN THE INSERT, when the handle was built [WithEmbed] and the entry
-// carries no vector of its own: the content's vector and its model are
-// written in the same statement as the row, so the memory changelog — which
-// carries a row when it is inserted — carries the vector with it, and the
-// seat's next holder can recall the note by meaning. A vector that cannot be
-// had inside [DiaryEmbedBudget] costs the vector and never the note: the row
-// lands without one and the holder's fill gives it one later (see
-// [Diary.Unfilled]).
+// carries no vector: vector and model are written in the row's statement, so
+// the memory changelog carries them and the next holder recalls by meaning. A
+// vector not had inside [DiaryEmbedBudget] costs the vector, never the note;
+// the holder's fill adds it later ([Diary.Unfilled]).
 //
-// THERE IS NO DUPLICATE GUARD HERE, and a note is stored verbatim. What keeps
-// the diary from filling with paraphrases is upstream of the store: the
-// reflect dispatcher's redelivery guard on the work key, and the persist
-// decider's prompt, which is shown the seat's recent notes and asked not to
-// repeat one. A byte-exact guard here would catch only the copy that is
-// already caught, and none of the paraphrases.
+// THERE IS NO DUPLICATE GUARD HERE; a note is stored verbatim. Paraphrases are
+// kept out upstream: the reflect dispatcher's redelivery guard on the work key
+// and the persist decider's prompt, which shows recent notes. A byte-exact
+// guard here would catch only copies already caught.
 func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	switch {
 	case e.ID == "" || e.AgentID == "":
@@ -462,21 +453,15 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 
 // DiaryLongCap is how many durable entries one seat keeps.
 //
-// A CAP RATHER THAN A HORIZON, because a diary_long row is a fact the agent
-// deliberately marked durable — "the release train is Thursdays", "this
-// reviewer wants tests first" — and those do not stop being true after a
-// quarter. Expiring them by age would delete exactly what the kind exists to
-// protect.
+// A CAP RATHER THAN A HORIZON: a diary_long row is a fact the agent marked
+// durable ("the release train is Thursdays"), which does not stop being true
+// after a quarter, so expiring by age would delete what the kind protects.
 //
-// But they cannot be unbounded either: recall scans every embedded row a seat
-// owns, once per turn, at 7.5 µs a row (the same measurement the episode
-// threshold is set from, re-measured at the pin). Five hundred is that
-// threshold's budget (about 3.9 ms at the start of every turn), and a
-// seat holding five hundred durable facts about its own work is already far
-// past what a person would.
-//
-// So the bound is on WORTH rather than on age: see [Diary.TrimLong] for what
-// is dropped when a seat exceeds it.
+// But not unbounded: recall scans every embedded row a seat owns, once per
+// turn, at 7.5 µs a row (the measurement the episode threshold is set from,
+// re-measured at the pin). Five hundred is that threshold's budget, about
+// 3.9 ms at the start of every turn, and already far past what a person would
+// hold. The bound is on WORTH, not age: see [Diary.TrimLong].
 const DiaryLongCap = 500
 
 // TrimLong drops a seat's least-useful durable entries once it holds more

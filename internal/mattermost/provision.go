@@ -17,18 +17,9 @@ import (
 // (accessvendor.go); this file is the admin API it calls and the names it
 // derives.
 //
-// # No manifest, no OAuth
-//
-// This is the GitLab shape rather than Slack's. An admin token mints a bot's
-// access token directly, so there is no app to install and no browser round
-// trip to broker.
-//
-// # A bot only hears what it has joined
-//
-// Mattermost delivers a channel's messages to its members. So joining the
-// channels is not a convenience here: a bot that exists, authenticates and
-// is in no channel is an agent that never wakes, and the failure is silent
-// on both sides.
+// No manifest, no OAuth: the GitLab shape, not Slack's, as an admin token mints
+// a bot's access token directly. A bot only hears the channels it has joined,
+// so joining is not a convenience: a bot in no channel never wakes, silently.
 
 // BotUsername is a seat's bot username.
 //
@@ -64,22 +55,16 @@ type Bot struct {
 
 	// Description is where this engine records that IT disabled the bot.
 	//
-	// Mattermost deactivates rather than deletes, so a disconnect leaves
-	// the account behind — and "disabled" alone is an ambiguous bit: a
-	// disconnect this engine performed and a deactivation a person
-	// performed at Mattermost look identical. Reconnecting used to re-enable
-	// EITHER, unconditionally, so an administrator who turned an agent off
-	// had that reversed on the next tick, for ever.
+	// Mattermost deactivates rather than deletes, and "disabled" alone cannot
+	// tell this engine's disconnect from a person's deactivation, so
+	// reconnecting must not re-enable EITHER unconditionally. The provenance
+	// lives on the account, as datadog's does ([datadog.DisconnectedTitle]),
+	// because the status row is forgotten once a disconnect succeeds and
+	// does not survive a lost coordination store or a restore.
 	//
-	// The provenance lives on the account for the reason datadog's does
-	// ([datadog.DisconnectedTitle]): the surface's own status row is
-	// forgotten the moment a disconnect succeeds, and it does not survive a
-	// lost coordination store or a restore from backup. The account does.
-	//
-	// Empty, or anything other than the marker, on a bot a person disabled
-	// at Mattermost, which compares unequal and is therefore reported rather
-	// than re-enabled. That is the safe direction: it asks a person about an
-	// account this engine cannot prove it turned off.
+	// Empty or anything but the marker on a bot a person disabled compares
+	// unequal and is reported rather than re-enabled: the safe direction,
+	// asking a person about an account this engine cannot prove it turned off.
 	Description string `json:"description"`
 	// DisplayName is the bot's own, which lives on the BOT record rather
 	// than on its user: the user's nickname is a different field the bots
@@ -167,19 +152,14 @@ func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
 // description, keeping the id in keep (empty keeps nothing), and reports how
 // many it took.
 //
-// THE ONE WALK THREE CALLERS SHARE: a rotation retiring the token it just
-// superseded, a decommission removing a departed seat's, and a disconnect
-// removing a seat's before its bot is disabled. Written three times, the
-// three would have disagreed about the one thing that matters here, which is
-// what "this tool's own" means, and the caller that got it wrong would revoke
-// an administrator's own token or leave a live one behind, silently either
-// way.
+// THE ONE WALK THREE CALLERS SHARE (a rotation, a decommission, a disconnect),
+// so they agree on what "this tool's own" means: a caller that got it wrong
+// would revoke an administrator's token or leave a live one, silently.
 //
-// FOLDED, because the description is built from a handle a person wrote (see
-// [TokenDescription]) and a decommission recovers that handle from the
-// LOWERCASED username Mattermost stores. Comparing exactly there would
-// leave a mixed-case seat's credential live on an account this engine had
-// just disabled.
+// The description is compared FOLDED: it is built from a handle a person wrote
+// ([TokenDescription]) and a decommission recovers the handle from the
+// LOWERCASED username Mattermost stores, so an exact comparison would leave a
+// mixed-case seat's credential live on a disabled account.
 func (c *Client) RevokeMinted(ctx context.Context, userID, description, keep string) (int, error) {
 	tokens, err := c.Tokens(ctx, userID)
 	if err != nil {
@@ -220,18 +200,14 @@ func (c *Client) TeamByName(ctx context.Context, name string) (Team, bool, error
 
 // TeamMember reports whether an account is already in a team.
 //
-// THE READ THAT MAKES THE JOIN CONDITIONAL, and it exists because
-// [Client.AddTeamMember] tolerating a duplicate made an unconditional POST
-// look free. It is not free: this pass is what the reconcile loop runs every
-// few minutes for the life of the deployment, so an unconditional join is a
-// membership write to somebody's instance for ever, on a company that needs
-// nothing. The tolerance below stays exactly where it belongs — the backstop
-// between this read and that write, for the window between them and for two
-// writers racing.
+// THE READ THAT MAKES THE JOIN CONDITIONAL: [Client.AddTeamMember] tolerating a
+// duplicate makes an unconditional POST look free, but the reconcile loop runs
+// every few minutes for the deployment's life, so it would be a membership
+// write to somebody's instance for ever. The tolerance stays as the backstop
+// for the window between this read and that write, and for racing writers.
 //
-// A SINGLE OBJECT rather than [Client.Teams]: Mattermost answers 404 when the
-// account is not a member, so the answer is one row whatever the account's
-// team count, where the listing grows with it.
+// A SINGLE OBJECT rather than [Client.Teams]: Mattermost answers 404 for a
+// non-member, so the answer is one row whatever the account's team count.
 func (c *Client) TeamMember(ctx context.Context, teamID, userID string) (bool, error) {
 	if teamID == "" || userID == "" {
 		return false, fmt.Errorf(

@@ -51,20 +51,16 @@ func (h *fleetHarness) putHold(owner string) {
 
 var markerCases = []fleetCase{{
 	// THE CONTRACT, held on every family a KV backend keeps markers in. A
-	// removal leaves a marker that a bucket nobody ages keeps for ever, and
-	// the sweep that removes them is only safe because nothing reads one as
-	// an answer: a listing asks the leader about a marker its pass met, and a
-	// create asks before it conditions on one. So after a sweep of EVERY
-	// marker, each family answers exactly what it answered before — and a
-	// key whose marker went is created again as if it had never existed,
-	// which is the case a create that conditioned on the marker's revision
-	// got wrong.
+	// removal leaves a marker an unaged bucket keeps for ever, and sweeping
+	// them is safe only because nothing reads one as an answer: a listing
+	// asks the leader about a marker it met, a create asks before it
+	// conditions on one. So after a sweep of EVERY marker each family answers
+	// as before, and a key whose marker went is created as if it never
+	// existed.
 	//
-	// The same failure INSIDE one create — a marker swept between the
-	// create's read of it and its write over it — opens in a window this
-	// contract cannot reach, and a stress loop around it measured no hit in
-	// four hundred rounds. It is staged at the seam instead:
-	// internal/coord/kv's
+	// The same failure INSIDE one create (a marker swept between its read and
+	// its write) opens in a window this contract cannot reach, so it is
+	// staged at the seam: internal/coord/kv's
 	// TestACreateOverAMarkerTheSweepRemovesMidWayStillCreates.
 	name: "sweeping every marker changes no answer",
 	fn: func(h *fleetHarness) {

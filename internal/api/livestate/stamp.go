@@ -7,17 +7,12 @@ import (
 
 // stamp is a timestamp that can still be ORDERED when it did not parse.
 //
-// Every state transition in this projection is gated on the event's timestamp,
-// because the events arrive over a broker that guarantees order only within a
-// topic — and different event types are different topics. A state-affecting
-// event can therefore arrive out of order relative to another, and an older one
-// must never clobber newer state.
-//
-// The input is whatever the wire carried, which this process does not control.
-// A comparison that failed on one malformed value would take the ordering guard
-// down with it, so an unparseable stamp degrades to lexicographic ordering
-// rather than to an error: worse ordering for one bad row, never a broken guard
-// for the rest.
+// Every state transition here is gated on the event's timestamp, because the
+// broker orders only within a topic and event types are different topics, so an
+// older event must never clobber newer state. The input is whatever the wire
+// carried: a comparison failing on one malformed value would take the guard
+// down, so an unparseable stamp degrades to lexicographic ordering rather than
+// an error: worse ordering for one bad row, never a broken guard for the rest.
 type stamp struct {
 	t     time.Time
 	raw   string

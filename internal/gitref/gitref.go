@@ -34,6 +34,14 @@
 // shape a short glob and name can take — because each walk is written for
 // speed, and the git tables only sample.
 //
+// In a glob `*` is one component, `**` zero or more, and a LAST `**` one or
+// more, as git's wildmatch reads a trailing `/**`: release/** does not protect
+// release. One reading ([readGlob]) serves refs and tree paths alike.
+//
+// A repository's name says its kind: a project's is one host-name label
+// ([ValidProjectName]), a seat's scratch repository's <handle>.<label>
+// ([ScratchName]), so a deployment names things after either unchanged.
+//
 // # Where this package is stricter than git
 //
 // Each is stated at its rule with its reason, and each is a row of the tests
@@ -55,6 +63,14 @@
 // Each narrows what git would take to a name the engine carries correctly —
 // across JSON, on every client's disk, and in a protection rule or a path
 // owner's glob that reaches exactly as far as it says.
+//
+// # A rule is parsed once
+//
+// The code domain's decide asks every rule about every command on every
+// compare-and-set round, so a rule is read once ([ParsePattern]) and then
+// asked ([Pattern.Match]): checking and cutting a pattern belong to the rule,
+// and a ref allocates nothing. [MatchPattern] and [PatternReachesSeats] read
+// on every call and are for the one-off caller.
 //
 // # Measured
 //
@@ -249,26 +265,15 @@ func ValidOID[S ~string | ~[]byte](oid S) bool {
 	return true
 }
 
-// ValidRef reports whether ref is a ref a push may create or move. It is git's
-// check-ref-format (without --allow-onelevel, --refspec-pattern or
-// --normalize) and three rules of the engine's own, each stricter than git:
+// ValidRef reports whether ref is a ref a push may create or move: git's
+// check-ref-format (no --allow-onelevel, --refspec-pattern or --normalize),
+// whose rules refFormat reads, and three of the engine's own, stricter:
 //
 //  1. at most MaxRefNameBytes, for the reason given there;
-//  2. valid UTF-8 — git takes any byte from 0x80 up, but a ref crosses JSON on
-//     every wire this engine has, where invalid UTF-8 is replaced, so two
-//     different refs would arrive as one;
-//  3. refs/ then at least two more components — git's check-ref-format takes
-//     refs/x, but a ref a push names is a name inside a namespace, and every
-//     rule the engine keys on a ref (a branch, a tag, a protection) reads the
-//     namespace first.
-//
-// Git's own rules, as git-check-ref-format(1) and refs.c state them: at least
-// two components (which rule 3 narrows); no component is empty, begins with
-// '.' or ends with ".lock"; no ".." and no "@{" anywhere; no byte below 0x20,
-// no 0x7f, and none of space ~ ^ : ? * [ \; the ref does not end with '/' or
-// '.'; and it is not the single string "@". A component may END with '.', and
-// a ref may hold '@', '{' or ']' on their own: only the sequences above are
-// refused.
+//  2. valid UTF-8: a ref crosses JSON on every wire, where invalid UTF-8 is
+//     replaced and two different refs would arrive as one;
+//  3. refs/ then at least two more components: a ref a push names is a name
+//     inside a namespace, which every rule keyed on a ref reads first.
 func ValidRef(ref string) bool {
 	if len(ref) > MaxRefNameBytes || !utf8.ValidString(ref) || !strings.HasPrefix(ref, "refs/") {
 		return false
@@ -278,20 +283,16 @@ func ValidRef(ref string) bool {
 }
 
 // refFormat is git's check_refname_format over s but for the count of its
-// components, which it returns for the caller's own rule: every component
-// non-empty, not beginning with '.' and not ending with ".lock"; no ".." and
-// no "@{"; no byte refused; s not ending with '.'. A sequence git refuses
-// never spans a '/' (".." across one is "./.", whose second half begins with
-// '.'; "@{" across one is "@/{"), so reading s a component at a time is
-// reading it whole. It reads s once, a byte at a time, because every ref a
-// push names passes through it before any rule is asked about it.
+// components, which it returns for the caller's own rule: no empty component,
+// none beginning '.' or ending ".lock"; no ".." or "@{"; no byte below 0x20,
+// no 0x7f, none of space ~ ^ : ? * [ \; s not ending '.', and not "@". A
+// refused sequence never spans a '/' (".." across one is "./.", "@{" is
+// "@/{"), so reading a component at a time is reading s whole, once.
 //
-// With star, '*' is read as an ordinary byte rather than refused, except that
-// two together are a component of their own or nothing: that is how a
-// protection pattern is checked, since a glob component that is a valid
+// With star, '*' is an ordinary byte, except that two together are a
+// component of their own or nothing: a protection pattern is valid when its
 // component with each * read as a letter is one some ref can match. No rule
-// here reads a '*' any other way — it is not '.', '@' or part of ".lock" — so
-// the reading is exactly the component with each * replaced by a letter.
+// reads a '*' otherwise, so that reading is exact.
 func refFormat(s string, star bool) (components int, ok bool) {
 	start := 0       // where the component being read begins
 	doubled := false // it holds "**"
@@ -352,19 +353,25 @@ func ValidBranch(branch string) bool {
 		ValidRef("refs/heads/"+branch)
 }
 
+// ValidTag reports whether tag is a tag name an engine write creates: git
+// tag's rules (refs/tags/<tag> a ValidRef, not HEAD, no leading '-') and,
+// stricter, not "@", for the reason [ValidBranch] gives.
+func ValidTag(tag string) bool {
+	return tag != "HEAD" && tag != "@" && !strings.HasPrefix(tag, "-") && ValidRef("refs/tags/"+tag)
+}
+
 // SeatsRoot is the directory of branches every seat's own namespace lives
 // under: a seat's namespace is refs/heads/seats/<handle>/, NEVER
 // refs/heads/<handle>/. A handle is a slug of a role name — docs, qa,
-// release, infra — and those are the prefixes people name their own branches
-// under, so a namespace at the handle alone would hand a full_access seat
-// that only READS a repository every docs/* or release/* branch a person
-// pushed there, to force, to delete, or to create one a pipeline deploys. No
-// branch convention uses seats/, so whose a ref is is decidable from the ref
-// alone.
+// release, infra — the prefixes people name their own branches under, so a
+// namespace at the handle alone would hand a full_access seat that only READS
+// a repository every docs/* or release/* branch a person pushed there, to
+// force, delete, or create one a pipeline deploys. No branch convention uses
+// seats/, so whose a ref is is decidable from the ref alone.
 //
-// Here rather than in the code domain because two judges read it — the
-// domain deciding a push, and the configuration validating a repository's
-// default branch — and the domain imports the configuration.
+// Here, not in the code domain, because two judges read it (the domain
+// deciding a push, the configuration validating a default branch) and the
+// domain imports the configuration.
 const SeatsRoot = "refs/heads/seats/"
 
 // seatsBranch is SeatsRoot as a branch name: "seats/".

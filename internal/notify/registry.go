@@ -16,43 +16,16 @@ import (
 
 // Registry answers "who is this?" for one epoch of the company.
 //
-// # Two halves, two lifetimes
+// The SEAT INDEX is derived from the org and immutable: an epoch swap builds a
+// NEW registry, so seat reads need no lock. The EXTERNAL-IDENTITY MAP is
+// written at runtime and read on the inbound hot path, hence a RWMutex.
 //
-// The SEAT INDEX is derived from the org and never changes. An epoch swap
-// builds a NEW registry rather than mutating this one, which is what lets
-// every seat read go through a plain map with no lock, no version counter
-// and no rebuild-on-demand: the org a registry was built from is the org it
-// answers for, permanently. A registry that mutated in place would have to
-// answer "which org is this?" on every read, and the honest answer during a
-// swap is "one of two".
+// Human contact identities also depend on one reading of the identity directory
+// ([Standing]): a suspended or removed holder registers none. A moved directory
+// is a NEW registry, never a patch, which would drop untouched identities.
 //
-// The EXTERNAL-IDENTITY MAP is written at runtime and does need a lock.
-// Transports register their agents' bot ids once they have resolved them
-// against the third-party app, and human contact ids are reconciled at boot
-// and on every org swap. It is small, written rarely and read on the inbound
-// hot path, so a RWMutex is the right trade.
-//
-// # The human half answers for a DIRECTORY READING too
-//
-// Which human seats' contact identities are registered is decided by the org
-// AND by one reading of the identity directory ([Standing]): a seat whose
-// holder is suspended or removed registers none. That reading is fixed for the
-// registry's life on the org's terms — a directory that moved is a NEW registry
-// built whole and swapped in, never this one patched. A diff applied to a
-// fresh registry would drop every identity it did not touch, and a registry
-// that re-read the directory itself would answer "whose standing is this?"
-// with "one of two".
-//
-// # Resolution is ORG-derived, never node-derived
-//
-// Routing an event to a seat needs its handle and its agent id, both of
-// which any node derives from the org with no database and no running
-// instance. This matters because each engine event topic has ONE fleet-wide
-// consumer group: the node that wins a delivery is rarely the node running
-// the recipient, so a registry that could only resolve locally-running seats
-// would turn most deliveries into terminal drops. Whether this node may RUN
-// the seat is a separate question with a separate answer — the seat lease —
-// and deliberately not asked here.
+// Resolution is ORG-derived, never node-derived: each event topic has ONE
+// fleet-wide consumer group, so the winning node rarely runs the recipient.
 type Registry struct {
 	orgName string
 
@@ -95,40 +68,16 @@ type identityKey struct{ namespace, externalID string }
 
 // NewRegistry indexes an organization's seats.
 //
-// BOTH kinds are indexed. A human seat has no agent id and no inbox, but it
-// is addressable — a mention resolves to it, a prompt renders it as a
-// colleague, and a notification can be routed to the surface it lives on.
-// Indexing only agents would make every human sender an unknown stranger,
-// which is exactly the annotation the prompt layer exists to avoid.
+// BOTH kinds are indexed: indexing only agents would make every human a
+// stranger. A nil org yields an empty registry, not a panic.
 //
-// A nil org yields an empty registry rather than a nil one. `crewlet
-// validate` and a node that has not yet applied a revision both run without
-// a company, and they should get "nobody matches" rather than a panic.
+// LOOKUP RESOLVES EACH SEAT'S DECLARED ADDRESS ([org.Role.ResolvedEmail]), as
+// [Registry.ReconcileHumanContacts] does; nil reads the process environment. A
+// `${VAR}` address indexed as written matches no payload.
 //
-// LOOKUP RESOLVES EACH SEAT'S DECLARED ADDRESS ([org.Role.ResolvedEmail]) —
-// the lookup [Registry.ReconcileHumanContacts] resolves contact ids through,
-// and nil reads the process environment as it does there. It is not optional
-// in practice: a company document may declare a seat's address as a `${VAR}`
-// reference, and an index built from those as written matched no payload at
-// all.
-//
-// # handleNamespaces are the sources whose ids ARE seat handles
-//
-// The engine's own surfaces — its tracker, its knowledge base, its chat —
-// authenticate nobody as an account anywhere else: the actor a record names
-// is the seat's handle, so the id an event names its sender by IS that
-// handle. [Registry.ByExternalID] on one of these namespaces answers
-// [Registry.ByHandle], and every reader that asks a source who spoke — a
-// learning profile's subject, the requester an artifact tool's ceiling
-// bounds a turn by, the thread block's attribution — gets the colleague
-// rather than an outside party, without knowing which sources are the
-// engine's.
-//
-// DECLARED, never registered per seat: registering every handle as its own
-// external id would be a second copy of the seat index, rebuilt on every
-// apply and free to disagree with the first. And declared by the caller, the
-// engine, because which surfaces it hosts is a fact about the build — this
-// package cannot import the domains that name them.
+// handleNamespaces are the sources whose ids ARE seat handles (the engine's own
+// surfaces): [Registry.ByExternalID] there answers [Registry.ByHandle].
+// DECLARED by the caller, which knows domains this package cannot import.
 func NewRegistry(o *org.Organization, lookup org.EnvLookup, handleNamespaces ...string) *Registry {
 	r := &Registry{
 		byHandle: make(map[string]Party),
@@ -273,20 +222,13 @@ func (r *Registry) ByAgentID(id uuid.UUID) (Party, bool) {
 // ByEmail resolves an address to a party. TWO ARMS, in this order:
 //
 //   - A PLUS TAG THAT SPELLS A SEAT'S HANDLE names that seat:
-//     notif+engineer@example.com is the engineer, whatever address that seat
-//     declares and whichever seat declares the rest of the address. This is
-//     how a seat is
-//     reached through a shared mailbox, so a tag that is somebody's handle is
-//     never read as anything else — which is why a person's own sub-address
-//     tag should not be a seat's handle.
-//   - Otherwise THE SEAT WHOSE DECLARED ADDRESS HAS THE SAME MATCHED FORM:
-//     both sides folded by [iam.NormalizeEmail], lower-cased with the plus tag
-//     dropped. A third-party app hands back whatever the sender typed, no mail
-//     system treats the local part's case as significant in practice, and a
-//     person who signed a vendor up as sarah.chen+jira@example.com is the seat
-//     declaring sarah.chen@example.com. It is the fold the identity estate
-//     blinds a person's address under, so an address reaches a seat and a
-//     person through one normalisation rather than two.
+//     notif+engineer@example.com is the engineer, whatever address it declares
+//     (how a shared mailbox reaches a seat), so a person's own sub-address tag
+//     should not be a seat's handle.
+//   - Otherwise THE SEAT WHOSE DECLARED ADDRESS HAS THE SAME MATCHED FORM, both
+//     folded by [iam.NormalizeEmail] (lower-cased, plus tag dropped), the fold
+//     the identity estate blinds a person's address under: sarah.chen+jira@
+//     example.com is the seat declaring sarah.chen@example.com.
 func (r *Registry) ByEmail(email string) (Party, bool) {
 	if handle := PlusAddress(email); handle != "" {
 		if p, ok := r.ByHandle(handle); ok {

@@ -26,9 +26,9 @@ type TipsQuery struct {
 func (q TipsQuery) validate() error {
 	switch {
 	case len(q.OIDs) == 0:
-		return fmt.Errorf("%w: tips.oids: name the objects to read", ErrInvalid)
+		return refusedf("%w: tips.oids: name the objects to read", ErrInvalid)
 	case len(q.OIDs) > MaxTips:
-		return fmt.Errorf("%w: tips.oids: %d objects, past the %d one read names (MaxTips)", ErrInvalid,
+		return refusedf("%w: tips.oids: %d objects, past the %d one read names (MaxTips)", ErrInvalid,
 			len(q.OIDs), MaxTips)
 	}
 	seen := make(map[string]bool, len(q.OIDs))

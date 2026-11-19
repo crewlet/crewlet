@@ -56,7 +56,7 @@ func (h *Handler) brandFile(w http.ResponseWriter, r *http.Request, name string)
 		h.refuse(w, http.StatusNotFound, 0)
 		return
 	case err != nil:
-		log.WarnContext(r.Context(), "artifacts_serve_brand_unavailable", "hash", raw, "error", err)
+		unanswered(r.Context(), "artifacts_serve_brand_unavailable", "hash", raw, "error", err)
 		ref := unavailable(err)
 		h.refuse(w, ref.status, ref.retry)
 		return
@@ -135,7 +135,7 @@ func (h *Handler) brandFailed(w http.ResponseWriter, r *http.Request, obj objsto
 		h.refuse(w, http.StatusInternalServerError, 0)
 		return
 	}
-	log.WarnContext(r.Context(), "artifacts_serve_brand_content_unavailable", "key", obj.Key.String(),
+	unanswered(r.Context(), "artifacts_serve_brand_content_unavailable", "key", obj.Key.String(),
 		"error", err)
 	h.refuse(w, http.StatusServiceUnavailable, retryUnavailable)
 }

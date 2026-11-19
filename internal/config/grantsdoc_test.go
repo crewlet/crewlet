@@ -15,19 +15,15 @@ import (
 // EVERY SHIPPED `grants:` THAT LISTS THE PERMISSIONS LISTS EVERY ONE, IN THE
 // ORDER iam DECLARES THEM.
 //
-// A Tier A block somebody copies says beside its `grants:` line what may be
-// written there, and the names are the identity estate's ([iam.AllGrants]):
-// the API's refusal, the CLI's flag and the schema's description all read
-// them off that list. The comments beside the shipped blocks were typed by
-// hand, and the quickstart's went on offering `tracker` and `knowledge`, which
-// no build accepts, after the configuration reference and the example had
-// moved on. So every annotation of a `grants:` line under docs/ or examples/
-// (the comment on its line and the comment lines continuing it, and the
-// comment block directly above it) that names two permissions or more names
-// all of them, joined as strings.Join joins them, in declaration order.
-//
-// Mutation: put `tracker` back into the quickstart's list and this names the
-// file and the line.
+// The names a Tier A block offers beside its `grants:` line are the identity
+// estate's ([iam.AllGrants]), which the API, the CLI and the schema read. The
+// comments beside shipped blocks are typed by hand and drifted (the quickstart
+// offered `tracker` and `knowledge`, which no build accepts). So every
+// annotation of a `grants:` line under docs/ or examples/ (its line's comment,
+// continuing comment lines, and the block directly above) that names two
+// permissions or more names all of them, joined as strings.Join joins them, in
+// declaration order. Mutation: put `tracker` back into the quickstart's list
+// and this names the file and the line.
 func TestEveryShippedGrantsAnnotationNamesEveryPermission(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

@@ -119,11 +119,10 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("List %s's changes with %s",
 				repo.Name, CodeListChangesTool), "the same revert would be pushed twice")), nil
 	case res.Command.Result == gitlet.ResultNG && res.Command.Reason == gitlet.RefusalStale:
-		// The new branch is there: this change's revert, begun already.
+		// The new branch is there: this change's revert, begun already, named where its change says.
 		return refusedBy(tools.RefusalExists, writeRefusalError(string(res.Command.Reason), res.Command.Detail),
-			fmt.Sprintf("%s: branch %s exists already, so a revert of %s is under way; find its change with "+
-				"%s, or delete the branch with %s to revert again.", tool, branch, cv.g.ref(), CodeListChangesTool,
-				CodeDeleteBranchTool)), nil
+			fmt.Sprintf("%s: branch %s exists already, so a revert of %s is under way%s; delete the branch with "+
+				"%s to revert again.", tool, branch, cv.g.ref(), t.revertNamed(ctx, cv), CodeDeleteBranchTool)), nil
 	case res.Command.Result == gitlet.ResultNG:
 		return pushRefused(ctx, tool, repo.Name, branch, res.Command, cv.g.c.actor), nil
 	default:
@@ -136,6 +135,16 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.mergeStep(ctx, turn, cv, op, res, opened, &out)
 	}
 	return newForeignRead(turn, cv.g.c.asker.Seat).page(ctx, tool, out, "")
+}
+
+// revertNamed is the change already reverting cv's, as a refusal names it:
+// ": <ref>, <state>", or where to find it when its read names none.
+func (t *codeRevertChange) revertNamed(ctx context.Context, cv conversing) string {
+	detail, _, _, refusal := cv.g.detail(ctx, cv.at)
+	if refusal != nil || detail.RevertedBy == nil {
+		return fmt.Sprintf("; find its change with %s", CodeListChangesTool)
+	}
+	return fmt.Sprintf(": %s, %s", detail.RevertedBy.Ref, detail.RevertedBy.State)
 }
 
 // opened says on out which change the revert's push opened, or why none was,

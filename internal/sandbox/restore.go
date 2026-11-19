@@ -1398,8 +1398,9 @@ type SessionContinuation struct {
 // not read the resume of: a read at a hook's step is held only as the job's
 // session showed it, which such a box's resume may not rebuild, so these tell
 // the notes from the first such read on again, as notes the session may
-// already show; or, where its harness may compact the session before it reads
-// them, they are the briefs told as a session that may be a summary.
+// already show, and every late call a hook took ([CallTelling.Hook]); or,
+// where its harness may compact the session before it reads them, they are
+// the briefs told as a session that may be a summary.
 type UnheldTelling struct {
 	Brief, Replaced string
 
@@ -1547,6 +1548,11 @@ type continuedLaunch struct {
 	// job's own copy with, to know whether the job restarted it after its
 	// brief ([RestartedSince]).
 	restart *string
+	// point is the save point of the kept capture the launch hands its run,
+	// with that capture's launch, where the launch carries its round on and
+	// the capture states one above zero; nil otherwise ([LaunchRecord.Continued]).
+	// Written on the job's record with its command ([BoxRef.Continued]).
+	point *ContinuedPoint
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
@@ -1570,22 +1576,23 @@ func (l continuedLaunch) decision() LaunchDecision {
 
 // omitted is what the launch req records on the job it opens of the calls of
 // the round it carries on that the brief it hands its run left out, and, where
-// that brief continues a session, the fresh one its box falls back to
-// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+// that brief continues a session, the fresh one its box falls back to, each of
+// both kinds ([BriefTold.Omitted], [BriefTold.LateOmitted];
+// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
 //
 // NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
 // turn's first launch tells no round's calls, and a send-back opens a new
 // round, whose log restarts, so a set of the collected round's calls would be
 // read against another round's log. A closed round's reads past the read cap
 // are counted under the prior-work ledger's rule for them.
-func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
+func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh BriefTold) {
 	if req.Continue == nil {
-		return nil, nil
+		return BriefTold{}, BriefTold{}
 	}
 	if l.kind.Continues() {
-		fresh = req.Continue.Fresh.Omitted
+		fresh = req.Continue.Fresh
 	}
-	return l.told.Omitted, fresh
+	return l.told, fresh
 }
 
 // freshLaunch is a launch that continues no session: what its fresh brief told
@@ -1783,6 +1790,10 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// AND WHERE THE ARCHIVE RESTARTS LAST, as the capture's own read of it
 	// found it.
 	restart := restartOf(kept.ResumedCount)
+	// AND ITS SAVE POINT, for a later capture of the job to be raised to: only
+	// where the launch carries its round on, since a round the launch opens
+	// numbers its calls from a new log ([LaunchRecord.Continued]).
+	point := continuedPoint(req, *kept)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
@@ -1862,7 +1873,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if own {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 			kept: true, unheld: unheld, summarized: summarized, measure: measure, restart: restart,
-			release: func() {}}, ""
+			point: point, release: func() {}}, ""
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
@@ -1884,10 +1895,21 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 		kept: true, exact: exact != "", unheld: unheld, summarized: summarized, carried: carried,
-		measure: measure, restart: restart, release: func() {
+		measure: measure, restart: restart, point: point, release: func() {
 			_ = body.Close()
 			fetched.remove()
 		}}, ""
+}
+
+// continuedPoint is the save point of kept, the capture launch req hands its
+// run, with kept's launch ordinal ([LaunchRecord.Continued]): nil where req
+// carries no round on, the rule [continuedLaunch.omitted] reads, and where kept
+// states no point above zero.
+func continuedPoint(req LaunchRequest, kept SessionCapture) *ContinuedPoint {
+	if at, stated := kept.SavePoint(); req.Continue != nil && stated && at > 0 {
+		return &ContinuedPoint{LaunchSeq: kept.LaunchSeq, Through: at}
+	}
+	return nil
 }
 
 // answeredRelease is the release check's box answered, in a person's words.

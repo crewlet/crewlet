@@ -17,20 +17,15 @@ const Source = "page"
 // FeedGroup is the durable consumer's name, and it is STABLE for the
 // deployment's life.
 //
-// The name is where the fleet's position IS. A rename is a fresh consumer,
-// and a fresh one starts from the log's first retained record rather than its
-// head, so it loses nothing and REPLAYS instead: every change the log still
-// holds comes back as a wake, which only the change feed's claim and wake-id
-// dedupe collapse, and only within their own windows — a company re-woken
-// for page changes it already handled — and until the new consumer catches
-// up, its acknowledgement floor holds back the log's trim.
+// The name is where the fleet's position IS. A rename is a fresh consumer that
+// starts from the log's first retained record, not its head, so it REPLAYS:
+// every change the log still holds returns as a wake (only the change feed's
+// claim and wake-id dedupe collapse them, within their own windows), and until
+// it catches up its acknowledgement floor holds back the log's trim.
 //
-// This is the GROUP, not the broker's consumer name: the durable name is
-// derived from the group and the stream together, so `nats consumer ls
-// CREWLET_PAGES_LOG` lists it and this string alone finds nothing. The same
-// derivation is why the spelling — the one the coordination-family feed this
-// domain replaced ran under — carried no position over to this log: that feed
-// read a bucket, a different stream, so it was a different consumer.
+// This is the GROUP, not the broker's consumer name: the durable name derives
+// from group and stream together, so `nats consumer ls CREWLET_PAGES_LOG`
+// lists it and this string alone finds nothing.
 const FeedGroup = "crewlet-pages-feed"
 
 // Translator turns a change record into the delivery the parser reads.

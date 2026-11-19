@@ -180,6 +180,12 @@ func (k *sessionKeep) Keeps() bool {
 	return k.policy.Keep
 }
 
+// SaveInterval is the rig's save interval, as the engine's default.
+func (k *sessionKeep) SaveInterval() time.Duration { return rigSaveInterval }
+
+// rigSaveInterval is every keeping rig's save interval: the engine's default.
+const rigSaveInterval = 10 * time.Minute
+
 func (k *sessionKeep) SealHanded(turnID string, handed []byte) (string, error) {
 	return turnID + "|" + string(handed), nil
 }

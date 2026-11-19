@@ -10,30 +10,16 @@ import (
 
 // EVERY UNIT CHANNEL CONFIG ACCEPTS IS A NAME CHATLET ACCEPTS.
 //
-// The grammar is written twice, because neither package may import the
-// other: here, where an author is refused while still typing the org chart,
-// and in internal/chatlet, where the engine opens the unit's room under that
-// name. Wider here, and a company validates and then the unit's room is never
-// created: the chart apply is best effort per unit, so the apply succeeds and
-// logs `chat_unit_room_not_reconciled` at every apply and every restart while
-// the unit has nowhere to talk. Each copy is tested against itself and nothing
-// compared them — which is the shape internal/textcut and internal/whsec each
-// record the cost of.
+// The grammar is written twice (neither package may import the other): here,
+// where an author is refused while typing, and in internal/chatlet, which opens
+// the unit's room. Wider here, and a company validates but the room is never
+// created, logging `chat_unit_room_not_reconciled` at every apply.
 //
-// ONE DIRECTION, because that is the rule roles.go states: unitChannel is the
-// INTERSECTION of the Mattermost, Slack and Chatlet grammars rather than Chatlet's own,
-// so a company keeps its chart when it changes chat
-// backend. Today Chatlet's is the narrowest and the two sets are equal, but a
-// Chatlet grammar that widened past a vendor's limit must not drag config
-// with it — config accepting fewer names than chat does is the intersection
-// working, not a defect.
-//
-// AND EVERY ONE IS ITS OWN ADDRESS: [chatlet.NormalizeName] leaves it unchanged,
-// which is what lets config compare two units' channels as written.
-//
-// The probes are built rather than listed, so a character nobody thought to
-// write a case for still has one: every byte class an author reaches for, at
-// the start and in the middle, plus both edges of the length bound.
+// ONE DIRECTION, per roles.go: unitChannel is the INTERSECTION of the
+// Mattermost, Slack and Chatlet grammars, so a chart survives a chat backend
+// change; accepting fewer names than chat does is not a defect. EVERY ONE IS
+// ITS OWN ADDRESS: [chatlet.NormalizeName] leaves it unchanged. Probes are
+// built, not listed: every byte class at the start and middle, both length edges.
 func TestEveryUnitChannelConfigAcceptsIsANameChatletAccepts(t *testing.T) {
 	t.Parallel()
 	var probes []string

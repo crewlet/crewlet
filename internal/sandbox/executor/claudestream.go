@@ -509,8 +509,9 @@ func (d *claudeEvents) Result() sandbox.Result {
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
-// own prints as it hands the model a note ([ClaudeHookAnswer]): the event that
-// fired it, then the line's own opening (measured on 2.1.263 and 2.1.310).
+// own prints as it hands the model a note or a late call ([ClaudeHookAnswer]):
+// the event that fired it, then the line's own opening (measured on 2.1.263
+// and 2.1.310).
 var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
 	claudeEventFinish + `) says: crewlet: `)
 
@@ -531,9 +532,9 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 }
 
 // claudeSteerSaid is what the run's own hook said as it handed the model a
-// note — the content after the event's opening, AS THE HARNESS RECORDED IT,
-// less the take's token, cut here alone ([withoutTakeToken]) — and false for
-// any other system message. ONE READING for the live transcript
+// note or a late call — the content after the event's opening, AS THE HARNESS
+// RECORDED IT, less the take's token, cut here alone ([withoutTakeToken]) — and
+// false for any other system message. ONE READING for the live transcript
 // ([claudeSteerLine]) and a captured session's ([ReadTranscript]). Neither
 // redaction nor a bound is here, because each applies its own: the live view
 // redacts the whole and cuts a line; the session reader redacts and bounds an
@@ -628,36 +629,51 @@ const claudeImagePlaceholder = "[an image]"
 // and OpenCode's tool content ([openCodeAnswer]).
 //
 // A PART AT A TIME ([eachElement]), by exact key names ([threadDecoding]) and
-// loosely by type, never the whole list first, which would hold a part per
-// element before reading any.
+// loosely by type, each read in place ([eachKeyInPlace]), never the whole list
+// first, which would hold a part per element before reading any. AN ANSWER OF
+// ONE PART IS ITS TEXT, never copied again into a builder.
 func toolAnswer(list json.RawMessage, said func(kind, text, mime string) (string, bool)) string {
 	var (
 		answer strings.Builder
-		kept   bool
-		part   struct {
-			Type json.RawMessage `json:"type"`
-			Text json.RawMessage `json:"text"`
-			Mime json.RawMessage `json:"mime"`
-		}
+		first  string
+		kept   int
 	)
 	if eachElement(list, func(element json.RawMessage, _ int) error {
 		// A part that is no object is the zero part, which says nothing.
-		part.Type, part.Text, part.Mime = nil, nil, nil
-		if wireObject(element) && wireDecode(element, &part) != nil {
-			part.Type, part.Text, part.Mime = nil, nil, nil
+		var kind, text, mime json.RawMessage
+		if wireObject(element) {
+			_ = eachKeyInPlace(element, func(name []byte, value json.RawMessage) error {
+				switch string(name) {
+				case "type":
+					kind = value
+				case "text":
+					text = value
+				case "mime":
+					mime = value
+				}
+				return nil
+			})
 		}
-		text, ok := said(looseString(part.Type), looseString(part.Text), looseString(part.Mime))
-		if !ok {
+		line, ok := said(looseString(kind), looseString(text), looseString(mime))
+		switch {
+		case !ok:
 			return nil
-		}
-		if kept {
+		case kept == 0:
+			first = line
+		case kept == 1:
+			answer.WriteString(first)
+			fallthrough
+		default:
 			answer.WriteByte('\n')
+			answer.WriteString(line)
 		}
-		answer.WriteString(text)
-		kept = true
+		kept++
 		return nil
 	}) != nil {
 		return ""
+	}
+	if kept == 1 {
+		return first
 	}
 	return answer.String()
 }

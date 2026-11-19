@@ -410,6 +410,24 @@ var coordinatorEntries = map[string][]entryDrive{
 			rig.fireRetries()
 		},
 	}},
+	"SaveRunning": {{
+		// IT ENDS NOTHING: a save's stamp is a place on the row its license
+		// grants only a running job, and what came of it moves no status; what
+		// becomes of the run is its poll's to say.
+		name: "a running box the poll offers for a save of its session",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			rig.coordinator.SaveRunning(t.Context(), run, rig.runner)
+		},
+	}},
+	"SaveHosted": {{
+		// IT ENDS NOTHING: a drain's save is a save as an offered one is, of a
+		// job the drain leaves running.
+		name: "a draining node saving its Direct jobs' sessions",
+		call: func(t *testing.T, rig *coordRig) {
+			rig.coordinator.SaveHosted(t.Context())
+		},
+	}},
 	"Manager": {{
 		name: "the manager a caller mints a box through",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
@@ -950,11 +968,11 @@ func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Relea
 	return s.inner.ReleaseClaim(ctx, turnID, r)
 }
 
-func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	if s.called("LiftHold") {
 		return false, errRefusedCall
 	}
-	return s.inner.LiftHold(ctx, turnID, cond)
+	return s.inner.LiftHold(ctx, turnID, cond, hold)
 }
 
 func (s *refusingStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {

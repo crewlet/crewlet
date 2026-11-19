@@ -18,56 +18,29 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Custody: the event log of a node that keeps none (ADR-0025).
+// Custody: the event log of a node that keeps none (ADR-0025). A node without
+// `data` deletes its database at every boot, so the [Writer] rule (publish and
+// write one's own rows inline) would lose its audit rows unread. Such a node
+// hands events to the data nodes, and exactly ONE keeps each: [Custody]
+// publishes batches durably onto [topics.CustodyRecords], and [Keeper] on every
+// data node writes each into its own event log.
 //
-// The [Writer] rule is that the publisher writes its own rows, inline, into its
-// own database — and a node without the `data` role deletes its database at
-// every boot. Written there, its audit rows would be gone at its next restart,
-// and nothing could have read them in between: the API runs only where the
-// data is. So such a node hands its events to the data nodes, and exactly ONE
-// of them keeps each one.
-//
-// # Two halves, and the broker between them
-//
-// [Custody] runs on the node without `data`. It buffers what the node publishes
-// for a moment — a turn never waits on its own audit trail — and publishes it
-// in batches onto [topics.CustodyRecords], durably: a batch the broker has
-// acknowledged survives the node that published it, which a batch held in its
-// memory waiting for a data node to answer did not.
-//
-// [Keeper] runs on every data node, in one fleet-wide group, [CustodyGroup].
-// Each batch it takes it writes into its own event log, where `GET /events` and
-// the fleet's history reads find it.
-//
-// # Exactly one keeper, decided after the write
-//
-// A group delivers a batch whose acknowledgement was lost AGAIN, to whichever
-// member asks next — and a publisher that was not told its batch was stored
-// sends it again. Written by two data nodes, a batch is two copies of one
-// history, and every figure derived from a node's own log counts it twice: the
-// usage domain sums each data node's day, so a stateless node's spend would be
-// billed once per data node that wrote it. So after writing a batch a keeper
-// CLAIMS it in coordination, create-only ([coord.Custody]): the claim's winner
-// keeps the batch, any other writer deletes its copy, and the delivery is
-// acknowledged only once that is settled — or once the fleet's record of its
-// keeper is one nothing can read ([coord.ErrCustodyUndecidable]), which no
-// redelivery could settle and every one would only write again on another
-// data node.
-//
-// Write first and claim second, never the reverse: a node that claimed and died
-// before writing would hold a batch nobody wrote. In this order the worst a
-// crash leaves is a written copy whose keeper this node never learned —
-// remembered in its own store ([store.EventLog.WriteCustody]) and settled by
-// [Keeper.Reconcile] the same way, at its next boot and on every pass after.
-//
-// Until the node that lost the claim has settled its copy, both logs hold the
-// batch's rows. That is the one moment two stores share a row, and the fleet's
-// history reads are built for it: every count a node answers is of the rows it
-// KEEPS, with the rows of a batch it has not settled named beside it, and the
-// asker counts each named row once (internal/eventfan, and internal/store's
-// unsettled.go).
+// Exactly one keeper, decided after the write: a group redelivers a batch whose
+// ack was lost, and a publisher resends one it was not told was stored, so two
+// data nodes would write it and double every figure derived from a node's own
+// log (usage sums each data node's day). A keeper therefore CLAIMS the batch
+// create-only ([coord.Custody]) afterwards: the winner keeps it, others delete.
 
 // CustodyGroup is the data nodes' fleet-wide group on [topics.CustodyRecords].
+// A delivery is acknowledged only once its claim is settled, or once the
+// fleet's record of its keeper is unreadable ([coord.ErrCustodyUndecidable]),
+// which no redelivery could settle. Write first, claim second: claiming first
+// and dying leaves a batch nobody wrote; this order leaves at worst a written
+// copy of unknown keeper, remembered ([store.EventLog.WriteCustody]) and
+// settled by [Keeper.Reconcile] at boot and every pass after. Until then both
+// logs hold the rows; reads count the rows a node KEEPS, name its unsettled
+// ones, and the asker counts each once (internal/eventfan, internal/store's
+// unsettled.go).
 const CustodyGroup = "event-custody"
 
 // Publisher is what [Custody] publishes its batches through: the node's queue.
@@ -77,24 +50,16 @@ type Publisher interface {
 }
 
 // Custody publishes what this node publishes onto the custody topic, for a data
-// node to keep.
+// node to keep. It never holds a publish: a listener runs in the publishing
+// goroutine, so events go into a BOUNDED buffer one goroutine publishes in
+// batches; an unreachable broker is retried with backoff while it holds, and a
+// full buffer drops the NEWEST event and counts it, logged as it drains, so a
+// gap is a log line, not a silence.
 //
-// # It never holds a publish, and says what it drops
-//
-// A listener runs in the publishing goroutine, so the event goes into a
-// BOUNDED buffer and one goroutine publishes batches of it. A broker that
-// cannot be reached is retried with a backoff while the buffer holds; a buffer
-// that fills drops the NEWEST event and counts it, and the count is logged as
-// the buffer drains, so a gap in the audit log is a line in this node's log
-// rather than a silence.
-//
-// # A batch keeps its identity until the broker has it
-//
-// A batch is cut once and published under its own id until a publish is
-// acknowledged. A publish whose acknowledgement was lost may have landed, and
-// sent again under a new id it would be a second batch the keepers could not
-// tell from the first; under the same id it is the same batch, which a keeper
-// that already holds it writes over harmlessly and claims to the same answer.
+// A batch is cut once and published under one id until acknowledged: a publish
+// whose ack was lost may have landed, and under a new id would be a second
+// batch keepers could not tell apart; under the same id a keeper holding it
+// writes over it harmlessly and claims to the same answer.
 type Custody struct {
 	pub Publisher
 
@@ -462,18 +427,15 @@ const keeperPassBatches = 256
 // keeperStopWait is how long [Keeper.Stop] waits for a batch in hand to settle
 // before it lets go of the group.
 //
-// ONE SECOND, an order of magnitude past a healthy delivery — one store
-// transaction and one create-only claim, milliseconds each — and what it
-// orders is narrow: a SETTLE landing before the usage publisher's last flush,
-// since a settle as kept is what makes a batch's rows count. A delivery still
-// in hand after it is waiting on a coordination store that is not answering.
-// The detach that follows cancels its context, so its claim fails in this
-// process: the batch goes back to the group, and a copy this node already
-// wrote stays unsettled, counted in no day, until this node's next start
-// reconciles it — which is also where a settle as kept marks its days.
-// Waiting out the claim's own request timeout instead would add
-// those seconds to every stop of a member that has lost its stores, for no
-// row a count would see.
+// ONE SECOND, an order of magnitude past a healthy delivery (one store
+// transaction and one create-only claim, milliseconds each). It orders one
+// thing: a SETTLE landing before the usage publisher's last flush, since a
+// settle as kept is what makes a batch's rows count. A delivery still in hand
+// after it awaits an unanswering coordination store; the detach that follows
+// cancels its context, so its claim fails: the batch returns to the group and
+// a copy already written stays unsettled until this node's next start
+// reconciles it. Waiting out the claim's own timeout would delay every stop of
+// a member that lost its stores, for no row a count would see.
 const keeperStopWait = time.Second
 
 // NewKeeper builds this data node's keeper.
@@ -717,29 +679,16 @@ type KeeperPass struct {
 }
 
 // Reconcile settles every batch this node wrote at least [keeperSettleGrace]
-// before it began and has not settled, reporting what it settled and what it
-// could not.
+// before it began and has not settled, reporting what it settled and could not.
 //
 // A BATCH OLDER THAN THE EVENT LOG KEEPS ROWS is let go without asking: its
-// rows are past the log's retention and swept with every other row of their
-// age, and its keeper's record may have aged out with them
-// ([coord.CustodyRetention]), so there is nothing left to decide.
+// rows are past retention and swept, and its keeper's record may have aged out
+// with them ([coord.CustodyRetention]), so nothing is left to decide.
 //
-// A BATCH WHOSE KEEPER CANNOT BE DECIDED IS STEPPED OVER, never stopped at:
-// the fleet holds a record of its keeper that nothing can read, which says
-// nothing about any other batch and will say the same on every pass. Stopped
-// at, it held every batch written after it — the listing is oldest first —
-// unsettled on every pass and every boot until it aged past the log's
-// retention: a batch this node keeps counted in none of its days for a month,
-// its days by then older than the floor its usage publisher derives again,
-// and a copy another node keeps left here beside the keeper's for as long. So
-// it is named ([undecided]), left as it is, and the pass reads on after it.
-//
-// It STOPS at an answer that is unknown — the coordination store unreachable,
-// a claim this build cannot classify, this node's own store failing, ctx
-// ending — because that is no fact about one batch: the next would meet the
-// same, each after its own wait. What it settled and stepped over by then is
-// reported beside the error.
+// A BATCH WHOSE KEEPER CANNOT BE DECIDED IS STEPPED OVER, never stopped at: its
+// unreadable record says nothing about any other batch, and stopping held every
+// later one (the listing is oldest first) unsettled until retention. It is
+// named ([undecided]) and the pass reads on.
 func (k *Keeper) Reconcile(ctx context.Context) (KeeperPass, error) {
 	var pass KeeperPass
 	// ONE INSTANT FOR THE PASS: the listing reads on after the last batch it
@@ -766,6 +715,10 @@ func (k *Keeper) Reconcile(ctx context.Context) (KeeperPass, error) {
 				undecided(ctx, b, err)
 				pass.Undecidable = append(pass.Undecidable, b)
 			case err != nil:
+				// STOP at an unknown answer (coordination store unreachable,
+				// an unclassifiable claim, this node's store failing): it is
+				// no fact about one batch, and the next would meet the same
+				// after its own wait. What was settled is reported beside it.
 				return pass, err
 			default:
 				pass.Settled++
@@ -778,25 +731,17 @@ func (k *Keeper) Reconcile(ctx context.Context) (KeeperPass, error) {
 	}
 }
 
-// undecided says that a batch this node wrote cannot be settled, because the
-// fleet's record of its keeper cannot be read: once when its delivery meets
-// it, and on every pass after for as long as the record stands — the pass
-// naming when the batch was first written, which is when the event log's
-// retention lets it go.
+// undecided says that a batch this node wrote cannot be settled because the
+// fleet's record of its keeper cannot be read: once when its delivery meets it,
+// then on every pass while the record stands, naming when the batch was
+// written, which is when event-log retention lets it go.
 //
-// LOUD, and on every pass: it is a value no claim of this engine writes, and
-// what clears it is somebody removing it — the next claim then creates the
-// record afresh, and the copies settle — or the month the event log keeps the
-// batch's rows, until which a batch this node may keep is counted in none of
-// its days.
-//
-// The detail says WHERE the removal is possible, because on the default
-// topology it is not: the record is in the coordination store's custody
-// bucket, which the error names with its key, and only an external NATS
-// cluster is one an operator's own client is meant to reach — an embedded
-// broker offers no way in from outside the engine. And it says what to know
-// first, since a removal over a batch some node already keeps as its own
-// hands it a second keeper.
+// LOUD, on every pass: no claim of this engine writes the record, and only its
+// removal (the next claim recreates it) or retention clears it, until which a
+// batch this node may keep is counted in none of its days. The detail says
+// WHERE removal is possible (the custody bucket the error names, reachable only
+// on an external NATS cluster) and warns that removing over a batch a node
+// already keeps hands it a second keeper.
 func undecided(ctx context.Context, b store.UnsettledBatch, err error) {
 	attrs := []any{"batch", b.ID, "origin", b.Origin}
 	if !b.WrittenAt.IsZero() {

@@ -11,50 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the four rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so N nodes derive byte-identical tables:
+//  1. It reads no config and no clock; everything arrives in [statelog.ApplyOptions].
+//  2. It writes only what the record says, except the room's sequence below.
+//  3. Every derived instant is a max over a set, never a fold over arrival order.
+//  4. Every upsert carries its version guard and SKIPS on a stale one: a
+//     constraint violation would abort identically on every node and stall the log.
 //
-// N nodes derive one SQL state from one ordered stream, and the claim that
-// their tables are byte-identical is checkable — a checksum over the
-// replicated file. That claim survives exactly as long as these four hold, and
-// they are the tracker's and the wiki's because they are properties of the
-// FRAMEWORK rather than of any one domain:
-//
-//  1. IT READS NO CONFIG AND NO CLOCK. Everything it would otherwise read
-//     arrives in [statelog.ApplyOptions]: the batch's instant, the broker's own
-//     timestamp, and the epoch values the domain declared it reads.
-//  2. IT WRITES ONLY WHAT THE RECORD SAYS — with one exception this domain
-//     names below, which is the room's sequence.
-//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over an arrival
-//     order. Two nodes at one checkpoint have seen the same set and a different
-//     order, so a fold gives them different answers.
-//  4. EVERY UPSERT CARRIES ITS VERSION GUARD, and the guard is a SKIP rather
-//     than an error: a redelivered record is ordinary traffic, and a constraint
-//     violation inside this transaction would abort it identically on every
-//     node and stall the whole fleet's log.
-//
-// # The one value this applier MINTS rather than copies
-//
-// Rule 2 has an exception here that neither of the other domains has: a
-// message's `channel_seq` is minted from the ROOM'S OWN high-water mark, read
-// inside this transaction, rather than carried on the record. A writer cannot
-// carry it — posts are sequenced, so two writers in one room form no
-// expectation and would compute the same number — and the applier can, because
-// every data node applies the same records in the same order.
-//
-// That is why a message record's declared SCOPE is its channel: a deferral on
-// one post must block the room rather than one message in it, or a node that
-// stepped over a deferred post would hand the next one the number the deferred
-// record should have had, and its rows would differ from every other node's for
-// the life of the deployment. See the package doc and [TermKind].
-//
-// # What is NOT here
-//
-// NO WAKE IS PUBLISHED. A wake is derived from the committed record by
-// something that outlives the writer — see
-// [github.com/crewlet/crewlet/internal/changefeed] — rather than published by
-// the applying goroutine as a courtesy. What IS published from here is the
-// live frame a browser renders, which is a different promise made to a
-// different audience: see [Observer].
+// A message's `channel_seq` is MINTED from the room's high-water mark inside this
+// transaction; a writer cannot carry it (two would compute the same number). So a
+// message record's scope is its channel: a deferral must block the room, or a node
+// stepping over it would give the next post the deferred one's number. See [TermKind].
+// No wake is published here ([github.com/crewlet/crewlet/internal/changefeed] derives it); only the browser's live frame is ([Observer]).
 
 // Applier writes this node's copy of the company's conversation.
 type Applier struct {
@@ -87,29 +55,16 @@ func (a *Applier) Committed(context.Context) { a.live.drain() }
 
 // Gated reports a record that must produce no rows at all.
 //
-// ONE GATE IS ANSWERABLE HERE, and which one is decided by what a gate is
-// allowed to read rather than by what this domain would like to check:
+// ONE GATE IS ANSWERABLE HERE: THE EVICTION GATE. A record written by a node the
+// fleet evicted before the record's position is dropped everywhere. It reads only
+// the log's order and the ENVELOPE, so it holds when coordination is unreachable
+// and for a record this build cannot decode.
 //
-// THE EVICTION GATE. A record written by a node the fleet evicted before the
-// record's own position is dropped everywhere. It depends on nothing but the
-// log's own order and the record's ENVELOPE, which is what makes it the fence
-// that holds when coordination cannot be reached at all — and what makes it
-// answerable for a record this build cannot decode.
-//
-// # Why the erase marker is not a gate, although the wiki's purge is
-//
-// The wiki gates a purged page here because A PAGE RECORD'S SUBJECT NAMES ITS
-// OWN PAGE. A chat MESSAGE record's subject names the ROOM — that is the whole
-// hot-path design, [KindMessage] — so the message ids a gate would compare
-// against [chat_deletions] live in a PAYLOAD, which a record at an unknown
-// version does not let anyone read. A gate that decoded the payload would
-// answer "not gated" for exactly the records a rolling upgrade cannot read,
-// which is the one case it exists for.
-//
-// So the erase marker is consulted where the payload is decoded: in the apply,
-// by [messageErased], before any path writes or changes a message row. The
-// wiki states the same asymmetry about its title records, and for the same
-// reason.
+// The erase marker is not a gate: a message record's subject names the ROOM
+// ([KindMessage]), so the ids to compare against [chat_deletions] live in a
+// PAYLOAD, unreadable at an unknown version; a gate decoding it would say "not
+// gated" for exactly the records a rolling upgrade cannot read. [messageErased]
+// consults it where the payload is decoded.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	statelog.Reason, bool, error) {
 
@@ -349,18 +304,14 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, at applyConte
 // messageErased reports whether a compliance erase destroyed this message —
 // EXCEPTING the record that wrote the marker, by its own operation id.
 //
-// THE MARKER OUTLIVES EVERY OTHER ROW the message had, which is what lets a
-// node tell a message that never existed from one the company destroyed. Every
-// path that would write or change a message row asks this first, so a
-// redelivery months later cannot resurrect what an operator deliberately
-// removed.
+// THE MARKER OUTLIVES EVERY OTHER ROW the message had, so a node can tell a
+// message that never existed from one the company destroyed. Every path that
+// writes a message row asks this first, so a late redelivery cannot resurrect it.
 //
-// BY OPERATION ID AND NOT BY OP KIND. "Any erase" would let a SECOND erase
-// through, and an erase is the one gesture that destroys rows; by the
-// committed sequence would fail for a republished copy after a reanchor,
-// leaving a node holding only that copy unable to act on its own record at
-// all. The only record that can legitimately carry a marker's op id is the
-// erase that wrote it.
+// BY OPERATION ID, NOT OP KIND: "any erase" would let a SECOND erase through,
+// and by committed sequence would fail for a republished copy after a reanchor,
+// leaving its holder unable to act on its own record. Only the erase that wrote
+// the marker can carry its op id.
 func messageErased(ctx context.Context, tx *sql.Tx, messageID, opID string) (bool, error) {
 	var author sql.NullString
 	err := tx.QueryRowContext(ctx,

@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -211,18 +212,16 @@ func (c *steerCase) awaitSteered(t *testing.T, n int) []types.AgentTurnSteered {
 }
 
 // steeringOver is every record of a note the queue carried for runID's turn
-// once the turn's steering is over: the n the case expects carried — each
-// published off the step that read its note — and the run's record gone with
-// its turn. Every step that could record a note of the run again runs before
-// the record goes: a later hook of the run, which answers what it took; the
-// review, which reads what the run left waiting; and the ending, which records
-// every note still waiting as expired and then deletes the record. So the
-// records carried then are all the turn has, however late a duplicate among
-// them came.
+// once the turn's steering is over: the n the case expects carried, each
+// published off the step that read its note, and the run's record gone with
+// its turn. Every step that could record a note again runs before the record
+// goes: a later hook (answers what it took), the review (reads what the run
+// left waiting) and the ending (records every note still waiting as expired,
+// then deletes the record). So the records carried then are all the turn has,
+// however late a duplicate came.
 //
-// NOT A NAP AFTER THE FIRST RECORD, which counted only what arrived inside
-// it: a duplicate from a step that ran later — an ending off the resume's
-// frame, as an engine with an executor log runs it — went uncounted.
+// NOT A NAP AFTER THE FIRST RECORD, which would miss a duplicate from a later
+// step, such as an ending off the resume's frame.
 func (c *steerCase) steeringOver(t *testing.T, runID string, n int) []types.AgentTurnSteered {
 	t.Helper()
 	c.awaitSteered(t, n)
@@ -510,7 +509,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	// BEFORE THE RESTART the run reads one note at a batch.
 	c.file(t, "run-1", "req-before", "use the staging database")
 	before := c.e.runSteers.inbox(identityOfRun(row), 1)
-	before.Bind(t.Context(), row.LaunchID)
+	before.Bind(t.Context(), row.LaunchID, provenance.NewBoundary())
 	got := before.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "staging") {
 		t.Fatalf("the run was not served its first note before the restart: %q", got)
@@ -692,29 +691,16 @@ func reviewRound(n int) steer.Reading {
 }
 
 // A REVIEW'S TAKE WHOSE ANSWER WAS LOST HANDS ITS NOTES OVER ALL THE SAME. A take
-// of a resumed segment's whose write landed and whose answer was an error is
-// settled on its own path, its round still waiting on it: the settle answers
-// what the take recorded, and the round is handed that — read by the record's
-// word, so no later take would ever hand it over. Where the store answers the
-// settle no more than the take, the take is kept: it stands for a note waiting,
-// so a round asking for tools ends and the next opens; the next round's take,
-// or a relaunch's brief, settles it again and hands over what it recorded,
-// never marking it; a brief a failed launch hands back hands its take back too,
-// and the write of one that launches records the note read by the job it opens,
-// in the take's place — the brief is the first to tell it — so the job's ending
-// reports it where the job never started, with the rest of its brief, and a
-// resume carries it as that job's read, which the job's execute record lists:
-// at the take's own place among the reads, which the brief says, so a note a
-// later round read, correcting it, is told after it by every brief. Only a take
-// still unsettled when the segment ends is handed off its path, and marked
-// unanswered.
+// of a resumed segment whose write landed and whose answer was an error is
+// settled on its own path: the settle answers what the take recorded and the
+// round is handed that. Where the store answers the settle no more than the
+// take, the take is kept as a note waiting; the next round's take, or a
+// relaunch's brief, settles it again, never marking it. Only a take still
+// unsettled when the segment ends is handed off its path, marked unanswered.
 //
-// Mutation: hand the round nothing where the settle answers, settle a lost take
-// at no later round or brief, mark it where a later one answers, forget it when
-// a brief is handed back, seal a brief without the takes its notes came from,
-// number the read taken over at the write's place, place no note a settle hands
-// over, report no note waiting while it is lost, or never hand it off at the
-// segment's end, and a case goes red.
+// Mutation: hand nothing where the settle answers, settle at no later round or
+// brief, mark where one answers, forget on a handed-back brief, misplace or
+// misnumber the read, or never hand it off at the segment's end: red.
 func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	t.Parallel()
 	setup := func(t *testing.T, failSettles int) (*sandbox.CoordStore, *runSteers, *rowSource) {
@@ -995,16 +981,14 @@ func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 // RETURNS, so the run's ending reports its note missed. The review's round took
 // a note, the take's answer was lost and its settle went unanswered too, and
 // the review concluded without it. A segment that ends the turn is followed at
-// once by the run's ending, which reads the record and reports what no step
-// reported reading, and reads a lost take's note, unmarked, as one its step
-// reported: marked off the segment's path, the mark could land after that read,
-// and no node reported the note. So the segment's end marks it in its own path,
-// where the store answers there. The case's node settles nothing off a path any
-// more, its teardown having waited its settles out, so what is marked when the
-// segment returns is what the segment's own path marked.
+// once by the run's ending, which reports what no step reported reading and
+// reads a lost take's unmarked note as one its step reported: marked off the
+// segment's path, the mark could land after that read and no node reported the
+// note. So the segment's end marks it in its own path, where the store answers.
+// The case's node settles nothing off a path, its teardown having waited its
+// settles out, so what is marked at return is what the segment's path marked.
 //
-// Mutation: hand every take still lost off the path at the segment's end, and
-// the case goes red.
+// Mutation: hand every take still lost off the path at the segment's end: red.
 func TestAReviewsTakeLostAtItsSegmentsEndIsMarkedBeforeItReturns(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1209,31 +1193,16 @@ func servedHooks(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids 
 
 // A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
 // clock gave up on would leave the record saying the run read notes its reader
-// was never handed, while the store that did not answer in time answers once it
-// is back: so it asks again until the store answers — a minute's outage past its
-// patience included — and the note is marked then, however long ago the take
-// that lost it ended: its hook's request is answered, or its segment over,
-// within seconds. And a run's lost takes settle in one loop, whatever their
-// number: never two of its settles at once — a take lost while the loop's
-// round is asked joining it, even the round the store first answers past the
-// patience, which met no error to say the take unsettled with and says nothing.
+// was never handed, so it asks until the store answers, a minute's outage
+// included. A run's lost takes settle in one loop, never two at once: a take
+// lost while a round is asked joins it. It stops with its node, after asking
+// every take once more in a window the teardown opens (not the stop's
+// allowance, owed to the later give-backs), and asks nothing once the teardown
+// has waited the settles out.
 //
-// It stops when its node stops — once it has asked every take once more, in a
-// window of its own the teardown opens as it begins and none of the stop's
-// allowance, which the give-backs made after it are owed: a store back while
-// the loop slept between rounds settles then, and so does a take a segment the
-// teardown ended hands off, one joining that last round included, whereas a
-// store still silent is asked nothing more once the window is over — of every
-// run and every take together. And once the teardown has waited the settles
-// out, a take lost is asked nothing at all: the store it would ask is closing.
-//
-// Mutation: give the settle up at its patience, end it with the context of the
-// take that lost it, ask on past the node's stop, start a loop for every take,
-// say unsettled a round that met no error, sleep through the node's stop, make
-// no last attempt or ask one twice (a hook settle's loop then never ends, so
-// the binary times out), leave a settle joining the last round unasked, make
-// the last attempts on the stop's allowance or hold them to no window, or start
-// a loop once the teardown waited them out, for any kind: a case goes red.
+// Mutation: give up at the patience, end with the losing take's context, ask
+// past the stop, loop per take, sleep through the stop, make no last attempt
+// or two (a hook settle's loop never ends), or use the stop's allowance: red.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	t.Parallel()
 	t.Run("its store answering a minute after", func(t *testing.T) {
@@ -1520,20 +1489,17 @@ func (unservingStore) ServeNotes(context.Context, string, sandbox.NoteServe) ([]
 }
 
 // A POLLED NOTE IS SERVED ON ITS RECORD BEFORE IT IS ANSWERED. A harness that
-// polls for its notes — OpenCode's plugin — delivers what it is answered and
+// polls for its notes (OpenCode's plugin) delivers what it is answered and
 // confirms it only once it has, so a note answered with nothing on the record
 // could sit in a session the record says never read it. The poll answers a note
 // only once its record says it was served to the run's job: still waiting, its
-// read the confirmation's alone, and the mark kept once the confirmation reads
-// it — and carried, by id, to the segment that resumes the turn. A poll whose
-// serve the store does not answer answers nothing from the note it could not
-// mark on, though a later note was marked by an earlier poll: the poller's
-// cursor moves past every note it is answered, and would never ask again for
-// the one passed over.
+// read the confirmation's alone, the mark kept once read and carried, by id, to
+// the resume. A poll whose serve the store does not answer answers nothing from
+// the note it could not mark, though a later note was marked by an earlier
+// poll: the cursor moves past every note answered and would never return.
 //
-// Mutation: answer the poll without the serve, answer a note past one the serve
-// did not mark, drop the mark once the note is read, or carry none to the
-// resume, and a check goes red.
+// Mutation: answer without the serve, answer past an unmarked note, drop the
+// mark once read, or carry none to the resume: red.
 func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1586,22 +1552,17 @@ func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
 }
 
 // A CONFIRMATION WHOSE ANSWER WAS LOST REPORTS ITS NOTE, ONCE. OpenCode's plugin
-// confirms a note once OpenCode delivered it, and the confirmation's take is
-// what reports the note read: a take whose write landed and whose answer was
-// lost reported nothing, the confirmation the plugin made again found the note
-// read and skipped it, and the run's ending, a step having read the note,
-// reported nothing either. So the take is settled on the confirmation's own
-// path, and what its write recorded is reported there, the confirmation
-// answered done, whether or not the plugin ever confirms again; where the
-// store answers that settle no more than the take, the confirmation answers
-// its error, and the one the plugin makes again finds the note read at its
-// job's step and reports it; and a confirmation made again after one that
-// reported its note, its answer lost on the way back, reports it under the
-// same id at the same instant: one record.
+// confirms a note once OpenCode delivered it, and the confirmation's take
+// reports the note read: a take whose write landed and answer was lost
+// reported nothing, the plugin's repeat found the note read and skipped it, and
+// the run's ending reported nothing either. So the take is settled on the
+// confirmation's own path and what it recorded is reported there; where the
+// store answers that settle no more than the take, the confirmation answers its
+// error and the repeat reports the note. A repeat after a confirmation that
+// reported does so under the same id and instant: one record.
 //
-// Mutation: answer a lost take's confirmation without settling it, skip a note
-// an earlier confirmation of the job read, or report it again under another id
-// or at another instant, and a case goes red.
+// Mutation: answer a lost take's confirmation unsettled, skip a note an earlier
+// confirmation read, or report it again under another id or instant: red.
 func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -2316,21 +2277,16 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 
 // A NOTE A TAKE NEVER HANDED OVER IS DELIVERED WHERE A LATER LAUNCH TOLD IT
 // AGAIN, and missed only where none did. A review's take whose answer was lost
-// is marked unanswered: its reader never had the note. The brief of every
-// later launch tells it again (runner.AgentRunRequest.Retold); the launch's
-// write records it read by the job it opens, told again, at the take's own
-// place among the reads, so the turn carries it unmarked, ahead of a note a
-// later take read. The ending reports it delivered at that brief, told again,
-// where the job started; and missed at the take where no launch whose job
-// started told it. The twin: a hook's serve the job's session lacks leaves the
-// note waiting at its first serve's place, and a later launch's brief reads it
-// there, its runner reporting it where its job started, and the ending missed
-// at the serve where none did.
+// is marked unanswered: its reader never had the note. Every later launch's
+// brief tells it again (runner.AgentRunRequest.Retold); the launch's write
+// records it read by the job it opens, at the take's own place among the
+// reads, so the turn carries it unmarked, ahead of a later take's note. The
+// ending reports it delivered at that brief where the job started, else missed
+// at the take. Twin: a hook's serve the session lacks leaves the note waiting
+// at its first serve's place, reported missed there where no brief told it.
 //
-// Mutation: leave the marked read as the launch found it, place the telling at
-// the write's place, report a note told again as nothing, as missed or as a
-// plain read where its job started, or one never told again as anything but
-// missed at its take or its serve, and a case goes red.
+// Mutation: leave the marked read as found, place the telling at the write's
+// place, or report a note as nothing, missed or a plain read: red.
 func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -2569,15 +2525,13 @@ func TestAMarkedNoteIsToldAgainByTheNextLaunchThroughTheRealTurn(t *testing.T) {
 // COORDINATOR. The engine builds the coordinator that ends its runs
 // (sandboxRuntimeOn) and hands it the step that records the run's waiting
 // notes before the record goes ([sandbox.CoordinatorOptions.SteersEnded]);
-// nothing else does it, and nothing else holds the note once the record is
-// deleted. A person who sent one and was told it waits learns what became of
-// it from that record alone. Here a person's stop ends the run its turn is
-// parked on, through the engine's own pause path, with a note filed on the
-// record that no step of the run took: one record of it, `expired`, at the
-// ending's instant — the run's stop announcement's — and none `delivered`.
+// nothing else holds the note once the record is deleted, and a person told it
+// waits learns its fate from that record alone. Here a person's stop ends the
+// run its turn is parked on, through the engine's own pause path, with a note
+// no step took: one record of it, `expired`, at the ending's instant (the
+// stop announcement's), and none `delivered`.
 //
-// Mutation: drop SteersEnded from the engine's coordinator options, and no
-// record of the note is published.
+// Mutation: drop SteersEnded from the coordinator options: no record.
 func TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator(t *testing.T) {
 	t.Parallel()
 	c := newSteerCase(t, nil)
@@ -2735,17 +2689,15 @@ func (w *launchWindow) AttachSandbox(ctx context.Context, turnID string, box san
 
 // A NOTE THE BOX HELD AT THE LAUNCH IS READ BEFORE ONE FILED ON THE RECORD
 // AS IT IS WRITTEN. A note that reached the first segment's box after its brief
-// was taken was sent before any note a person files on the record once the
-// launch has written one — and the moment that write lands, any node's
-// steer_turn finds the record and files on it directly. So the box's note rides
-// the write that creates the record, ahead of everything: every reader of a
-// run's notes takes in the record's order, and where two notes disagree the
-// later word is the one a model is told to keep. Handed over by the launch once
-// the record existed, it was filed behind a note filed on the record in that
-// window, and read after it.
+// was taken was sent before any note filed on the record once the launch has
+// written one, and the moment that write lands any node's steer_turn files on
+// it directly. So the box's note rides the write that creates the record,
+// ahead of everything: readers take in the record's order, and where two notes
+// disagree the later word is the one a model is told to keep. Handed over after
+// the record existed, it was filed behind a note filed in that window.
 //
-// Mutation: hand the box over after the launch's write, as it was, and the note
-// filed as the record is written is first.
+// Mutation: hand the box over after the launch's write: the note filed as the
+// record is written is first.
 func TestANoteTheBoxHeldAtTheLaunchIsReadBeforeOneFiledDuringIt(t *testing.T) {
 	t.Parallel()
 	model := &reviewWatch{}

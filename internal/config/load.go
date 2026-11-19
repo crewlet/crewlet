@@ -76,21 +76,12 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 // refuseUnresolvedLogFile stops a boot whose log file was named by a `${VAR}`
 // nothing answered for.
 //
-// # Why this one field and not every unresolved reference
-//
-// Because an unresolved reference expands to the empty string, and what that
-// MEANS is the field's own business. Almost everywhere it is caught: an empty
-// `store.path` is refused as a missing store, an empty credential surfaces as
-// the authentication failure the resolver's warning predicts. `logging.file.path`
-// is the exception, and a dangerous one — empty is a legitimate, common
-// SETTING there, meaning "write no file". So `path: "${LOG_PATH}"` with the
-// variable unset does not fail, or warn twice, or look wrong: it silently
-// becomes the deployment that asked for no durable log at all.
-//
-// That is the precise failure this whole surface is arranged against. A path
-// that cannot be OPENED already stops the boot rather than running without
-// the record an operator configured; a path that never arrived has to do the
-// same, or the policy holds only for the failures that are easy to notice.
+// An unresolved reference expands to the empty string, whose meaning is the
+// field's own business. Elsewhere it is caught (an empty `store.path` is a
+// missing store, an empty credential an authentication failure). But empty
+// `logging.file.path` is a legitimate setting meaning "write no file", so an
+// unset variable there would silently start a node with no durable log. A path
+// that cannot be opened already stops the boot; one that never arrived must too.
 func refuseUnresolvedLogFile(missing []Unresolved) error {
 	for _, u := range missing {
 		if u.Path != "logging.file.path" {
@@ -114,56 +105,34 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 // a file with no mask in it — the overwhelming case — has no reason to do.
 type PriorRevision func() (*Company, error)
 
-// LoadCompany reads and validates Tier B from a YAML file that is written into
-// the store as a revision.
+// LoadCompany reads and validates Tier B from a YAML file written into the
+// store as a revision (`crewlet config import`).
 //
-// Used by `crewlet config import` to populate a revision from a file on
-// disk. At runtime the engine reads Tier B from the store, never from YAML.
+// ${VAR} references stay VERBATIM, so revisions, exports and the dashboard
+// hold no resolved secrets and `crewlet validate` works where no credential
+// exists; they resolve where a provider, transport or MCP server is built.
 //
-// ${VAR} references are preserved VERBATIM — in the returned value and in
-// the revision that gets stored. Resolution happens where a provider,
-// transport or MCP server is constructed, which is what keeps a stored
-// revision, a YAML export and the dashboard free of resolved secrets. It is
-// also what lets `crewlet validate` check a config on a laptop where no
-// credential exists.
-//
-// A REDACTED READ IS RESTORED FIRST, against prior ([PriorRevision]; nil
-// where the caller has no revision to offer): the file may be `GET /config`,
-// the dashboard's Copy as YAML or `crewlet config show`, every one of which
-// masks an inline credential, and writing it back is the round trip `PUT
-// /config` makes work by restoring each mask from the revision it replaces
-// ([Company.RestoreRedacted]). An import that refused the masks instead made
-// a file kept in sync from those reads impossible to import over the company
-// it was read from. A mask the prior cannot answer — a member that is new,
-// renamed or ambiguous, or no prior at all — is left standing, and the
-// validation that follows names its field.
+// A REDACTED READ IS RESTORED FIRST against prior ([PriorRevision]; nil where
+// the caller has none): `GET /config`, Copy as YAML and `crewlet config show`
+// mask inline credentials, each restored from the revision it replaces
+// ([Company.RestoreRedacted]). A mask the prior cannot answer stays, and
+// validation names its field.
 func LoadCompany(path string, prior PriorRevision) (*Company, error) {
 	return loadCompanyFile(path, prior, (*Company).Validate)
 }
 
-// LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on
-// rather than written into the store, and holds it to the RUNNABLE rules only.
+// LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on, not
+// written into the store (`crewlet run`'s `-company` and `-import-company`
+// seed, the vendor commands), and holds it to the RUNNABLE rules only.
 //
-// Its callers are `crewlet run`'s `-company` and `-import-company` seed, and
-// the vendor commands (`crewlet gitlab provision` and its siblings) that act
-// on the company the file describes. The difference from [LoadCompany] is
-// the admission rules (see [Company.ValidateRunnable]): running a company
-// depends on none of them, so a file that breaks one must still start the
-// node that runs it when the store already holds it, and still be
-// provisionable. Most boots never write the file anywhere: it is byte for
-// byte the revision the store already holds, or a bootstrap seed the store's
-// own company outranks. The
-// admission rules apply where the file IS written as a revision, which the
-// seed decides and checks with [Company.ValidateAdmission] before it imports,
-// and `crewlet config import` and `crewlet validate` use [LoadCompany].
+// It skips [LoadCompany]'s admission rules ([Company.ValidateRunnable]): a file
+// that breaks one must still start a node whose store already holds it, and
+// still be provisionable. They apply where the file IS written as a revision:
+// the seed checks [Company.ValidateAdmission] first, and `crewlet config
+// import` and `crewlet validate` use [LoadCompany].
 //
-// A file it reads is RESTORED against prior first, as [LoadCompany] restores
-// one: `crewlet run` seeds the store from it and runs it, and a redacted read
-// kept as the node's company.yaml must start the node it was read from. The
-// commands that act on a file and write no revision — `crewlet llm` and the
-// vendor commands, which beside a running node can reach no revision but the
-// redacted one its API serves — pass nil, and a mask in the file is refused
-// by name.
+// Masks are restored against prior as in [LoadCompany]; commands that write no
+// revision pass nil, and a mask in the file is refused by name.
 func LoadCompanyToRun(path string, prior PriorRevision) (*Company, error) {
 	return loadCompanyFile(path, prior, (*Company).ValidateRunnable)
 }
@@ -210,20 +179,16 @@ func ParseCompany(data []byte) (*Company, error) {
 	return cfg, nil
 }
 
-// ParseCompanyDocument decodes Tier B WITHOUT validating it.
+// ParseCompanyDocument decodes Tier B WITHOUT validating it. The shape is
+// still enforced (unknown fields, wrong kinds fail); only the whole-document
+// rules are deferred.
 //
-// The shape is still enforced — an unknown field, a list where a mapping
-// belongs, a malformed value all fail here — and only the whole-document rules
-// are deferred. It exists for the callers that cannot validate yet: the
-// config write path and the file loaders ([LoadCompany], [LoadCompanyToRun]),
-// where a document may carry redaction masks in place of credentials and has
-// to have them resolved against the previous revision first. Validating
-// before that would reject an operator's document for carrying
-// "__redacted__" in a field they never touched.
-//
-// Everything else uses [ParseCompany]. A caller that skipped validation and
-// forgot to run it later would be a config that fails at the first turn, and
-// that is the worst place to learn it.
+// It is for callers that cannot validate yet: the config write path and the
+// file loaders ([LoadCompany], [LoadCompanyToRun]), whose document may carry
+// redaction masks that must be restored from the previous revision first.
+// Validating earlier would reject "__redacted__" in a field the operator never
+// touched. Everything else uses [ParseCompany]: a caller that forgot to
+// validate later would learn of a bad config at the first turn.
 func ParseCompanyDocument(data []byte) (*Company, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -233,16 +198,13 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 }
 
 // ParseCompanyNode is [ParseCompanyDocument] over a document already parsed,
-// for a caller that has taken the document apart before handing it on: the
-// write surface lifts a `_summary` key out of a body before the company in it
-// is read.
+// for a caller that took the document apart first (the write surface lifts a
+// `_summary` key out of a body).
 //
-// THE NODES KEEP THE LINES THEY WERE PARSED FROM, and every failure is placed
-// at its node, so a failure names the line it has in the text the caller sent.
-// Encoding the edited document again to hand it to [ParseCompanyDocument]
-// renumbered every line: in a YAML body opening with its summary, a typo
-// twenty lines down was reported a line or two above where it was written.
-// doc is only read.
+// THE NODES KEEP THEIR PARSED LINES and every failure is placed at its node,
+// so it names the line in the text the caller sent; re-encoding the edited
+// document renumbered lines and misplaced a typo by a line or two. doc is
+// only read.
 func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 	if empty(doc) {
 		return nil, fault(nil, ErrMissing, "the company config is empty; it needs at least a name")
@@ -256,28 +218,22 @@ func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 		return nil, err
 	}
 	// EVERY UNIT GETS A KEY AND EVERY SEAT ITS HANDLE, written into the
-	// document where it declares none. A unit is referenced by its key and
-	// a seat by its handle — a `manages:` entry, a unit's `lead:`, a seat's
-	// `unit:` — and a seat's agent id, mailbox and memory derive from its
-	// handle, so one left to be derived from the display name moves the day
-	// somebody corrects a typo in that name: a removal and a creation nobody
-	// asked for. Written down here, every revision a file or a whole-document
-	// write stores carries both, and the config surface mints the same way
-	// on the two writes that read the stored form instead ([MintIdentities]).
+	// document where it declares none. Units are referenced by key and seats
+	// by handle, and a seat's agent id, mailbox and memory derive from its
+	// handle: left to derive from the display name they would move when
+	// somebody fixes a typo in it, a removal and creation nobody asked for.
+	// The config surface mints the same way on the two writes that read the
+	// stored form ([MintIdentities]).
 	MintIdentities(&cfg)
-	// The declaration order of providers.llm exists only in the document —
-	// a Go map has none — and per-phase resolution's last resort is "the
-	// first provider configured". Read here, against the whole document,
-	// because the strict decoder serialises a subtree alone and an alias
-	// inside one pointing at an anchor defined elsewhere would stop
-	// resolving. See llmKeyOrder.
+	// The declaration order of providers.llm exists only in the document (a Go
+	// map has none), and per-phase resolution's last resort is "the first
+	// provider configured". Read against the whole document, because the
+	// strict decoder serialises a subtree alone and an alias to an anchor
+	// defined elsewhere would stop resolving. See llmKeyOrder.
 	//
-	// Only when the document did not state one. A document that made a
-	// round trip through the config surface carries the authored order in
-	// llm_order and NOT in its key order, because Go marshals a map with
-	// sorted keys — so deriving unconditionally would silently reorder
-	// every provider chain the moment somebody read a config and sent it
-	// back.
+	// Only when the document did not state one: a round trip through the config
+	// surface carries the order in llm_order, not in key order (Go marshals
+	// maps sorted).
 	if len(cfg.Providers.LLMOrder) == 0 {
 		cfg.Providers.LLMOrder = llmKeyOrder(doc)
 	}
@@ -289,12 +245,10 @@ func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 // whole document is read by: unknown keys refused, and every failure a
 // [Fault] with its path inside the member and its line in data.
 //
-// The per-entity write surface is what reads one. It used encoding/json's own
-// strict decoder, whose refusal names a key and no place (`json: unknown field
-// "gaol"`) and classifies as nothing, so the surface a person is most likely to
-// edit by hand was the one whose mistakes could not be put beside the field.
-// ONE READER for a member and for the document holding it, so the two cannot
-// disagree about what a seat may carry.
+// The per-entity write surface reads these. encoding/json's strict decoder
+// named a key and no place (`json: unknown field "gaol"`) and classified
+// nothing. ONE READER for a member and its document keeps them agreeing on
+// what a seat may carry.
 //
 // The caller knows where the member sits in the document and places the
 // faults there; a path here starts at the member.
@@ -325,49 +279,18 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 	return decodeDocument(doc, out)
 }
 
-// DecodeCompany reads Tier B from its STORED form.
+// DecodeCompany reads Tier B from its STORED form: JSON marshalled from a
+// parsed [Company]. It carries what the AUTHORED form does not
+// (providers.llm_order, so a booting node resolves an unpinned seat as the
+// authoring node did) and is LENIENT about unknown fields, where [ParseCompany]
+// fails closed: an unknown key in a stored revision is a peer on a newer build,
+// and rejecting it makes a mixed-version fleet an outage.
 //
-// The stored form is JSON produced by marshalling a parsed [Company], not a
-// document a person wrote — which makes it a different reader from
-// [ParseCompany] in two ways that both matter.
-//
-// It carries fields the AUTHORED form does not. providers.llm_order is the
-// declaration order of a Go map, recoverable only while the YAML document
-// exists; it is written into the stored form precisely so a node booting from
-// a revision resolves an unpinned seat to the same model the authoring node
-// did. Reading the stored form through the YAML parser would reject it as an
-// unknown setting.
-//
-// And it is LENIENT about fields it does not know, where ParseCompany fails
-// closed on them. The two are answering different questions: a typo in a file
-// a person wrote is a mistake to catch at the door, while an unrecognised key
-// in a stored revision is a peer running a newer build — and rejecting that
-// makes a mixed-version fleet an outage in the older direction. Strictness
-// lives at the import, which is where a person's document arrives.
-//
-// ${VAR} references stay VERBATIM here as everywhere else: they are resolved
-// where a provider, transport or MCP server is constructed, which is what
-// makes re-activating an unchanged revision pick up a rotated credential.
-//
-// # It does not validate, and every caller decides what to hold it to
-//
-// A stored revision was valid under the rules of the build that WROTE it,
-// which is not necessarily this one: during a rolling upgrade a newer peer
-// can store a document this build's rules would refuse. A reader that
-// validated here made such a revision unreadable to every caller at once,
-// including the ones that could repair it. GET /config answered 500, a PUT
-// and a PATCH failed opening their own merge base, and export refused, so the
-// only way out was stopping the engine.
-//
-// So the decode is only a decode, and the rules live with the question being
-// asked:
-//
-//   - Reading, exporting, diffing, and using a revision as the prior a write
-//     restores its masks from or merges onto: no rules at all. Those readers
-//     never run the company, and refusing them is what locks it out.
-//   - Applying a revision (engine apply, boot, reload, revert): the rules a
-//     running company depends on, before anything is built.
-//   - A document a person submits: every rule, after its masks are restored.
+// It does NOT validate: a revision was valid under the build that WROTE it, and
+// validating here made one a newer peer stored unreadable to every caller,
+// repairing ones included (GET /config 500, PUT and PATCH failing on their
+// merge base). Callers pick their rules: none to read, export, diff or serve as
+// a prior; the runnable rules to apply; all, after masks, for a person's input.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits
 	// must land on the same default the authored path gives it, or the
@@ -480,19 +403,10 @@ func decodeError(err error, idx *bufferIndex) error {
 	return out.err()
 }
 
-// EncodeCompanyYAML renders a company config back to YAML.
-//
-// # Why YAML rather than the JSON the store holds
-//
-// Both round-trip, and the store's payload is JSON — but this output is for
-// a PERSON: it is what `crewlet config export` prints, what a diff compares,
-// and what an operator edits and imports back. The authored form is YAML, so
-// handing back JSON would make every export a translation the reader has to
-// undo before they can use it.
-//
-// The struct tags are shared, so a field that exports is a field the loader
-// accepts: an export is importable by construction rather than by a rule
-// somebody maintains.
+// EncodeCompanyYAML renders a company config back to YAML, not the JSON the
+// store holds: the output is for a PERSON (`crewlet config export`, diffs,
+// edit and re-import), and the authored form is YAML. The struct tags are
+// shared, so an export is importable by construction.
 func EncodeCompanyYAML(c *Company) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("config: nothing to encode")

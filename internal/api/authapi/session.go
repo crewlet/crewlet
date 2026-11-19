@@ -21,21 +21,12 @@ import (
 // directoryFor adapts this surface's own seam to the one
 // [session.Signer.Validate] takes.
 //
-// TWO SEAMS OVER ONE READER, and that is deliberate rather than duplication:
-// this package's [Directory] is what a SIGN-IN may reach and carries no
-// per-bearer resolve, while session's is what a VALIDATION needs and carries
-// nothing else. Widening either to be the other would give a route access to
-// the half it has no business with.
-//
-// # And the guard's reading of the subject, never a second one
-//
-// A session exchanged from a Tier A token names the token's login, which no
-// person row holds; the guard answers that subject from the entry this node
-// holds ([auth.SessionSubjects]), and so does this. It used to validate
-// against the bare estate, so a token's session read as one whose person was
-// gone: [Service.Logout] cleared the cookie and closed nothing, while the guard
-// went on serving the same cookie — and a captured copy with it — until its
-// hour ran out.
+// TWO SEAMS OVER ONE READER, deliberately: [Directory] is what a SIGN-IN may
+// reach, session's what a VALIDATION needs; widening either gives a route the
+// half it has no business with. It carries the guard's reading of the subject:
+// a Tier A token's session names a login no person row holds, answered from the
+// entry this node holds ([auth.SessionSubjects]); the bare estate would read
+// its person as gone, so [Service.Logout] would close nothing.
 func (s *Service) directoryFor() session.Directory { return s.sessions }
 
 // configResponse is what a client reads before anybody has signed in.
@@ -209,63 +200,26 @@ func (s *Service) ownName(ctx context.Context, p iam.Principal) string {
 // the next step-up gesture will ask them to confirm it.
 //
 // THE PRINCIPAL'S OWN DEADLINE, never a second number: [iam.Principal.ReauthAt]
-// is the instant the proof stops counting, composed by the guard from when the
-// session proved identity and this node's `step_up` window — the one setting
-// the gate uses — so a client warned here and refused there is warned at the
-// threshold that refuses. A zero deadline is stale: nothing proved yet is due
-// by definition, which is the honest reading of a session opened by a route
-// that does not prove identity at all — see the Tier A token exchange.
-//
-// IT USED TO SUBTRACT THE WINDOW A SECOND TIME, reading ReauthAt as the
-// instant of proof while the guard wrote it as the deadline, so a fresh proof
-// counted for twice the window here.
+// is the instant the proof stops counting, composed by the guard from the
+// proof's time and this node's `step_up` window, so a client is warned at the
+// threshold that refuses. It is a deadline, not the instant of proof: do not
+// subtract the window again. A zero deadline is stale, the honest reading of a
+// session opened by a route that proves nothing (the Tier A token exchange).
 func (s *Service) stepUpDue(p iam.Principal) bool {
 	return !p.Fresh(s.now())
 }
 
-// Logout ends THIS session.
+// Logout ends THIS session. THE COOKIE IS CLEARED WHATEVER THE WRITE DID: a 503
+// would leave a person on a shared machine looking at a signed-in page. The
+// record's failure is logged, not shown; the cookie is all the browser holds.
 //
-// THE COOKIE IS CLEARED WHATEVER THE WRITE DID. A logout that answered 503
-// because the log could not be reached would leave a person looking at a
-// signed-in page having asked to leave, on a shared machine — so the cookie
-// goes first, the record is published, and a failure to publish is reported in
-// the log rather than to the person walking away from the screen.
-//
-// That is safe because the cookie is the only thing the browser holds: without
-// it nothing is presented, and the record catching up later merely makes the
-// row agree with what already happened.
-//
-// # Unguarded, or the promise above is not one
-//
-// The request guard answers `503 identity_unavailable` on a node whose identity
-// estate it cannot read, BEFORE any handler runs — and this route was behind
-// it, so on exactly that node no sign-out cleared anything. It is exempt now
-// ([auth.PathAuthLogout] is on the guard's exact list), which it can afford
-// because it trusts nothing the guard would have told it: every bearer it ends
-// is read here under its signature and this node's rows. The guard still
-// hands through whatever it resolved, for [callerName]; the origin check still
-// judges the post.
-//
-// # A session already over is cleared, and nothing else
-//
-// The cookie is read under its signature AND this node's rows, and only a
-// session they still hold — live, or opened on a node ahead of this one —
-// is closed and announced. It used to be read under the signature alone, so
-// any cookie ever signed under a live key — expired, revoked, a removed
-// person's leftover — published a close and announced another
-// `iam_session_ended` on every post: a row per request authored by whoever
-// held a cookie the engine no longer accepts, and a second ending named for a
-// session a record had already ended. A node that cannot read its rows still
-// records the close the person asked for, and announces nothing it cannot say
-// was live.
-//
-// # Every bearer the browser holds
-//
-// Under either name ([session.Held]), where the guard authenticates only the
-// name this deployment issues: a browser still holding the name an http
-// deployment issued before it moved to https is signed in by nothing any
-// more, and its session is closed here rather than left live behind a cookie
-// the sign-out merely forgot.
+// The route is UNGUARDED ([auth.PathAuthLogout], the guard's exact list): the
+// guard's `503 identity_unavailable` would run first on a node that cannot read
+// its estate, and nothing here trusts what the guard says. Every bearer, under
+// either name ([session.Held]), is read under its signature and this node's
+// rows; only a session they still hold is closed and announced
+// (TestASignOutEndsOnlyASessionStillLive). A node that cannot read its rows
+// still records the close, announcing nothing it cannot say was live.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	s.signOut(w)
 	s.endEveryHeld(r)
@@ -444,29 +398,14 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 // signature and this node's rows — the zero validation for a request carrying
 // none.
 //
-// # It is the SIGNATURE that decides the lineage, never the field
-//
-// A lineage read straight out of a cookie without checking the mac is a
-// lineage the CALLER CHOSE, and closing a session on one is a denial of
-// service against anybody whose session id leaks: a proxy log, a referrer, a
-// screenshot. So this goes through [session.Signer.Validate], which parses
-// under the keyring and yields a bearer only when the signature verifies — a
-// malformed cookie's bearer is the zero value, and its lineage the nil uuid.
-//
-// # And the ROWS decide whether there is anything left to end
-//
-// The verdict comes back beside the bearer, because a sign-out is a CLAIM
-// that the session was live until now: a cookie that is expired, revoked, or
-// names a session a record already ended still carries a verified bearer, and
-// a caller that read only the bearer closed and announced every one of those
-// again. [Service.Logout] reads the row; the step-up answer and a named
-// sign-out read only the bearer, because what they need from it — the
-// absolute deadline, whether the named lineage is this cookie's — is the
-// bearer's own.
-//
-// THE NAME THIS DEPLOYMENT ISSUES, by [session.Presented]'s rule — the
-// guard's own, so what this reads is what the request was authenticated with.
-// The sign-out alone reaches the other name too, through [session.Held].
+// The SIGNATURE decides the lineage: one read from an unchecked cookie is one
+// the CALLER CHOSE, a denial of service against anybody whose session id leaks.
+// [session.Signer.Validate] yields a bearer only when the signature verifies.
+// The ROWS decide whether anything is left to end, so the verdict comes beside
+// the bearer: an expired or ended session still carries a verified one.
+// [Service.Logout] reads the row; the step-up and a named sign-out need only
+// the bearer's own fields. THE NAME THIS DEPLOYMENT ISSUES, by
+// [session.Presented]'s rule; only the sign-out reaches the other, [session.Held].
 func (s *Service) presentedSession(r *http.Request) session.Validation {
 	cookie := session.Presented(r, s.boot.API.ExternalBase())
 	if cookie == "" {
@@ -492,25 +431,14 @@ func (s *Service) signOut(w http.ResponseWriter) {
 // laptop they left in an office without signing out of the browser they are
 // doing it from.
 //
-// # Whose session it is comes from the estate, and who may end it from the table
-//
-// A lineage is not a secret — it is in a cookie, a proxy log, a screenshot —
-// so a route that closed whatever lineage it was handed would let anybody end
-// anybody's session. The person who OWNS it is read from this node's own rows
-// rather than claimed by the caller, and whether this caller may end it is
-// [authz.ActionSessionEnd] — the verb `DELETE /iam/people/{id}/sessions` is
-// mounted on, so ending one session and ending all of somebody's are one
-// rule: their own, on no proof at all (the first thing somebody does on
-// finding an intruder), or anybody else's on admin, a `step_up` and a person
-// present.
-//
-// It used to be decided here, by a check of its own that admitted the
-// deployment's operating permission for anybody's session with no step-up —
-// one a machine token may carry — so a leaked pipeline token, or a week-old
-// cookie, could end any session whose lineage it knew while the table, its
-// walks and the docs all said that took an administrator and a person present.
-// An SRE who finds a stolen laptop asks an admin, or uses a Tier A token
-// holding admin, which is fresh by construction.
+// A lineage is not a secret, so the OWNER is read from this node's rows, not
+// claimed by the caller, and whether the caller may end it is
+// [authz.ActionSessionEnd], the verb `DELETE /iam/people/{id}/sessions` is
+// mounted on: one rule for one session or all, their own on no proof, anybody
+// else's on admin, a `step_up` and a person present. No check of its own may
+// be added here: the operating permission a machine token may carry would end
+// any session with no step-up. An SRE with a stolen laptop asks an admin, or
+// uses a Tier A token holding admin, fresh by construction.
 func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
@@ -534,20 +462,16 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if owner == "" {
-		// ABSENT IS NOT AN ERROR HERE. A session that has already ended
-		// is exactly what the caller asked for, and a 404 would send
-		// somebody looking for a session they successfully closed. It is
-		// an absence the directory PROVED against the identity log's end
-		// ([Directory.SessionStanding]): read bare, a node that had not
-		// applied the session's start answered `ended` about a session
-		// still running, and wrote nothing.
+		// ABSENT IS NOT AN ERROR: a session already ended is what the
+		// caller asked for, and a 404 would send them looking. The
+		// absence is PROVED against the identity log's end
+		// ([Directory.SessionStanding]); read bare, a node that had not
+		// applied the session's start would say `ended` of a running one.
 		//
 		// IT IS NOT THE ANSWER A SESSION SOMEBODY ELSE HOLDS GETS BELOW,
-		// which is the table's refusal, so the difference says a lineage
-		// the caller already holds names a session they may not end. That
-		// is all it says — no owner, no person — and a lineage is not a
-		// secret (above); answering that refusal `ended` too would tell
-		// the caller a session they did not end is over.
+		// the table's refusal, which says only that a lineage the caller
+		// holds names a session they may not end. Answering that `ended`
+		// too would tell them a session they did not end is over.
 		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 		return
 	}

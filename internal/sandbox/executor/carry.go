@@ -286,13 +286,22 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
 	}
 	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
-	check.ResumeRead = r.harness.Name() == sandbox.ClaudeCodeHarness && claudeResumeRead(check.Version)
+	check.ResumeRead = r.resumeRead(check.Version)
 	if restores, why := r.Restores(archive); !restores {
 		check.Why = why
 		return check, nil
 	}
 	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
 	return check, nil
+}
+
+// resumeRead reports whether release, of this runner's harness, is one whose
+// resume this build read ([claudeResumeRead]): what a box's carry check
+// ([sandbox.CarryCheck.ResumeRead]) and a take's archive
+// ([sandbox.TakenSession.ResumeRead]) each report. False for every harness
+// but Claude Code.
+func (r *Runner) resumeRead(release string) bool {
+	return r.harness.Name() == sandbox.ClaudeCodeHarness && claudeResumeRead(release)
 }
 
 // Restores reports whether this runner restores archive at all

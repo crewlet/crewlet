@@ -27,83 +27,16 @@ const (
 
 // Schema returns the JSON Schema for a tier, as indented JSON.
 //
-// # Who reads this
-//
-// Not the engine. The engine validates with the Go code in this package;
-// the schema is a PUBLIC, EDITOR-FACING artifact — it backs the
-// `# yaml-language-server: $schema=` modeline at the top of every shipped
-// config, a CI linter, and an assistant authoring a config without the
-// binary installed. Its whole value is telling an author about a mistake
-// while they are still typing.
-//
-// # It is a SUBSET of the validator, never a superset
-//
-// A schema can express structure — key spaces, types, closed sets, ranges,
-// patterns, and a handful of cross-field implications. It cannot express
-// everything [Company.Validate] checks, and it must never try to: an editor
-// that red-underlines a config the engine would happily run teaches authors
-// to ignore it.
-//
-// So the invariant is one-directional and it is tested (see the schema
-// parity test): EVERYTHING THE SCHEMA REJECTS, THE VALIDATOR ALSO REJECTS.
-// The reverse does not hold, and the validator remains the authority.
-//
-// Closed sets are read from the same package-level slices the validators
-// use, so an enum here cannot drift from what the engine accepts.
-//
-// # A leaf admits what the DECODER reads there, not what its Go type spells
-//
-// An editor judges the value YAML hands it; the engine judges the value its
-// decoder makes of that same text, and the two differ in four ways a schema
-// written from the Go types alone got wrong — each of them a red underline
-// on a file the engine runs:
-//
-//   - AN EMPTY VALUE IS "UNSET". `level:` is YAML null, and the decoder
-//     leaves the field as it was; every custom decoder here says so in as
-//     many words. So every position admits null — except the company's root,
-//     because an empty company document is refused by name. `level: ""` is
-//     the same statement in a string field, whose zero value IS unset: every
-//     validator judges a closed set or a pattern only on a value somebody set,
-//     so a text field's rule admits the empty string beside its own values.
-//   - TEXT IS TEXT, whatever YAML resolved it as. A string field receives
-//     the scalar's own source characters, so `org_webhook: false` — the
-//     spelling the GitHub guide uses — is the enum value "false" to the
-//     engine and a boolean to an editor, and `gpu: true` is a label value.
-//     See [textTypes] and [enumValues].
-//   - A BOOLEAN ALSO READS YAML 1.1's WORDS. The decoder accepts `yes`, `on`,
-//     `off` and the rest into a bool field, so they are admitted there; see
-//     [yaml11BoolPattern].
-//   - TIER A RESOLVES `${VAR}` BEFORE IT DECODES (see [ParseBootstrap]), so a
-//     reference in a Tier A scalar is judged by what it will resolve to,
-//     which the schema cannot know: it is admitted wherever SOME resolved
-//     value could be decoded. A text leaf takes a reference anywhere in its
-//     value, because the resolver splices the value in as text. A number or
-//     a switch takes a WHOLE one, whose value is read as the same characters
-//     written there would be ([Resolver.Document]); the resolver refuses a
-//     reference with other text around it in those, and so does the schema.
-//     Tier B keeps a reference VERBATIM, so there it is the literal text it
-//     looks like and is judged as such — except in a field whose js tag says
-//     `pointer`: one its consumer resolves when it is ONE WHOLE reference
-//     ([envref.Resolve]) and holds to its enum or pattern only when it is
-//     written out. That field admits exactly a whole reference beside its
-//     rule, which is what its validator accepts (see [pointerOrLiteral]).
-//
-// What the schema does NOT model is a leniency that loses what the author
-// wrote, because there is none left to model: a fractional number in an
-// integer field is refused by the loader rather than truncated
-// ([refuseFractions]), so `integer` here is exactly what the engine reads.
-//
-// # A credential's position says so
-//
-// Every string position a `secret:"true"` tag covers carries
-// [secretKeyword]: the field itself for one value, `items` for each member
-// of a list, `additionalProperties` for each value of a map — never a map's
-// keys, which are names. The generator reads the tag through [secrets.Field],
-// the predicate redaction reads it through, and descends exactly as
-// redaction does, so the positions a config read masks and the positions
-// this document calls credentials are one set, and a test holds them to it
-// in both directions. It is an annotation and never a rule: a literal there
-// is still a value the engine runs, so marking it changes no verdict.
+// The engine does not read it: it is a PUBLIC, EDITOR-FACING artifact (the
+// `# yaml-language-server: $schema=` modeline, a CI linter). It is a SUBSET of the validator, never a superset: an
+// editor underlining a config the engine runs teaches authors to ignore it.
+// EVERYTHING THE SCHEMA REJECTS, THE VALIDATOR ALSO REJECTS (the parity test);
+// closed sets come from the validators' own slices. A leaf admits what the
+// DECODER reads ([textTypes], [yaml11BoolPattern]): an empty value is unset, so
+// every position but the company root admits null. Tier A resolves `${VAR}`
+// first: a text leaf takes one anywhere, a number or switch a WHOLE one; Tier B
+// keeps it verbatim, except a `pointer` field, which admits a whole one beside
+// its rule. A credential's position carries [secretKeyword].
 func Schema(tier Tier) ([]byte, error) {
 	var root reflect.Type
 	var title, id string
@@ -111,22 +44,16 @@ func Schema(tier Tier) ([]byte, error) {
 	var rootType any
 
 	var g *schemaGen
-	// Each `$id` is where the documentation site serves the CURRENT STABLE
-	// copy (/engine/latest/schema/), never a version, because this tree
-	// cannot name its own: the tag is the version and nothing in the source
-	// records one, so a generated file stamped with a version would be a
-	// second record of it that every release made stale. The site serves
-	// each version's copy under that version's own path — /engine/next/ for
-	// main, /engine/vX.Y/ for an older line — and stamps the copy it serves
-	// with that path, so this spelling is read only from a file outside the
-	// site (a checkout, or what `crewlet schema` writes). latest/ is main's
-	// copy until a release of this code exists and the newest such release's
-	// from then on; the site never serves v0.1.0 there, which predates this
-	// engine and whose schema describes another program's configuration. So an
-	// editor resolving this `$id` gets the current release's field list,
-	// which a binary older or newer than that release does not share: the
-	// schema of the binary in hand is `crewlet schema <tier>`, and the
-	// company-architect skill says to prefer it whenever crewlet is installed.
+	// Each `$id` is where the documentation site serves the CURRENT STABLE copy
+	// (/engine/latest/schema/), never a version: this tree cannot name its own
+	// (the tag is the version), so a stamped file would be a second record every
+	// release made stale. The site serves each version's copy under its own path
+	// and stamps it, so this spelling is read only from a file outside the site.
+	// latest/ is main's copy until a release of this code exists; it never serves
+	// v0.1.0, whose schema describes another program. So an editor resolving this
+	// `$id` gets the current release's field list, which another binary may not
+	// share: the schema of the binary in hand is `crewlet schema <tier>`, which
+	// the company-architect skill prefers whenever crewlet is installed.
 	switch tier {
 	case TierBootstrap:
 		root = reflect.TypeOf(Bootstrap{})
@@ -246,24 +173,14 @@ const wholeReferencePattern = `^\$\{[A-Za-z_][A-Za-z0-9_]*\}$`
 // is always `true`, and a position without it holds none.
 //
 // A VENDOR KEYWORD, because the vocabulary has no word for this. JSON Schema
-// 2020-12 collects a keyword it does not know as an annotation and validates
-// nothing by it, so every conforming validator and editor reads the file
-// exactly as before. The nearest standard word, `writeOnly`, says the value
-// is never returned by its owner — false here, since a whole ${VAR} in a
-// credential field is returned verbatim on every read.
-//
-// SPELLED `x-crewlet-secret`. The `x-` prefix is the convention for a
-// vendor's word in a JSON Schema: OpenAPI 3.1 accepts no other spelling for
-// an extension, so the mark survives being quoted in an API description,
-// and `crewlet` keeps it from meaning somebody else's word. Its consumers —
-// an editor, a CI linter, external tooling such as a Kubernetes operator —
-// read the published file and act on the mark there. They cannot carry it
-// further into a CustomResourceDefinition: a CRD's schema accepts only its
-// own fixed `x-kubernetes-*` extensions (and no `$ref`), so a generator that
-// copies fragments of this schema into one has to strip the mark and keep
-// the policy it states in its own code. A boolean rather than a kind of
-// credential, because the one thing a reader acts on is whether a literal
-// belongs here.
+// 2020-12 collects an unknown keyword as an annotation and validates nothing
+// by it. The nearest standard word, `writeOnly`, says the value is never
+// returned by its owner, false here: a whole ${VAR} in a credential field is
+// returned verbatim on every read. SPELLED `x-crewlet-secret`: `x-` is the
+// vendor convention (OpenAPI 3.1 accepts no other). A CRD schema accepts only
+// its own `x-kubernetes-*` extensions, so a generator copying fragments into
+// one must strip the mark and keep the policy. A boolean, because a reader
+// acts only on whether a literal belongs here.
 const secretKeyword = "x-crewlet-secret"
 
 // secretDefSuffix names the $defs entry of a struct reached beneath a secret
@@ -282,24 +199,18 @@ const secretDefSuffix = ".secret"
 // holds this list to the decoder's own verdict, spelling by spelling.
 const yaml11BoolPattern = `^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$`
 
-// overrides are the types the walk cannot see through, because their YAML
-// shape is decided by a custom unmarshaler rather than by their fields.
+// overrides are the types the walk cannot see through, because a custom
+// unmarshaler, not their fields, decides their YAML shape.
 //
-// Each is a hand-written fragment. Keeping the list SHORT is the point: a
-// fragment is a second description of a decoder, and every entry here is
-// something that can silently drift from it. Nothing else in the package
-// gets a custom decoder without earning a place in this table.
+// Each is a hand-written fragment, and keeping the list SHORT is the point: a
+// fragment is a second description of a decoder and can silently drift from
+// it, so nothing else earns a custom decoder without a place here. Each is
+// built from the plain-field leaf rules (a key decodes as a string, a toggle
+// as a bool) and reads null as unset, so all four admit null.
 //
-// Each is built from the same leaf rules as a plain field, because each of
-// these decoders ends in the ordinary one: a key is decoded as a string and
-// a toggle as a bool, so what those admit, these admit. And each reads a
-// null as unset in its own first lines, so a null is admitted by all four.
-//
-// None of them is a credential's position — a switch, provider NAMES and
-// tool hints — so a fragment here carries no [secretKeyword]. A secret tag
-// on a field of one of these types would make redaction mask strings this
-// fragment does not mark, and TestSchemaMarksExactlyWhatRedactionMasks
-// fails on exactly that.
+// None is a credential's position, so none carries [secretKeyword]: a secret
+// tag on one of these types would make redaction mask strings the fragment
+// does not mark, which TestSchemaMarksExactlyWhatRedactionMasks fails on.
 func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	text := map[string]any{"type": textTypes}
 	textList := map[string]any{"type": "array", "items": text}
@@ -730,21 +641,17 @@ func inlined(f reflect.StructField) bool {
 	return strings.Contains(","+opts+",", ",inline,")
 }
 
-// parseDirectives reads the js tag: semicolon-separated flags and
-// key=value pairs.
+// parseDirectives reads the js tag: semicolon-separated flags and key=value
+// pairs.
 //
 // Semicolons rather than commas because a pattern is one of the values, and
-// a character class like {0,63} contains a comma. A directive that silently
-// truncated a pattern would put a WRONG rule in a public artifact, which is
-// worse than no rule.
+// a character class like {0,63} contains a comma; a truncated pattern would
+// put a WRONG rule in a public artifact.
 //
-// THE KEYS THE GENERATOR READS are `required`; for a string `enum`, `pattern`,
-// `maxlen` and `pointer`; for a number `min` and `max`; and for a map
-// `maxkeys`, beside its values' own. A key outside that
-// set, or a bound that is not a number, would be dropped here without a word —
-// a constraint the author meant and the artifact never states — so the suite
-// walks every tag the two tiers carry and refuses both
-// (TestEveryDirectiveMeansWhatItSays).
+// THE KEYS THE GENERATOR READS are `required`; for a string `enum`,
+// `pattern`, `maxlen` and `pointer`; for a number `min` and `max`; for a map
+// `maxkeys`. A key outside that set, or a non-numeric bound, would be dropped
+// without a word, so the suite refuses both (TestEveryDirectiveMeansWhatItSays).
 func parseDirectives(tag string) map[string]string {
 	if tag == "" {
 		return nil
@@ -767,21 +674,16 @@ func parseDirectives(tag string) map[string]string {
 
 // ---- the cross-field rules ------------------------------------------- //
 //
-// Each of these mirrors a check in the validators, and each is written to
-// be SOUND: it rejects a strict subset of what the validator rejects, so an
-// editor never flags a config the engine would run. The parity test asserts
-// that direction over a table of documents.
+// Each mirrors a validator check and is SOUND: it rejects a strict subset of
+// what the validator rejects (the parity test asserts it). Two things make a
+// condition sound that the obvious spelling misses:
 //
-// Two things make a condition sound that the obvious spelling misses, and
-// both are about values the leaves admit:
-//
-//   - `properties` and `required` say nothing about a value that is not an
-//     object, so a condition built from them alone MATCHES a null block —
-//     and a null block is an unset one. [has] therefore states the object.
-//   - In Tier A a reference may resolve to anything, so a condition that
-//     turns on a value must decide which way an unknown reads. A rule that
-//     REFUSES when a value is X fires only on a literal X; a rule that
-//     refuses when a value is NOT X treats a reference as possibly X.
+//   - `properties` and `required` say nothing about a non-object, so they
+//     alone MATCH a null (unset) block; [has] therefore states the object.
+//   - In Tier A a reference may resolve to anything, so a condition on a value
+//     decides which way an unknown reads: a rule that REFUSES when a value is
+//     X fires only on a literal X; one refusing when it is NOT X treats a
+//     reference as possibly X.
 
 // has builds the "this key is present and looks like X" shape both `if` and
 // `not` clauses are made of, on an object — see the section comment for why

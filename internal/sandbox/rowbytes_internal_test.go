@@ -174,6 +174,64 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	}
 }
 
+// worstItemCall is a late-call item's call at its widest ([itemCall]): kept
+// from a call with every field an item copies set, at the widest the log's
+// encoder writes it, failed so its error is copied, and neither held nor
+// approved, whose arguments an item would keep none of.
+func worstItemCall(t *testing.T) BridgeCall {
+	t.Helper()
+	call := worstCall(t, strings.Repeat("<", 4<<10))
+	call.ArgsUnparsed, call.ArgsBytes, call.OutputBytes = true, math.MaxInt, math.MaxInt
+	return itemCall(call)
+}
+
+// AN ITEM'S CALL IS HELD TO AN ORDINARY CALL'S SHARE, whatever share the log kept
+// it at ([itemCall]): the log keeps its newest successful submission at eight
+// times an ordinary call's arguments ([MaxSubmissionArgsBytes]), and an
+// abandoned one of the job's own is that submission. An item keeps every call
+// within [MaxBridgeCallBytes] less a later build's room, its arguments within
+// [MaxBridgeArgsBytes], a failed call's error and no success's output, and
+// none of what only the log reads: a digest, an id, who answered, what it
+// committed.
+//
+// Mutation: copy the call as the log listed it (item-copies-the-listed-call),
+// and the submission's arguments and its success's output ride the item.
+func TestAnItemsCallIsHeldToItsShare(t *testing.T) {
+	t.Parallel()
+	const reserve = 1758 // what rowbytes.go leaves a later build in one call
+	for name, tc := range map[string]struct {
+		call   BridgeCall
+		listed int
+	}{
+		"a failed call at its widest": {worstCall(t, strings.Repeat("<", 4<<10)), MaxBridgeArgsBytes},
+		"a successful submission the log kept whole": {func() BridgeCall {
+			c := worstCall(t, SubmitWorkTool)
+			c.Failed, c.Late = false, false
+			return keptCall(c, MaxSubmissionArgsBytes)
+		}(), MaxSubmissionArgsBytes},
+	} {
+		if got := kept.Quoted(tc.call.Args); got < tc.listed-2000 {
+			t.Fatalf("%s: the log keeps %d bytes of its arguments, far under the %d the case needs", name, got,
+				tc.listed)
+		}
+		item := itemCall(tc.call)
+		raw, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args := kept.Quoted(item.Args); args > MaxBridgeArgsBytes || len(raw) > MaxBridgeCallBytes-reserve {
+			t.Errorf("%s: the item keeps %d bytes of arguments and weighs %d, past an ordinary call's %d and "+
+				"%d less a later build's %d", name, args, len(raw), MaxBridgeArgsBytes, MaxBridgeCallBytes, reserve)
+		}
+		if tc.call.Failed != (item.Output != "") || item.Digest != "" || item.CallID != "" || item.Origin != "" ||
+			len(item.Committed) != 0 {
+			t.Errorf("%s: the item keeps output %d bytes (failed %v), digest %q, id %q, origin %q and %d kinds; "+
+				"want a failure's error alone, and none of what only the log reads", name, len(item.Output),
+				tc.call.Failed, item.Digest, item.CallID, item.Origin, len(item.Committed))
+		}
+	}
+}
+
 // everyField is [worstCall] with every other field a call can carry set
 // besides: both its marks, both its sizes, the mark of arguments that did not
 // parse, a runner past the most an
@@ -596,24 +654,38 @@ func worstRow(t *testing.T) PendingRun {
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
 	}
-	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]), each sealed
-	// at a note's bound, for a job, served as often and read by its job's own
-	// step: no brief tells an item again, the next launch removing it.
+	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]): late-call
+	// items, the one kind the store files, each carrying its call at the
+	// widest an item keeps one ([itemCall], [worstItemCall]), unsealed, for a
+	// job, under the widest id ([lateItemID]), served as often and read by its
+	// job's own step: no brief tells an item again, the next launch removing it.
 	for range MaxJobItems {
-		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: math.MaxInt - len(notes),
-			Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt, Served: uuid.NewString(), Place: math.MaxInt,
-			Serves: serves(), For: uuid.NewString(), Read: read()})
+		job := uuid.NewString()
+		notes = append(notes, RunNote{ID: lateItemID(job, math.MaxInt), Seq: math.MaxInt - len(notes),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
+			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
-	// THE READS A BRIEF LEFT OUT, as a launch records them on the job's record
-	// and a capture states them: a whole log's calls ([MaxBridgeCalls]), each a
-	// place at its widest.
-	omitted := make([]int, MaxBridgeCalls)
+	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
+	// a round and a job at their widest ids, every number at its widest, a
+	// hook's.
+	tellings := make([]CallTelling, MaxCallTellings)
+	for i := range tellings {
+		tellings[i] = CallTelling{Round: uuid.NewString(), Appended: math.MaxInt, Launch: uuid.NewString(),
+			Place: math.MaxInt, Hook: true}
+	}
+	// THE CALLS A BRIEF LEFT OUT, as a launch records them on the job's record
+	// and a capture states them: a whole log's calls ([MaxBridgeCalls]) between
+	// the reads it owes and the late calls, each a place at its widest, one of
+	// them late so that both keys are written.
+	omitted := make([]int, MaxBridgeCalls-1)
 	for i := range omitted {
 		omitted[i] = math.MaxInt
 	}
+	lateOmitted := []int{math.MaxInt}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
-		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
+		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
+		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
@@ -753,10 +825,11 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
-		BriefOmitted: omitted, FreshOmitted: omitted, LeadMarks: marks,
-		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
-		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
-		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
+		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)),
+		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
+		CollectFailingSince: worstAt,
+		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
 		// THE WIDEST WINDOW A RELEASE COUNTS ONTO THE RECORD, a day's: a
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
@@ -776,6 +849,10 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND THE POINT OF THE KEPT CAPTURE IT CONTINUED, each figure at its
+		// widest spelling, twenty bytes for an int64's minimum
+		// ([LaunchRecord.Continued]): nothing but the type bounds either.
+		Continued: &ContinuedPoint{LaunchSeq: math.MinInt64, Through: math.MinInt},
 		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
 		// writes as itself ([ValidCountProvider]).
 		CountProvider: plain(MaxCountProviderBytes),
@@ -927,8 +1004,9 @@ func worstRow(t *testing.T) PendingRun {
 		PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
-		HeldFor: Condition(plain(32)), HeldUntil: worstAt,
-		Steer:     RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(), Reads: math.MaxInt},
+		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
+		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
+			Reads: math.MaxInt, Tellings: tellings},
 		CreatedAt: worstAt, UpdatedAt: worstAt,
 	}
 	return run
@@ -1093,6 +1171,8 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].For": "the walk reads the first note, a person's, which is an item of the whole turn and " +
 			"names no job (RunNote.For); the worst row's job items, as many as it holds (MaxJobItems), each name " +
 			"theirs",
+		"Steer.Notes[0].LateCall": "the walk reads the first note, a person's, which hands no job a call " +
+			"(RunNote.LateCall); the worst row's job items each carry theirs at its widest (worstItemCall)",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at

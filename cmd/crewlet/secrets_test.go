@@ -490,27 +490,18 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	}
 }
 
-// AND WHEN THE NODE CANNOT BE REACHED, both facts are in the refusal — and the
-// way past it is the run's own.
+// AND WHEN THE NODE CANNOT BE REACHED, both facts are in the refusal, and the way
+// past it is the run's own.
 //
-// The lock alone reads as "you are blocked, with no way forward"; the API's
-// own complaint alone reads as though nothing were holding the store. An
-// operator needs to know that the engine is holding the file AND why the
-// route around it did not work. What to do next differs by what the run does
-// with the store: a `crewlet secrets` command, whose whole subject is the
-// store, is offered stopping the engine — with it stopped the command reaches
-// the fleet's store itself — and a run that reads the company to act on a
-// vendor or a login is not, since a node taken down to read a value is an
-// outage to save a token. And none of them is told the environment will stand
-// in: the store outranks it in the engine's resolver, so an exported value
-// never replaces one the store holds, and a routed read never falls back to
-// it. Every one is sent to a node whose api.auth.admin is serve, whether it
-// reveals, lists or writes: each /secrets route is admin's, and a node that
-// refuses admin serves it to no token.
-//
-// Mutation: name the admin posture only for a run that reveals, and the write,
-// the listing and the unset go red; offer stopping the engine to every run,
-// and the provisioners' and the login's do.
+// The lock alone reads as "blocked, no way forward"; the API's complaint alone as
+// though nothing held the store. What next depends on the run: a `crewlet secrets`
+// command is offered stopping the engine (stopped, it reaches the fleet's store
+// itself); a run reading the company for a vendor or a login is not (a node taken
+// down to read a value is an outage to save a token). None is told the environment
+// will stand in (the store outranks it in the resolver). All are sent to a node
+// whose api.auth.admin is serve: each /secrets route is admin's. Mutation: name the
+// admin posture only for a run that reveals, and the write, the listing and the
+// unset go red; offer stopping the engine to every run, and the provisioners' do.
 func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	t.Parallel()
 	// api.port 0 is a node that serves no HTTP at all, which is the one
@@ -710,18 +701,16 @@ func TestOnlyALockedStoreGetsARemediation(t *testing.T) {
 
 // EVERY STORE OPENER IN THE CLI ROUTES OR EXPLAINS A LOCKED STORE.
 //
-// Derived from the source in BOTH directions, because a hand-kept list of the
-// openers names functions, not opens: it named the function each command
-// opened its store in, so an open that moved — as the secret store's moved
-// into routeSecretStore, and then onto the fleet's own store — left it
-// asserting about a function that opens nothing, and a new opener appeared in
-// no list at all. So every function in this package that calls one of the
-// store's openers — every exported function of internal/store taking a
-// database path, the lock's own probe among them — must be
-// declared below, with the functions that answer its lock, and each of those
-// must route it (throughTheRunningNode) or explain it (engineHoldsTheStore).
-// A new opener fails here until somebody decides what a running engine means
-// to it; a declared one that no longer opens fails too.
+// Derived from the source in BOTH directions, because a hand-kept list names the
+// function a command opened its store in, so an open that moved (as the secret
+// store's moved into routeSecretStore) left it asserting about a function that
+// opens nothing, and a new opener appeared in no list. Every function here that
+// calls one of the store's openers (every exported function of internal/store
+// taking a database path, the lock's probe among them) must be declared below,
+// with the functions that answer its lock, and each of those must route it
+// (throughTheRunningNode) or explain it (engineHoldsTheStore). A new opener fails
+// until somebody decides what a running engine means to it; a declared one that
+// no longer opens fails too.
 func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 	t.Parallel()
 	answeredBy := map[string][]string{

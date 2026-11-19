@@ -15,43 +15,29 @@ import (
 )
 
 // HOW A MACHINE TOKEN BECOMES A PRINCIPAL: the guard's THIRD credential arm.
+// A `cwl_pat_…` token, minted through `/iam/credentials`, is a person's
+// assistant acting as them or a declared service account.
 //
-// A Tier A token is the DEPLOYMENT's credential and a cookie is a PERSON's
-// session; a machine token (`cwl_pat_…`) is the third shape — a person's own
-// assistant acting as them, or a service account the company declared —
-// minted through `/iam/credentials` and presented as a bearer on every request.
-//
-// # Nothing here decides anything either
-//
-// What the rows mean is internal/iam/credential's table ([credential.CheckToken]),
-// over ONE snapshot the identity reader takes; who the owner acts as is the
-// seat table every other credential goes through ([session.ResolveSeat]). This
-// file reads the bearer, asks both, and composes the principal — as the owner,
-// carrying the grants the token was minted with that the owner STILL holds,
-// under this node's admin posture on this request, and reaching no further
-// than either of them.
-//
-// # A node that cannot tell says so
-//
+// Nothing here decides anything: the rows' meaning is internal/iam/credential's
+// ([credential.CheckToken]) over ONE snapshot, the owner's seat is
+// [session.ResolveSeat]'s. This file composes the owner's principal with the
+// minted grants the owner STILL holds under this node's admin posture.
 // UNKNOWN IS 503 AND NEVER 401, for the session table's reason: a pipeline
-// that reads 401 discards a credential that was fine, and a node behind the
-// identity log — including one that has not yet applied the very mint the
-// token names — cannot establish that anything is wrong with it.
+// reading 401 discards a good credential, and a node behind the identity log
+// (one that has not applied the very mint) cannot establish anything is wrong.
 
 // TokenDirectory is the one read a machine token needs.
 //
-// DEFINED HERE, by the caller, and one method wide. The identity reader
-// answers it in one snapshot; AN ERROR IS THE UNKNOWN ARM, always.
+// Defined by the caller, one method wide, answered in one snapshot; AN ERROR IS
+// THE UNKNOWN ARM, always.
 //
-// IT IS HANDED THE PRESENTED TOKEN, not its id, because the rows may be
-// another node's: a node holding no identity rows asks a data node for them,
-// and what crosses back carries no verifier — only a MAC over it, which the
-// presented secret is checked against where it was presented (the engine,
-// through internal/estate's TokenFacts), so the row [credential.CheckToken]
-// reads holds the verifier only where it is the presented token's. A surface
-// that holds the token's NAME and never its secret — a view ticket's
-// ([Lineages]) — hands it by its id alone, and is answered with no verifier,
-// which [credential.CheckHeld] never reads.
+// It is handed the PRESENTED TOKEN, not its id, because the rows may be another
+// node's: a node with no identity rows asks a data node, and what crosses back
+// carries no verifier, only a MAC the presented secret is checked against where
+// it was presented (internal/estate's TokenFacts). So the row
+// [credential.CheckToken] reads holds the verifier only for the presented
+// token. A surface holding only the token's NAME ([Lineages]'s view ticket)
+// hands it by id and gets no verifier, which [credential.CheckHeld] never reads.
 type TokenDirectory interface {
 	MachineToken(ctx context.Context, presented credential.Token) (credential.TokenRow, error)
 }
@@ -103,14 +89,12 @@ func NewTokens(deps TokensDeps) (*Tokens, error) {
 // WithTokens installs the machine-token arm and returns the guard for
 // chaining.
 //
-// CALLED ONCE, AT WIRING TIME, for [Guard.BindSeats]' reason. Nil is a guard
-// that resolves no machine token — what a suite stands up — and a token-shaped
-// bearer there is refused like any bearer it does not hold. A running node is
-// never that: `crewlet run` installs the arm on every node serving the API, and
-// each such node holds the estate (ingress requires the `data` role, ADR-0025)
-// and applies the identity directory from boot, company or none — so a token
-// minted on a peer resolves here too, and a node that has not yet applied its
-// mint answers "cannot say", a 503 rather than a 401.
+// CALLED ONCE, AT WIRING TIME, for [Guard.BindSeats]' reason. Nil resolves no
+// machine token (a suite's guard) and a token-shaped bearer is refused like any
+// unheld one. A running node installs it: every API node holds the estate
+// (ingress requires `data`, ADR-0025) and applies the identity directory from
+// boot, so a token minted on a peer resolves here, and a node that has not yet
+// applied its mint answers 503, not 401.
 func (g *Guard) WithTokens(t *Tokens) *Guard {
 	g.machine = t
 	return g
@@ -119,17 +103,14 @@ func (g *Guard) WithTokens(t *Tokens) *Guard {
 // PresentedToken is the id of the machine token this request carried as its
 // bearer, if it carried one.
 //
-// ASKED BY THE ROUTES THAT MUST KNOW what the authority table cannot decide:
-// minting a token from a token would let whoever holds one extend it for ever,
-// a year at a time, with nobody present, and a password step-up has nobody to
-// confirm. Every gesture that needs a person present is the TABLE's to refuse
-// a token ([iam.Principal.MachineToken], which internal/authz reads), and
-// never a route's to remember.
+// Asked by the routes that must know what the authority table cannot decide:
+// minting a token from a token would let its holder extend it for ever with
+// nobody present, and a password step-up has nobody to confirm. Gestures that
+// need a person present are the TABLE's to refuse a token
+// ([iam.Principal.MachineToken], read by internal/authz), never a route's.
 //
-// READ OFF THE PRINCIPAL'S [iam.Principal.Via], which is the one place the
-// arm records it: a second carrier on the context beside it was a second
-// answer to "through what", and the audit trail and these refusals would have
-// asked different ones.
+// Read off [iam.Principal.Via], the one place the arm records it: a second
+// carrier on the context would be a second answer to "through what".
 func PresentedToken(ctx context.Context) (string, bool) {
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
@@ -213,21 +194,17 @@ func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.
 		// author stays the owner; the operator column names the token.
 		Via: iam.MachineTokenName(id),
 	}
-	// STEPPED UP BY CONSTRUCTION, as every non-interactive credential is —
-	// there is nothing else it could present.
+	// STEPPED UP BY CONSTRUCTION, as every non-interactive credential is.
 	//
-	// WHAT KEEPS IT OFF THE GESTURES THAT NEED A PERSON PRESENT is not a
-	// proof's age, and not a permission it cannot carry: admin may be
-	// minted onto a token, and a token minted with it acts with admin on a
-	// serving node. Every gesture that needs a person present says so on
-	// its row in internal/authz, and the table refuses the credential this
-	// principal names below ([iam.Principal.Via], read through
-	// [iam.Principal.MachineToken]) — which also closes the ones a verb
-	// admits the owner to as THEMSELVES on no permission at all, changing
-	// how they prove who they are. And internal/iamdomain refuses every
-	// administrative identity record — an enrolment, a grant, a removal, an
-	// invalidation — whose operator is a machine token, whatever the route
-	// in front of it decided, so a leaked token never rewrites who may act.
+	// WHAT KEEPS IT OFF THE GESTURES THAT NEED A PERSON PRESENT is neither a
+	// proof's age nor a missing permission: a token minted with admin acts
+	// with admin. Those gestures say so on their row in internal/authz, and
+	// the table refuses the credential [iam.Principal.Via] names (read
+	// through [iam.Principal.MachineToken]), which also closes the ones a
+	// verb admits the owner to as THEMSELVES on no permission. And
+	// internal/iamdomain refuses every administrative identity record whose
+	// operator is a machine token, whatever the route decided, so a leaked
+	// token never rewrites who may act.
 	g.proof.stamp(&p, now)
 	if owner.Seat == "" {
 		return p, nil, nil

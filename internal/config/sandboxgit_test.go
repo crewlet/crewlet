@@ -11,22 +11,18 @@ import (
 // the three values the coding clone's commit hook reads.
 var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}
 
-// THE ENGINE'S GIT VARIABLES ARE RESERVED, in each of the four envs a box's
-// environment is assembled from — a seat's sandbox block, a seat's own setup
-// step, a provider-wide one, and the company's check secrets, since a check's
-// box is given Gitlet's credential and base too — each refused at its
-// own path, naming the variable: an operator's value for one would break the
-// box's clones (the credential, the base) or make a box commit's trailers
-// disagree with its push's record (the three the commit hook reads). The table
-// spells every name literally, so a name dropped from ReservedSandboxEnv is a
-// row that passes.
+// THE ENGINE'S GIT VARIABLES ARE RESERVED in each of the four envs a box's
+// environment is assembled from (a seat's sandbox block, a seat's setup step,
+// a provider-wide one, the company's check secrets), each refused at its own
+// path, naming the variable: an operator's value would break the box's clones
+// (the credential, the base) or make its commit trailers disagree with its
+// push's record. The table spells every name literally, so a name dropped
+// from ReservedSandboxEnv is a row that passes.
 //
 // AN ADMISSION RULE: a stored revision carrying one is held to the runnable
-// rules alone, which take it — the engine's own value wins for the names it
-// sets — so a build whose rule a newer peer relaxed never splits the fleet.
+// rules alone, which take it, so a relaxed newer peer never splits the fleet.
 //
-// Mutations: drop a place from validateReservedSandboxEnv → its rows pass,
-// red; drop a name from ReservedSandboxEnv → its rows pass, red.
+// Mutations: drop a place or a name → its rows pass, red.
 func TestTheEnginesGitVariablesAreReserved(t *testing.T) {
 	t.Parallel()
 	if got := ReservedSandboxEnv(); !slices.Equal(got[:min(len(got), len(gitVariables))], gitVariables) {

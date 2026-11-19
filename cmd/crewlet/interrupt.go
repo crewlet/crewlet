@@ -8,61 +8,17 @@ import (
 	"syscall"
 )
 
-// interrupts is `crewlet run`'s hold on SIGINT and SIGTERM, in TWO TIERS: the
-// first signal cancels the run's context, and a second ends the process at
-// once.
-//
-// From the first moment of the run rather than once the node is serving,
-// because a serving node's drain is not the only unbounded wait. A boot has
-// them too: a boot that fails once the engine is up runs the same drain, and
-// an embedded broker still recovering a large store cannot be interrupted
-// (internal/queue/jetstream's startEmbedded waits the recovery out). While a
-// handler that only cancels is still installed, every further press is
-// swallowed, which left an operator with no way to abort from the terminal
-// they started the node in short of SIGKILL from somewhere else. The second
-// tier is what makes those unbounded waits safe to offer: the bound belongs
-// to whoever supervises the process, and for an operator at a terminal the
-// second press IS their bound.
-//
-// THE SECOND TIER IS THE OPERATING SYSTEM'S WHEREVER IT CAN BE. The first
-// signal HANDS BOTH BACK before it cancels anything ([interrupts.handBack]),
-// so the second takes the signal's default action and nothing in this
-// process has to be well enough to perform it. A press that reached the
-// handler between the first and the hand-back is raised again once the
-// default is back ([release]), rather than swallowed by a handler that no
-// longer reads it.
-//
-// EXCEPT A SIGINT THE PROCESS STARTED WITH IGNORED. A background job of a
-// non-interactive shell starts that way (with job control off, POSIX has the
-// shell ignore SIGINT and SIGQUIT for an asynchronous command), and so does
-// anything a parent that ignored SIGINT starts, nohup-style launchers among
-// them. Notify overrides an inherited ignore, so the first SIGINT is caught
-// and starts the drain like any other — but handing SIGINT back restores the
-// disposition the process INHERITED, because the runtime keeps an inherited
-// SIG_IGN for SIGINT and SIGHUP alone, and the second press, which the drain
-// line had just promised "exits at once", did nothing. No Go program can set
-// SIGINT to its default once it inherited it ignored: os/signal offers
-// Notify, Ignore and a Reset to whatever was inherited, and sigaction is the
-// runtime's. So for that one signal the hold keeps its own handler past the
-// first, and the second SIGINT ends the process from it, with
-// [interruptedStatus] and every deferred cleanup skipped, as the kill would
-// have. Keeping a handler for SIGINT in every case, so both dispositions took
-// one path, was the alternative, and it is worse where it does not have to
-// be paid: a default disposition ends the process whatever state the Go
-// scheduler is in. SIGTERM needs no such care, because the runtime installs
-// its own handler for SIGTERM whatever the process inherited, so handing it
-// back always leaves the default action.
-//
-// A HANGUP THE PROCESS STARTED IGNORING (`nohup crewlet run`) STAYS IGNORED
-// HERE, AND IS NOT HANDED ON. The runtime keeps an inherited SIG_IGN for
-// SIGHUP and every process the engine starts inherits it, and a
-// non-interactive sh may not trap a signal it started ignoring, so a box's run
-// script under nohup could neither trap a SIGHUP nor die of one: the export a
-// hangup gives a run (and its exit 129) never happened. Caught on a channel
-// nothing reads, SIGHUP still does nothing to the engine, which is what nohup
-// asked for, and the runtime starts every child with its default, as it does
-// any signal it handles. One the process did not start ignoring keeps its
-// default, which ends the engine as it always has.
+// interrupts is `crewlet run`'s hold on SIGINT and SIGTERM in TWO TIERS: the
+// first signal cancels the run's context, the second ends the process at once.
+// Held from the start of the run, since a boot has unbounded waits too (an
+// embedded broker recovering a large store); the second press IS the operator's
+// bound. The first signal HANDS BOTH BACK before cancelling ([interrupts.handBack]),
+// so the second takes the OS default; a press in between is raised again ([release]).
+// EXCEPT A SIGINT INHERITED IGNORED (background job of a non-interactive shell,
+// nohup launchers): no Go program can restore its default, so that signal keeps
+// its handler and the second SIGINT exits with [interruptedStatus], skipping
+// deferred cleanup, as a kill would. SIGTERM needs no care: the runtime always
+// installs its own handler.
 type interrupts struct {
 	// sigintIgnored says SIGINT was ignored when the process started. Read
 	// BEFORE the first Notify, which clears what signal.Ignored reports.
@@ -74,8 +30,10 @@ type interrupts struct {
 	// to end the process from.
 	sigint, sigterm chan os.Signal
 
-	// sighup holds a SIGHUP the process started ignoring, read by nothing,
-	// so its children start with the default; nil where it did not.
+	// sighup holds a SIGHUP the process started ignoring (`nohup crewlet
+	// run`), read by nothing: it stays ignored here, but caught rather than
+	// inherited as SIG_IGN, so children start with the default and a box's
+	// run script can trap or die of a hangup. nil where it did not.
 	sighup chan os.Signal
 
 	cancel context.CancelFunc

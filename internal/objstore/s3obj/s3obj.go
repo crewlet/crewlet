@@ -25,6 +25,20 @@
 // refused exactly the credential that makes sharing safe. One bucket per
 // company remains the simpler isolation and the recommended one.
 //
+// # The AWS SDK, the keys and what the probe proves
+//
+// The backend uses the AWS SDK rather than a client of its own because SigV4
+// and the regional endpoint rules are what a hand-rolled one gets wrong. Its
+// credentials are the static pair in [Config] or else the SDK's own chain, and
+// `AWS_CA_BUNDLE` is added to the roots for the bucket's requests only, which
+// all go through internal/httpx and never the SDK's own pool. The open's
+// probe (probe.go) stores and deletes an object through the engine's own path,
+// failing the boot if it cannot, then proves with presigned puts that the
+// provider refuses a mismatched `x-amz-checksum-sha256` (BadDigest) and a
+// second put under `If-None-Match: *` (412). Only a provider doing both offers
+// [Backend.PresignPut] through DirectUpload, and only one proven to check
+// checksums gets the header on single-part puts and a digest on [Backend.Stat].
+//
 // # One object per name, streamed
 //
 // Each name is the key `<prefix><name>` — and every name the store writes is
@@ -233,6 +247,9 @@
 // ([objstore.Full]), naming the provider's room ([FullRemedy]); read as the
 // bucket failing, every surface invited the retry, and a client or a script
 // honouring a Retry-After sent the same bytes into the same bucket again.
+// The remedy is never the nats bucket's "move the files to a bucket", which
+// would send an operator already on one to migrate to the store that refused;
+// and the write is not asked again, since the SDK asks none of these twice.
 //
 // # What it counts
 //
@@ -466,66 +483,29 @@ const PartBytes = 8 * objstore.MiB
 const maxParts = 10_000
 
 // partsInFlight is the most parts of one upload sent at once, and the most
-// ranges of one read read ahead at once — each in a buffer of its own, with at
-// most one more range for each asked for and waiting for one, and at most
-// twice this many ranges in all, the one the read streams among them, so a
-// read has at most twice this many requests at the bucket.
+// ranges of one read read ahead at once, each in a buffer of its own: a read
+// has at most twice this many requests at the bucket.
 //
-// FOUR, which is where a bucket a round trip away stops being what an upload
-// waits on and the node's own hashing starts to be. A part costs its round
-// trip on top of its bytes, so one part at a time moved a 128 MiB object at
-// 121 MB/s with the bucket 20 ms away and 79 at 50, against 166 on loopback
-// (the `rtt=` arms of BenchmarkBackend; the package doc has the machine).
-// Four in flight overlap the round trips — 220–228 and 153–196 MB/s — and
-// more would only queue parts behind the one goroutine that reads and hashes
-// the body, which on that CPU, without SHA instructions, hashes 324–353 MB/s
-// (internal/objstore's BenchmarkHashOf). It is also four connections'
-// throughput from a provider that limits each connection's, and 32 MiB of
-// parts held by the largest upload.
-//
-// FOUR FOR A READ TOO, measured on its own rather than borrowed: against a
-// bucket sending each connection 80 MB/s (`bw=80MB`), four ranges read a
-// 128 MiB object at 335–353 MB/s, 284–310 with the bucket 20 ms away and
-// 219–246 at 50, against one stream's 80, 79 and 78 — four connections'
-// throughput, the round trip hidden by asking for each range before its
-// buffer frees ([askAhead]). What holds a read at four rather than more is
-// MEMORY, not the hash: four ranges are 32 MiB of buffers, and three reads
-// that wide hold the node's whole allowance ([spareParts]). On the CPU
-// measured, without SHA instructions, a verified read is bound by its hash
-// near four connections' rate anyway (178–244 MB/s); on a CPU with them,
-// which hashes past a gigabyte a second a core, a fifth range would add about
-// 80 MB/s to every read the link bounds — bought with a fifth more of a
-// read's buffers and a quarter fewer reads at full width at once.
+// FOUR, where a bucket a round trip away stops being what an upload waits on
+// and the node's hashing starts to be: one part at a time moved 128 MiB at
+// 121 MB/s with the bucket 20 ms away (166 on loopback); four overlap the
+// round trips (220-228), and more would only queue behind the one goroutine
+// that hashes the body (324-353 MB/s, internal/objstore's BenchmarkHashOf).
+// For a read, memory holds it at four: 32 MiB of buffers, and three such
+// reads hold the node's whole allowance ([spareParts]).
 const partsInFlight = 4
 
-// spareParts is the most part buffers the node's uploads hold BEYOND the one
-// each holds for its own first part, together with every buffer its reads
-// hold — 96 MiB, room for four uploads, or three reads, at full width at once.
+// spareParts is the most part buffers the node's uploads hold BEYOND each
+// one's first, together with every buffer its reads hold: 96 MiB, four
+// uploads or three reads at full width at once.
 //
-// AN ALLOWANCE, NEVER A QUEUE: an upload or a read takes a spare only while one
-// is free and otherwise goes on with the buffers it has, so the fifth large
-// upload at once runs a part at a time, and a read that finds none streams its
-// ranges one after another, rather than either waiting for memory — and none
-// ever waits on another to finish. What bounds the memory is then one part
-// per upload in progress — what the uploads before this allowance held — plus
-// this: a read streams its first range straight through and holds nothing
-// outside it.
-//
-// ONE ALLOWANCE FOR BOTH DIRECTIONS, because it is one node's memory: the wide
-// reads and the wide uploads then happen exactly when few large objects are
-// in flight — a git cache's sync down to its largest bundle, a lone large
-// download — which is when a wide one is worth most.
-//
-// TAKEN AS FAST AS IT IS USED, in both directions: an upload takes a spare
-// once its part in flight is still on its way when the client's body has
-// filled the next, and a read takes one beyond its first only once its reader
-// has waited on the bucket ([wideRead.fit]). So an upload whose client sends
-// slowly and a read whose reader takes slowly — a download paced to a
-// person's link, for hours — hold ONE spare each, however long they last, and
-// the allowance stays with the transfers a wider one speeds up. A read that
-// took four whatever its reader's pace let three slow downloads hold the
-// node's whole allowance, and every upload on the node went a part at a time
-// for as long as they lasted.
+// AN ALLOWANCE, NEVER A QUEUE, and ONE FOR BOTH DIRECTIONS (one node's
+// memory): a transfer takes a spare only while one is free and otherwise goes
+// on with the buffers it has, so none waits on memory or another transfer.
+// TAKEN AS FAST AS IT IS USED: an upload once its part in flight is still on
+// its way when the body has filled the next, a read once its reader has
+// waited on the bucket ([wideRead.fit]). A slow download holds ONE spare; a
+// read taking four regardless let three hold the whole allowance.
 const spareParts = 3 * partsInFlight
 
 // callBudget bounds a request that carries no object's bytes: a head, a
@@ -555,33 +535,16 @@ const completeBudget = 5 * time.Minute
 func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n) }
 
 // partBudget bounds the request carrying one part of size bytes: [callBudget]
-// for the request, and [objstore.MiBPace] for every mebibyte of the part
-// [partsInFlight] times over.
+// plus [objstore.MiBPace] a mebibyte of the part [partsInFlight] times over.
 //
-// THE PART HAS A SHARE OF THE LINK, NOT THE LINK: an upload's parts in flight
-// cross one link to the bucket together, and the floor is the UPLOAD's — the
-// slowest an object may cross a link, which one part at a time held it to. A
-// part given only its own bytes at the floor, on a link the upload crosses at
-// the floor, misses its deadline once others share it, and the upload is
-// abandoned where one part at a time would have finished.
-//
-// EVERY PART AN UPLOAD MAY KEEP IN FLIGHT, not the parts in flight when it is
-// sent: an upload sends parts behind one already on its way — its first goes
-// alone and three more join it as fast as the body arrives — and each one that
-// joins slows the parts before it for the rest of their way. A part's share is
-// at worst one in [partsInFlight] while the link divides fairly between the
-// connections carrying them, which is what it is given: sixteen and a half
-// minutes for a full part, where the link to itself was four and a half.
-//
-// WHAT THE BUDGET STILL BOUNDS is narrow, since neither way a bucket fails a
-// part waits for it: one it keeps failing is given up within a minute of its
-// first failure ([judge.giveUpAfter]), and one it stops moving is ended a
-// minute after it last moved ([watchedClient], [objstore.Stall]). What is left
-// to the budget is a part that keeps MOVING below its share of the floor, one
-// the bucket keeps THROTTLING (a throttle is never given up: the gate slows
-// the node instead), and one whose connection's unacknowledged count cannot
-// be read, which its watch never ends (internal/sockcount's ErrUncountable; no connection on the
-// platforms the engine builds for).
+// THE PART HAS A SHARE OF THE LINK, NOT THE LINK: parts in flight cross one
+// link and the floor is the UPLOAD's, so a part given only its own bytes
+// misses its deadline once others share it. Counted for EVERY PART AN UPLOAD
+// MAY KEEP IN FLIGHT, since parts join as the body arrives: sixteen and a
+// half minutes for a full part, four and a half alone. What it still bounds
+// is a part that keeps MOVING below its share, one the bucket keeps
+// THROTTLING, and one whose connection count cannot be read (sockcount's
+// ErrUncountable); failing and stopped parts end sooner ([judge.giveUpAfter]).
 func partBudget(size int64) time.Duration { return sendBudget(size * partsInFlight) }
 
 // Backend is the objects in a bucket.
@@ -702,9 +665,9 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 	return open(ctx, cfg, fullJitter{}, systemClock)
 }
 
-// clock is the time the client's [gate] keeps: the instant it measures its
-// quiet minute from ([throttleQuiet]), and the timer that lifts it when the
-// minute ends.
+// clock is the time the client keeps: the instant its [gate] measures its
+// quiet minute from ([throttleQuiet]) and its watches date movements on
+// ([watchedClient]), and the timer that lifts the gate when the minute ends.
 type clock struct {
 	now   func() time.Time
 	after func(d time.Duration, f func())
@@ -755,7 +718,7 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 	// would ask again.
 	retryer := newRetryer(backoff)
 	b.judge = &judge{now: c.now, retryer: retryer, stall: &b.stall, count: count}
-	b.watched = watching(httpClient, &b.stall)
+	b.watched = watching(httpClient, &b.stall, c.now)
 	b.client = s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's — every attempt
@@ -892,24 +855,16 @@ func (b *Backend) putObject(ctx context.Context, name string, data []byte, m obj
 
 // putParts streams a body longer than one part as a multipart upload whose
 // first part is already in first. Up to [partsInFlight] parts are sent at
-// once, each from a buffer of its own, while the next is read into another:
-// one whose part has landed, a spare from the node's allowance while one is
-// free, or — with neither — the buffer of the next part to land, once it has.
+// once from buffers of their own while the next is read into one whose part
+// has landed, a spare from the allowance, or the next part to land's buffer.
 //
 // A PART THAT FAILS ENDS THE UPLOAD AT ONCE: its sender ends the upload's
-// context with the failure as the cause, which cancels every other part in
-// flight and stops the read of the body at its next piece, and nothing is
-// sent once the upload has ended. An upload that heard of a failure only when
-// it next needed a buffer read the client's body on and sent up to three more
-// parts — minutes of a slow client's body, and three more part buffers held
-// — for an upload already lost, and told its caller last.
-//
-// EVERY FAILURE ABANDONS THE UPLOAD, under a context the caller's cannot end:
-// the failure being cleaned up after is often the caller giving up, and an
-// abort inheriting that context would abort nothing. And only ONCE EVERY PART
-// SENT HAS ANSWERED, the rest cancelled first: S3 documents that a part still
-// uploading when its upload is aborted may land anyway, holding storage no
-// listing shows until somebody aborts the upload a second time.
+// context with the failure as cause, cancelling every part in flight and the
+// read of the body; hearing of it only at the next buffer would read on and
+// send three more parts for a lost upload. EVERY FAILURE ABANDONS THE UPLOAD
+// under a context the caller's cannot end (the caller giving up is often the
+// failure), and only ONCE EVERY PART SENT HAS ANSWERED: S3 may land a part
+// still uploading when its upload is aborted, holding storage no listing shows.
 func (b *Backend) putParts(ctx context.Context, name string, r io.Reader, first *[]byte,
 	m objstore.PutMeta) (err error) {
 
@@ -1193,17 +1148,14 @@ func (b *Backend) Delete(ctx context.Context, name string) error {
 // up to [objstore.MaxDeleteBatch] keys, QUIET, so its answer names only the
 // keys it refused — a key that is not there is one it answers deleted.
 //
-// CONTENT-MD5 BESIDE THE SDK'S OWN CHECKSUM: the API required an MD5 of this
-// verb's body for most of its life, and S3-compatible gateways implemented the
-// requirement as written, while Amazon checks whichever it is sent.
+// CONTENT-MD5 BESIDE THE SDK'S OWN CHECKSUM: the API once required an MD5 of
+// this body and S3-compatible gateways implement that as written.
 //
-// A REQUEST THE BUCKET REFUSES AS A WHOLE — a client error but a throttle, or
-// 501 — is [objstore.ErrNoBatch]: it removed nothing, and a gateway that does
-// not offer the verb answers it so (Google Cloud Storage's XML API has no
-// multi-object delete), so its caller deletes each name instead. A throttle or
-// a server error is the bucket failing, and is reported as such: the caller
-// asking for each name on its own would answer a prefix that said to slow
-// down with a request for every key.
+// A REQUEST THE BUCKET REFUSES AS A WHOLE (a client error but a throttle, or
+// 501) is [objstore.ErrNoBatch]: it removed nothing and the gateway lacks the
+// verb (GCS's XML API has no multi-object delete), so the caller deletes each
+// name. A throttle or server error is reported as the bucket failing: a
+// request per key would answer a prefix that said to slow down.
 func (b *Backend) DeleteBatch(ctx context.Context, names []string) error {
 	if len(names) > objstore.MaxDeleteBatch {
 		return fmt.Errorf("s3obj: a batch deletion of %d names, past the %d one DeleteObjects takes",
@@ -1281,15 +1233,14 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 // page of a thousand keys at a time, until a key passes through.
 //
 // IN THE BYTE ORDER OF THE KEYS, which is how a general-purpose bucket lists
-// them — and with the prefix common to every key, the order of the names. A
-// DIRECTORY BUCKET (S3 Express One Zone, whose names end in `--x-s3`) lists in
-// no order and takes no StartAfter, so it answers [objstore.ErrUnordered]
-// without a request, and its caller asks about each object instead.
+// them, so with the common prefix, the order of the names. A DIRECTORY BUCKET
+// (S3 Express One Zone, names ending `--x-s3`) lists in no order and takes no
+// StartAfter, so it answers [objstore.ErrUnordered] without a request and its
+// caller asks about each object instead.
 //
 // The page that passes through is read whole, up to a thousand keys past it:
-// S3 has no end to a range, so ending one costs at most that. A range holding
-// more names than a page costs a request for each page it spans, which is why
-// the audit cuts its ranges short of one.
+// S3 has no end to a range. A range spanning pages costs a request each,
+// which is why the audit cuts its ranges short of one.
 func (b *Backend) ListRange(ctx context.Context, after, through string, visit func(objstore.Info) error) error {
 	if strings.HasSuffix(b.bucket, directoryBucketSuffix) {
 		return fmt.Errorf("%w: %q is a directory bucket, which lists in no order",
@@ -1376,14 +1327,11 @@ func (u undatedCount) err(what, field, remedy string) error {
 // by what follows the prefix and dated by when it was begun.
 //
 // THE BUCKET KEEPS THEM, AND BILLS FOR THEM, UNTIL SOMEBODY ABORTS THEM: a put
-// abandons its own upload when it fails ([Backend.Put]), so one is left only
-// where the process died mid-upload — and then nothing else will ever find it,
-// since no listing of the bucket's objects shows an upload. A bucket's own
-// lifecycle rule for incomplete uploads does the same where an operator set
-// one; this does not rely on one having been.
-//
-// It needs `s3:ListBucketMultipartUploads` on the bucket, which an identity
-// granted only the object verbs lacks — the listing then fails, and says so.
+// abandons its own failed upload ([Backend.Put]), so one is left only where
+// the process died mid-upload, and no listing of objects shows it. A bucket
+// lifecycle rule may do the same; this does not rely on one. It needs
+// `s3:ListBucketMultipartUploads`, which an identity granted only the object
+// verbs lacks: the listing then fails, and says so.
 func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
 	pages := s3.NewListMultipartUploadsPaginator(b.client, &s3.ListMultipartUploadsInput{
 		Bucket: aws.String(b.bucket),
@@ -1438,35 +1386,17 @@ func (b *Backend) Abandon(ctx context.Context, p objstore.Pending) error {
 }
 
 // bucketClient is the client the bucket is reached through: a clone of the
-// engine's shared transport (internal/httpx) that speaks HTTP/1.1 ALONE and —
-// where the operator set AWS_CA_BUNDLE, the SDK's own setting for a bucket
-// behind a private certificate authority — also trusts that bundle. The
-// system roots (SSL_CERT_FILE, SSL_CERT_DIR) are trusted either way.
+// engine's shared transport (internal/httpx) that speaks HTTP/1.1 ALONE and
+// also trusts AWS_CA_BUNDLE where set, beside the system roots.
 //
 // HTTP/1.1, SO A SOCKET IS ONE REQUEST'S: every attempt is watched at its own
-// socket ([watchedClient]), and over HTTP/2 one socket carries many requests,
-// so another request's acknowledgements would read as this one's movement and
-// a request whose stream the bucket stopped reading would never be ended
-// while its siblings moved. S3's API is specified over HTTP/1.1 and every
-// S3-compatible gateway serves it; the shared transport would offer HTTP/2
-// (it is a clone of http.DefaultTransport, ForceAttemptHTTP2 included), which
-// a gateway served by Go's net/http over TLS takes by default. What it costs
-// a gateway that would have taken HTTP/2 is multiplexing: four parts of an
-// upload on four connections rather than four streams on one, which a bucket
-// spoken to over HTTP/1.1 has always had — and a pool of the bucket's own,
-// which no other client shares anyway. The pool keeps httpx's settings:
-// httpx.MaxIdleConnsPerHost (32) warm connections to the host, the width the
-// git cache's NodeFetches, the backup's reads and the collector's questions
-// are each held to, so their requests ride connections already open. A
-// request past that width opens a connection the pool then closes — a TLS
-// handshake a gateway that would have multiplexed it over HTTP/2 did not
-// charge.
-//
-// WHERE THE PROCESS'S DEFAULT TRANSPORT IS NOT ONE httpx CAN CLONE — a test
-// harness or an instrumented build, never the engine's own run — the client
-// is the shared one, and the bucket is spoken to in whatever that transport
-// speaks: a multiplexed socket is then watched as one, and a stall that
-// shares it with a moving request is ended only by its deadline.
+// socket ([watchedClient]); over HTTP/2 another request's acknowledgements
+// would read as this one's movement, so a stalled stream would never be ended
+// while its siblings moved. The cost is four parts on four connections, not
+// four streams on one. The pool keeps httpx.MaxIdleConnsPerHost (32), the
+// width the git cache, backup and collector are held to. Where the default
+// transport is not one httpx can clone (a test harness) the client is the
+// shared one, and a stall sharing a socket is ended only by its deadline.
 func bucketClient(bundle string) (*http.Client, error) {
 	var roots *x509.CertPool
 	if bundle != "" {

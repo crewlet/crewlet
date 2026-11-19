@@ -226,12 +226,11 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 // A CONFIG SEALED IN A FORM THIS BUILD DOES NOT READ IS NEVER REPLACED, by an
 // import or anything else, and no command calls it unsealed.
 //
-// A newer build's seal (a successor's `enc:v2:`) is wrapped as this build's
-// is, and every command took a seal it could not parse for none at all: show
-// and rekey named the import as the way back, and the import, which replaces
-// an unsealed revision reading nothing from it, replaced the newer build's
-// document with the file. It is somebody's sealed document, so each refuses it
-// for what it is, naming the build that sealed it, and nothing is stored.
+// A newer build's seal (a successor's `enc:v2:`) is wrapped as this build's is,
+// and commands took a seal they could not parse for none at all: the import,
+// which replaces an unsealed revision reading nothing from it, replaced the
+// newer build's document. Each now refuses it, naming the build that sealed it,
+// and nothing is stored.
 //
 // Mutation: answer a seal secrets cannot parse as ErrUnsealedWithKey, and the
 // import replaces it; check a rekey's seal by its key id alone, and the rekey

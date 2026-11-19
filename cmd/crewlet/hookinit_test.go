@@ -15,86 +15,30 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
-// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. Gitlet's proc-receive hook
-// is this binary, exec'd once a push (`crewlet gitlet hook proc-receive`), and Go
-// runs every linked package's initialisation before main's first statement —
-// the hook's dispatch — so whatever a package of this engine does at init, a
-// template parsed, a table hashed, a pattern compiled, it does on every push's
-// critical path, for a process that needs none of it.
+// WHAT EVERY PUSH PAYS BEFORE ITS HOOK RUNS. Gitlet's proc-receive hook is this
+// binary, exec'd once a push (`crewlet gitlet hook proc-receive`), and every
+// linked package's init runs before its dispatch, so whatever a package does at
+// init (a template parsed, a table hashed, a pattern compiled) lands on every
+// push's critical path. A package that needs more builds it at first use
+// (sync.OnceValue).
 //
-// MEASURED IN BYTES, which a test can hold, rather than in milliseconds, which
-// it cannot: GODEBUG=inittrace reports both for every package, and what a
-// package allocates at init is a property of the build, the same on a loaded
-// runner and an idle laptop. The milliseconds are what BenchmarkTheHookStartsUp
-// measures, and docs/concepts/gitlet.md records.
-//
-// EXCEPT UNDER THE RACE DETECTOR, which every CI run of this test uses: there a
-// sync.Pool drops a quarter of what is put back, at random, and a Get the drop
-// left empty allocates afresh — a pattern's matcher, a formatter's buffer — so
-// the same build allocates more at init on some starts than on others, and
-// never less than its own initialisation does with every Put kept. One build
-// measured 1.57 MB to 1.65 MB across six starts, 74 KB of it in one package
-// that matched a rendered page against patterns at init. So the probe starts
-// hookInitRuns times and each package is charged its least.
-//
-// The two bounds, and why each:
-//
-//   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
-//     of this module allocated at init when last measured is redact's, about
-//     132 KB of patterns in the plain build — 195 before its token rules, the
-//     engine's own run-token shape 10 KB of them, were built at first use —
-//     with the event types' next at 93, and the webhooks pages parsed at init
-//     were 315 KB —
-//     about 2 ms of every push — before they were built at their first
-//     request. A package that needs more builds it at first use
-//     (sync.OnceValue), as the password blocklist does (140 KB) and the code
-//     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.43 MB under the race
-//     detector when CI's race job last measured it, the least of
-//     hookInitRuns starts. It was 1.1 MB
-//     before the artifact packages and the larger redaction tables were
-//     linked beside Gitlet, and the brand and the drawing allowlist
-//     came in with their tables built at first use; it had reached 1.62 under
-//     the race detector, past this bound, before the code cache's file-name
-//     patterns were compiled at first use too. Merged beside main's Dashboard Assistant, Chatlet and artifacts
-//     it reached 2.47 MB, 2.55 under the race detector, with config and the
-//     assistant's wire each past the package bound: 26 grammars in 11
-//     packages compiled at init, most a bounded repeat (`{0,63}`), which
-//     compiles to a program holding every count. Compiled at first use, they
-//     left 1.31 MB. Gitlet's own growth since took it to 1.44, and
-//     main's Cloudflare validation then compiled its account and zone patterns
-//     at init — 100 KB in config, 13 in cloudflare — for 1.56 MB, 1.63 in
-//     CI's race job, until those too were built at first use. Main's Scaleway
-//     and DigitalOcean checks then compiled their identifier and token
-//     patterns at init — 24 KB in config, 24 in scaleway, 24 in setup, 19 in
-//     digitalocean — for 1.53 MB, 1.62 in CI's race job, until those too were
-//     built at first use, which left 1.45 in the plain build. CI's race job
-//     still measured 0.07 to 0.13 MB over that — two trees within 1.3 KB of
-//     each other measured 1.62 and 1.66 MB there — and most of what moved
-//     from one start to the next was the MCP sign-in page, still rendered and
-//     matched against its policy at init, whose matchers the race detector's
-//     pools dropped at random: up to 74 KB between two starts of one build.
-//     Built at its first request, and each package charged the least of
-//     several starts, the module came to 1.43 MB under the race detector. So
-//     a second webhooks-sized global anywhere fails it, while a toolchain's
-//     change to what a compiled pattern allocates, within the 140 KB left,
-//     does not; growth past that is built at first use rather than bought
-//     with a larger bound, as redact's token rules were, which took 62 KB off
-//     its init in the plain build. The session's, the JSON Web Token's and
-//     DigitalOcean's rules after them added none only once the tree's one
-//     package-level logger built out of slog's boot default was a
-//     logging.Get one: the root's redaction reads an attribute as it is
-//     bound, so that logger compiled every rule during its own package's
-//     init, 189 KB in the plain build, for 1.60 MB there and 1.64 in CI's
-//     race job. Without it the module came to 1.41 MB in the plain build,
-//     and internal/logging's TestNoPackageLevelLoggerIsBoundToTheBootDefault
-//     refuses another. The tree's growth since took CI's race job to 1.574 MB,
-//     a kilobyte past the bound on a change that added nothing at init, with
-//     Confluence's eight storage-format patterns still compiled there: 53 KB,
-//     built at first use since.
+// MEASURED IN BYTES, which a test can hold, not milliseconds (the benchmark
+// below, docs/concepts/gitlet.md): GODEBUG=inittrace reports both. UNDER THE
+// RACE DETECTOR a sync.Pool drops a quarter of what is put back, so one build
+// allocates up to 74 KB more at init on some starts: the probe starts
+// hookInitRuns times and charges each package its least.
 const (
+	// 256 KiB for one package: the largest at init is redact's, about 132 KB of
+	// patterns in the plain build; the webhooks pages once parsed at init were
+	// 315 KB, about 2 ms of every push.
 	hookInitPackageBytes = 256 << 10
-	hookInitBytes        = 3 << 19
+	// 1.5 MiB for the module: CI's race job last measured 1.43 MB. A second
+	// webhooks-sized global fails it, a toolchain's change to what a compiled
+	// pattern allocates does not; growth past the 140 KB left is built at first
+	// use, not bought with a larger bound. internal/logging's
+	// TestNoPackageLevelLoggerIsBoundToTheBootDefault refuses a package-level
+	// logger, which would compile every redaction rule at init.
+	hookInitBytes = 3 << 19
 )
 
 // hookInitRuns is how many times the probe starts, each package charged the
@@ -232,18 +176,15 @@ func initTraceOnce(t *testing.T) map[string]int64 {
 }
 
 // BenchmarkTheHookStartsUp is what every push pays to start its hook: this
-// binary exec'd as git starts it, through its packages' initialisation, to
-// main's first statement and out — the hand-run's refusal, which is where a
-// real hook would dial the relay. It runs the TEST binary, which links what
-// the production binary does and this package's test helpers besides, so it
-// is a slight overstatement of the production hook's start.
+// binary exec'd as git starts it, through package initialisation to main's
+// first statement and out (the hand-run's refusal, where a real hook would dial
+// the relay). It runs the TEST binary, so it slightly overstates the
+// production hook's start.
 //
-// Measured 2026-10-14 on a 4-vCPU container, without the race detector: about
-// 14.5 ms a start, of which the runtime's own init trace (GODEBUG=inittrace)
-// counts about 13 ms and this module's packages under 4 ms of that — 2 ms less
-// once the webhooks pages stopped being built at init — beside about 2 ms for
-// receive-pack's own start. The rest is other modules' initialisation, which
-// no package here can defer.
+// Measured 2026-10-14 on a 4-vCPU container without the race detector: about
+// 14.5 ms a start, about 13 ms of it the runtime's init trace and under 4 ms
+// this module's packages, beside about 2 ms for receive-pack's own start. The
+// rest is other modules' initialisation, which no package here can defer.
 func BenchmarkTheHookStartsUp(b *testing.B) {
 	for b.Loop() {
 		if _, _, status := probeHook(b); status != 2 {

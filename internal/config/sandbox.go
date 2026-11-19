@@ -16,20 +16,13 @@ import (
 //
 // # One axis, three cells, named by the entry that launches
 //
-// This replaces a `type:` on the provider block, and the reason is that the
-// old shape could express only ONE answer for a whole company. A company has
-// exactly one `providers.sandbox`, so choosing `local` for the run that needs
-// the operator's own subscription login meant choosing it for the run whose
-// work must never touch the engine host. There was no way to say "this run
-// remotely, that run here" — and the two are different security decisions
-// about different work.
-//
-// So the provider block is a CATALOGUE — configure `e2b:`, `local:`, or
-// both — and the choice sits on the providers.llm entry a seat's executor
-// launches on (`run_in`), else on the catalogue's `default_run_in`. On the
-// entry rather than the seat, because it is a property of that RUNTIME: a
-// subscription login lives on the engine host, which `direct` and
-// `container` reach and a remote cell does not.
+// A company has one `providers.sandbox`, so a company-wide choice could not
+// say "this run remotely, that run here": the run needing the operator's own
+// subscription login and the run whose work must never touch the engine host
+// are different security decisions. So the block is a CATALOGUE (`e2b:`,
+// `local:`, or both) and the choice sits on the providers.llm entry the
+// executor launches on (`run_in`, else `default_run_in`), a property of that
+// RUNTIME: a subscription login lives on the engine host, not a remote cell.
 type Placement string
 
 const (
@@ -76,18 +69,15 @@ func (p Placement) backend() string {
 // SandboxProvider is the engine-wide CATALOGUE of cells every agent seat's
 // executor runs in.
 //
-// Every agent seat's executor is its harness's own run, in a box: this
-// block says WHICH BOXES EXIST, the providers.llm entry the run launches on
-// picks the cell (`run_in`, else `default_run_in`), and a seat's own
-// role.sandbox adds what that seat's box reads beyond the engine-wide
-// settings. So a company with an agent seat and a model to run it on needs
-// this block ([Company.validateSandboxPlacement]); one with no agent seat, or
-// no providers.llm yet, does not.
+// Every agent seat's executor is its harness's own run, in a box: this block
+// says WHICH BOXES EXIST, the providers.llm entry picks the cell (`run_in`,
+// else `default_run_in`), and a seat's role.sandbox adds what its box reads
+// beyond the engine-wide settings. So a company with an agent seat and a
+// model needs this block ([Company.validateSandboxPlacement]); one with
+// neither does not.
 //
-// BOTH BACKENDS MAY BE CONFIGURED AT ONCE, which is the whole point of the
-// reshape: the run that should use the operator's own subscription login and
-// the run whose work must never touch the engine host are different runs,
-// and a company-wide `type:` could only ever answer for both.
+// BOTH BACKENDS MAY BE CONFIGURED AT ONCE, so one run can use the operator's
+// subscription login while another never touches the engine host.
 type SandboxProvider struct {
 	// E2B configures the remote backend. Absent means no run may be
 	// placed `run_in: e2b`.
@@ -113,23 +103,18 @@ type SandboxProvider struct {
 	// make a demo config differ from a real one in a second place.
 	Fake bool `yaml:"fake,omitempty" json:"fake,omitempty" desc:"Use the in-process double for every placement. Demonstrations only."`
 
-	// DefaultRunIn is where a run launched on a providers.llm entry that
-	// names no `run_in` happens.
+	// DefaultRunIn is where a run launched on a providers.llm entry that names
+	// no `run_in` happens.
 	//
-	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS
-	// CONFIGURED, and the absence of one is the point: `direct` runs the
-	// harness as the engine user with the engine's filesystem access
-	// and `e2b` bills a remote account, so neither may be chosen for an
-	// operator who did not say which they meant. `local:` alone is two
-	// cells, not one — it serves both `direct` and `container` — so it
-	// needs this field as much as a catalogue with both backends does.
-	// Only `e2b:` alone, and the double, resolve on their own.
+	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS CONFIGURED:
+	// `direct` runs the harness with the engine user's filesystem access and
+	// `e2b` bills a remote account, so neither may be chosen for an operator who
+	// did not say. `local:` alone is two cells (`direct` and `container`), so it
+	// needs this field too. Only `e2b:` alone, and the double, resolve alone.
 	//
 	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
-	// entry an executor can launch on names its own cell has nothing left to
-	// default — that is the shape the catalogue exists for — so the refusal
-	// is written at the entry that named none, never on this field alone.
-	// See [Company.validateSandboxPlacement].
+	// launchable entry names its cell has nothing to default, so the refusal is
+	// written at the entry that named none. See [Company.validateSandboxPlacement].
 	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
 
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
@@ -141,63 +126,46 @@ type SandboxProvider struct {
 	// heart-beating.
 	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap: the orphan-reclaim grace."`
 
-	// DefaultPauseTTLSeconds is how long a sandbox blocked on a human's
-	// answer stays paused before it is reaped and the work re-seeds from
-	// the pushed branch.
+	// DefaultPauseTTLSeconds is how long a sandbox blocked on a human's answer
+	// stays paused before it is reaped and the work re-seeds from the pushed
+	// branch.
 	//
-	// A paused box is held indefinitely by the provider and BILLED for the
-	// snapshot, so expiring it is the engine's job. 0 means never pause:
-	// the box is torn down as soon as it blocks and the work always
-	// re-seeds, for zero snapshot cost. A negative value is refused rather
-	// than read as "no expiry" — an unbounded pause is exactly the leak
-	// this knob exists to prevent — and a seat that wants the provider
-	// default omits role.sandbox.pause_ttl_seconds.
-	// A POINTER, because 0 is a valid SETTING here rather than an absent
-	// field: unset means "take the 1800s default" and 0 means "never
-	// pause". A plain float64 cannot hold both, and read as one it mapped
-	// every operator who wrote 0 onto the default — silently keeping and
-	// billing for the snapshots the setting exists to refuse.
+	// A paused box is held by the provider and BILLED for the snapshot, so
+	// expiring it is the engine's job. 0 means never pause: the box is torn down
+	// as soon as it blocks and re-seeds, at zero snapshot cost. A negative value
+	// is refused, never "no expiry" (an unbounded pause is the leak this knob
+	// prevents); a seat wanting the default omits role.sandbox.pause_ttl_seconds.
+	//
+	// A POINTER, because 0 is a valid SETTING, not an absent field: unset takes
+	// the 1800s default, and a plain float64 cannot tell them apart.
 	DefaultPauseTTLSeconds *float64 `yaml:"default_pause_ttl_seconds,omitempty" json:"default_pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL before reap and re-seed. Unset = 1800s; 0 = never pause."`
 
-	// DefaultMaxTurns caps how many agentic rounds one executor run may
-	// take, for seats that name none (role.sandbox.max_turns). Read it
-	// through [SandboxProvider.MaxTurns].
+	// DefaultMaxTurns caps how many agentic rounds one executor run may take,
+	// for seats that name none (role.sandbox.max_turns). Read it through
+	// [SandboxProvider.MaxTurns].
 	//
-	// UNCAPPED UNLESS SET. A run is its harness's own loop, and how many
-	// rounds its task takes is the harness's to judge, as it is when a person
-	// runs it: the engine does not end a run part-way on a count nobody
-	// chose. A company that wants a bound sets one here, and a positive value
-	// becomes the harness's own turn cap — Claude Code's --max-turns,
-	// OpenCode's agent steps. Without one, a run ends when it finishes, at a
-	// scheduled turn's timeout_seconds, or when a person stops it: it is
-	// never stopped on its box's clock (see default_timeout_seconds), and a
-	// token budget holds every launch to its floor and charges the run when
-	// it is collected, never part-way through.
+	// UNCAPPED UNLESS SET. How many rounds a task takes is the harness's own
+	// loop to judge, as when a person runs it. A positive value becomes the
+	// harness's turn cap (Claude Code's --max-turns, OpenCode's agent steps).
+	// Without one a run ends when it finishes, at a scheduled turn's
+	// timeout_seconds, or when a person stops it, never on its box's clock (see
+	// default_timeout_seconds) or part-way through a token budget.
 	//
-	// A PLAIN INT, because zero — the field left out or written 0 — is
-	// uncapped and every other value is the cap itself. It was a pointer
-	// while leaving it out took a shipped cap of 96 and only an explicit 0
-	// turned that off; with no default left to take, a pointer would tell
-	// nothing apart.
+	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap.
 	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
 
-	// CommitAttribution says whether every commit an executor authors as
-	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
-	// `Crewlet-Seat:` naming the seat it is the executor of, `Crewlet-Run:`
-	// naming the run's turn, and `Crewlet-Work-Item:` naming the item that
-	// turn is charged to. Git adds it, through a hook
-	// the run's box is given (internal/sandbox/executor), so it holds
-	// whatever the model remembers, and only on the run's own commits: a
-	// person's commit the run amends, cherry-picks or rebases keeps no
-	// credit. Read it through [SandboxProvider.AttributesCommits].
+	// CommitAttribution says whether every commit an executor authors as itself
+	// credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
+	// `Crewlet-Seat:` the seat, `Crewlet-Run:` the run's turn and
+	// `Crewlet-Work-Item:` the item it is charged to. Git adds it
+	// through a hook the run's box is given (internal/sandbox/executor), so it
+	// holds whatever the model remembers, and only on the run's own commits: a
+	// person's commit the run amends or rebases keeps no credit.
+	// Read it through [SandboxProvider.AttributesCommits].
 	//
-	// ON UNLESS TURNED OFF, because a commit that says where it came from is
-	// what a reader of the history needs by default, and the credit changes
-	// nothing a commit does. A company that does not want Crewlet named in
-	// its repositories' history sets false.
-	//
-	// A POINTER, because unset is "on": a plain bool's zero would turn the
-	// credit off for every company that said nothing.
+	// ON UNLESS TURNED OFF: a history reader needs where a commit came from, and
+	// the credit changes nothing a commit does. A POINTER, because unset is
+	// "on": a plain bool's zero would turn it off.
 	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing."`
 
 	// Setup is the engine-wide provisioning applied to every box before
@@ -290,16 +258,13 @@ func (s *SandboxProvider) AttributesCommits() bool {
 // PauseTTL is the paused-box TTL as configured, or nil when the field is
 // absent and the engine-wide default applies.
 //
-// A POINTER OUT as well as in, because collapsing the two here is what the
-// bug was: 0 is "never pause — tear the box down the moment it blocks and
-// always re-seed from the pushed branch", and absent is "take the 1800s
-// default". The old accessor mapped 0 onto the default in the same breath as
-// a comment claiming it did not, so a company that asked for zero snapshot
-// cost was billed for every paused box for half an hour.
+// A POINTER OUT as well as in: 0 is "never pause, tear the box down the
+// moment it blocks and re-seed from the pushed branch", absent is "take the
+// 1800s default", and collapsing the two bills a company that asked for zero
+// snapshot cost for every paused box.
 //
 // The caller resolves nil, so the default lives in ONE place
-// ([sandbox.DefaultPauseTTL]) rather than being re-applied by every layer
-// that touches the value.
+// ([sandbox.DefaultPauseTTL]) rather than being re-applied by every layer.
 func (s *SandboxProvider) PauseTTL() *float64 {
 	return s.DefaultPauseTTLSeconds
 }
@@ -528,23 +493,18 @@ type LocalSandbox struct {
 	// SIZED, mirroring how a remote box is sized by its template.
 	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a local box is sized."`
 
-	// RuntimeEnv is the environment DECLARED for the container runtime's
-	// own CLI — every `docker`/`podman` call the backend makes — over the
-	// fixed rule it always gets (hostbox.ContainerRuntime: the host
-	// allowlist, the engine user's locations and the runtime's own
-	// DOCKER_/CONTAINER_/CONTAINERS_/PODMAN_ settings).
+	// RuntimeEnv is the environment DECLARED for the container runtime's own CLI
+	// (every `docker`/`podman` call the backend makes), over the fixed rule it
+	// always gets (hostbox.ContainerRuntime: the host allowlist, the engine
+	// user's locations and the runtime's own DOCKER_/CONTAINER_/CONTAINERS_/
+	// PODMAN_ settings).
 	//
-	// The channel the fixed rule cannot be: what a runtime's HELPERS read
-	// is open-ended — the cloud role, profile or key file a registry
-	// credential helper pulls a private image with — and with no
-	// way to add a name, a runtime that needed one simply stopped working
-	// when the engine stopped handing the CLI its whole environment. It is
-	// the MCP server's `env:` for the runtime, resolved the same way at the
-	// edge, and it never reaches a box: what a box needs is
-	// `role.sandbox.env`.
-	//
-	// A credential field, for the reason an MCP server's `env:` is one: a
-	// helper's cloud credentials are exactly what gets declared here.
+	// The channel the fixed rule cannot be: what a runtime's HELPERS read is
+	// open-ended (the cloud role, profile or key file a registry credential
+	// helper pulls a private image with). It is the MCP server's `env:` for the
+	// runtime, resolved the same way at the edge, and never reaches a box: that
+	// is `role.sandbox.env`. A credential field, for the reason an MCP server's
+	// `env:` is one.
 	RuntimeEnv map[string]string `secret:"true" yaml:"runtime_env,omitempty" json:"runtime_env,omitempty" desc:"Environment for the container runtime's own CLI (not the box); ${VAR} supported."`
 }
 
@@ -655,20 +615,18 @@ type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
 	Name string `yaml:"name" json:"name" js:"required" desc:"Short identifier used in logs and failure messages."`
 
-	// Files are written into the box (path -> content) before Commands
-	// run.
+	// Files are written into the box (path -> content) before Commands run.
 	//
-	// A CREDENTIAL FIELD, because provisioning is what these files are for:
-	// a registry's auth file, a git credential store, a cloud CLI's config.
-	// A file's content is shown on a config read only when it is exactly one
+	// A CREDENTIAL FIELD, because provisioning is what these files are for: a
+	// registry's auth file, a git credential store, a cloud CLI's config. A
+	// file's content is shown on a config read only when it is exactly one
 	// ${VAR} reference, and masked otherwise.
 	//
-	// AND CONTENT RATHER THAN A SETTING (`secret:"content"`, see
-	// internal/secrets): a body that is exactly one ${VAR} is read at launch
-	// as the value that variable holds, byte for byte, and any other body is
-	// written as it is — a `${HOME}` in a script or a `${NPM_TOKEN}` in an
-	// .npmrc is the box's own syntax, expanded there from the run
-	// environment and never from the engine host's.
+	// CONTENT RATHER THAN A SETTING (`secret:"content"`, see internal/secrets): a
+	// body that is exactly one ${VAR} is read at launch as the value that
+	// variable holds, byte for byte; any other body is written as it is, so a
+	// `${HOME}` in a script or `${NPM_TOKEN}` in an .npmrc is the box's own
+	// syntax, expanded there from the run environment, never the engine host's.
 	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value."`
 
 	// Commands run in order after the files land. A non-zero exit fails
@@ -804,18 +762,15 @@ var reservedSandboxEnvReasons = map[string]string{
 // validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
 // any env a box's environment is assembled from: a seat's `sandbox.env`, a
 // seat's setup steps' `env`, `providers.sandbox.setup`'s, and
-// `code.checks.env` — the secrets a check's box is given beside what the
-// engine tells it of its check.
+// `code.checks.env`.
 //
-// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
-// about running depends on it, since the engine's own value wins over every
-// other source of a box's environment for the names it sets (an executor
-// launch's environment, sandbox.LaunchRequest.RunEnv; a check's, which names
-// its secrets beside them) — so a stored revision carrying one runs as it did, a
-// later build may relax the rule, and this build applies whatever its newer
-// peer admitted. What it refuses is a setting that READS as working: one the
-// engine overwrites on every box it sets the name in, and on every other box a
-// value nothing of the engine's reads.
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: running
+// does not depend on it, since the engine's own value wins over every other
+// source for the names it sets (sandbox.LaunchRequest.RunEnv; a check's
+// own), so a stored revision carrying one runs as it did, a later build may
+// relax the rule, and this build applies whatever its newer peer admitted.
+// What it refuses is a setting that READS as working: the engine overwrites
+// it wherever it sets the name, and elsewhere nothing of the engine's reads it.
 func (c *Company) validateReservedSandboxEnv() error {
 	var p problems
 	check := func(path Path, env map[string]string) {

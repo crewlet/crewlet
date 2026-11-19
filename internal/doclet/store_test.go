@@ -407,15 +407,10 @@ func TestOversizedContentIsRefusedNamingTheField(t *testing.T) {
 // BARE.
 //
 // A seat or an agent must state the handle it acts as: an audit trail whose
-// author is empty is a list of changes nobody made. An operator has no seat —
-// the operator surface deliberately gives a caller no way to name one — so it
-// is named by the credential's own login, exactly as the tracker names it.
-//
-// It used to be named `"operator:" + OperatorID` when it stated no handle,
-// which was a second spelling of one party: the audit feed reads this history
-// beside the tracker's, where the same operator is the bare login, and showed
-// one person as two. So there is no fallback name, and a write with no handle
-// is refused whatever its kind.
+// author is empty is a list of changes nobody made. An operator has no seat,
+// so it is named by the credential's own login, as the tracker names it. There
+// is no fallback name (an `"operator:"` spelling showed one person as two in
+// the audit feed), and a write with no handle is refused whatever its kind.
 func TestAWriteNamesItsAuthor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -718,17 +713,14 @@ func TestAnUnchangedCommentEditStillAnswersWithARevision(t *testing.T) {
 // NOTHING.
 //
 // THE TRUE NO-OP IS BOTH HALVES: the same address AND the same displayed
-// title. Only then is there nothing left to write — `pages_titles` is keyed on
-// the normalised title and `pages_heads.title` already reads exactly what was
-// asked for. Publishing anyway would take a create-only append at an address
-// this page already holds, lose to its own claim, and be reported as a name
+// title. Publishing anyway would take a create-only append at an address this
+// page already holds, lose to its own claim, and be reported as a name
 // somebody else took.
 //
-// It is the one write here that never reaches the broker, so it is the one
-// whose outcome the framework's own no-op arm has to answer: an empty outcome
-// is not one of the three the contract has, and a caller reading it cannot
-// tell a move that has already happened from a write nothing could be
-// established about — the honest response to the second being to retry.
+// It is the one write that never reaches the broker, so the framework's own
+// no-op arm must answer its outcome: an empty outcome is none of the contract's
+// three, and a caller cannot tell a move already made from a write nothing
+// could be established about, which should be retried.
 func TestARenameToTheTitleItAlreadyDisplaysAnswersApplied(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -779,15 +771,13 @@ func TestARenameToTheTitleItAlreadyDisplaysAnswersApplied(t *testing.T) {
 // see.
 //
 // `title` is the DISPLAYED title and `title_norm` the address it was
-// arbitrated on, kept apart precisely because a link is resolved by the second
-// and rendered from the first. So "Runbook" -> "RUNBOOK" moves a real field
-// every reader sees while the address stays exactly where it is — and
-// discarding it as a no-op told the caller `applied`, handed back the OLD
-// title, and left the stored one untouched.
+// arbitrated on, kept apart because a link resolves by the second and renders
+// from the first. So "Runbook" -> "RUNBOOK" moves a field every reader sees
+// while the address stays put; discarding it as a no-op would say `applied`
+// and leave the stored title untouched.
 //
-// It arbitrates on the PAGE rather than on the title: the address does not
-// move, so the title subject it would otherwise take is the one this page
-// already holds, where a create-only append loses to its own claim.
+// It arbitrates on the PAGE, not the title: the title subject is the one this
+// page already holds, where a create-only append loses to its own claim.
 func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -837,18 +827,14 @@ func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
 
 // AN OPERATOR'S `watch` TOGGLE CHANGES NOTHING AND PUBLISHES NOTHING.
 //
-// An operator write names no seat — the ops surface deliberately refuses to
-// let a token act as one — so there is no subscription for `watch` to move.
-// The set-size comparison this used to rest on could not see that: it was
-// covered by a clause that is false by construction once the mutator has run,
-// and true only for the empty handle, so the one caller it fired for was the
-// one caller with nothing to change.
+// An operator write names no seat (the ops surface refuses to let a token act
+// as one), so there is no subscription for `watch` to move.
 //
 // AND THE OPERATOR IS BUILT AS EVERY SURFACE BUILDS ONE, with the credential's
-// own login as its handle. The rule was keyed on the handle being empty, which
-// this case satisfied and no surface did, so in production an operator's
-// unwatch muted its login and published a record, and an operator's create
-// subscribed a login no wake can reach.
+// own login as its handle: a rule keyed on an empty handle would pass here and
+// match no surface, so in production an operator's unwatch would mute its
+// login and publish a record, and its create would subscribe a login no wake
+// can reach.
 func TestAnOperatorsWatchToggleChangesNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -883,18 +869,15 @@ func TestAnOperatorsWatchToggleChangesNothing(t *testing.T) {
 // A RE-WATCH IS A CHANGE THE SET SIZES CANNOT SEE, and the case that proves it
 // needs a handle that was NEVER a watcher.
 //
-// MUTED IS NOT A SUBSET OF WATCHERS: a `watch: false` from somebody who does
-// not follow the page adds them to the muted set alone, so the page sits at
-// watchers=[jane] muted=[carla]. Their later `watch: true` takes them OUT of
-// muted and INTO watchers — two rows moved, and a total that does not budge.
-// A mutator that compared the sizes before and after would read that as
-// "nothing changed", publish nothing, and leave somebody who asked to follow
-// the page muted on every record it writes.
+// MUTED IS NOT A SUBSET OF WATCHERS: a `watch: false` from a non-follower adds
+// them to the muted set alone (watchers=[jane] muted=[carla]). Their later
+// `watch: true` moves them OUT of muted and INTO watchers, two rows moved with
+// a total that does not budge. A mutator comparing sizes would publish nothing
+// and leave somebody who asked to follow the page muted.
 //
-// An unwatch by somebody who WAS a watcher is the easy half and cannot stand
-// in for it: their handle stays in the watcher set and the mute is added
-// beside it, so the total moves and the sizes agree with the truth by
-// accident.
+// An unwatch by a former watcher is the easy half and cannot stand in: their
+// handle stays in the watcher set beside the mute, so the sizes agree with the
+// truth by accident.
 func TestARewatchIsAChangeAlthoughTheSetsStaySameSize(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -986,18 +969,14 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 
 // THE SKILLS CONTAINER REFUSES AN AGENT EVERY WRITE, not only a create.
 //
-// It used to be one check inside `write_page`, so a seat that could not create
-// a page in the tool-skills container could still SAVE over one, RENAME one
-// and COMMENT on one — and every surface added later inherited the hole
-// silently, because nothing in the domain said the rule existed. The store is
-// the one place every write goes through, which is why it is here and why
-// [doclet.ErrReserved] finally has a producer.
+// The rule lives in the store, the one place every write goes through: a check
+// inside `write_page` let a seat that could not create a tool-skills page SAVE
+// over, RENAME and COMMENT on one, and every later surface inherited the hole.
 //
 // A PERSON IS NOT REFUSED here. Whether a person may write a tool skill is a
-// capability, and internal/authz decides it; what the store holds is that a
-// page in the skills container is machinery injected into every seat's turn
-// and excluded from search and routing, which an AGENT cannot tell from
-// anything it holds.
+// capability internal/authz decides; the store holds that a skills page is
+// machinery injected into every seat's turn and excluded from search and
+// routing, which an AGENT cannot tell from anything it holds.
 func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 	r := newRoundTrip(t)
 
@@ -1071,13 +1050,11 @@ func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 // THE ORG ROOT REFUSES AN AGENT A NEW PAGE, AND NOTHING ELSE.
 //
 // The root holds what is true of the whole company, starting with the
-// Onboarding page every seat reads first, and a new page at the top of the
-// company is a person's decision — which is all `write_page` ever refused
-// there. When the rule moved into the store it was folded into the skills
-// container's, so an agent could no longer keep a root page current, rename
-// it or remark on it, and the refusal told it the page was "excluded from
-// knowledge search and from routing" — true of the skills container and false
-// of this one, which is searched and routed like any other.
+// Onboarding page every seat reads first; a new page there is a person's
+// decision. Folded into the skills container's rule, it would stop an agent
+// keeping a root page current, renaming or remarking on it, and the refusal
+// would call the page "excluded from knowledge search and from routing",
+// false of the root, which is searched and routed like any other.
 //
 // Both halves, and the message: a create is refused naming the root's own
 // reason, and every gesture on a page already there lands.
@@ -1179,19 +1156,16 @@ func TestTheReservationIsAskedAtEachWrite(t *testing.T) {
 
 // A GESTURE RETRIED UNDER THE CALLER'S OWN KEY IS ONE OPERATION.
 //
-// An HTTP write whose answer was `unknown` can only be retried safely under
-// the SAME operation id, because the ledger is what recognises a second
-// arrival. Every write here minted a fresh id per call, so a retried comment
-// posted twice — and there was no way for a caller with no turn to say "this
-// is the same gesture". [doclet.Actor.OpKey] is that way.
+// An HTTP write whose answer was `unknown` is retried safely only under the
+// SAME operation id, since the ledger recognises a second arrival; a fresh id
+// per call would post a retried comment twice. [doclet.Actor.OpKey] is how a
+// caller with no turn says "same gesture". The control is the same retry with
+// no key: two operations, exactly what the key prevents.
 //
-// The control is the same retry with no key, which is two operations: the
-// comment posted twice is exactly what the key exists to prevent.
-//
-// AND THE RETRY IS ANSWERED WITH WHAT THE FIRST ONE WROTE. It is answered from
-// the ledger rather than decided, so a remark or a page computed by this call
-// would describe a decision nothing published — the comment's author and
-// instant are the earlier copy's, and the page it trashed is trashed.
+// AND THE RETRY IS ANSWERED WITH WHAT THE FIRST ONE WROTE, from the ledger
+// rather than decided: a remark or page computed by this call would describe
+// a decision nothing published. The comment's author and instant are the
+// earlier copy's.
 func TestAGestureRetriedUnderOneKeyIsOneOperation(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

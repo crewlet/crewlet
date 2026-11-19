@@ -4,23 +4,16 @@ import "strings"
 
 // THE per-role MCP instance grammar.
 //
-// A `shared: false` server is a TEMPLATE, not a process. Every role that
-// declares mcp_env for it gets its own child, launched with that seat's
-// credentials in its environment (stdio) or its headers (HTTP). Two roles must
-// never share one child: the credentials in it ARE one seat's identity, and a
-// shared process would let either seat act as the other in Jira, Slack, GitHub
-// — invisibly, because the tool call looks identical from the engine's side.
+// A `shared: false` server is a TEMPLATE: every role declaring mcp_env for it
+// gets its own child with that seat's credentials. Two roles must never share
+// one, since the credentials ARE the seat's identity and a shared process
+// would let either act as the other, invisibly.
 //
-// The instance name is what keeps them apart, and it is load-bearing in three
-// places at once: it keys the bridge's client index, it names the child in
-// every log line, and — stripped back down by ServerName — it is the BARE name
-// the model sees and types into list_mcp_server_tools. Producer and consumer
-// disagreeing about it does not raise anything; the lookup just misses, and a
-// server the prompt advertises answers "not configured for this role".
-//
-// So it is defined once, here, and a guard test fails the build on a
-// hand-built "::" anywhere else in this package. That is the same rule the
-// queue's topic grammar carries, for the same reason.
+// The instance name keeps them apart: it keys the bridge's client index, names
+// the child in logs, and, stripped by ServerName, is the BARE name the model
+// types into list_mcp_server_tools. A disagreement raises nothing; the lookup
+// misses. So it is defined once, here, and TestInstanceSeparatorHasOneDefinition
+// fails on a hand-built "::" elsewhere in this package.
 const instanceSeparator = "::"
 
 // InstanceName builds the per-role instance name for a server.

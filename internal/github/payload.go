@@ -25,27 +25,16 @@ const Backend = "github"
 
 // Reading a GitHub delivery.
 //
-// # The event name is in a HEADER, and that is the whole shape of this file
+// The event name is in a HEADER. Other apps say what a delivery is in the body
+// (`object_kind`, `webhookEvent`, `type`); GitHub puts it in `X-GitHub-Event`
+// and only the ACTION in the body, so a body-only reader would route an issue
+// comment and a review comment identically. The API edge captures headers onto
+// the envelope LOWERCASED, so match lowercase: Go's canonical form is
+// per-header and matching it by hand comes back empty.
 //
-// Every other third-party app here says what a delivery is inside the body:
-// `object_kind` on GitLab, `webhookEvent` on Jira, `type` on Slack. GitHub
-// says it in `X-GitHub-Event` and puts only the ACTION in the body, so
-// `{"action": "created"}` is the entire discriminator a body-only reader
-// gets: created WHAT is not in there. A parser that read the body alone
-// would route an issue comment and a review comment identically, which is
-// two different asks rendered as one.
-//
-// The header survives to here because the API edge captures headers onto the
-// envelope for exactly this reason, and it is LOWERCASED there — Go's
-// canonical form is per-header and matching it by hand is how a lookup comes
-// back empty against a header that is present.
-//
-// # Typed, like the self-hosted host's
-//
-// GitHub's payloads are documented, versioned by an API-version header, and
-// stable — so they decode into structs, and a field a branch reads is
-// declared where the next reader can see it. A key GitHub adds is ignored
-// rather than fatal, which is what makes an API-version bump a non-event.
+// Payloads are documented and stable, so they decode into typed structs with
+// each field a branch reads declared; a key GitHub adds is ignored, not fatal,
+// which makes an API-version bump a non-event.
 
 // The delivery header names, lowercased as the envelope carries them.
 const (

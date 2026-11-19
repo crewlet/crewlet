@@ -110,20 +110,16 @@ func (p *joinProbe) drainHanded() {
 
 // AN ARTIFACT ROOM'S JOINER IS NEVER SHOWN AN OLDER ROSTER THAN THE ROOM.
 //
-// The join answered its roster after the presence hub's join returned, while
-// the room's fan-outs went to the sockets in it whenever the hub took them: a
-// fan-out taken after the roster could reach the socket ahead of the join's
-// answer, and the tab — which replaces the room with a roster — put back what
-// the fan-out had moved on; one taken before the socket was in the room reached
-// nobody. Here dana is in the room, and the moment erin's join returns from the
-// hub dana starts editing and that fan-out is handed over: erin's screen must
-// end showing dana editing.
+// A fan-out reaching the socket ahead of the join's roster answer would be
+// undone by the tab, which replaces the room with the roster; one taken before
+// the socket was in the room reaches nobody. Here dana is in the room, and the
+// moment erin's join returns from the hub dana starts editing and that
+// fan-out is handed over: erin's screen must end showing dana editing.
 //
 // Mutation: join the socket to the room and answer after the presence join
 // returns (the hand only keeping the roster), and erin's screen ends showing
 // dana viewing; answer after it with the socket joined in the hand, and the
-// fan-out reaches erin first and the roster behind it puts dana back to
-// viewing.
+// fan-out reaches erin first and the roster behind puts dana back to viewing.
 func TestAnArtifactJoinersRosterIsNeverOlderThanTheRoom(t *testing.T) {
 	t.Parallel()
 	id := artifacts.IDFor("stream-join-order-artifact")

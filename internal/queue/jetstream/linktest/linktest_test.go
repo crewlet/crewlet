@@ -295,18 +295,16 @@ func TestAFIFOLinkQueuesNoMoreThanItsInflightOfOneConnection(t *testing.T) {
 }
 
 // A WATCHER IS HANDED EACH PIECE A LINK CARRIES AS IT CARRIES IT: across a
-// first-in, first-out link, every quantum the far side is written is one
-// crossing, a quantum's time after the one before, its count of what was
-// carried one quantum more, and what was read never more than the
-// connection's inflight ahead of it — what a case reads a node's socket
-// against at the instant the link has carried a known count. The count
-// keeps a connection's bytes once it has ended.
+// first-in, first-out link, every quantum written to the far side is one
+// crossing, a quantum's time after the one before, its carried count one
+// quantum more, and what was read never more than the connection's inflight
+// ahead of it: what a case reads a node's socket against at a known carried
+// count. The count keeps a connection's bytes once it has ended.
 //
-// Red first: with no count of what the link carried, a case could read a
-// node's socket only against what it had itself sent. Mutants: the link
-// counts as carried what it reads, and the first crossing reports all of it;
-// the watcher is told once a read rather than once a piece, and the
-// crossings are not one a quantum.
+// Red first: with no carried count a case could read a node's socket only
+// against what it had sent. Mutants: the link counts as carried what it reads,
+// and the first crossing reports all of it; the watcher is told once a read
+// rather than once a piece.
 func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
 	const pieces, inflight = 16, 8 * ethernetSegment
 	synctest.Test(t, func(t *testing.T) {
@@ -361,18 +359,16 @@ func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
 
 // A FIRST-IN, FIRST-OUT LINK READS NO MORE OF A CONNECTION THAN ITS INFLIGHT
 // AHEAD OF WHAT IT HAS CARRIED, however long what it carried takes to be
-// written: a watcher that holds every crossing for several quanta, as a case
-// holds one while it samples a node's socket, holds the connection's reads
-// back with it, and a read a blackhole held when it began counts against the
-// inflight while it is held and once it is mended. The bound a case reading a
-// node's acknowledged bytes rests on: at most what the link carried, the
-// inflight and the pinned receive buffer.
+// written: a watcher holding every crossing for several quanta, as a case does
+// while sampling a node's socket, holds the connection's reads back with it,
+// and a read a blackhole held counts against the inflight while held and once
+// mended. The bound a case reading a node's acknowledged bytes rests on: at
+// most what the link carried, the inflight and the pinned receive buffer.
 //
-// Red first: the pacer made room as each piece crossed, before it was
-// written, so a held watcher let the link read on into a backlog of crossed
-// pieces, and a held read was outside the count, so a mended link read a
-// whole inflight on top of it. Mutants: room made as the pacer carries a
-// piece; a held read left out of the count.
+// Red first: the pacer made room as each piece crossed, before it was written,
+// so a held watcher let the link read on into a backlog, and a held read was
+// outside the count, so a mended link read a whole inflight on top of it.
+// Mutants: room made as the pacer carries a piece; a held read left uncounted.
 func TestAFIFOLinkReadsNoMoreThanItsInflightAheadOfWhatItCarried(t *testing.T) {
 	const (
 		account  = "BULK"

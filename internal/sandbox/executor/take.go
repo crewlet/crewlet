@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -41,6 +42,45 @@ import (
 
 var _ sandbox.SessionTaker = (*Runner)(nil)
 
+// SessionTakesAtOnce is how many takes this process scrubs at once, each
+// holding a slot of [sessionTakes] from before it asks its box for anything
+// to its scrub's and its meter's end. 27: the base tier's 326 MiB (64 reads at
+// 5.1 MiB, the package doc's "A collection's read of a thread") over a take's
+// hold at its base, 12 MiB, the most of the 11 to 12 MiB
+// BenchmarkATakeAtItsBase measures, rounded down: so the takes at their base
+// hold no more than every read of the tier did when a take held 5.1 MiB.
+const SessionTakesAtOnce = 27
+
+// sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
+var sessionTakes = make(chan struct{}, SessionTakesAtOnce)
+
+// errTakeWait is a take whose wait for a slot of [sessionTakes] ended with its
+// ctx: refused, as a box read whose wait runs out is, its box asked nothing.
+var errTakeWait = errors.New("executor: the wait for a session take's slot ended")
+
+// takeSessionSlot takes a slot of [sessionTakes] within ctx, the take's own
+// wait. A take that waits says so as its wait ends
+// (executor_session_take_waited): that the slots are contended, and where it
+// ran out waiting, why it was refused.
+func takeSessionSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", errTakeWait, err)
+	}
+	select {
+	case sessionTakes <- struct{}{}:
+		return func() { <-sessionTakes }, nil
+	default:
+	}
+	start := time.Now()
+	took, err := takeSlot(ctx, sessionTakes)
+	log.InfoContext(ctx, "executor_session_take_waited", "took", err == nil,
+		"waited_ms", time.Since(start).Milliseconds())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errTakeWait, err)
+	}
+	return took, nil
+}
+
 // TakeSession streams the session the box's last run worked in, as a capture
 // keeps it ([sandbox.SessionTaker]): packed now where take says so, and else
 // the archive the run's script left, or — where it left none — one packed now;
@@ -64,6 +104,18 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
+	// ONE OF [SessionTakesAtOnce], held by the scrub's goroutine to its end,
+	// and given back here where none starts.
+	freeSlot, slotErr := takeSessionSlot(ctx)
+	if slotErr != nil {
+		return sandbox.TakenSession{}, slotErr
+	}
+	scrubbingStarted := false
+	defer func() {
+		if !scrubbingStarted {
+			freeSlot()
+		}
+	}()
 	// A JOB THAT IS OVER IS TAKEN AS ITS SCRIPT LEFT IT where its script
 	// packed it, and packed now where it did not — one that crashed before
 	// its pack, one killed part way through it, one lost with its engine —
@@ -133,8 +185,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
 	meter := newContextMeter(metering, carries.layout(), archive.SessionID, archive.Version, large)
+	scrubbingStarted = true
 	go func() {
 		defer close(out.done)
+		defer freeSlot()
 		defer stopScrub()
 		// THE TAKE ENDS WITH ITS METER, which may still wait for the slot.
 		defer func() {
@@ -152,7 +206,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		scrubErr := scrubContained(ctx, func() error {
+			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		})
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
 		// take to its end and asks what it measured waits on nothing but the
@@ -173,7 +229,31 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next}, nil
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
+		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
+// the take's error rather than the end of the engine.
+//
+// THE SCRUB RUNS ON A GOROUTINE OF THE TAKE'S OWN, which nothing above it can
+// recover: a defect a box's text reaches in a redaction or a rewrite would end
+// the engine's process, every seat the node holds with it, for one session the
+// box's code wrote. So the panic is contained here, told to whoever observes
+// contained panics (panics.Recovered) under the take's scope, its stack logged,
+// and the take refused with the panic's message, which the capture's stamp
+// carries as the reason the session was not kept. The pipe the take writes to
+// ends on that error, so no reader takes the archive for whole.
+func scrubContained(ctx context.Context, scrub func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSessionTake, r)
+			log.ErrorContext(ctx, "session_scrub_panicked", "panic", fmt.Sprint(r), "stack", contained.Stack)
+			err = fmt.Errorf("executor: the session's scrub failed, and the session was not kept: %w",
+				contained.Err())
+		}
+	}()
+	return scrub()
 }
 
 // keptRunStart is where an archive's run began in its session as the take
@@ -373,8 +453,8 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	paths := PathsFor(box)
 	staged, dest := paths.SessionPackStaging(pack), paths.SessionPackHeld(pack)
 	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return carries.Pack(paths, session, staged, dest, working)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return carries.Pack(paths, rec.id, staged, dest, working), nil
 	})
 	if err != nil || !packed {
 		release(ctx)
@@ -483,15 +563,15 @@ const packReleaseFloor = 5 * time.Second
 // its staging directory gone, and every other save's archive as it was. EVERY
 // SAVE IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionSaveStaging]), named
 // here for that save alone, as a pack on demand's is: two saves of one taker
-// at once never clear each other's lists or archive. A save packed and never
-// taken stays in the box until the clear before its next run, which removes
-// every save's files.
+// at once never clear each other's lists or archive. A save never taken is
+// removed by its release ([Runner.ReleaseSave]), or else by the clear before
+// its next run, which removes every save's files.
 //
-// A zero description where there is nothing to save: a harness whose session
-// the engine packs none of beside its run (OpenCode's, [saver]), a run whose
-// record names no session, a harness that wrote no transcript. An error where a
-// save could not be made, saying why — the check that refused it, for a file
-// the harness wrote under the pack — or where taker names none.
+// A zero description where there is nothing to save: no [saver], a record that
+// names no session, a harness that holds none of it yet. An error where a save
+// could not be made, saying why (the check or the release that refused it),
+// wrapping [sandbox.ErrSaveNoRoom] where its box lacks the room ([packNoRoom]),
+// or where taker names none.
 func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string) (sandbox.SessionArchive, error) {
 	saves, ok := r.harness.(saver)
 	if !ok {
@@ -504,8 +584,8 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionSaveStaging(taker, pack), paths.SessionSave(taker, pack)
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return saves.PackSave(paths, session, staged, dest)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return saves.PackSave(paths, rec, staged, dest)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, err
@@ -519,6 +599,50 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 		return sandbox.SessionArchive{}, err
 	}
 	return *described, nil
+}
+
+// Saves reports whether this runner packs saves of a session its run still
+// works in ([Runner.PackSave]): only a runner of a harness that is a [saver],
+// Claude Code's and OpenCode's. Asked before anything else of a save, so a run
+// on a harness that packs none costs its node no slot, no box call and no read
+// of the store.
+func (r *Runner) Saves() bool {
+	_, ok := r.harness.(saver)
+	return ok
+}
+
+// Streamed is how far the event stream of the job in box has run, in bytes:
+// the size of the file the wrapper redirects the harness's stdout into
+// ([Output.Stdout]), Claude Code's stream-json and OpenCode's event log, read
+// by its size alone, as [Runner.archiveAt] reads an archive's. That stream,
+// and not the session's transcript, because it is the one file every step of
+// the run moves: a subagent's calls and results are printed on it too, where
+// they reach no line of the main thread's transcript, so a session whose only
+// work is a subagent's still reads as moved. Zero where the job has written
+// none, a missing file reading as empty.
+func (r *Runner) Streamed(ctx context.Context, box sandbox.Sandbox) (int64, error) {
+	tail, err := box.ReadTail(ctx, r.harness.Output(PathsFor(box)).Stdout, 0)
+	if err != nil {
+		return 0, fmt.Errorf("executor: reading how far %s's event stream has run: %w", r.harness.Name(), err)
+	}
+	return tail.Size, nil
+}
+
+// ReleaseSave removes the save at path ([Runner.PackSave]) from box, for a
+// save no take will read: one its saver gave up on between its pack and its
+// take, which no take's release removes. Within the bound a take's release has
+// ([Runner.dropPack]), past ctx's cancellation, which is often what gave the
+// save up; a box that does not answer it leaves the file to the clear before
+// its next run, said in the log. A path that is no save of the box's
+// ([savePath]) is refused and nothing is removed: a release removes one save's
+// archive, never another file of the box.
+func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path string) error {
+	if !savePath(PathsFor(box), path) {
+		return fmt.Errorf("executor: %q is no save a runner packed in the box, and a release removes a save "+
+			"and nothing else", path)
+	}
+	r.dropPack(ctx, box, path)
+	return nil
 }
 
 // openSave streams the save at path ([Runner.PackSave], [Paths.SessionSave]),
@@ -571,14 +695,17 @@ func savePath(paths Paths, path string) bool {
 }
 
 // packNow runs pack — a harness's script that packs a session now, beside or
-// after its harness — for the session the box's record names, in a login shell
-// with the box's bin directory first on its PATH as the run's wrapper runs it,
-// within [sandbox.SessionPackWait]: packed, where the pack made its archive;
-// not, with no error, where there is nothing to pack — a record that names no
-// session, a harness that wrote no transcript ([packNothing]); and an error
-// where the pack failed, with what it said ([packFailed]).
+// after its harness — for the session the box's record names, handed that
+// record as the box holds it, in a login shell with the box's bin directory
+// first on its PATH as the run's wrapper runs it, within
+// [sandbox.SessionPackWait]: packed, where the pack made its archive; not, with
+// no error, where there is nothing to pack — a record that names no session, a
+// harness that wrote no transcript ([packNothing]); and an error where pack
+// refused the record before any script ran, saying why, where the pack failed,
+// with what it said ([packFailed]), or where a save's box lacked the room to
+// pack it, wrapping [sandbox.ErrSaveNoRoom] ([packNoRoom]).
 func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
-	pack func(paths Paths, session string) string) (sessionRecord, bool, error) {
+	pack func(paths Paths, rec sessionRecord) (string, error)) (sessionRecord, bool, error) {
 
 	paths := PathsFor(box)
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
@@ -588,7 +715,11 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 	if refusal != "" || rec.id == "" {
 		return sessionRecord{}, false, nil
 	}
-	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + pack(paths, rec.id)
+	packs, err := pack(paths, rec)
+	if err != nil {
+		return sessionRecord{}, false, err
+	}
+	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {
@@ -600,6 +731,9 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 		return rec, true, nil
 	case packNothing:
 		return sessionRecord{}, false, nil
+	case packNoRoom:
+		return sessionRecord{}, false, fmt.Errorf("%w: %s", sandbox.ErrSaveNoRoom,
+			firstLine(strings.TrimSpace(res.Stderr), packDetailLimit))
 	}
 	return sessionRecord{}, false, fmt.Errorf("executor: %s's session %s could not be packed (exit %d): %s",
 		r.harness.Name(), rec.id, res.ExitCode, firstLine(strings.TrimSpace(res.Stderr), packDetailLimit))
@@ -631,12 +765,14 @@ func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, pat
 const packDetailLimit = 512
 
 // The exits a pack made on demand ends with ([carrier.Pack]) beside 0, the
-// session packed: packNothing, a session there is nothing of to pack — no
-// transcript its harness wrote, no session its harness holds — and packFailed,
-// one there is and the pack could not make, its error stream saying why.
+// session packed: packNothing, a session there is nothing of to pack (no
+// transcript its harness wrote, no session its harness holds); packFailed,
+// one there is and the pack could not make, its error stream saying why; and
+// packNoRoom, a save its box lacks the memory to pack now ([openCodeSaveRoom]).
 const (
 	packFailed  = 2
 	packNothing = 3
+	packNoRoom  = 4
 )
 
 // packDigest is the part of every pack — the run's own as its harness exits,

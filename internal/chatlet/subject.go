@@ -67,24 +67,18 @@ const (
 	// alphabet is for.
 	KindChannel ObjectKind = "channel"
 
-	// KindMessage is everything anybody says, and the overwhelming
-	// majority of records: a post, an edit, a deletion and a reaction are
-	// all writes under this kind.
+	// KindMessage is everything anybody says: a post, an edit, a deletion and
+	// a reaction, the overwhelming majority of records.
 	//
-	// ITS ID IS THE CHANNEL'S, not the message's, and that is the whole
-	// hot-path design. One subject per room gives the log a total order
-	// per room — which is what the applier mints the per-channel sequence
-	// from — while the broker's per-subject index stays bounded by the
-	// number of ROOMS rather than by the number of things anybody ever
-	// said. A subject per message would be an index entry per utterance,
-	// held for the stream's whole retention window, for an arbitration
-	// nothing ever asks for.
+	// ITS ID IS THE CHANNEL'S, not the message's: the hot-path design. One
+	// subject per room gives the log a total order per room (the applier mints
+	// the per-channel sequence from it) and bounds the broker's per-subject
+	// index by ROOMS, not utterances.
 	//
-	// THE ONE SEQUENCED KIND ([statelog.PatternSequenced]): it carries no
-	// expectation, the log orders it, and the applier decides it at its
-	// position against the room as it is there, writing a [Verdict] the
-	// writer reads back — and a post's apply is guarded by its own id
-	// insert affecting a row besides.
+	// THE ONE SEQUENCED KIND ([statelog.PatternSequenced]): no expectation; the
+	// applier decides it at its log position against the room as it is there,
+	// writing a [Verdict] the writer reads back, and a post's apply is guarded
+	// by its own id insert affecting a row.
 	KindMessage ObjectKind = "message"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission.
@@ -137,24 +131,14 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and therefore whether an anchor row is written for it.
 //
-// TWO OF SEVEN, AND IT IS A CLOSED SET. A name claim and a room's own state are
-// the only objects two writers ever decide against each other over.
-//
-// EVERYTHING ELSE PAYS NOTHING FOR ARBITRATION IT DOES NOT USE. A message is
-// sequenced — nothing in a room races, so an expectation there would serialise
-// the single hottest subject in the company behind itself and turn a lost race
-// into a message somebody typed and lost; what a message does depend on, the
-// applier decides at its position. A barrier shares one subject across
-// the whole domain, so an anchor there would put an upsert per linearizable
-// read on one hot row inside the transaction holding this store's only writer.
-// An eviction and a generation are fleet machinery with a handful of records
-// each: their expectation comes from the broker's own last sequence, at the
-// cost of one round trip on a write nobody takes twice a day.
-//
-// A CLOSED SET RATHER THAN A NEGATIVE ONE, so a kind added later arbitrates
-// nothing until somebody says it should — the failure of a missing anchor is
-// an extra round trip, and the failure of an unintended one is a row on a hot
-// subject inside every apply transaction.
+// TWO OF SEVEN, A CLOSED SET: a name claim and a room's own state are the only
+// objects two writers decide against each other over. A message is sequenced:
+// an expectation would serialise the hottest subject behind itself. A barrier
+// shares one subject domain-wide, so an anchor would be an upsert per
+// linearizable read on one hot row inside the store's only writer. An eviction
+// and a generation are rare, expecting the broker's last sequence.
+// CLOSED RATHER THAN NEGATIVE: a missing anchor costs a round trip, an
+// unintended one a hot row inside every apply transaction.
 func (k ObjectKind) Arbitrated() bool {
 	switch k {
 	case KindChannelName, KindChannel:
@@ -178,23 +162,14 @@ func (k ObjectKind) InstallsGate() bool { return k == KindEviction }
 
 // Routable reports an object kind whose records can wake somebody.
 //
-// ONE, AND IT IS A CLOSED SET: a message. The only gestures that wake anybody
-// are a post and an edit ([wakesAnybody]), and both are on a room's message
-// subject. Every op on the room's own subject — a create, a patch, a
-// membership, an erase, a prune — is published quiet, so routing the channel
-// kind would only have let a snapshot ride a record that by construction
-// carries none.
-//
-// THE OTHER FIVE ARE NOT CONVERSATION. A room's settings and membership are
-// what a screen redraws from its live frame, not what a seat is woken for; a
-// name claim has no audience; an eviction, a generation and a barrier are the
-// fleet talking to itself, and a wake per barrier would page the company once
-// per linearizable read.
-//
-// A CLOSED SET RATHER THAN A NEGATIVE ONE, so a kind added later is silently
-// unroutable rather than silently routed: the failure of a missing wake is one
-// person not hearing something, and the failure of an unintended one is every
-// seat in the company woken by a bookkeeping append.
+// ONE, A CLOSED SET: a message. Only a post and an edit wake anybody
+// ([wakesAnybody]), both on a room's message subject; every op on the room's
+// own subject is published quiet. THE OTHER FIVE ARE NOT CONVERSATION:
+// settings and membership are redrawn from the live frame, a name claim has no
+// audience, and an eviction, generation or barrier is the fleet talking to
+// itself (a wake per barrier pages the company per linearizable read).
+// CLOSED RATHER THAN NEGATIVE: a missing wake is one person not hearing, an
+// unintended one wakes every seat on a bookkeeping append.
 func (k ObjectKind) Routable() bool { return k == KindMessage }
 
 // Subject is the object a record is published on.
@@ -269,35 +244,16 @@ func TrimmedSubject(floor statelog.Position) Subject {
 
 // ChannelToken is the address a channel name is arbitrated on.
 //
-// # Why the name is a TOKEN rather than the name
+// A subject is a broker path (no space, dot, `*` or `>`); prose in one ties the
+// grammar to [ValidName] staying strict, and the day a name may carry a dot
+// every subject on the log changes meaning. So the address is a fixed-width
+// digest, for the reasons of
+// [github.com/crewlet/crewlet/internal/doclet.TitleToken]: arbitration needs
+// only equality, and the payload carries the name, whose token the applier
+// recomputes, REFUSING a writer that arbitrated on another address.
 //
-// A subject is a broker path: it may not contain a space, a dot, a `*` or a
-// `>`. A channel name is checked against [ValidName] and so contains none of
-// them today — and that is exactly why the token is here rather than the name.
-// Putting prose in a subject makes the grammar depend on a validation rule
-// somewhere else staying as strict as it is now: the day a name is allowed to
-// carry a dot, every subject already on the log means something different.
-//
-// So the address is arbitrated on a fixed-width digest of the normalised name,
-// and three things make that the better trade — the same three
-// [github.com/crewlet/crewlet/internal/doclet.TitleToken] states:
-//
-//   - ARBITRATION NEEDS ONLY EQUALITY. Two writers claiming one address must
-//     land on one subject, and nothing here ever needs to read the name back
-//     out of the subject.
-//   - THE SUBJECT IS A COST. It is a key in the broker's per-subject index on
-//     every member for the life of the deployment, and a 32-byte token is
-//     fixed where a name is not.
-//   - NOTHING IS LOST. The record's own payload carries the displayed name,
-//     the applier writes it, and this function recomputes the token from it —
-//     so a writer that arbitrated on one address while claiming another is
-//     REFUSED rather than applied.
-//
-// The first sixteen bytes of SHA-256 over the NORMALISED name, in lower-case
-// hex. Truncated because 128 bits is far past what the collision matters: a
-// company at [MaxChannels] sits around 1.5e-33, and a collision's whole
-// consequence is that two names contend at the broker and one create retries
-// — not a wrong row and not a lost write.
+// The first sixteen bytes of SHA-256 over the NORMALISED name, lower-case hex:
+// at [MaxChannels] a collision is ~1.5e-33, and costs one create retrying.
 func ChannelToken(name string) string {
 	sum := sha256.Sum256([]byte(NormalizeName(name)))
 	return hex.EncodeToString(sum[:16])
@@ -337,37 +293,14 @@ var directChannelNamespace = uuid.MustParse("7b1f4a2c-8d63-4e57-9c0a-2f5b6d8e3a4
 // DirectChannelID is the deterministic id of the conversation between these
 // participants.
 //
-// # Why it is derived and not minted
-//
-// A named room is created ONCE, by somebody who typed a name, and two people
-// typing it contend on that name. A direct conversation has nobody who creates
-// it: it comes into existence because somebody said something, and the other
-// side may say something at the same moment on another node. Minting an id
-// there gives two rooms with the same two people in them, each holding half
-// the conversation — and no arbitration can fix it afterwards, because neither
-// writer was deciding against anything the other wrote.
-//
-// So the id IS the participant set: a UUIDv5 over the normalised, sorted,
-// deduplicated handles joined with NUL. Every node computes the same id for
-// the same people with no database and no lookup, the create is a create-only
-// append on that id, and the loser of the race is told the room already exists
-// — which is the right answer, because it does.
-//
-// THE JOIN IS NUL rather than a comma or a space, because a handle may not
-// contain one: a separator a value can carry makes `[ab, c]` and `[a, bc]` the
-// same input, which is an id collision between two different conversations.
-// SORTED because the two sides pass their participants in whatever order they
-// hold them, and DEDUPLICATED because a caller that lists itself twice must
-// not derive a third room.
-//
-// IT ANSWERS [uuid.Nil] FOR AN EMPTY SET rather than the digest of nothing,
-// for the reason [github.com/crewlet/crewlet/internal/org.DeriveAgentID]
-// refuses empty inputs: an unnameable conversation must not silently acquire
-// an id that every other unnameable conversation would also derive.
-// [ChannelCreate.Validate] refuses the nil id, so the zero value is a refusal
-// rather than a room. The participant COUNT is bounded there too, against
-// [MaxDMParticipants]: a cap belongs where a write can be refused naming the
-// field, not in a derivation that has no way to say no.
+// Derived, not minted: both sides may speak at once on different nodes, and a
+// minted id gives two rooms, each half the conversation. The id IS the set: a
+// UUIDv5 over the normalised handles, SORTED (callers hold any order) and
+// DEDUPLICATED (listing oneself twice derives no third room), joined with NUL (a
+// handle may not contain one, so `[ab, c]` and `[a, bc]` differ). Any node
+// computes it with no lookup. IT ANSWERS [uuid.Nil] FOR AN EMPTY SET, as
+// [github.com/crewlet/crewlet/internal/org.DeriveAgentID] refuses empty inputs;
+// [ChannelCreate.Validate] refuses it and bounds the COUNT ([MaxDMParticipants]).
 func DirectChannelID(handles []string) uuid.UUID {
 	normalised := make([]string, 0, len(handles))
 	for _, h := range handles {

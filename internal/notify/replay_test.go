@@ -151,28 +151,15 @@ func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 // A WAKE NO NODE TOOK WHILE IT WAS PASSED ROUND IS DEAD-LETTERED WITH ITS COPY,
 // AND THE NEXT START OF A NODE THAT READS IT REPLAYS IT.
 //
-// Nothing steers a pass to a node that can read it: every delivery of a newer
-// record's wake can go to older nodes, early in a roll, until the group's
-// budget is spent. So what delivers it is the dead letter the queue keeps of
-// it, on the group's unhandled subject (queue.RetiredTo), and the replay a
-// node's start makes of it (crewlet#993). End to end on one broker, through
-// the real service and the queue's own budget:
+// What delivers a passed wake is the dead letter on the unhandled subject
+// (queue.RetiredTo) and a node's start replay (crewlet#993), on one broker:
+// an older node passes it until the budget is spent and the queue keeps a copy;
+// another older start keeps it; a newer start delivers the wake under the id
+// derived from the change, drops the copy, and leaves the poison.
 //
-//   - an older node, whose parser refuses the record as newer than it reads,
-//     passes the delivery until the budget is spent, and the queue keeps its
-//     copy with the group's unhandled deliveries;
-//   - another older node starting reads it no better, delivers nothing and
-//     keeps the copy;
-//   - a newer node starting after the copy is kept — the next start of a
-//     node that reads it; one already running replays nothing — delivers the
-//     wake to the seat it names, under the id derived from the change, and
-//     drops the copy, and leaves the poison beside it, a delivery whose
-//     failure, not a pass, retired it.
-//
-// Mutation: replay nothing at Start, and the seat is never woken; drop a copy
-// this node still defers, and the second older node's start empties the
-// subject; dead-letter a spent pass as a failure's, with the poison, and no
-// node replays it.
+// Mutation: replay nothing at Start and the seat is never woken; drop a copy
+// this node still defers and the second older start empties the subject;
+// dead-letter a spent pass as a failure's and no node replays it.
 func TestAPassedWakeNoNodeTookIsReplayedByTheNextStartOfANodeThatReadsIt(t *testing.T) {
 	ctx := t.Context()
 	older := newService(t, func(o *notify.Options, _ *harness) {
@@ -270,18 +257,15 @@ func (q failingWakes) Publish(ctx context.Context, topic string, ev *events.Even
 // A WAKE WHOSE LAST DELIVERY A NEWER NODE COULD NOT PUBLISH IS KEPT WITH THE
 // UNHANDLED DELIVERIES, AND A LATER START DELIVERS IT.
 //
-// The older nodes of a roll pass a newer record's wake round, and its last
-// delivery can reach a newer node whose broker does not answer the wake's
-// publish. That failure is the node's, not the delivery's (queue.NakNode), so
-// the copy its budget leaves is kept with the group's unhandled deliveries —
-// kept with the poison, as a failure's was, it was a wake no start ever
-// replayed. The next start of a newer node that can publish delivers it.
+// The last delivery can reach a newer node whose broker does not answer the
+// publish. That failure is the node's (queue.NakNode), so the copy is kept with
+// the unhandled deliveries, not the poison no start replays.
 //
-// The newer node attaches first, so the twin's round robin hands it the first
-// delivery and every second one after, the budget's twenty-fifth among them.
+// The newer node attaches first, so the twin's round robin hands it every
+// second delivery, the budget's twenty-fifth among them.
 //
-// Mutation: answer the node's failed publish as the delivery's own failure (a
-// plain Nak), and the copy is kept with the poison, which no start replays.
+// Mutation: answer the failed publish as the delivery's own failure (a plain
+// Nak) and the copy is kept with the poison.
 func TestAWakeWhoseLastDeliveryItsNodeCouldNotPublishIsReplayed(t *testing.T) {
 	ctx := t.Context()
 	older := newService(t, func(o *notify.Options, _ *harness) {
@@ -347,17 +331,14 @@ func (p panickingParser) Parse(ctx context.Context, w types.RawWebhook, r *notif
 
 // A REPLAYED COPY WHOSE HANDLING PANICS IS KEPT, AND THE REPLAY GOES ON.
 //
-// A live delivery runs inside the queue's recover, where a panic is a Nak and
-// a line; the replay is no queue handler, so it contains each copy itself.
-// Uncontained, a panic on one copy ended the process at every start of a node
-// of the build that reads it — the only build that gets that far — because the
-// copy, never dropped, was handled again at the next start.
+// The replay is no queue handler, so it contains each copy itself; uncontained,
+// a panic ended the process at every start of the build that reads it, because
+// the never-dropped copy was handled again.
 //
-// The replay is run on the case's own goroutine (ReplayNow), as Start's
-// goroutine runs it, so a panic it fails to contain fails this case by name.
+// The replay runs on the case's own goroutine (ReplayNow), so a panic it fails
+// to contain fails this case by name.
 //
-// Mutation: drop the recover from handleContained, and the panic fails the
-// case.
+// Mutation: drop the recover from handleContained and the panic fails the case.
 func TestAReplayedCopyThatPanicsIsKeptAndTheReplayGoesOn(t *testing.T) {
 	newer := newService(t, func(o *notify.Options, _ *harness) {
 		o.Parsers = []notify.Parser{panickingParser{versionedParser{reads: 2}, "op-panic"}}
@@ -398,17 +379,14 @@ func (p blockingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify
 // A START RETURNS WHILE ITS REPLAY RUNS, AND A STOP ENDS THE REPLAY, KEEPING
 // WHAT IT DID NOT REACH.
 //
-// The replay handles its copies one after another, as many as a paused roll
-// left, and a start runs in the engine's boot and ahead of a first company's
-// epoch: run inside Start, it held both for the whole backlog. So it runs on a
-// goroutine of its own, which Stop ends — and a copy it never reached is still
-// kept, for the next start. In a bubble, so a Start that waited for its replay
-// is a deadlock the bubble reports, never a case that hangs.
+// A replay inside Start would hold the engine's boot and a first company's
+// epoch for the whole backlog, so it runs on a goroutine Stop ends, and a copy
+// it never reached stays kept for the next start. In a bubble, so a Start that
+// waited for its replay is a reported deadlock, never a hang.
 //
-// Mutation: replay inside Start, and every goroutine of the bubble is blocked
-// on the held copy; return from Stop without waiting for the replay, and Stop
-// has returned while the replay still holds its copy; never end it, and the
-// second copy is replayed after the Stop returned.
+// Mutation: replay inside Start and every bubble goroutine is blocked on the
+// held copy; return from Stop without waiting and Stop returns while the replay
+// holds its copy; never end it and the second copy is replayed after Stop.
 func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		parser := blockingParser{versionedParser: versionedParser{reads: 2}, once: &sync.Once{},
@@ -505,21 +483,14 @@ func (p countingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify
 // A RUNNING REPLAY NEVER HANDLES AGAIN WHAT ITS BUILD CANNOT, AND TRIES AGAIN
 // WHAT MAY HAVE CLEARED.
 //
-// A copy this node passed is one its build cannot read, and its build changes
-// only with a restart — and so is one it fails as itself, a wake too large to
-// publish: handled again at every pass it would cost a frame's read and a
-// parse each time the subject moved, for nothing. A copy kept because its
-// wake was not delivered for a reason of the node's own may be delivered now:
-// a later pass, at most a retry's minute on, tries it again. Here an older
-// node passes a newer record's copy once and fails a too-large wake's once,
-// however the subject moves, and a copy whose wake's broker did not answer is
-// delivered once the broker takes it. In a bubble, so the polls pass on its
-// clock.
+// A copy this node passed, or failed as itself (a wake too large to publish),
+// cannot be handled until a restart: retrying costs a read and a parse per pass
+// for nothing. A copy kept for the node's own reason may be delivered now, so a
+// later pass retries it. In a bubble, so the polls pass on its clock.
 //
-// Mutation: forget what a pass held back (the memory's held set), and the
-// passed copy is parsed at every pass; hold back nothing it failed as itself,
-// and the too-large one is; retry nothing a pass kept, and the failed wake is
-// never delivered.
+// Mutation: forget the memory's held set and the passed copy is parsed at every
+// pass; hold back nothing failed as itself and the too-large one is; retry
+// nothing kept and the failed wake is never delivered.
 func TestARunningReplayHoldsBackWhatItsBuildCannotRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		parsed := new(atomic.Int32)
@@ -670,19 +641,14 @@ func TestAReplayedBurstIsPacedByTheValveAndLosesNoWake(t *testing.T) {
 
 // A REPLAY NEVER SPENDS A SLOT THE LIVE PATH WOULD DROP A WAKE FOR.
 //
-// The replay paces a seat's copies by the rate valve, and the live path skips
-// a wake the valve refuses. Paced in the live path's own bucket, the replay
-// took the seat's slot as each window opened, so a person's mention landing in
-// that window was refused and lost — where without the replay it would have
-// been the window's only wake — while a refusal of a replayed copy costs
-// nothing, since the copy is kept. So the replay asks in a bucket of its own,
-// at the same limit. Three copies for a seat limited to one a second are paced
-// into three windows; Start returns once that first pass has, still in the
-// third window, and a live wake asked then is delivered beside the third copy.
-// In a bubble, so the windows pass on its clock and on nothing else.
+// The live path skips a wake the valve refuses; a refused replayed copy is
+// merely kept. Paced in the live bucket, the replay took each window's slot
+// and a person's mention was lost, so it asks in a bucket of its own at the
+// same limit. Three copies at one a second take three windows; a live wake in
+// the third is delivered beside the third copy. In a bubble, on its clock.
 //
-// Mutation: pace the replay in the live path's bucket, and the live wake is
-// skipped as rate limited.
+// Mutation: pace the replay in the live bucket and the live wake is skipped as
+// rate limited.
 func TestAReplayNeverSpendsASlotTheLivePathWouldDropAWakeFor(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		valve := &windowValve{counts: map[string]int{}}

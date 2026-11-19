@@ -12,21 +12,14 @@ import (
 // AN EMBEDDER THIS BUILD CANNOT RUN IS REFUSED WHERE A REVISION IS APPLIED, not
 // only where a document is submitted.
 //
-// The embedding rules — a width the endpoint cannot produce, a limit nobody
-// documented and nobody stated, a limit raised past the model's — are RUNNABLE
-// rules, and the configuration guide promises an operator that a stored
-// revision breaking one is refused at boot as well as at an apply. Both of
-// those decode the stored form and hold it to ValidateRunnable alone
-// (cmd/crewlet's boot, the engine's reconcile), so that is the path taken
-// here: the company goes into the store's JSON, comes back out through
-// DecodeCompany, and is judged as a boot judges it. Every other embedding
-// test calls Validate, which runs the admission rules too — so a case moved
-// to the admission class would keep all of them green while a node booted on
-// the revision and sent what the model refuses, or asked a width its
-// endpoint cannot give.
-//
-// And none of them is an admission rule as well, which Validate would report
-// twice.
+// The embedding rules (a width the endpoint cannot produce, an undocumented
+// limit, a limit past the model's) are RUNNABLE, and the configuration guide
+// promises a stored revision breaking one is refused at boot as well as at an
+// apply. Both hold the decoded stored form to ValidateRunnable alone, so the
+// company goes into the store's JSON, back through DecodeCompany, and is judged
+// as a boot judges it. Other embedding tests call Validate, which also runs
+// admission rules, so a case moved to that class would keep them green while a
+// node booted on the revision. None is an admission rule as well.
 func TestAnEmbedderThisBuildCannotRunIsRefusedWhereARevisionIsApplied(t *testing.T) {
 	t.Parallel()
 	cohere := func(width int) *config.EmbeddingProvider {

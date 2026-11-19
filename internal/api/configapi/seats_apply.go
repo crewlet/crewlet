@@ -13,22 +13,17 @@ import (
 )
 
 // Writing SEVERAL SEATS AS ONE REVISION, and rewriting the stored document
-// itself: the two writes an in-process caller makes that neither a merge patch
-// nor a one-entity write can.
+// itself: what an in-process caller needs beyond a merge patch or an entity.
 //
-// A SAVE OF AN INTEGRATION'S AGENTS TAB CHANGES MANY SEATS AT ONCE, and it is
-// one decision: turning three agents on and one off is reviewed, reverted and
-// attributed as one change. Written as one entity write per seat it was as many
-// revisions, each its own activation, and a failure part way through left the
-// company with half of what the person saved. So every seat is changed on one
-// decoded copy of the fleet's revision, spliced into the stored bytes one after
-// another, and the whole document is validated and activated once.
+// AN AGENTS TAB SAVE CHANGES MANY SEATS AT ONCE, as one decision. One write
+// per seat would be many activations, and a failure part way would leave half
+// the save. So every seat is changed on one decoded copy of the fleet's
+// revision, spliced into the stored bytes, and activated once.
 //
-// A MIGRATION READS WHAT THIS BUILD CANNOT REPRESENT. A stored revision decodes
-// leniently: a key this build no longer has is dropped from the struct and
-// carried back on every write ([config.CarryUnknown]). A migration that reads a
-// retired value has to read it from the stored tree, and one that retires a key
-// has to remove it there, or the next write carries it back for ever.
+// A MIGRATION READS WHAT THIS BUILD CANNOT REPRESENT: a retired key is dropped
+// from the struct and carried back on every write ([config.CarryUnknown]), so
+// a migration reads a retired value from the stored tree and removes the key
+// there, or the next write restores it.
 
 // SeatEdit is one seat's change in a [Service.ApplySeats] write.
 type SeatEdit struct {
@@ -311,20 +306,15 @@ type Disconnected struct {
 // Disconnect removes an integration's block and turns off every seat that was
 // on through the connection it held, as ONE revision.
 //
-// THE ONE WRITER OF A DISCONNECT, for the engine's teardown and for a forced
-// one alike. Each used to send the merge patch `{"integrations":{kind:null}}`
-// alone, and where the document refuses an agent turned on at an integration
-// the company has not connected (Mattermost, Jira, Confluence, SSH) that
-// revision was refused: the teardown retried it for ever and the forced
-// disconnect answered 400, until somebody turned every agent off by hand.
-// What a disconnect leaves has to be a document the rules accept, so the
-// seats go off in the revision the block leaves in
-// ([config.Company.TurnOffDisconnected]): one decision, reviewed and reverted
-// as one.
+// THE ONE WRITER OF A DISCONNECT, for the engine's teardown and a forced one
+// alike. The merge patch `{"integrations":{kind:null}}` alone is refused where
+// an agent is still on at an integration the company has not connected
+// (Mattermost, Jira, Confluence, SSH), so the teardown would retry for ever.
+// The seats go off in the same revision the block leaves in
+// ([config.Company.TurnOffDisconnected]).
 //
 // The refusals are a write's: a [*RacedError] for a stale Expect and a
-// [*ValidationError] for a company the change still leaves invalid, which is
-// then some other rule's to say.
+// [*ValidationError] for a company the change still leaves invalid.
 func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Disconnected, error) {
 	kind := strings.TrimSpace(req.Kind)
 	if kind == "" {

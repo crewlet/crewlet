@@ -1726,9 +1726,9 @@ func (c compactionFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions)
 }
 
 // BenchmarkRecallScan is where defaultThreshold comes from. Recall is a brute
-// scan of every embedded row a seat owns and it runs in the prefetch of every
-// turn, so the raw-row count IS a per-turn latency budget. Re-measured at the
-// pin, 30 iterations per cell, 1 536 dimensions:
+// scan of every embedded row a seat owns in every turn's prefetch, so the
+// raw-row count IS a per-turn latency budget. Measured at the pin, 30
+// iterations per cell, 1 536 dimensions:
 //
 //	100 rows    1.9 ms
 //	250 rows    2.8 ms
@@ -1736,13 +1736,7 @@ func (c compactionFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions)
 //	1000 rows   7.3 ms
 //	2000 rows  15.2 ms
 //
-// Linear at 7.5 µs per row on the 500 → 2 000 slope, over a fixed ~1.1 ms per
-// query, with nothing else in the system bounding it.
-//
-// THE FIGURES THIS REPLACES WERE 8× HIGHER and were taken before the ordering
-// moved into the database: they described a Go loop that decoded every vector
-// across the driver boundary, which this package deleted. A stale anchor on a
-// tuning knob is the number the next person raises the knob from.
+// Linear at 7.5 µs per row (500 → 2 000 slope) over a fixed ~1.1 ms per query.
 func BenchmarkRecallScan(b *testing.B) {
 	const dim = 1536
 	for _, n := range []int{100, 250, 500, 1000, 2000} {
@@ -1834,16 +1828,13 @@ func TestTheToolFreeHorizonIsConfigurable(t *testing.T) {
 // EVERY SIMILARITY DECISION IN THIS PACKAGE USES ONE FUNCTION, and they agree
 // at the boundary.
 //
-// The overlap was written twice, under two names, and the copies were free to
-// drift: `clusterByTools` and `clusterEpisodes` pooled by one of them while
-// `mostSimilar` — the near-duplicate check that decides whether a drafted
-// skill is a new one — used the other. A seat's skills clustered by one rule
-// and deduplicated by another means a draft can be rejected as a duplicate of
-// a skill it would never have been clustered with, which reads as "synthesis
-// stopped producing anything" and is invisible from either side alone.
+// `clusterByTools`, `clusterEpisodes` and `mostSimilar` (the near-duplicate
+// check for a drafted skill) must not drift to different overlap rules, or a
+// draft is rejected as a duplicate of a skill it would never be clustered
+// with, invisibly from either side.
 //
 // {x,y} and {y,z} overlap at exactly 1/3, so a threshold AT it must pool and a
-// threshold above it must not — on both paths, in the same direction.
+// threshold above it must not, on every path.
 func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
 	t.Parallel()
 	left, right := []string{"x", "y"}, []string{"y", "z"}

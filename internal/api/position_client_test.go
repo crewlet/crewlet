@@ -9,28 +9,16 @@ import (
 )
 
 // THE DASHBOARD UNPACKS AND PACKS A POSITION WITH THE ENGINE'S OWN STRIDE,
-// held here — see internal/clientsource for why a copy exists at all and why
-// this side checks it.
-//
-// Every coverage answer carries `applied_through` and `log_seq` packed, and the
-// dashboard splits them into a generation and a sequence to print them
-// (dashboard/src/components/work.tsx), with the stride its contract declares
-// (dashboard/src/contract/positions.ts). A stride that drifted from the engine's
-// would still compare correctly — the packed values are compared whole — and
-// would print every re-anchored position as a wrong generation and a wrong
-// sequence, which nothing else would notice.
-//
-// AND THE CHAT SCREEN PACKS A READ CURSOR WITH THE SAME ONE: the coordination
-// record holds one integer per room, and the unread count compares it with the
-// packed position of the room's newest message ([statelog.Position.Packed]),
-// so the screen — which packs the position of the last message it showed
-// before it flushes (dashboard/src/routes/chatlet/cursor.ts) — has to pack in the
-// engine's number space. Drift there is silent in both directions: a stride
-// too high writes a cursor above every message there will ever be, and the
-// room reads as read for ever; too low, and the badge never clears. So the
-// probes are the client's formula, `generation * GENERATION_STRIDE + seq`,
-// against the engine's own packing at the edges a stride decides — a
-// generation's first sequence, its last, and the next generation's first.
+// held here (see internal/clientsource). Coverage answers carry
+// `applied_through` and `log_seq` packed, split by the stride in
+// dashboard/src/contract/positions.ts; a drifted one still compares correctly
+// and prints every re-anchored position wrong, unnoticed. The chat screen
+// packs its read cursor with the same stride
+// (dashboard/src/routes/chatlet/cursor.ts) and the unread count compares it
+// with [statelog.Position.Packed]: too high, the room reads as read for ever;
+// too low, the badge never clears. The probes are
+// `generation * GENERATION_STRIDE + seq` against the engine's packing at a
+// generation's first and last sequence and the next one's first.
 func TestTheDashboardUnpacksAPositionWithTheEnginesStride(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "GENERATION_STRIDE")

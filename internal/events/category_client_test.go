@@ -11,24 +11,15 @@ import (
 // TestCategoryChipsAreTheEngines holds the event log's filter chips against
 // the categories this build actually assigns.
 //
-// THE DRIFT ALREADY HAPPENED, and the client's own comment records it: the
-// list held TEN where [events.CategoryNames] returns eight, so two chips could
-// never match a row. A reader filtering a log down to nothing concludes the
-// engine is quiet, which is the worst answer a log can give — it is
-// indistinguishable from the true one.
+// A category added to the engine is a filter nobody can apply, and one removed
+// is a chip that empties the log, which reads as a quiet engine, the worst
+// answer a log can give. Both are silent, so both are checked: every chip names
+// a category the engine has ([events.CategoryNames]), every category has a
+// chip, and no chip is drawn twice. A chip for an empty category is useful, so
+// emptiness is not asserted.
 //
-// It was repaired by hand and nothing held it there. A category added to the
-// engine is a filter nobody can apply, and one removed is a chip that empties
-// the screen; both are silent, so both are checked.
-//
-// A chip for a real category with nothing in it is still useful — it says the
-// category exists and is quiet — so what is asserted is that every chip names
-// a category the engine has, every category has a chip, and no chip is drawn
-// twice.
-//
-// ONE GATE. This list was held by two tests once, each reading it its own way
-// and each agreeing with the other; a second question about the chips belongs
-// here, which is what `internal/clientsource`'s contract records.
+// ONE GATE: a second question about the chips belongs here, as
+// `internal/clientsource`'s contract records.
 func TestCategoryChipsAreTheEngines(t *testing.T) {
 	t.Parallel()
 	engine := events.CategoryNames()

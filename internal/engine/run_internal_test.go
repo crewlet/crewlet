@@ -500,19 +500,14 @@ func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
 // minted, which the capacity barrier and the admission handshake are written
 // in terms of.
 //
-// The seat host was built with a mint of its own, so a single process held its
-// presence, its seats and its fleet duties under one owner and its publish
-// admission and capacity acknowledgements under another — two identities for
-// one process in the coordination store, which is precisely what a second
-// process running under the same node id looks like, and which no peer reading
-// the store can tell apart from one. Asserted on the leases as the store holds
-// them rather than on the values handed to their constructors, because the
-// store is what a peer reads.
+// Two owners for one process look in the coordination store exactly like a
+// second process under the same node id, which no peer can tell apart. So this
+// asserts on the leases as the store holds them, not on the values handed to
+// their constructors: the store is what a peer reads.
 //
-// The mailbox retirement is the one owner that is deliberately NOT this: it
-// claims a seat as a separate party that must lose to this host (see
-// [Engine.buildMailboxes]), and a node with no retired seats never claims one,
-// so nothing here can see it.
+// The mailbox retirement deliberately is NOT this owner: it claims a seat as a
+// separate party that must lose to this host (see [Engine.buildMailboxes]), and
+// a node with no retired seats never claims one, so nothing here sees it.
 func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	t.Parallel()
 	boot := testBootstrap(t)

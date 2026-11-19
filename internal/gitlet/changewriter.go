@@ -425,13 +425,17 @@ func (w *ChangeWriter) answer(ctx context.Context, cw ConversationWrite, last co
 	return cw.made(ConversationResult{Outcome: statelog.OutcomeUnknown}), nil
 }
 
-// made is res naming what cw makes that is named apart from its change — a
-// comment's id, a review's and its findings' — every one derived from the
-// write's operation id, so it is the same on every node and every retry.
+// made is res naming what cw makes apart from its change (a comment's id, a review's and its
+// findings'), each derived from the write's operation id so it is the same on every node and
+// every retry; an edit or a delete names the comment it names.
 func (w ConversationWrite) made(res ConversationResult) ConversationResult {
 	switch {
 	case w.Comment != nil:
 		res.ID = CommentID(w.OpID)
+	case w.CommentEdit != nil:
+		res.ID = w.CommentEdit.CommentID
+	case w.CommentDelete != nil:
+		res.ID = w.CommentDelete.CommentID
 	case w.Review != nil:
 		res.ID = ReviewID(w.OpID)
 		for i := range w.Review.Findings {

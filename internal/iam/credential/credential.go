@@ -14,6 +14,40 @@
 // donated to joining peers — so a value that could be replayed out of it would
 // be a credential every operator with a backup holds.
 //
+// # Spend cost where an attacker has a shortcut
+//
+// The rule is not "hash secrets with argon2id". A password came from a space
+// small enough to grind, so it gets 64 MiB and t=3. A recovery code, a machine
+// token and a reset link's secret are values this engine minted (crypto/rand,
+// or for a first password link a MAC under the company's key, so a create's
+// retry hands back the same link): no dictionary exists, SHA-256 is the whole
+// of it, and a token is presented on every request a pipeline makes. [VerifyCap]
+// is derived, never configured, and bounds every argon2 derivation through one
+// path, a verification as much as a hash, because each holds 64 MiB and an
+// unauthenticated caller must not be able to turn the endpoint into an
+// out-of-memory kill. password.go has the parameters and the semaphore.
+//
+// A stored password verifier is stale only when WEAKER than this build's cost,
+// never merely different, or a rolling upgrade rewrites each verifier down and
+// back. Twelve characters and a folded blocklist are the whole strength rule
+// (strength.go). A TOTP's last accepted step is stored, or one shoulder-surfed
+// code works across the drift window.
+//
+// A reset link lives [ResetLinkLifetime], a day, and a first password link
+// [EnrolmentLinkLifetime], a week: one constant here for both invitation and
+// enrolment, since each brings in somebody who may not read it before their
+// first day.
+//
+// # A machine token is decided by a table, three-valued
+//
+// [CheckToken] decides a token over one snapshot's values and answers VALID,
+// REFUSED or UNKNOWN. The position a token carries in the clear is a hint
+// about when to look and is deliberately not under the verifier, so forging it
+// can only buy a 503. A valid token carries its mint's grants cut per request
+// to what its owner still holds, and is refused once the owner's revocation
+// epoch or the company's session generation moves, because a restore brings a
+// revoked token back as it brings a session back. tokencheck.go has the rest.
+//
 // # The enumeration oracle, which is the failure this package is shaped by
 //
 // A sign-in endpoint is the one surface an unauthenticated stranger may
@@ -55,6 +89,10 @@
 // somebody else's by signing in as themselves. throttle.go carries the whole
 // argument.
 //
+// A wait up to [InlineDelay] is served inside the request, a longer one is 429
+// with Retry-After. An attempt that names nobody (an invitation or password
+// link, whose secret is 256 bits) is admitted uncounted with a nil [Ticket].
+//
 // # And the source is bounded by what it costs, never refused
 //
 // A run across many names meets a fresh pair every time, so no curve slows it
@@ -88,21 +126,14 @@ import "errors"
 
 // ErrWeak reports a password the company will not accept.
 //
-// THE ONLY REFUSAL IN THIS PACKAGE THAT SAYS WHAT IS WRONG, and the asymmetry
-// is the difference between two audiences. A failed SIGN-IN is answered to a
-// stranger, and "no such login", "wrong password", "wrong code" and "that code
-// was already used" are four different facts whose difference tells an
-// attacker as much as it tells the caller — the first of them is the company's
-// roster. So every verification here answers a BOOL and the route composes one
-// generic refusal from it; the sentinel for that refusal belongs where it is
-// RETURNED rather than here, where nothing would produce it.
+// THE ONLY REFUSAL HERE THAT SAYS WHAT IS WRONG. A failed sign-in goes to a
+// stranger, and "no such login" or "wrong code" tell an attacker as much as the
+// caller (the first is the roster), so every verification answers a BOOL and the
+// route composes one generic refusal. This one goes to somebody who has proved
+// who they are and is choosing a secret; a generic refusal there is them typing
+// variations until one sticks.
 //
-// This one is answered to somebody who has already proved who they are and is
-// choosing a new secret. A generic refusal there is somebody typing variations
-// until one sticks.
-//
-// SO ITS TEXT IS A SENTENCE, with no package prefix: the three surfaces that
-// refuse a new password hand [CheckStrength]'s error to the person choosing
-// it, verbatim, and the prefix this package's other errors carry for a log
-// reached a form as "Credential: this password cannot be used".
+// ITS TEXT IS A SENTENCE, with no package prefix: the surfaces that refuse a new
+// password hand [CheckStrength]'s error to the person verbatim, and a prefix
+// would reach the form as "Credential: this password cannot be used".
 var ErrWeak = errors.New("this password can't be used")

@@ -155,21 +155,16 @@ func TestTheFoldDoesNotRefuseAnOrdinaryPassword(t *testing.T) {
 
 // EVERY ENTRY IN THE FILE IS A LINE THAT CAN ACTUALLY MATCH SOMETHING.
 //
-// Three ways a line can look like it is doing something and not be, and every
-// one of them is invisible in a data file nothing reads back:
+// Three ways a line looks like it works and does not, invisible in a data file
+// nothing reads back:
 //
-//   - BELOW THE FLOOR: the length rule refuses the string first, so the entry
-//     can never be reached;
-//   - NOT LOWER CASE: the fold lower-cases before comparing, so the capitals
-//     are decoration;
-//   - A FOLD DUPLICATE: two lines that fold to one key, which is what an entry
-//     written in leetspeak always is — `p4ssw0rd1234` is `password1234`
-//     wearing a different face, and adds nothing.
+//   - BELOW THE FLOOR: the length rule refuses the string first;
+//   - NOT LOWER CASE: the fold lower-cases first, so capitals are decoration;
+//   - A FOLD DUPLICATE: two lines folding to one key, as a leetspeak entry
+//     always does (`p4ssw0rd1234` is `password1234`).
 //
-// A digit RUN is not a fold duplicate of anything and stays written in digits:
-// the fold maps digits to letters, so `123123123123` folds to a string nobody
-// types, and that is fine — what matters is that the entry and the candidate
-// fold the SAME WAY, not that the fold is readable.
+// A digit RUN stays written in digits: `123123123123` folds to a string nobody
+// types, and that is fine, since the entry and the candidate fold the SAME WAY.
 func TestEveryBlocklistEntryCanActuallyBeReached(t *testing.T) {
 	t.Parallel()
 	entries := credential.BlocklistEntries()

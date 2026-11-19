@@ -628,23 +628,18 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 }
 
-// A MACHINE THAT IS NOT A NODE RUNS `crewlet secrets` THROUGH -api WITH NO TIER
-// A FILE, and creates nothing there.
+// A MACHINE THAT IS NOT A NODE RUNS `crewlet secrets` THROUGH -api WITH NO TIER A
+// FILE, and creates nothing there.
 //
-// Through a named node this command seals and opens nothing — the node does
-// both, under its own keyring — so the Tier A file it reads for a keyring has
-// nothing to give it, and requiring one sent an operator on a laptop to put a
-// Tier A file carrying a keyring on it (in practice a copy of a node's) to
-// take a listing. With no file, nothing names a store on this machine, so
-// nothing is opened or created on it either.
-//
-// rekey is the one subcommand still refused without the file, and before it
-// asks the node anything: it judges the rows against the key it expects to
-// re-seal under, which is Tier A's, and its real pass sends that key so that a
-// node sealing under another refuses it. And with no -api either there is no
-// store to reach at all, so the run is refused naming both ways to one —
-// except a rekey's, which names only -config, since -api would not spare it
-// the file — rather than going on with none.
+// Through a named node this command seals and opens nothing (the node does both,
+// under its own keyring), so requiring a Tier A file carrying a keyring, in
+// practice a copy of a node's, sent an operator on a laptop to fetch one to take a
+// listing. With no file nothing names a store on this machine, so nothing is
+// opened or created on it. rekey alone is still refused without the file, before
+// it asks the node anything: it judges the rows against the key it expects to
+// re-seal under, which is Tier A's, and its real pass sends that key so a node
+// sealing under another refuses it. With no -api either there is no store to
+// reach, so the run is refused naming both ways to one (a rekey's only -config).
 func TestTheSecretsCommandReachesANamedNodeWithNoTierAHere(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)

@@ -14,18 +14,13 @@ import (
 // SeatIssuer holds the access tokens this process has issued its agents, one per
 // account and connection, and asks Google again only when one runs short.
 //
-// ONE PER PROCESS, shared by every reader of a seat's token (its tool servers,
-// its box's launches and the poll that keeps a long run's token file), so an
-// account costs one mint an hour however many ask. MEMORY ONLY: a token is
-// never logged, sealed or put in an error.
+// ONE PER PROCESS, shared by every reader of a seat's token, so an account
+// costs one mint an hour however many ask. MEMORY ONLY: a token is never
+// logged, sealed or put in an error.
 //
-// A REFUSAL IS HELD TOO, for [SeatIssuer.RetryWait]: Google's answer for one
-// account is handed to every reader asking within the wait, and the first to
-// ask after it asks Google again. A refusal is forgotten the moment a mint
-// succeeds.
-//
-// Safe for concurrent use. Two callers that miss at once may both mint; the
-// later token replaces the earlier, and both are good until they expire.
+// A REFUSAL IS HELD TOO, for [SeatIssuer.RetryWait]; a successful mint
+// forgets it. Safe for concurrent use: two callers that miss at once may both
+// mint, the later token replaces the earlier, and both are good until expiry.
 type SeatIssuer struct {
 	// Now is the clock tokens and refusals are judged against. Nil takes the
 	// wall clock.

@@ -11,24 +11,17 @@ import (
 )
 
 // MCPOAuth is how the company signs in to a remote MCP server with OAuth: one
-// grant for the company, which a person makes once from the server's page
-// and the engine renews on every node that runs the server (internal/mcp/oauth,
-// internal/engine's mcpoauth.go).
+// grant for the company, made once by a person from the server's page and
+// renewed on every node running the server (internal/mcp/oauth).
 //
-// THE GRANT IS NOT HERE. What a sign-in is granted (the refresh token, and the
-// client a registration issued) is the engine's own, sealed in the secret
-// store under a name no `${VAR}` reaches and never answered back; this block
-// says only how the sign-in is made.
-//
-// ONE GRANT PER SERVER, for the company: a per-agent server (`shared: false`)
-// carries each seat's own credential in its `mcp_env`, and a sign-in is
-// nobody's in particular, so the two are refused together.
+// THE GRANT IS NOT HERE: the refresh token and registered client are the
+// engine's own, sealed under a name no `${VAR}` reaches. ONE GRANT PER SERVER: a per-agent server
+// (`shared: false`) carries each seat's credential in `mcp_env`, and a sign-in
+// is nobody's in particular, so the two are refused together.
 //
 // TWO GRANTS ([MCPOAuthGrant]): a person's sign-in (authorization_code, the
-// default), or a SERVICE IDENTITY (client_credentials), a client the company
-// registered at the vendor that the engine signs in as with its id and
-// secret, with no person and nothing kept but those two: each node is issued
-// its own access token as the server is used, and holds it in memory alone.
+// default), or a SERVICE IDENTITY (client_credentials), the company's own client
+// signed in with its id and secret, each node holding its own token in memory.
 type MCPOAuth struct {
 	// Grant is how the engine is granted access: a person signs the
 	// company in once (authorization_code, the default, written or not), or

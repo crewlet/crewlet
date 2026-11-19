@@ -55,20 +55,16 @@ func New(root, module string, dirs map[string]string) *World {
 }
 
 // NewWithTests is a world that reads the module's packages as their tests
-// compile them, for a gate whose subject is test code: in a world that reads
-// no test file, a value a test helper of another file returns is one the walk
-// cannot type, and a gate that judges test files would report most of what
-// they build.
+// compile them, for a gate whose subject is test code: otherwise a value a
+// test helper of another file returns cannot be typed.
 //
-// A package whose file is asked for ([World.FileAt]), or which is loaded by
-// its directory ([World.LoadDir]), is read with its in-package test files —
-// the declarations a _test.go file of package p adds to p, a method it
-// declares on one of p's types among them — and an external test file
-// (package p_test) is read in a package of its own,
-// whose import path is p's with _test and which imports p as the go command
-// builds p for its tests: with those declarations. A package that is only
-// imported is read as [New] reads it, since that is what its importers compile
-// against, and so is every package outside the module.
+// A package whose file is asked for ([World.FileAt]) or which is loaded by
+// directory ([World.LoadDir]) is read with its in-package test files, the
+// declarations a _test.go file adds to p (methods on p's types included). An
+// external test file (package p_test) is read in a package of its own, with
+// p's import path plus _test, importing p as the go command builds it for its
+// tests. A package only imported is read as [New] reads it, since that is what
+// its importers compile against, and so is every package outside the module.
 func NewWithTests(root, module string, dirs map[string]string) *World {
 	w := New(root, module, dirs)
 	w.tests = true

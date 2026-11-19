@@ -201,19 +201,16 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 }
 
 // A REFUSAL A DOMAIN WROTE IS TOLD IN ITS CODE'S OWN WORDS on a verb with no
-// tool, and never in its error's. The human write surface's purge, rename and
-// destructions answered the error's own text, so a person read "chatlet:
-// invalid: reason: …" — the package the error came from, before what to
-// change. Without that prefix it is the domain's own sentence
-// ([builtin.WriterSentence]), the one its tools word the same refusal with,
-// and that is written for a model: nobody has worded these refusals for a
-// person yet, so each is answered in the class its domain decided with no
-// detail, and its code's own message stands alone (ADR-0060), as the same
-// refusal through a tool is.
+// tool, and never in its error's: err.Error() leads with the package ("chatlet:
+// invalid: reason: …"), not what to change. The domain's own sentence
+// ([builtin.WriterSentence]) is worded for a model. Nobody has worded these
+// refusals for a person yet, so each is answered in the class its domain
+// decided with no detail, its code's own message alone (ADR-0060), as through
+// a tool.
 //
 // Mutation: answer err.Error(), or the domain's sentence, as a classified
-// refusal's detail again and every row goes red; word chat's refusal with
-// another domain's sentence function and its row does.
+// refusal's detail and every row goes red; word chat's refusal with another
+// domain's sentence function and its row does.
 func TestADomainsRefusalIsToldInItsCodesOwnWords(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -269,17 +266,11 @@ func TestADomainsRefusalIsToldInItsCodesOwnWords(t *testing.T) {
 // A STATE OR A COLLISION A DOMAIN DECIDED IS TOLD TO A PERSON IN ITS CODE'S
 // OWN WORDS, and the tool's own sentence to the model alone, in process.
 //
-// The tool's sentence for a refusal is a model's — "post_message refused that:
-// … say it somewhere that is still open, or say nothing", "write_project on ENG
-// with tags_add: …" — and so is the domain's sentence it carries: the room
-// archived, the task in the trash, the label another tag holds. A person is
-// shown neither (ADR-0060), and nobody has worded these refusals for a person
-// yet, so each is answered in its class — a state, a race, a collision and a
-// turn's note bounds a `409` alike — with no detail and its code's own message
-// standing alone, and never with the tool's sentence beside it as a
-// `tool_detail`. That sentence reaches the one reader it is worded for through
-// [operator.FailTool], which tells it to the in-process model that made the
-// call (internal/modelnote).
+// The tool's sentence and the domain's it carries are a model's. A person is
+// shown neither (ADR-0060): each refusal is answered in its class (`409` for
+// a state, race, collision or turn's note) with no detail, its code's own
+// message alone, never a `tool_detail`. The model gets it through
+// [operator.FailTool] (internal/modelnote).
 //
 // Mutation: answer result.Output as the detail, or drop FailTool's
 // modelnote.Tell, and every row goes red; answer the domain's sentence and
@@ -358,13 +349,10 @@ func TestAStateOrACollisionIsToldToAPersonInItsCodesOwnWords(t *testing.T) {
 // A NOTE THE RUNNING NODE COULD NOT VERIFY IS TOLD TO A PERSON UNDER NO WAIT:
 // no Retry-After, since only an operator giving the fleet's nodes the same
 // keys changes the answer, and the assistant's sentence to its model alone, in
-// process (internal/modelnote). A refusal carrying the person's sentence
-// alone, with no condition beneath it, reached the dashboard as an unavailable
-// a wait would clear. Nobody has worded the condition for a person yet
-// (ADR-0060), so the answer carries no detail and no `tool_detail`, and its
-// code's own message for a refusal no wait clears stands alone. So is an executor's
-// record whose seat this node cannot open, sealed under a key it does
-// not hold.
+// process (internal/modelnote). Nobody has worded the condition for a person
+// yet (ADR-0060), so the answer carries no detail and no `tool_detail`, its
+// code's own message alone. So is an executor's record whose seat this node
+// cannot open, sealed under a key it does not hold.
 //
 // Mutation: drop either steer arm from builtin's condition table, or mark it
 // as a condition a wait clears, and the answer carries a Retry-After; answer
@@ -411,19 +399,15 @@ func TestAnUnverifiedNoteIsToldToAPersonUnderNoWait(t *testing.T) {
 // A DELETION AND A REUSED KEY ARE TOLD WITHOUT THE FRAMEWORK'S WORDS, through
 // a tool and around one alike.
 //
-// Both are the state log's refusals, and its error names the subject each met
-// and the operation each was about: "statelog: unavailable (deleted):
-// crewlet.tracker.task.t-1 was deleted and stays deleted". A tool-less write
-// handed that to a person as its `detail`, and a tool-backed one handed them
-// the tool's restatement of it for a model; a reused key's answer opened with
-// either before saying which header to change. Nobody has worded a deletion
-// for a person yet, so it answers `404 not_found` with no detail, in its
-// code's own message (ADR-0060); a reused key is told in the one sentence
-// every surface taking a key answers it with ([opkey.Reused]), alone.
+// Both are the state log's refusals, whose error names the subject ("statelog:
+// unavailable (deleted): …"): neither it nor the tool's restatement belongs in
+// a person's `detail` or before a reused key's words. A deletion answers `404
+// not_found` with no detail, its code's own message (ADR-0060); a reused key
+// is told alone in [opkey.Reused].
 //
 // Mutation: answer a deletion's `detail` with the writer's error or the tool's
-// sentence again, or put the sentence back in front of the reused key's
-// words, and a row goes red.
+// sentence, or put the sentence in front of the reused key's words, and a row
+// goes red.
 func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
 	t.Parallel()
 	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
@@ -518,11 +502,9 @@ func TestAReusedKeyCarriesNoToolDetail(t *testing.T) {
 // domain marked keeps its class, a condition waiting clears is `unavailable` —
 // an estate the router found nobody to serve among them — and anything
 // unmarked is a fault. And a write that MAY HAVE LANDED is an unknown, by the
-// tools' own rule for that ([builtin.UnknownCause]): a walk that stopped at a
-// step nobody can confirm, and a write the router sent to a node that never
-// answered — `unavailable` by class, and never read as a refusal that wrote
-// nothing, which is what the audit recorded the first as and the surface
-// answered the second as a fault.
+// tools' own rule ([builtin.UnknownCause]): a walk that stopped at a step
+// nobody can confirm, and a write the router sent to a node that never
+// answered — `unavailable` by class, never a refusal that wrote nothing.
 //
 // Mutation: drop the UnknownCause step from ClassifyWrite and the two
 // unknowns go red; drop the ErrUnserved arm from builtin.Condition and the

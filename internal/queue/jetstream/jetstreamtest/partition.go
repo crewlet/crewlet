@@ -13,17 +13,11 @@ import (
 // forwarder is one member's view of one peer: a listener this member dials,
 // which proxies to the peer's real route port until it is stopped.
 //
-// # Why a forwarder per ORDERED PAIR
-//
-// A partition is not symmetric to build even when it is symmetric in effect.
-// Member 0 reaches member 1 through 0's own forwarder for 1, and member 1
-// reaches member 0 through 1's forwarder for 0 — two different listeners. With
-// one forwarder per pair, stopping it would cut both directions from a single
-// switch, which cannot express the asymmetric case a real network produces (a
-// member that can send and not receive), and cannot cut ONE member off from
-// the cluster without also cutting the cluster off from itself.
-//
-// For n = 3 that is six forwarders, which is the number the design note names.
+// There is a forwarder per ORDERED PAIR: member 0 reaches 1 through 0's
+// forwarder for 1, and 1 reaches 0 through 1's for 0. One per pair would cut
+// both directions from a single switch, which cannot express the asymmetric
+// case a real network produces (a member that sends and cannot receive) nor
+// cut ONE member off without cutting the cluster off from itself.
 type forwarder struct {
 	from, to int
 	target   string

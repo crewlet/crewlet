@@ -53,16 +53,13 @@ var SettingKinds = []SettingKind{SettingText, SettingZone, SettingContainer, Set
 // default for it. [LimitRow] is its numeric sibling.
 //
 // THE VALUE IS THE APPLIED ONE, its default applied, for [LimitRow]'s reason:
-// a screen that kept its own copy of `HOME`, `seats.invalid` or UTC would
-// drift from the engine the day either moved.
+// a screen's own copy of `HOME` or UTC would drift from the engine.
 //
-// SET IS KNOWABLE HERE, unlike on a limit: each of these is a pointer or an
-// empty-is-unset field, so the applied company remembers whether the
-// document wrote it. A screen says Default or Set from it, and a document that
-// writes the default value says Set, which is true.
+// SET IS KNOWABLE HERE, unlike on a limit: each is a pointer or an
+// empty-is-unset field; a document writing the default value says Set.
 //
-// The validator holds each value, and its refusal carries a person's words
-// ([config.Fault.Said]): no rule of these is copied onto the row.
+// The validator holds each value ([config.Fault.Said]): no rule is copied
+// onto the row.
 type SettingRow struct {
 	// Key is the setting's path in the company document, as `PATCH /config`
 	// names it.

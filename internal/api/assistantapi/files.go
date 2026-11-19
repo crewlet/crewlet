@@ -22,30 +22,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CONVERSATION'S FILES OVER HTTP: the person's upload of an image to ask
-// about, their download of any file their conversation keeps, and an
-// administrator's audited download of one.
+// A CONVERSATION'S FILES OVER HTTP: a person's image upload, their download of a
+// kept file, and an administrator's audited download. The upload is the raw
+// file, its name in `name`. Its declared Content-Type must be an image type or
+// application/octet-stream (a cross-site form cannot send them without a
+// preflight; the Origin gate is the second lock) and is never what the file is
+// kept as: the type is sniffed (assistant.SniffFile) against the attachable
+// image types, so HTML named `.png` is refused. The body is bounded at
+// wire.FileMaxBytes, refused by its declared length before a byte is read.
 //
-// # The upload is the image's bytes, typed by its bytes
-//
-// The body is the raw file and its name rides the `name` query parameter, so
-// nothing about the file is parsed out of a multipart envelope. The declared
-// Content-Type must be an image type or application/octet-stream, none of which
-// a cross-site form can send without a preflight, so the Origin gate in front
-// of every guarded write is the second lock rather than the only one; and it is
-// never what the file is kept as: the type is read from the bytes
-// (assistant.SniffFile) against the image types a person may attach, so HTML
-// named `.png` is refused. The body is bounded at wire.FileMaxBytes, refused by
-// its declared length before a byte is read, and otherwise after one byte past
-// the bound.
-//
-// # A download is never a page
-//
-// Every download, the owner's and the audited one alike, is served as an
-// attachment of the type its bytes were sniffed as, beside
-// `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` and
-// `Cache-Control: private, no-store`, so no browser renders a kept file as a
-// document of this origin or keeps a copy of it.
+// Every download is an attachment of the sniffed type with `nosniff`,
+// `Content-Security-Policy: sandbox` and `Cache-Control: private, no-store`, so
+// no browser renders it as a page of this origin or keeps a copy.
 
 // The file routes, as the API mounts them.
 const (

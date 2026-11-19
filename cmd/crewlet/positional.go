@@ -6,25 +6,14 @@ import "flag"
 //
 // # Why a value can arrive from two places
 //
-// Go's flag package stops parsing at the FIRST non-flag token. So
-// `crewlet run /etc/crewlet.yaml -debug` parses no flags at all: the path and
-// `-debug` both land in fs.Args(), and a command that read only the flags
-// would boot from ./crewlet.yaml without ever mentioning the file the operator
-// named. Every command here therefore peels a LEADING positional with
-// [splitSubject] before parsing, and the same value may also arrive TRAILING
-// (`crewlet run -debug /etc/crewlet.yaml`), where the flag package leaves it in
-// fs.Args().
-//
-// Both forms are legitimate and an operator will write either, so both are
-// accepted — and the total is what a command has to judge.
+// Go's flag package stops parsing at the FIRST non-flag token, so `crewlet run
+// /etc/crewlet.yaml -debug` parses no flags and would boot from ./crewlet.yaml.
+// Every command therefore peels a LEADING positional with [splitSubject]
+// before parsing, and the value may also arrive TRAILING; both are accepted.
 //
 // # Why the count, rather than an ok
 //
-// Because the three commands that name the count in their refusal each
-// computed it differently, and two of the three were wrong: `len(tail)+1`
-// reports THREE for `config import a.yaml b.yaml`, which is two documents and
-// no flag. Counting is the part that is easy to get wrong and impossible to
-// notice, so it is done once, here.
+// `len(tail)+1` reports THREE for `config import a.yaml b.yaml`: done once, here.
 
 // onePositional resolves the single value a command takes, whether it arrived
 // leading or trailing, and reports how many were given in total.

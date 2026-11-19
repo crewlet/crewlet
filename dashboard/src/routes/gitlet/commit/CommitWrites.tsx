@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
 import { GitCommitVerticalGlyph, RotateCcwGlyph } from "@crewlethq/icons/glyphs";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
@@ -23,10 +24,11 @@ import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
+import { heldItem } from "../change/ReviewDialog.tsx";
 
 type Kind = "revert" | "pick";
 
-/** The commit page's two writes, in its page bar. */
+/** The commit page's two writes, in its page bar; on a phone in its More, beside Browse files. */
 export function CommitWrites({
   repo,
   sha,
@@ -43,35 +45,53 @@ export function CommitWrites({
   const detail = read.data?.repo;
   const [open, setOpen] = useState<Kind | null>(null);
   const held = detail ? branchWriteHeld(detail, viewer) : "Still reading the repository.";
+  usePageMenu([
+    {
+      key: "revert",
+      label: "Revert",
+      icon: <RotateCcwGlyph size="sm" />,
+      onSelect: () => setOpen("revert"),
+      ...heldItem(revert.access, held),
+    },
+    {
+      key: "pick",
+      label: "Cherry-pick",
+      icon: <GitCommitVerticalGlyph size="sm" />,
+      onSelect: () => setOpen("pick"),
+      ...heldItem(pick.access, held),
+    },
+  ]);
   return (
-    <div className="row gap-2 wrap" role="group" aria-label="Commit actions">
-      <WriteButton
-        write={revert}
-        size="small"
-        variant="secondary"
-        blocked={held}
-        leadingIcon={<RotateCcwGlyph size="sm" />}
-        onPress={() => setOpen("revert")}
-      >
-        Revert
-      </WriteButton>
-      <WriteButton
-        write={pick}
-        size="small"
-        variant="secondary"
-        blocked={held}
-        leadingIcon={<GitCommitVerticalGlyph size="sm" />}
-        onPress={() => setOpen("pick")}
-      >
-        Cherry-pick
-      </WriteButton>
+    <>
+      <div className="row gap-2 wrap page-action-folds" role="group" aria-label="Commit actions">
+        <WriteButton
+          write={revert}
+          size="small"
+          variant="secondary"
+          blocked={held}
+          leadingIcon={<RotateCcwGlyph size="sm" />}
+          onPress={() => setOpen("revert")}
+        >
+          Revert
+        </WriteButton>
+        <WriteButton
+          write={pick}
+          size="small"
+          variant="secondary"
+          blocked={held}
+          leadingIcon={<GitCommitVerticalGlyph size="sm" />}
+          onPress={() => setOpen("pick")}
+        >
+          Cherry-pick
+        </WriteButton>
+      </div>
       {open === "revert" && detail && (
         <RevertDialog repo={detail} sha={sha} subject={subject} onClose={() => setOpen(null)} />
       )}
       {open === "pick" && detail && (
         <PickDialog repo={detail} sha={sha} subject={subject} onClose={() => setOpen(null)} />
       )}
-    </div>
+    </>
   );
 }
 

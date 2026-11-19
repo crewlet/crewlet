@@ -2,65 +2,18 @@ package livestate
 
 import "slices"
 
-// WHAT ONE READER MAY SEE OF A SEAT'S LIVE STATE — the split between a seat's
-// STATUS and its BODY, declared once (ADR-0033).
-//
-// # Status is everybody's, the body is the seat's trail
-//
-// Everybody a node resolves reads the company's overview: which seats exist,
-// what each is doing, what it costs, which executors are in flight. What a
-// seat is SAYING — the prompt it was sent, what the model answered, the tools
-// it called and with what, the narration of each round, the message that woke
-// it, and what an executor was asked and asked back — is that seat's trail,
-// and reaches only those internal/authz's `audit.seat.read` admits to the
-// seat: an admin, and whoever leads the seat. A live call is the trail as it
-// is being written, so it is masked exactly as the trail's questions are
-// decided, never by a second statement of who may read it.
-//
-// And a WORK ITEM a seat is on is the tracker's: a reader without Worklet
-// is shown that the seat is working, never which item.
-//
-// # The company's configuration is an admin's
-//
-// Which `providers.llm` entries a company configures, and so which of them
-// served a run or failed it, is the company's configuration: the org
-// projection hands only an admin each seat's chain, and Settings, Models is
-// an admin's screen. Three live fields name entries: a harness run's
-// `provider_key` ([LiveCall.Invocations]), the entry an executor was
-// launched on ([ExecutorEntry.ProviderKey]), which a fallback at launch makes
-// other than the chain's head, and a failure's own text ([ErrorInfo.Detail]),
-// which also carries whatever a vendor or a tool wrote. All three reach only
-// a reader with [Reach.Config], whatever their reach to the seat's body: a
-// seat's lead reads its trail and is still not an admin. Everybody else is
-// told a failure by its kind, and an executor by the model it runs under.
-//
-// # Why one mask, over every shape a call travels in
-//
-// A live call reaches a reader in two shapes: the projection's own
-// [*LiveCall] (a snapshot, the `agent` and `live_call` answers, `GET
-// /agents`), and the [leanCall] an `agents` push leaves the heavy fields out
-// of ([LiveCall.Without]). Masked in each surface that sends one, the push and
-// the answer would be two statements of the body list, and the first field
-// added to one and not the other would be a transcript on the overview. So
-// every surface goes through [MaskCall], [MaskRow], [Overlay.For] or
-// [ExecutorEntry.For], and a walk over every field these types put on the wire
-// (TestEveryLiveFieldIsClassified) fails the build on one nobody classified.
-//
-// # The masked call's versions
-//
-// A call withheld from its reader names NO version of a body field — every
-// body member of [CallVersions] is zero, the rounds' kept — and says so
-// (`body_withheld`). The dashboard asks for a call whole (`live_call`) when a
-// push names a version newer than the copy it holds; a reader who will never
-// be sent the body must never be told there is a newer one, or every push
-// would send their tab round that loop.
-//
-// # It never writes through
-//
-// The projection hands out a clone, and a push shares one clone across every
-// audience variant of one broadcast. So every change here is made on a COPY
-// of the struct, and a map is replaced rather than edited: one variant's mask
-// must never be what another variant receives.
+// WHAT ONE READER MAY SEE OF A SEAT'S LIVE STATE: status vs body, declared once
+// (ADR-0033). Status is everybody's: which seats exist, what each does, what it
+// costs, which executors run. A seat's BODY (prompt, answers, tool calls and
+// arguments, narration, the waking message, an executor's question) is its
+// trail, reaching only whom `audit.seat.read` admits: an admin and the seat's
+// lead. A live call is the trail as written, masked as the trail's questions
+// are decided. A WORK ITEM is the tracker's: without Worklet a reader sees the
+// seat works, never which item. Configuration is an admin's ([Reach.Config]).
+// One mask serves every shape ([*LiveCall], [leanCall]) through [MaskCall],
+// [MaskRow], [Overlay.For] and [ExecutorEntry.For]; TestEveryLiveFieldIsClassified
+// fails on an unclassified wire field. It never writes through: a push shares
+// one clone across audiences, so changes go on a COPY and a map is replaced.
 
 // Reach is what one reader may see of one seat's live state.
 type Reach struct {
@@ -72,13 +25,14 @@ type Reach struct {
 	// the seat is on belongs to.
 	Tracker bool
 
-	// Config is whether the reader may read the company's configuration
-	// (an admin): which entries served a run or launched an executor, and
-	// a failure's own text.
-	// It gates the LIVE BROADCAST only. A seat's history read
-	// (maskHistory in internal/api/queries) is held to `audit.seat.read`,
-	// which a lead holds over that seat's trail, so its raw errors are
-	// within the lead's own grant there.
+	// Config is whether the reader may read the company's configuration (an
+	// admin). Three live fields name `providers.llm` entries or vendor text: a
+	// run's `provider_key` ([LiveCall.Invocations]), an executor's launch entry
+	// ([ExecutorEntry.ProviderKey], not the chain's head after a fallback) and a
+	// failure's text ([ErrorInfo.Detail]). A seat's lead reads its trail and is
+	// still not an admin; others get a failure's kind and an executor's model.
+	// It gates the LIVE BROADCAST only: a history read (maskHistory in
+	// internal/api/queries) is held to `audit.seat.read`.
 	Config bool
 
 	// Record is the reader's own record ([iam.RecordOwner]) — the seat an
@@ -98,17 +52,16 @@ const invocationEntry = "provider_key"
 
 // MaskCall is THE ONE MASK of a live call, whichever shape carries it: a
 // [*LiveCall], the projection's own, or the [leanCall] an `agents` push carries
-// once [LiveCall.Without] has left out what a tab holds. Nil answers nil, and
-// so does a typed nil; any other dynamic type is withheld whole (nil), which
-// TestMaskRowHandlesEveryShape keeps unreachable by feeding this both shapes
-// the package produces.
+// once [LiveCall.Without] has left out what a tab holds. Nil and a typed nil
+// answer nil; any other dynamic type is withheld whole (nil), which
+// TestMaskRowHandlesEveryShape keeps unreachable.
 //
-// With r.Body, the call comes back as it was but for the tracker rule. Without
-// it, the call comes back as a [withheldCall]: no body key at all, every
-// running call without its arguments, every body version zero, and
-// `body_withheld`. Without r.Tracker, either way, it carries no work item.
-//
-// It never writes through to v — see the package's paragraph on that.
+// With r.Body the call comes back as it was but for the tracker rule. Without
+// it, a [withheldCall]: no body key, running calls without arguments, every
+// body version zero (the rounds' kept) and `body_withheld`; a reader never
+// sent the body must not be told of a newer version, or its tab would loop on
+// `live_call`. Without r.Tracker it carries no work item. It never writes
+// through to v.
 func MaskCall(v any, r Reach) any {
 	switch c := v.(type) {
 	case nil:

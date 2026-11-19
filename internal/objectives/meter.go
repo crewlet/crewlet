@@ -1,6 +1,8 @@
 package objectives
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -137,6 +139,24 @@ func (m *Meter) Record(n Name, elapsed time.Duration, answered bool) {
 		m.ledgers[n] = l
 	}
 	l.add(m.now(), good)
+}
+
+// Abandon counts one event of objective n whose caller went away before it
+// was answered ([Abandoned]), elapsed after it began: NO EVENT inside the
+// bound, where nobody can say how it would have ended, and a BAD one past it,
+// since it was late before its caller left.
+func (m *Meter) Abandon(n Name, elapsed time.Duration) {
+	if o, ok := Of(n); ok && !o.Good(elapsed, true) {
+		m.Record(n, elapsed, false)
+	}
+}
+
+// Abandoned reports whether ctx, the context of the caller an event answers,
+// ended because that caller went away: cancelled, as net/http cancels a
+// request whose client closed its connection. A context past its deadline is
+// not abandoned: the deadline is a bound the event failed to meet.
+func Abandoned(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), context.Canceled)
 }
 
 // RecordSince counts one observation of objective n whose event began at

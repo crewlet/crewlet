@@ -127,29 +127,16 @@ func (c *Client) UserByUsername(ctx context.Context, username string) (User, err
 
 // UsersByUsernames resolves names to accounts, every name in ONE request.
 //
-// POST /users/usernames, and the shape of its answer is the server's: the
-// accounts it holds under those names, in no order, with a name it holds no
-// account under simply ABSENT (server/channels/api4/user.go, getUsersByNames).
-// So an answer is complete only for the names asked: a name missing from it
-// is one this session cannot find, which is a different fact from a call that
-// failed, and the caller has to keep the two apart.
+// POST /users/usernames: a name with no account is simply ABSENT, a different
+// fact from a failed call; the caller keeps the two apart.
 //
-// THE NAMES ARE LOWERCASED, because the server matches them exactly: the
-// store selects `Username IN (...)` (SqlUserStore.GetProfilesByUsernames)
-// against names it saved lowercase (model.User.PreSave, NormalizeUsername) and
-// admits only lowercase ones (model.IsValidUsername). A name written as
-// Mattermost displays it in a profile, `Jane`, would otherwise find nobody —
-// while the single-name read beside it lowercases on the server's side
-// (`Users.Username = lower(?)`), so the same name looked up the two ways would
-// disagree.
+// THE NAMES ARE LOWERCASED, because the server matches exactly against names
+// saved lowercase (model.User.PreSave): `Jane` as a profile displays it would
+// find nobody, while the single-name read lowercases server-side.
 //
-// What it cannot see is absent too. Without the view_members permission —
-// which the built-in system_user role every bot holds carries — the server
-// narrows the answer to the accounts sharing a team or a channel with the
-// caller (GetViewUsersRestrictions), and says nothing about the rest.
-//
-// REPEATABLE although it is a POST: it reads, so a retry after a lost answer
-// repeats nothing.
+// What it cannot see is absent too: without view_members the answer narrows
+// to accounts sharing a team or channel with the caller. REPEATABLE although
+// a POST: it reads.
 func (c *Client) UsersByUsernames(ctx context.Context, usernames []string) ([]User, error) {
 	names := make([]string, 0, len(usernames))
 	for _, name := range usernames {
@@ -199,21 +186,15 @@ func (l postList) ordered() []Post {
 
 // chronological returns the posts oldest-first, by their own timestamps.
 //
-// DELIBERATELY NOT [postList.ordered]. That one walks `order` BACKWARDS
-// because the CHANNEL endpoint answers newest-first, and nothing establishes
-// that `/posts/{id}/thread` answers the same way — a different endpoint is a
-// different claim, and reusing the reversal on it would silently invert the
-// conversation and hand a seat the answer before the question, which is the
-// exact failure the helper exists to prevent. Sorting on `create_at` is right
-// whatever either endpoint returns.
+// DELIBERATELY NOT [postList.ordered], which walks `order` BACKWARDS because
+// the CHANNEL endpoint answers newest-first; nothing establishes that
+// `/posts/{id}/thread` does, and reusing the reversal could invert the
+// conversation and hand a seat the answer before the question. Sorting on
+// `create_at` is right whatever either endpoint returns.
 //
-// The POST ID breaks the tie, so two posts written in the same millisecond
-// render in a stable order rather than in a map-iteration one, which would
-// differ between two nodes rendering the same thread.
-//
-// It walks the POSTS rather than `order`: every post in a thread response
-// belongs to that thread, so there is no ordering to honour and nothing to
-// skip.
+// The POST ID breaks the tie, so two posts from the same millisecond render
+// stably, not in map-iteration order, which differs between nodes. It walks
+// the POSTS, not `order`: every post in a thread response belongs to it.
 func (l postList) chronological() []Post {
 	out := make([]Post, 0, len(l.Posts))
 	for _, p := range l.Posts {
@@ -251,19 +232,12 @@ func (c *Client) PostsSince(ctx context.Context, channelID string, since time.Ti
 
 // Thread reads one thread whole, oldest first.
 //
-// THE SECOND READ this per-seat client was written for, and the first that
-// serves a turn rather than a reconnect: the engine hands a seat the thread
-// it was woken in rather than telling it to go and fetch one, which on a
-// company whose chat tools come from an MCP server costs three rounds before
-// the agent has read a word.
+// The engine hands a seat its thread rather than telling it to fetch one,
+// which over an MCP chat server costs three rounds before it reads a word.
 //
-// NO PAGE SIZE. The endpoint's paging is anchored on a post the caller has to
-// name and walks from there, so a bare `perPage` truncates from the OLDEST
-// end — which for a seat woken by the newest message is the least useful
-// slice of a long thread. The whole thread comes back instead and the
-// renderer keeps the root and the newest, which is the slice that was wanted.
-// What bounds this call is the caller's own deadline and the decoder's
-// response limit, not a page number that would cut the wrong end.
+// NO PAGE SIZE: paging is anchored on a post the caller names, so a bare
+// `perPage` truncates from the OLDEST end, the least useful slice for a seat
+// woken by the newest message. The renderer keeps the root and the newest.
 //
 // skipFetchThreads drops the per-post thread membership Mattermost otherwise
 // attaches to every post in the response: it answers "who follows this

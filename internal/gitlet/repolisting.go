@@ -83,7 +83,7 @@ type ReposTotal struct {
 // validateRepos is [ReadQuery.validate] for a `repos` listing: a kind and an order this build
 // knows, each over an index of its own, so neither combines with a prefix or the protected ones.
 func (q ReadQuery) validateRepos() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.RepoKind != "" && !q.RepoKind.Valid():
 		return refused("repo_kind", fmt.Sprintf("%q is not one of %s", q.RepoKind, words.Or(RepoKinds())))

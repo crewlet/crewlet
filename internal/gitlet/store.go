@@ -245,12 +245,12 @@ func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensur
 func (d Declared) Validate() error {
 	switch {
 	case !gitref.ValidProjectName(d.Name):
-		return fmt.Errorf("%w: name: %q is not a project repository's name", ErrInvalid, d.Name)
+		return refusedf("%w: name: %q is not a project repository's name", ErrInvalid, d.Name)
 	case d.Settings.ManagedBy != ManagedConfig:
-		return fmt.Errorf("%w: settings.managed_by: a declared repository is "+
+		return refusedf("%w: settings.managed_by: a declared repository is "+
 			"managed by %s, not %q", ErrInvalid, ManagedConfig, d.Settings.ManagedBy)
 	case d.Settings.Kind != "" && d.Settings.Kind != RepoProject:
-		return fmt.Errorf("%w: settings.kind: a declared repository is a %s, not %q", ErrInvalid,
+		return refusedf("%w: settings.kind: a declared repository is a %s, not %q", ErrInvalid,
 			RepoProject, d.Settings.Kind)
 	}
 	settings := d.settingsAt(Activation{})

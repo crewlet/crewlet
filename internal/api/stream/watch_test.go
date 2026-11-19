@@ -25,13 +25,11 @@ import (
 
 // A WATCH IS DECIDED LIKE THE INBOX QUESTION ABOUT THE SAME SEAT.
 //
-// A watch installs this node's routing for a seat's `inbox_changed` frames —
-// whose inbox moved, in which domain, when, under which reason — so it takes
-// the rule the composed `inbox` question takes about that seat: the seat's own
+// A watch installs routing for a seat's `inbox_changed` frames, so it takes the
+// rule the composed `inbox` question takes about that seat: the seat's own
 // holder, whoever leads it through the chart, or an admin, with no app, since
-// the frames announce every native domain's notices. Any resolved caller could
-// watch any seat before, which made the routing index a way to follow somebody
-// else's inbox the question itself refused.
+// the frames announce every native domain's notices. Otherwise the routing
+// index would follow an inbox the question itself refused.
 //
 // Each refusal is a FRAME on a socket that stays open, never a close: 4403 is
 // what the dashboard reads as "you may not have the live channel at all", and
@@ -114,21 +112,14 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 // AN UNDECIDABLE WATCH SAYS WHEN TO ASK AGAIN, like every other `unavailable`
 // frame on the socket.
 //
-// The watch's refusal went out as a bare `unavailable` — the frame a node too
-// old to say sends — so the dashboard re-asked it at its own fixed interval
-// whatever the node could have told it: every five seconds for as long as the
-// tab stayed open against a log that was full, which no wait clears,
-// and sooner than a node draining a long backlog had said it could answer. So
-// the frame carries `retry_after` by the state log's own rule over what could
-// not be read, ZERO where waiting will not change it — and the hint ALONE:
-// what the directory says about a login names the seat it is bound to, so its
-// words stay in the node's log.
+// The frame carries `retry_after` by the state log's own rule over what could
+// not be read, ZERO where waiting will not change it — and the hint ALONE: what
+// the directory says about a login names its seat, so those words stay in the
+// node's log.
 //
 // AND IT IS A QUERY'S HINT OVER THE SAME CAUSE ([stream.UnavailableOf]), never
-// one the watch works out for itself: one tab told two different times to come
-// back about one unreadable cause is the disagreement that reading exists to
-// make impossible. The last case is the one that holds that rather than the
-// three values: [stream.ErrNoCompany] is a cause the reading answers with a
+// the watch's own: one tab told two times about one cause is the disagreement
+// that reading prevents. The last case holds that: [stream.ErrNoCompany] has a
 // hint of its own, which the state log's rule alone reads as the health tick.
 func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
 	t.Parallel()

@@ -269,23 +269,18 @@ func TestAPendingLoginOutranksAWriteThatLandedWhileItRan(t *testing.T) {
 	}
 }
 
-// A PENDING LOGIN IS ORDERED UNDER THE SHARED LOGIN'S LOCK. An operator's
-// write — here `-from-host`'s steps, made by hand so the order can be stopped
-// part way — moves the epoch and then writes, in one hold of the lock. A login
-// whose carry failed inside that hold, between the two, read the moved epoch
-// without the lock: it was ordered after a write that landed after it
-// finished, and the next command carried it out over the human's login. Under
-// the lock the read cannot land there: it is refused (the record keeps the
-// epoch read with the seed, and the operator's login stands) or waits the hold
-// out (the login is ordered after it, as its own carry, waiting the same hold
-// out, would have been written over it). That a login command whose carry
-// failed orders itself through this read at all is
-// [TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock]'s.
+// A PENDING LOGIN IS ORDERED UNDER THE SHARED LOGIN'S LOCK. An operator's write (here
+// `-from-host`'s steps, made by hand so the order can be stopped part way) moves the
+// epoch then writes, in one hold of the lock. A login whose carry failed inside that
+// hold read the moved epoch without it, was ordered after a write that landed later,
+// and was carried out over the human's login. Under the lock the read is refused (the
+// operator's login stands) or waits the hold out (the login is ordered after it).
+// [TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock] covers that a failed carry
+// orders itself through this read at all.
 //
-// Mutation: read the epoch without the lock, and the first case carries the
-// sign-in out over the human's login; give up on a lock held at all rather
-// than wait for it, and the second keeps the human's login over a sign-in
-// that finished after it.
+// Mutation: read the epoch without the lock and the first case carries the sign-in
+// out over the human's login; give up on a held lock rather than wait and the second
+// keeps the human's login over a sign-in that finished after it.
 func TestAPendingLoginIsOrderedUnderTheSharedLock(t *testing.T) {
 	t.Parallel()
 	token := `{"token":"signed-in"}`

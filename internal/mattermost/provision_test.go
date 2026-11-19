@@ -156,25 +156,15 @@ func (s *chatServer) mutations() int {
 // mutatingRoute reports whether a request CHANGES this instance, keyed by
 // ROUTE rather than by HTTP method.
 //
-// integrationtest states that distinction and it is not pedantry: some
-// vendors model a listing as a POST, so a counter keyed on the method makes
-// "a converged pass writes nothing" impossible to satisfy — and a clause
-// nobody can satisfy is one somebody eventually weakens until it passes.
-// Mattermost has two POSTs that are reads, and both are named here rather
-// than left to be discovered: /channels/direct FINDS the conversation
-// between two accounts and returns the existing one instead of making a
-// second, and /users/{id}/typing raises an ephemeral indicator there is
-// nothing to undo. Neither is on the provisioning path.
+// integrationtest states that distinction: a method-keyed counter makes "a
+// converged pass writes nothing" unsatisfiable for vendors that POST a
+// listing. Mattermost's two read POSTs are named: /channels/direct FINDS the
+// existing conversation, and /users/{id}/typing is ephemeral.
 //
-// Everything else that is not a GET is a write here: a bot created, renamed,
-// enabled or disabled, a membership set, a token minted or revoked. So the
-// DEFAULT IS TO COUNT — a route nobody classified that turns out to be a
-// read only makes the clause harder to pass, where one that turns out to be
-// a write would make this suite pass over the exact bug it exists to find.
-//
-// Counted on ARRIVAL, whatever the answer: a duplicate join that the server
-// refuses with "already a member" is still a request this pass sent to
-// somebody's instance, which is the thing the clause is about.
+// Everything else not a GET is a write, so the DEFAULT IS TO COUNT: an
+// unclassified read only makes the clause harder to pass, an unclassified
+// write would hide the bug it exists to find. Counted on ARRIVAL: a join
+// refused as "already a member" is still a request sent to somebody's instance.
 func mutatingRoute(method, path string) bool {
 	if method == http.MethodGet {
 		return false

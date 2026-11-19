@@ -15,14 +15,11 @@ import (
 
 // A QUESTION'S CONDITION GOES TO THE ANSWERING SURFACE'S LOG, with its own
 // fields, at WARN where no wait clears it and DEBUG where one does: a screen
-// asks a question again after every hint for as long as a node is catching up,
-// so a line per ask is noise beside the alarm that names it, while a refusal
-// no wait clears is the administrator's to act on.
+// re-asks after every hint, so a line per ask is noise beside the alarm.
 //
-// NO WAIT CLEARS IS THE ANSWER'S OWN HINT, so a condition the state log does
-// not class (a company's file storage full, a note the running node could not
-// verify) is written at WARN like a full log: read through the state log's
-// rule alone, both went out with no Retry-After and were written at DEBUG.
+// No wait clears is the answer's own hint, so a condition the state log does
+// not class (file storage full, a note the node could not verify) is WARN like
+// a full log, not DEBUG as the state log's rule alone would have it.
 //
 // Mutation: log through this package's logger, drop the fields, log a node
 // behind at INFO, or judge the level by [statelog.ConditionLevel], and a row

@@ -8,29 +8,17 @@ import (
 )
 
 // RevisionOf is the revision the activation pointer names, as a node's own
-// history keeps it, from the pointer and the sealed body it carries.
-//
-// ONE MAPPING for every reader of the pointer — the reconciler opening the
-// fleet's revision, the config API answering it, the boot keeping it — because
-// each used to build its own and they disagreed on whose record a revision was.
-//
-// THE ORIGIN'S RECORD, NOT THIS NODE'S. The pointer carries who wrote the
-// revision ([coord.RevisionOrigin]) — the author, what sort of author, the
-// credential it was written through — and how and when, and a peer that stored
-// `peer` from `fleet` at the activation instant instead gave one revision a
-// different author on every node: the audit screen's answer depended on which
-// node served it, and no node but the origin could say who had written it.
-// Every pointer carries a complete origin — the coordination store refuses one
-// that does not ([coord.RevisionOrigin.Check]) — so it maps straight onto the
-// row.
-//
-// AT THE POINTER'S INSTANT, never its creation: the two differ on every
-// re-activation of an older revision, and the instant is what an applied
-// revision stamps the chart with.
-//
-// The body is the caller's to authenticate: it is whatever the coordination
-// bucket holds, so nothing reads it as this fleet's until it opens under the
-// fleet's keyring.
+// history keeps it: ONE MAPPING for every reader of the pointer (reconciler,
+// config API, boot), so they agree on whose record a revision is. THE ORIGIN'S
+// RECORD, NOT THIS NODE'S. The pointer carries who wrote the revision
+// ([coord.RevisionOrigin]: author, kind, credential, how and when); a peer
+// storing `peer` from `fleet` would give one revision a different author on
+// every node. Every pointer carries a complete origin (the coordination store
+// refuses one that does not, [coord.RevisionOrigin.Check]), so it maps straight
+// onto the row. AT THE POINTER'S INSTANT, never its creation: they differ on
+// every re-activation of an older revision, and the instant stamps the chart.
+// The body is the caller's to authenticate: nothing reads it as this fleet's
+// until it opens under the fleet's keyring.
 func RevisionOf(target coord.Activation, payload json.RawMessage) store.Revision {
 	origin := target.Origin
 	return store.Revision{

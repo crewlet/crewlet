@@ -50,21 +50,15 @@ const (
 
 // Sources are what the answers read from.
 //
-// Every field is optional, and an absent one leaves its questions UNREGISTERED,
-// so they come back as [ErrUnknown] (`unknown_query`, 404) rather than answered
-// emptily: "there is no tracker here" and "the tracker is empty" are answers a
-// screen must be able to tell apart, and "not here" is permanent: no wait and
-// no other node's answer gives this node a source it was not configured with,
-// so it is a question this node does not have rather than [ErrUnavailable]'s
-// question it cannot answer here — whose `retry_after` says whether coming
-// back helps, and a Retry-After here would send a client round a loop.
+// Every field is optional, and an absent one leaves its questions UNREGISTERED:
+// [ErrUnknown] (`unknown_query`, 404), not an empty answer, so "no tracker
+// here" and "the tracker is empty" stay distinguishable. "Not here" is
+// permanent, unlike [ErrUnavailable], whose `retry_after` says whether coming
+// back helps; a Retry-After here would loop a client.
 //
 // Only a few are absent on a real node: Work and Pages on a company that runs
-// the vendor tracker and wiki, Knowledge where no knowledge backend is
-// configured, and Retention where no state log runs. The rest are held by every
-// node, and the API wires every one of them. Leaving one of those out is what a
-// caller that asks a subset of the questions does, which is how this package's
-// own suite exercises one question at a time.
+// the vendor tracker and wiki, Knowledge with no knowledge backend, Retention
+// with no state log. The API wires the rest.
 type Sources struct {
 	State *livestate.LiveState
 
@@ -135,12 +129,9 @@ type Sources struct {
 	// "leads nobody": a 503 a caller retries, never a 403 that sends them
 	// to ask for authority they already hold.
 	//
-	// internal/api REQUIRES it, because a node serving the API always has
-	// a chart and the unknown answer never clears by waiting: `crewlet
-	// run` built these sources without one, so every lead reading a
-	// report's inbox, queue or pins was told "this node cannot say who
-	// leads" for the life of the process, and the live socket's `watch`
-	// decides by the same seam.
+	// internal/api REQUIRES it: a node serving the API always has a chart
+	// and the unknown answer never clears by waiting. The live socket's
+	// `watch` decides by the same seam.
 	Chart authz.Chart
 
 	// Holders says whose record somebody else's LOGIN names — the identity
@@ -156,22 +147,16 @@ type Sources struct {
 	// while everything of theirs is kept under their seat.
 	Holders iam.Holders
 
-	// Acts names the operator catalogue's tools that WRITE which the
-	// authority table can admit this principal to before any object is
-	// named (internal/api/operator) — what `viewer` answers as `acts`, so
-	// a screen enables exactly the controls a press of would be decided
-	// for rather than discovering every refusal by pressing.
+	// Acts names the operator catalogue's WRITE tools the authority table
+	// can admit this principal to before any object is named
+	// (internal/api/operator): `viewer`'s `acts`, so a screen enables
+	// exactly the controls a press would be decided for.
 	//
-	// ASKED OF THE PRINCIPAL, never of the transport: any principal the
-	// guard resolved may call the act route, and what separates one
+	// ASKED OF THE PRINCIPAL, never of the transport: what separates one
 	// caller's buttons from another's is the table, not whether a seat is
-	// bound. An ERROR is the table's UNKNOWN — this node could not decide
-	// for this principal — and `viewer` refuses rather than answering an
-	// empty list a screen would draw as "you may do nothing". Nil answers
-	// none: it is a surface built with no operator catalogue, which mounts
-	// no act route — never an engine node, whose catalogue serves the seat
-	// controls whatever backends its company runs — so no press could
-	// reach anything.
+	// bound. An ERROR is the table's UNKNOWN and `viewer` refuses rather
+	// than answer an empty list a screen would draw as "you may do
+	// nothing". Nil answers none: no operator catalogue, no act route.
 	Acts func(ctx context.Context, p iam.Principal) ([]string, error)
 
 	// Assistant answers whether the Dashboard Assistant is available to this
@@ -201,12 +186,10 @@ type Sources struct {
 	// the process environment.
 	//
 	// THE NODE'S CHAIN because the routing that mentions a person resolves
-	// the same fields through it: an id sealed in the store, read here from
-	// the process environment, was a person the screen showed no id for
-	// while every delivery to them was routed by it. It resolves contact
-	// ids and the browser addresses `link_hosts` reports, and nothing else:
-	// who a caller IS is the identity directory's answer, never a field of
-	// the chart.
+	// the same fields through it: an id sealed in the store, read from the
+	// process environment, showed no id for a person deliveries still
+	// reached. It resolves contact ids and the `link_hosts` addresses, and
+	// nothing else: who a caller IS is the identity directory's answer.
 	Env org.EnvLookup
 
 	// CompanyWriters is Tier A's `api.auth.company_writers`: the ids of
@@ -300,16 +283,13 @@ type Sources struct {
 	// Memory is a seat's memory — its diary, episodes, the skills it drafted
 	// and what it learned about the people it works with — ANSWERED BY THE
 	// NODE HOLDING THE SEAT (internal/learning/memread). Every node keeps a
-	// copy of every seat it
-	// ever ran and only the holder keeps it current, so a read of whichever
-	// node served the request described the seat as of the last time that
-	// node ran it.
+	// copy of every seat it ever ran and only the holder keeps it current,
+	// so any other node describes the seat as of its last run there.
 	//
-	// HANDED THE SEAT WHOLE ([memread.Seat]: its agent id and its handle),
-	// resolved here from the org the answer is made of — the reader never
-	// resolves a handle itself, because the node that answers may hold a
-	// different org from the node that asked. Nil leaves `agent_memory`,
-	// `agent_episode` and `memory_overview` unregistered.
+	// HANDED THE SEAT WHOLE ([memread.Seat]: agent id and handle), resolved
+	// here from the org the answer is made of: the node that answers may
+	// hold a different org from the node that asked. Nil leaves
+	// `agent_memory`, `agent_episode` and `memory_overview` unregistered.
 	Memory SeatMemory
 
 	// Channels is the fleet's agent-to-agent authorization record. A
@@ -332,13 +312,11 @@ type Sources struct {
 	// get, rather than one from an index somebody has to keep fresh.
 	//
 	// A FUNCTION, not a value, for the reason [Sources.Company] is one: an
-	// apply REPLACES the searcher. A credential rotation, a retired
-	// integration block, a knowledge backend repaired after a failed boot
-	// — each rebuilds it, and a value captured when the API was assembled
-	// keeps searching with the credential that was revoked, against the
-	// wiki that was removed, or answers "no backend" forever for a company
-	// that has had one since its second minute. Nil, and a nil answer from
-	// it, both mean the same thing and leave the question unregistered.
+	// apply REPLACES the searcher (a credential rotation, a retired
+	// integration block, a backend repaired after a failed boot), and a
+	// value captured at assembly keeps searching with the revoked
+	// credential, or answers "no backend" forever. Nil, and a nil answer
+	// from it, both leave the question unregistered.
 	Knowledge func() knowledge.Searcher
 
 	// Budget is the DURABLE token counter — what the engine actually
@@ -433,16 +411,14 @@ type Sources struct {
 	// Reconciles is what the integration reconcile loop last found for
 	// each surface, or nil when this process cannot say.
 	//
-	// The FLEET's record rather than this node's, and that is the whole
-	// reason it is stored where it is: the loop is a worker duty, so on a
-	// split-role deployment the node answering this request is never the
-	// one that wrote it.
+	// The FLEET's record rather than this node's: the loop is a worker
+	// duty, so on a split-role deployment the node answering this request
+	// is never the one that wrote it.
 	//
 	// Nil is "cannot say" and an empty slice is "nothing has been
-	// reconciled", exactly as with Routed and Verifiable above. The
-	// integrations answer keeps the two apart rather than folding a
-	// coordination store that could not be read into a claim that every
-	// surface is unchecked.
+	// reconciled", as with Routed and Verifiable above; the integrations
+	// answer keeps them apart so an unreadable coordination store is not
+	// reported as every surface unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
 	// Converges reports whether a reconcile pass converges a surface in
@@ -462,13 +438,10 @@ type Sources struct {
 	// built without them — leaves their questions unregistered. The sources
 	// `crewlet run` wires resolve their half per question (see native.go),
 	// so a half not up yet answers [ErrUnavailable] and one the company
-	// keeps on a vendor [ErrUnknown], as an unregistered question would.
+	// keeps on a vendor [ErrUnknown].
 	//
-	// Consumer-defined interfaces rather than the concrete readers, like
-	// every other seam here — and the READ side only. Nothing on this
-	// surface writes: a board's edit goes through a seat's tools or the
-	// operator surface (internal/api/operator), both of which are
-	// attributed to somebody.
+	// READ side only: a board's edit goes through a seat's tools or the
+	// operator surface (internal/api/operator), both attributed to somebody.
 	Work  WorkReader
 	Pages PageReader
 
@@ -530,33 +503,18 @@ type Sources struct {
 	// every room with its whole history.
 	ChatReads ChatReads
 
-	// WebhookBase is where a THIRD-PARTY APP reaches this deployment —
-	// `config.API.WebhookBase`: the public listener's
-	// `api.public.external_url` where `api.public` is set, and
-	// `api.external_url` otherwise — or nil when this process cannot say.
+	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
+	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
+	// is set, `api.external_url` otherwise), or nil when it cannot say.
 	//
-	// THE VENDOR'S ADDRESS, NEVER THE PERSON'S. What this is compared
-	// against is the endpoint a surface was REGISTERED at, which the
-	// reconcile loop and the dashboard's setup pass both stamp from that
-	// same accessor ([integration.StampEndpoint]). Behind a public listener
-	// the person's `api.external_url` is a different socket, one that
-	// answers 404 for every webhook route — so compared against it, every
-	// registration on a healthy deployment read as moved, for ever, and its
-	// card as Action needed. Named as setupapi's Options name it, so the
-	// wiring says which of the two addresses it hands in.
+	// THE VENDOR'S ADDRESS, NEVER THE PERSON'S: compared against the
+	// endpoint a surface was REGISTERED at ([integration.StampEndpoint]).
+	// Behind a public listener the person's `api.external_url` answers 404
+	// for every webhook route, so comparing against it read every healthy
+	// registration as moved. A seam: no import of the operator's config.
 	//
-	// A SEAM RATHER THAN A READ OF [Sources.Company], which is where the
-	// address used to live. As a Tier B field it could be a whole `${VAR}`
-	// the document stored verbatim, while what a surface REGISTERED was the
-	// address that reference resolved to — so a comparison against the raw
-	// document answered "the address moved" for every company that wrote
-	// one, for ever. It is Tier A now and cannot be a reference, and the
-	// seam stays because this package must not import the operator's own
-	// config to answer a question about a company.
-	//
-	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
-	// above: a node that cannot read the value must not be the reason a
-	// screen calls a healthy registration stale.
+	// Nil is "cannot say", as with Routed, Verifiable and Reconciles above:
+	// it must not make a screen call a healthy registration stale.
 	WebhookBase func() string
 	// DashboardBase is where a PERSON's browser reaches this deployment,
 	// `api.external_url`: the origin a link in chat must carry to be one of
@@ -607,23 +565,15 @@ type Sources struct {
 	// Now is the ONE clock every answer here reads, injectable so a caller
 	// can pin it. Nil is the wall clock.
 	//
-	// EVERY ANSWER, not the few that happened to be written against it:
-	// `tokens` and seven of the tracker's answers read the wall clock
-	// beside it, so a caller that pinned this still had answers that moved
-	// with the wall — and `tokens` labels its window with the instant it
-	// was asked, so one question asked twice, a second apart, answered
-	// twice differently. A source walk in clock_test.go holds it: nothing
-	// in this package reads the wall clock but [Sources.clock].
+	// EVERY ANSWER: `tokens` labels its window with the instant it was
+	// asked, so a stray wall-clock read made one question answer
+	// differently twice. clock_test.go's source walk holds it.
 	//
-	// AND THE STORE IS HANDED IT where an answer here labels what the store
-	// counts: `tokens` and `token_series` head their answer with a window
-	// measured from this clock, and [store.EventLog.PhaseTokens] measures
-	// its rows from the same instant, or the heading and the rows are two
-	// windows. What the store measures AND labels itself stays on its own
-	// clock — a listing's read floor, which has to agree with the clock the
-	// retention sweep deletes by, and `event_series`, whose axis comes back
-	// from the one evaluation its bars were counted over — so pinning this
-	// does not pin those.
+	// The store is handed it where an answer labels what the store counts
+	// ([store.EventLog.PhaseTokens]), or heading and rows are two windows.
+	// What the store labels itself (a listing's read floor, which must
+	// agree with the retention sweep; `event_series`' axis) stays on its
+	// own clock.
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):
@@ -712,18 +662,11 @@ func (s Sources) zone() *time.Location {
 // the level asked, or at all while it holds a record it cannot decode, is
 // evicted or its log is full.
 //
-// Distinct from an empty answer, and the distinction is the point: a dashboard
-// that drew "there is no work" for "this node cannot read the work right now"
-// would report a quiet company during an outage. Distinct from [ErrUnknown]
-// too, which is the answer for a source this node does not have at all. Some
-// of it clears by waiting and some does not, and that is said by
-// [statelog.RetryAfter] on what it wraps — zero, and so no Retry-After, for a
-// refusal no wait changes — rather than by leaving those out of this error and
-// reporting them as a fault.
-//
-// Answers do not return it themselves. The registry classifies at one boundary
-// (see ClassifyFailure), so an answer that reads a store which can be
-// briefly unreachable cannot forget to.
+// Distinct from an empty answer ("there is no work" drawn during an outage)
+// and from [ErrUnknown], a source this node does not have at all. Whether
+// waiting helps is said by [statelog.RetryAfter] on what it wraps: zero, so no
+// Retry-After, for a refusal no wait changes. Answers do not return it
+// themselves: the registry classifies at one boundary (see ClassifyFailure).
 var ErrUnavailable = errors.New("queries: not available on this node")
 
 // ErrNotFound is a question this surface understood, about a record it does
@@ -1266,23 +1209,17 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	if seat == nil {
 		return nil, fmt.Errorf("%w: no agent seat answers to the handle %q", ErrNotFound, handle)
 	}
-	// LIVE STATE AND HISTORY, which are two different sources and always
-	// were: the projection holds the call in flight, the event store holds
-	// the ones that finished. The answer carried only the first, so a seat
-	// page showed the round happening now and nothing before it — while the
-	// spend chart beside it, which reads the store, reported every phase
-	// the turn had already completed. Two panels on one screen disagreeing
-	// about whether a seat had done anything.
+	// LIVE STATE AND HISTORY are two sources: the projection holds the call
+	// in flight, the event store the ones that finished. Answering only the
+	// first left a seat page disagreeing with the spend chart beside it.
 	//
 	// A seat the projection has never seen is NOT an error: a seat
-	// configured and never spawned is exactly that, and a 404 there would
-	// make a healthy new company look broken. Its history is answered the
-	// same way.
+	// configured and never spawned is exactly that, and a 404 would make a
+	// healthy new company look broken. Its history is answered the same way.
 	//
-	// `history=false` ASKS FOR THE SEAT ALONE, its status without the calls
-	// it finished: their payloads are whole transcripts, so a caller asking
-	// what a seat is doing (the assistant's step, held to a step's read)
-	// was handed a body too large to read and lost the status with it.
+	// `history=false` asks for the seat alone, its status without the
+	// finished calls: their payloads are whole transcripts, too large for a
+	// caller asking only what a seat is doing (the assistant's step).
 	history, next, coverage := []store.EventRecord{}, "", (*eventfan.Coverage)(nil)
 	if p.Bool("history", true) {
 		history, next, coverage = s.phaseHistory(ctx, agentID, p)
@@ -1464,25 +1401,15 @@ func (s Sources) agentSeat(handle string) (*org.Role, string) {
 // liveCall answers `live_call{agent_id}`: the seat's in-flight call with every
 // field, and the version of each, or null while it has none.
 //
-// The REPAIR for an `agents` push the socket dropped. A push leaves out a heavy
-// field its seat's tabs already hold at the version it names (internal/api/
-// stream's pushAgents), so a tab that missed the push which moved one is
-// holding an older copy than every later push describes, and asks for the call
-// whole here. A seat the projection has not seen is answered null like one
-// between calls: either way there is nothing in flight.
+// The repair for an `agents` push the socket dropped. A push leaves out a heavy
+// field its tabs already hold at the version it names (internal/api/stream's
+// pushAgents), so a tab that missed one asks for the call whole here.
 //
-// BY AGENT ID, the key the projection and every `agents` push name the seat
-// by, so the tab pairs the answer with the row it asked for. It used to be the
-// ROLE NAME, which two seats may share — two "Engineer"s answered each other's
-// call. The handle rides along as a label, from the company this node runs, and
-// is empty for an id that company does not hold: a call already in flight on a
-// seat the latest revision removed is still a call, and nothing in the answer
-// is keyed by the label.
+// BY AGENT ID, the key every `agents` push uses; a role name may be shared. The
+// handle is a label, empty for an id the company no longer holds.
 //
 // MASKED AS THE `agents` PUSH IS ([livestate.MaskCall]): the call whole to a
-// reader the seat's trail is open to, its status and no body to anybody else,
-// so the repair a status reader's tab never asks for anyway hands them nothing
-// the push did not.
+// reader the seat's trail is open to, its status alone to anybody else.
 func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 	agentID := strings.TrimSpace(p.String("agent_id"))
 	if agentID == "" {
@@ -1515,23 +1442,15 @@ func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 // phaseHistory is the seat's finished calls, newest first, as the rows the
 // dashboard renders beside the live one.
 //
-// BEST EFFORT. The live half is the answer's point and it comes from memory;
-// refusing the whole seat page because the event log could not be read would
-// turn a degraded history into no screen at all. An unreadable log and a seat
-// that has not run yet both render as "no invocations", which is the same
-// thing a reader can see for themselves from the phase chart above it.
+// BEST EFFORT. The live half is the answer's point and comes from memory;
+// refusing the seat page because the event log was unreadable would turn a
+// degraded history into no screen. An unreadable log and a seat that has not
+// run both render as "no invocations".
 //
-// Each row is the event's PAYLOAD with the envelope's timestamp merged in: the
-// payload's field names are already the client's — turn_id, phase, iteration,
-// model, response, tool_executions, total_tokens — because the same shape
-// drives the live row, and the timestamp is the one field that lives on the
-// envelope rather than inside it. The payload's price rides along, since the
-// row is the record as stored, and the dashboard reads none of it (rule 19 in
-// docs/reference/dashboard-design.md).
-//
-// BY THE SEAT'S AGENT ID, the one identifier every phase row carries for its
-// seat — never its role name, which a unit template stamps onto every seat it
-// makes.
+// Each row is the event's PAYLOAD with the envelope's timestamp merged in; its
+// field names are already the client's. The price rides along as stored (rule
+// 19 in docs/reference/dashboard-design.md). BY AGENT ID, never the role name a
+// unit template stamps onto every seat it makes.
 func (s Sources) phaseHistory(ctx context.Context, agentID string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
 	if s.Events == nil {
 		return []store.EventRecord{}, "", nil
@@ -1829,23 +1748,16 @@ func (s Sources) seatParam(p Params) (string, error) {
 
 // seatAgentID resolves a seat a caller named by HANDLE to the agent id every
 // node derives for it — the key the event log's `agent_id` column, a usage
-// row and a phase record are all filed under.
+// row and a phase record are filed under.
 //
-// A SEAT IS NAMED BY ITS HANDLE on every surface that takes one — the handle is
-// a seat's address in the dashboard's URLs and on its roster row — and it is
-// RESOLVED HERE, server-side, through the org this node holds, to the id
-// derived from the handle (ADR-0013). Neither alternative a caller had was a
-// seat's identity: a role name is shared by every seat a unit template stamps
-// out, and a raw agent id is a derivation every client would have to repeat.
+// Resolved server-side through the org this node holds (ADR-0013): a role name
+// is shared by every seat a unit template stamps out, and a raw agent id is a
+// derivation every client would repeat. A handle the org no longer holds still
+// names the history its seat left, so it is derived as while the seat ran.
 //
-// A HANDLE THE ORG NO LONGER HOLDS still names the history its seat left, so
-// it is derived as every node derived it while the seat ran.
-//
-// Refused rather than matched when it is not a handle, or names a PERSON's
-// seat, because either would match nothing and an empty answer reads as a seat
-// that never did anything; and UNAVAILABLE before a company is applied, since
-// the id is derived from the company's name and there is none to derive it
-// from.
+// Refused when it is not a handle or names a PERSON's seat, since either would
+// match nothing and an empty answer reads as a seat that never did anything;
+// UNAVAILABLE before a company is applied, since the id derives from its name.
 func (s Sources) seatAgentID(handle string) (string, error) {
 	if !org.ValidHandle(handle) {
 		return "", fmt.Errorf("%w: seat=%q is not a handle. A seat is named by "+

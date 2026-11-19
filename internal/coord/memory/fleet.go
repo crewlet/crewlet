@@ -19,20 +19,16 @@ import (
 
 // Fleet is the in-process twin of the fleet-shared state.
 //
-// A SEMANTIC twin, held to the same suite as the KV backend, which means it
-// has to model the things a naive map would not:
+// A SEMANTIC twin, held to the KV backend's suite, so it models what a naive
+// map would not:
 //
-//   - Expiry against a stored deadline, so a claim that has lapsed is gone
-//     whether or not anything has swept — judged against the clock the
-//     caller passes in, as the KV judges a claim's own deadline, and refused
-//     beyond [coord.MaxClaimTTL] as the KV's bucket refuses it, so the twin
-//     certifies no horizon the backend a fleet runs on cannot keep.
-//   - A monotonic activation epoch that survives every write, because the
-//     epoch is a fencing token: a counter that restarted would hand a node a
-//     number an older revision already used.
-//   - A rate window keyed by its own start instant, so two callers in the
-//     same window share a counter and the next window starts at zero without
-//     anything having to delete the old one.
+//   - Expiry against a stored deadline and the caller's clock, so a lapsed
+//     claim is gone unswept; refused beyond [coord.MaxClaimTTL] as the KV's
+//     bucket refuses it.
+//   - A monotonic activation epoch surviving every write: it is a fencing
+//     token, and a restarted counter would reissue a number.
+//   - A rate window keyed by its start instant, so callers in one window share
+//     a counter and the next starts at zero with nothing to delete.
 type Fleet struct {
 	mu sync.Mutex
 
@@ -97,6 +93,11 @@ type Fleet struct {
 	// is written, and uploads each upload's record by its id.
 	uploadLedger versioned
 	uploads      map[string]versioned
+
+	// saveLedgers is each seat's save ledger by its handle, kept apart from
+	// the upload ledger and records as the KV keeps it under a class of its
+	// own in the uploads bucket.
+	saveLedgers map[string]versioned
 
 	// nodeStatuses is each node's status record as the KV keeps it, its
 	// bytes, by node id: decoded on every read, so a reader meets what a
@@ -226,6 +227,7 @@ func NewFleet() *Fleet {
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
 		pauses:            map[uuid.UUID]coord.SeatPause{},
 		uploads:           map[string]versioned{},
+		saveLedgers:       map[string]versioned{},
 		nodeStatuses:      map[string][]byte{},
 		retries:           newRetryRecords(),
 		signIns:           newSignInRecords(),
@@ -524,17 +526,13 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 // window, and judges whether it fitted.
 //
 // The twin holds ONE mutex for the whole call, so the partial the KV backend
-// reports for a seat write that fails after the company's
-// ([coord.SeatUncountedError]) never arises here. That is not a shortcut
-// around the contract — the observable behaviour is identical, and the suite
-// asserts the behaviour — it is what a single process can honestly offer:
-// there is no second writer to race and no write that can fail, so a partial
-// nothing could ever produce would be a path with no test that could reach
-// it. The arithmetic is [coord.Tally]'s, the same the KV backend runs: the
-// company counted and judged first, then the seat — with no verdict of its
-// own when the company refused, since the round is counted there all the
-// same — and every answer, a refusal's included, carries both counters as the
-// charge left them ([coord.Spend.Org]).
+// reports for a seat write failing after the company's
+// ([coord.SeatUncountedError]) never arises: no second writer and no failing
+// write, so that path would have no test that could reach it. The arithmetic
+// is [coord.Tally]'s, as in the KV backend: the company counted and judged
+// first, then the seat (no verdict of its own when the company refused, the
+// round counted there all the same); every answer, a refusal's included,
+// carries both counters as the charge left them ([coord.Spend.Org]).
 func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		return coord.Spend{OK: true}, nil

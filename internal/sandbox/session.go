@@ -185,6 +185,13 @@ type SessionKeep interface {
 	// Policy says so ([Coordinator.capturing]).
 	Keeps() bool
 
+	// SaveInterval is the shortest time between saves of a running job's
+	// session, as the revision THIS NODE runs states it, read without a round
+	// trip: a cadence binds no other node, each node paces only the boxes it
+	// drives, and the poll that offers a save makes no round trip for it
+	// ([Coordinator.SaveRunning]).
+	SaveInterval() time.Duration
+
 	// SealHanded seals the secrets a launch handed its box, encoded
 	// ([HandedSecrets]), for the run's row, bound to its turn
 	// ([PendingStore.Handed]); OpenHanded opens what it sealed, or says why it
@@ -316,15 +323,14 @@ type SessionCapture struct {
 	// cleanly by itself, its script packing it — that read is the capture's
 	// own, made once the job was over, after its script packed the archive
 	// and before the take ([Coordinator.takeCapture], savepoint.go);
-	// every other capture — a save, the take of a job still working, and one
-	// cut off ([SessionCapture.Interrupted]) — is placed by an EARLIER read,
-	// the save point of the newest capture its launch is known to hold, or
-	// zero (savepoint.go), since its harness may have made, and had answered,
-	// calls it never wrote. Every call the log takes after that read is
-	// numbered past it ([BridgeCall.Appended]), and is one the session may not
-	// have been answered, as is a late call ([BridgeCall.Late]) whatever its
-	// number, or a dropped late one ([BridgeLog.LateElided]), counted: a
-	// launch that continues the session is told each,
+	// every other capture — a save, the take of a job still working, and one cut
+	// off ([SessionCapture.Interrupted]) — is reserved at zero and raised after
+	// its take (savepoint.go), since its harness may have made, and had
+	// answered, calls it never wrote. Every call the log takes after that read
+	// is numbered past it ([BridgeCall.Appended]), and is one the session may
+	// not have been answered, as is a late call ([BridgeCall.Late]) whatever its
+	// number, or a dropped late one ([BridgeLog.LateElided]), counted: a launch
+	// that continues the session is told each,
 	// with its outcome — whatever its place in the order the calls were made,
 	// so a call in flight at the read is told however many places the log's
 	// bound dropped below it — and how many of them the bound dropped from the
@@ -352,19 +358,27 @@ type SessionCapture struct {
 	// a count, by their places in the round's log ([BridgeCall.Appended]):
 	// the reads the brief its job's run read counted without listing them, its
 	// read cap spent ([BriefTold], [LaunchRecord.OmittedCalls]). A capture
-	// placed by its own read states its job's; one placed at an earlier
-	// capture's point states that capture's, with the point
+	// placed by its own read states its job's; one raised to an earlier
+	// capture's point, its launch's at or below that point
 	// ([SessionCapture.placeAtNewest]). A launch that continues the session
 	// tells each of them (internal/agent/runner's keptSession): placed by its
 	// read, the session counts every call the log had taken as held, and
 	// without this would never be told a read its brief only counted. Nil
 	// where its brief left none out, and on a stamp an older build wrote.
-	// Held to [MaxBridgeCalls] ([SessionCapture.Bounded]).
+	// Held to [MaxBridgeCalls] with LateOmitted ([SessionCapture.Bounded]).
 	Omitted []int `json:"bridge_omitted,omitempty"`
 
+	// LateOmitted is the late calls that brief counted without listing them,
+	// apart from the reads it owes ([BriefTold.LateOmitted],
+	// [LaunchRecord.LateOmittedCalls]), stated as Omitted is: a launch that
+	// continues the session tells each of them as every late call is told, and
+	// credits the session no telling of one (internal/agent/runner's
+	// heldByTelling).
+	LateOmitted []int `json:"bridge_late_omitted,omitempty"`
+
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
-	// READS IT — copied off the capture whose save point Through takes, where
-	// the capture is placed by an earlier read — written for a fleet
+	// READS IT — zero and nil on a capture no read places, raised or not, so a
+	// build that reads them is told every call — written for a fleet
 	// mid-upgrade and read by nothing of this build: the last bridged call
 	// ([BridgeCall.Seq]) the log held ([BridgeLog.LastSeq]), and the places at
 	// or below it the log held no call at ([openPlaces]) — a call the bridge
@@ -374,7 +388,7 @@ type SessionCapture struct {
 	// but BridgeOpen keeps only the highest [maxOpenPlaces] of them, which a
 	// long round's dropped middle fills, so a call in flight below them reads
 	// to it as answered, which no count of places can mend and Through does.
-	// FROM THE SAME READ AS THROUGH, so the two state one save point. On a
+	// From the same read as Through on a capture its read places. On a
 	// REFUSED stamp a BridgeSeq of zero is "not known", as a nil Through is.
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
@@ -574,9 +588,9 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
 	}
-	if len(c.Omitted) > MaxBridgeCalls {
-		return fmt.Errorf("sandbox: it names %d reads its brief left out, past the %d a round's log lists: %w",
-			len(c.Omitted), MaxBridgeCalls, ErrCaptureUnbounded)
+	if n := len(c.Omitted) + len(c.LateOmitted); n > MaxBridgeCalls {
+		return fmt.Errorf("sandbox: it names %d calls its brief left out, past the %d a round's log lists: %w",
+			n, MaxBridgeCalls, ErrCaptureUnbounded)
 	}
 	if count := c.ResumedCount; count != nil {
 		if len(count.Mark) > maxCountMarkBytes {
@@ -626,13 +640,14 @@ const maxIncarnationBytes = 128
 // run's log, made before the take — holds them: its save point
 // ([SessionCapture.Through]) and, off the same read, the places an older build
 // reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]); and
-// omitted, the reads at or below that point its session holds only as its
-// job's brief's count ([SessionCapture.Omitted], [LaunchRecord.OmittedCalls]).
-func (c *SessionCapture) placeAt(read BridgeLog, omitted []int) {
+// the calls at or below that point its session holds only as its job's brief's
+// count, of the job's record launch ([SessionCapture.Omitted],
+// [SessionCapture.LateOmitted]).
+func (c *SessionCapture) placeAt(read BridgeLog, launch LaunchRecord) {
 	c.Through = new(read.Appends())
 	c.BridgeSeq = read.LastSeq()
 	c.BridgeOpen = openPlaces(read, c.BridgeSeq)
-	c.Omitted = slices.Clone(omitted)
+	c.Omitted, c.LateOmitted = launch.OmittedCalls(), launch.LateOmittedCalls()
 }
 
 // SavePoint is the save point c states ([SessionCapture.Through]), and whether
@@ -1248,7 +1263,9 @@ func openPlaces(calls BridgeLog, last int) []int {
 // a note a hook was served and nothing read ([RunNote.Place]); none where it
 // was cut off. A continuation tells every note past it as notes the session may
 // already show (internal/agent/runner's keptSession). An item for one job stops
-// nothing. See the package doc, "A turn's notes".
+// nothing; a telling of its call is read against the cursor as stamped, at the
+// place of the write that recorded it ([CallTelling.Place]). See the package
+// doc, "A turn's notes".
 func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
@@ -1283,6 +1300,11 @@ type spooledCapture struct {
 	// keep first waits to see whether to take the next one
 	// ([Coordinator.takeOver]).
 	standby bool
+
+	// places is what the capture is raised by once its take is counted
+	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
+	// for one its read placed.
+	places *savePlaces
 }
 
 // spoolPrefix names this package's spools in the node's spool directory
@@ -1430,8 +1452,16 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if err != nil {
 		return nil, refuse(calls, err.Error())
 	}
+	// ONE PACK AT A TIME in a box that shares the node's memory
+	// ([Coordinator.sharedPack]): a take packs on demand, and its pack is
+	// made once TakeSession returns, before the stream the spool reads.
+	give, err := c.packSlot(ctx, current)
+	if err != nil {
+		return nil, refuse(calls, takeRefusal(ctx, err))
+	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes})
+	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
@@ -1456,39 +1486,22 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if standing {
 		place = current.Capture.CaptureSeq
 	}
-	stamp := SessionCapture{
-		LaunchSeq: current.LaunchSeq, CaptureSeq: place, Launch: run.LaunchID,
-		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
-		NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC(),
-		Taker: hold.holder, TakerEpoch: hold.epoch,
-		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
-		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
-		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
-		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
-		SeatBudget: policy.SeatBudget,
-	}
-	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN —
-	// the job over, its harness gone cleanly by itself and its script packing
-	// it, nothing cut off — which wrote every call it made before it exited.
-	// EVERY OTHER CAPTURE IS PLACED AS A SAVE IS, AT THE NEWEST SAVE POINT ITS
-	// LAUNCH IS KNOWN TO HOLD ([SessionCapture.placeAtNewest]): a job still
-	// working, and one CUT OFF ([readCapture]) — its harness killed, crashed
-	// or told to stop, or gone with a loss whose read cannot say how. A harness
-	// may make a call, and have it answered, before it writes the call to its
-	// record — Claude Code 2.1.310 writes a message only once the whole of it
-	// has streamed (measured) — and one killed in that window never writes it;
-	// its end's SIGTERM was measured only with the call's message already
-	// written. So the calls the log had taken before the pack are no measure of
-	// what such an archive holds, and a continuation told only the calls after
-	// them was never told those (savepoint.go).
-	// AND THE READS ITS JOB'S BRIEF COUNTED WITHOUT LISTING THEM, off the job's
-	// record by the brief its run read ([LaunchRecord.OmittedCalls]): placed by
-	// its read, the session holds every call the log had taken but those.
+	stamp := captureStamp(current, run.LaunchID, place, at.final, at.cutOff, hold, taken, box, policy)
+	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN,
+	// which wrote every call it made before it exited, with the reads its
+	// job's brief counted without listing them ([LaunchRecord.OmittedCalls]).
+	// EVERY OTHER CAPTURE, a job still working or one CUT OFF ([readCapture]),
+	// IS RESERVED AT ZERO AS A SAVE IS, AND RAISED AFTER ITS TAKE
+	// ([SessionCapture.placeAtNewest] says why): its harness may have had a
+	// call answered that it never wrote (savepoint.go).
+	var places *savePlaces
 	if calls != nil {
-		stamp.placeAt(*calls, current.Launch.OmittedCalls())
+		stamp.placeAt(*calls, current.Launch)
 	} else {
-		stamp.placeAtNewest(savePlaces{run: current})
+		stamp.placeAtZero(current.Launch)
+		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
 	}
+	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
 	// keeps for the reservation beside the pack's budget
 	// ([Coordinator.reserveRoom]) — never past it: a reservation answered
@@ -1497,7 +1510,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	if standing {
-		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at)
+		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places)
 	}
 	for {
 		took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
@@ -1514,7 +1527,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 				return nil, kept
 			}
 		case took:
-			spooled, err := c.spool(ctx, run, stamp, taken)
+			spooled, err := c.spool(ctx, run, stamp, taken, places)
 			if err != nil {
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 			}
@@ -1528,9 +1541,29 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// the row already holds as taken ([PendingStore.StampCapture]).
 		placed, after := c.besideAnother(ctx, run, stamp)
 		if !after {
-			return c.standBy(ctx, by, reserveBy, run, placed, taken, at)
+			return c.standBy(ctx, by, reserveBy, run, placed, taken, at, places)
 		}
 		stamp = placed
+	}
+}
+
+// captureStamp is the begun stamp of a take of row's launch at place, with
+// what the take found in box: unplaced ([SessionCapture.placeAt],
+// [SessionCapture.placeAtZero]) and with no instant, which its caller stamps
+// last, right before the reservation, so the instant a peer reads the take by
+// ([SessionCapture.sameTake]) comes after every step the take made before it.
+func captureStamp(row PendingRun, launch string, place int64, final, interrupted bool, hold takerHold,
+	taken TakenSession, box Sandbox, policy SessionPolicy) SessionCapture {
+
+	return SessionCapture{
+		LaunchSeq: row.LaunchSeq, CaptureSeq: place, Launch: launch,
+		State: CaptureBegun, Final: final, Interrupted: interrupted,
+		NoteCursor: notesHeld(row, interrupted), Taker: hold.holder, TakerEpoch: hold.epoch,
+		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
+		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
+		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
+		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
+		SeatBudget: policy.SeatBudget,
 	}
 }
 
@@ -1602,6 +1635,12 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 			spooled.stamp.ResumedCount, spooled.stamp.CountProvider = count.provided(provider)
 		}
 	}
+	// AND, FOR A CAPTURE NO READ PLACES, ITS POINT RAISED by that count, on
+	// every path: a save, a take, a standby's spool, whose takeover reserves
+	// at it ([SessionCapture.placeAtNewest]).
+	if spooled.places != nil {
+		spooled.stamp.placeAtNewest(*spooled.places)
+	}
 	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
 	digestCancel()
@@ -1643,7 +1682,7 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 // goes on as any standby; not, it keeps nothing and withdraws what may still be
 // on its way.
 func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run PendingRun, stamp SessionCapture,
-	taken TakenSession, at capturePoint) (*spooledCapture, *SessionKept) {
+	taken TakenSession, at capturePoint, places *savePlaces) (*spooledCapture, *SessionKept) {
 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
@@ -1658,7 +1697,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 				"the capture's place, and the store never answered this one's standing by for it; it keeps "+
 				"the session it took spooled until its keep reads whether the run's record names it")
 	}
-	spooled, err := c.spool(ctx, run, stamp, taken)
+	spooled, err := c.spool(ctx, run, stamp, taken, places)
 	if err != nil {
 		c.standDown(ctx, by, run, stamp, takeRefusal(ctx, err))
 		return nil, nil
@@ -2062,8 +2101,19 @@ func takeRefusal(ctx context.Context, err error) string {
 // long as it stalls, which no check of ctx between reads can interrupt, so the
 // body is closed the moment ctx ends.
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
-	taken TakenSession) (*spooledCapture, error) {
+	taken TakenSession, places *savePlaces) (*spooledCapture, error) {
 
+	// A TAKE WHOSE TIME HAS ENDED SPOOLS NOTHING: its close would race the
+	// first read, and a box's stream is cut at that end whichever wins. Its
+	// deadline is read off the clock too: ctx reports its end only once its
+	// timer has run, after the instant the deadline names.
+	ended := ctx.Err()
+	if deadline, ok := ctx.Deadline(); ended == nil && ok && !time.Now().Before(deadline) {
+		ended = context.DeadlineExceeded
+	}
+	if ended != nil {
+		return nil, fmt.Errorf("sandbox: the take ended before its session was spooled: %w", ended)
+	}
 	file, err := os.CreateTemp(c.spoolDirectory(), spoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
@@ -2075,7 +2125,7 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		_ = os.Remove(file.Name())
 		return nil, err
 	}
-	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name()}, nil
+	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), places: places}, nil
 }
 
 // spoolDirectory is where this coordinator's spools wait:
@@ -2129,18 +2179,28 @@ func (c *Coordinator) keepLater(ctx context.Context, spooled *spooledCapture) {
 	if spooled == nil {
 		return
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	if !c.joinKeeps() {
 		c.dropSpool(ctx, spooled, "the node stopped before the session could be uploaded")
 		return
 	}
-	c.keeping.Add(1)
-	c.mu.Unlock()
 	go func() {
 		defer c.keeping.Done()
 		c.keepCapture(c.keepLife, spooled)
 	}()
+}
+
+// joinKeeps counts a keep about to start in the keeps [Coordinator.Stop] waits
+// for, and reports false, counting nothing, once the coordinator is stopping:
+// checked and counted under one lock, so no keep starts after Stop has begun
+// its wait.
+func (c *Coordinator) joinKeeps() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.keeping.Add(1)
+	return true
 }
 
 // dropSpool refuses a spooled capture that will not be kept, saying why, and
@@ -2520,7 +2580,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
-		stamp.placeAt(*calls, current.Launch.OmittedCalls())
+		stamp.placeAt(*calls, current.Launch)
 	}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)

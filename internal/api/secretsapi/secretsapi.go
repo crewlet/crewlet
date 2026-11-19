@@ -7,7 +7,8 @@
 // process and does not listen on a socket at all, so a second process has no
 // way to reach the bucket. That is the whole reason this surface exists: the
 // rows are fleet-wide, and the engine is the only thing that
-// can put one there.
+// can put one there. A command run with the engine stopped reaches the same
+// store itself, through engine.OpenFleetStore.
 //
 // # Every route is admin's, reads included
 //
@@ -19,6 +20,12 @@
 // person present besides. A listing says which credentials a company holds and
 // when each last changed, which is reconnaissance even without the values, so
 // it is not part of everybody's overview.
+//
+// Every refusal is the engine's envelope, its codes in [httpjson]'s vocabulary,
+// because bare {"error": ...} maps gave no screen words to show. A condition of
+// the node (a coordination store that did not answer, the identity estate
+// refusing the read the listing counts by) is a 503 through
+// [operator.AnswerCondition], never 500 internal_error.
 //
 // THE THREE STAY THREE VERBS although one permission admits them: what
 // differs between them is the proof and the presence each row asks, and the
@@ -62,8 +69,10 @@
 // `GET /secrets/{name}` requires an explicit ?reveal=true — a path that cannot
 // be reached by accident or by a crawl — and `POST /secrets/reveal`, which
 // answers the values of the names its body asks for, is a POST no link or
-// crawl can make. Both are decided on `secrets.reveal` and both log the access
-// by operator and name. A read-back that leaves no trace is indistinguishable
+// crawl can make. Both are decided on `secrets.reveal` before the store is
+// read (the GET also asks the metadata's `secrets.list`), and a machine token
+// is refused both: a person must be present. Both log
+// the access by operator and name (`secret_revealed`, `secrets_revealed`). A read-back that leaves no trace is indistinguishable
 // from an exfiltration, and the name is the whole of what can be logged,
 // because logging the value would be the leak.
 //
@@ -73,7 +82,11 @@
 // The second exists for one reader: a CLI run resolving a company document's
 // `${VAR}` references through a running node, which reads the variables its
 // command reads that the node lists, and asks for them together rather than
-// one request per credential. It is handed exactly the names it asks for —
+// one request per credential (the planned seats' tokens its `-secret-store`
+// sink reads back included), at most [MaxRevealNames], so `GET ?reveal=true` is
+// left to `crewlet secrets get -reveal`. A name outside the
+// `${VAR}` grammar is refused by [secrets.CheckName] rather than answered
+// missing, which is what bounds the answer. It is handed exactly the names it asks for —
 // never the store.
 //
 // # A write re-activates the revision that reads it (ADR-0070)
@@ -104,7 +117,8 @@
 // are admin's with a recent proof, so nobody this route admitted before is
 // refused now.
 //
-// A MULTI-SECRET ROTATION IS ONE ACTIVATION. `PUT /secrets` seals every value
+// A MULTI-SECRET ROTATION IS ONE ACTIVATION. `PUT /secrets` (at most
+// [MaxRevealNames] values, refused whole on any bad name or value) seals every value
 // of its body and then reloads once, so rotating four credentials an entry
 // reads moves the fleet onto one new epoch rather than four, and the single
 // route is a batch of one through the same function.
@@ -420,17 +434,14 @@ func (s *Service) Routes(mux authz.Mux) error {
 // list serves GET /secrets — every name, with no values.
 //
 // THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. The blind-index key is not
-// the operator's to read, write or delete, and a listing of it was the first
-// step to every one of those; what an operator does need is to see a rotation
-// reach it, so `engine_keys` says how many there are under each keyring key and
-// nothing else. `identity_values` is the same count for the identity estate's
-// sealed values, by key — null where this surface was given no identity
-// estate, which `crewlet run` never does: every node serving the API holds the
-// estate (ingress requires `data`) and runs the identity estate from boot.
-// `assistant_values` is the same count for the Dashboard Assistant's sealed
-// values, which a rotation waits out, null where this surface was given none,
-// `executor_values` the same for the seats' sealed executor sessions, and
-// `access_values` for the SSH commands the access log recorded.
+// the operator's to read, write or delete, and naming it is the first step to
+// each; an operator does need to see a rotation reach it, so `engine_keys`
+// says how many there are under each keyring key and nothing else.
+// `identity_values` is the same count for the identity estate's sealed values
+// (null where this surface was given no estate, which `crewlet run` never
+// does), `assistant_values` for the Dashboard Assistant's, which a rotation
+// waits out (null where none), `executor_values` for the seats' sealed
+// executor sessions, and `access_values` for the recorded SSH commands.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -572,28 +583,18 @@ type revealRequest struct {
 	Names []string `json:"names"`
 }
 
-// revealMany serves POST /secrets/reveal — the values of the names a body
-// asks for, in one answer: `values` for every name held, `missing` for every
-// name nothing holds.
-//
-// IT IS THE BREAK-GLASS READ, AND NOTHING LESS. A CLI run resolving a company
-// document through a running node (`crewlet gitlab provision` and its
-// siblings, `crewlet llm`) reads the variables its command reads that the
-// node lists, and asking for them through `GET /secrets/{name}?reveal=true`
-// one at a time would make one decision, one log line and one round trip per
-// credential where the run has one question. So it is mounted on
-// `secrets.reveal` itself — admin, a person present, a recent proof — decided
-// before the body is read, and the access is logged by name like the single
-// reveal. It answers exactly the names asked, never the whole store: a run is
-// handed the values it asked for and nothing beside them.
+// revealMany serves POST /secrets/reveal — `values` for each name held,
+// `missing` for each nothing holds. IT IS THE BREAK-GLASS READ, AND NOTHING
+// LESS. A CLI run resolving a company document through a running node
+// (`crewlet gitlab provision`, `crewlet llm`) reads the variables its command
+// reads; one `GET /secrets/{name}?reveal=true` each would be a decision, a log
+// line and a round trip per credential. So it is mounted on `secrets.reveal`
+// itself (admin, a person present, a recent proof), decided before the body is
+// read, and logged by name. It answers exactly the names asked.
 //
 // A NAME OUTSIDE THE REFERENCE GRAMMAR IS REFUSED rather than answered
-// missing, unlike the single read: the one reader of this route asks only for
-// names the listing gave it, which every store holds to the grammar, so a name
-// no store can hold is a caller asking for something other than a command's
-// values — and keeping every name a plain identifier is what bounds the answer
-// at [MaxRevealAnswerBytes]. A reserved name is refused first, as on every route
-// here.
+// missing: the one reader asks only for names the listing gave it, and a plain
+// identifier is what bounds the answer at [MaxRevealAnswerBytes].
 func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 	if !noQuery(w, r, "POST /secrets/reveal",
 		"send the variables to read as the body, {\"names\": [...]}, and "+
@@ -879,13 +880,12 @@ type written struct {
 // bound.
 //
 // IN THIS ORDER: which paths read the names, then `config.write` when a
-// reload will follow (asked of the same guard the route was, BEFORE anything
-// is sealed, so a caller who may store a credential and may not re-activate the
-// company leaves nothing behind), then every seal, then the one reload.
+// reload will follow (asked BEFORE anything is sealed, so a caller who may
+// store a credential and may not re-activate the company leaves nothing
+// behind), then every seal, then the one reload.
 //
 // reactivates is false for a write whose caller re-activates at its own end
-// ([batchRequest.DeferReload]): nothing is re-activated, and `config.write`
-// is asked of the write that does.
+// ([batchRequest.DeferReload]); `config.write` is asked of the write that does.
 func (s *Service) write(w http.ResponseWriter, r *http.Request, values map[string]string,
 	reactivates bool) (written, bool) {
 	ctx := r.Context()

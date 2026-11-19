@@ -525,9 +525,9 @@ func otherCalls(o OtherCalls) string {
 // call with no outcome, as still running, as interrupted or as failed, its
 // harness having died, given up on it, been answered that it was still running
 // as its session on the bridge ended, or been replaced before the call
-// returned; and an earlier brief may have told it, since every continuation of
-// the work tells it again. So it is said to be ONE call, made once, whose
-// outcome as told here stands, never one the session lacks.
+// returned; and an earlier message may have told it: a brief, or the item
+// handing it to the job working as it landed. So it is said to be ONE call,
+// made once, whose outcome as told here stands, never one the session lacks.
 //
 // NEVER THAT THE CALLS FINISHED, NOR THAT EVERY ERROR FAILED. A call still in
 // flight is failed on the record, so that nothing takes it for a delivery or a
@@ -557,15 +557,50 @@ const lateCallsHeader = "## Calls the run that made them stopped waiting for, or
 // lateSubmission tells a run that a successful `submit_work` among the calls
 // under [lateCallsHeader] or [lateBeforeHeader] is no submission of the work
 // it carries on: the run that made it had stopped waiting for it before it
-// returned — replaced, and the run carrying the work on never told it, or told
-// it failed where it gave up on it — and the work's submission is the one a
-// run carrying it on makes (internal/agent/runner's sinceAnswer, which never
-// takes a late one, and replays the newest). Read as the work's, a late one
-// would leave a run that took it for done ending without its own, and the work
-// collected as one that submitted nothing.
+// returned — replaced, the run carrying the work on handed it only once under
+// way, or told it failed where it gave up on it — and the work's submission is
+// the one a run carrying it on makes (internal/agent/runner's sinceAnswer,
+// which never takes a late one, and replays the newest). Read as the work's, a
+// late one would leave a run that took it for done ending without its own, and
+// the work collected as one that submitted nothing.
 const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's submission:" +
 	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
+
+// LateCallHead is the heading [LateCallArrived] opens with, a line of its own:
+// the session reader tells such an account from a person's note and from a
+// brief by it (internal/sandbox/executor's lateCallHead, held equal by a test).
+const LateCallHead = "## A call the run that made it stopped waiting for"
+
+// LateCallArrived is one call of the work its run stopped waiting for, which
+// finished since, as the engine hands it to the run working on the work
+// (internal/engine's lateItemMessage): call its line's `name(args)` and outcome
+// `success` or `error: …`, each one line, the outcome first. submission says it
+// is a successful `submit_work`.
+//
+// EVERY FACT IS [lateCallsHeader]'s OR [lateSubmission]'s, as STATEMENTS, for
+// the reason [SteerMessage] states its own: a command in context a run did not
+// ask for reads as steering. The outcome-unknown clause is left out, since an
+// account is of a finished call; added are that it reached the run while the
+// work was under way and is no new request, and what a run told it as it
+// finishes answers next.
+func LateCallArrived(outcome, call string, submission bool) string {
+	text := LateCallHead +
+		"\nA run of this work made this call through your tools and stopped waiting for it before it" +
+		" finished (it gave up on it, or it was cut off or replaced), and it has finished since. This reached" +
+		" you while the work was under way, and it is not a new request. The session above may show the call" +
+		" with no outcome, as still running, as interrupted or as failed, and an earlier message may have told" +
+		" it. It is one call, made once, and the outcome told here stands: a call that succeeded has already" +
+		" run, so making it again would make it twice; a call that failed did not take effect. If this" +
+		" reached you as you were finishing, the answer you give next is this run's report, in place of the" +
+		" one before it." +
+		"\n\nOutcome: " + outcome + "\nCall: " + call
+	if submission {
+		text += "\n\nIt is not this work's submission: the run that made it had stopped waiting for it before it" +
+			" returned, and this work's submission is the one this run makes when its work is done."
+	}
+	return text
+}
 
 // earlierSubmission tells a run that a successful `submit_work` among the calls
 // listed before it, under [calledAfterHeader], [calledSinceHeader] or
@@ -1237,33 +1272,34 @@ const KeyKeptSession = "kept_session"
 // id, `match` finding a word in it. turn is the engine's record, defused by the
 // caller.
 //
+// THIS TURN'S IS KEPT ONLY UNTIL THIS RUN FIRST SAVES ITS OWN, which replaces it
+// on the turn's row, so the run is told to read it before then; no time is
+// given, which pacing or a failed save would make false. The last turn's is
+// another row, which nothing this turn keeps replaces.
+//
 // A SCHEDULE'S FIRE IS TOLD IN THE SCHEDULE'S WORDS (fire), as [BuildNextTurn]
-// and the endings block tell it: the session its schedule's last fire left, or
-// this fire's earlier launches'. Everywhere else in its brief a run its
-// schedule woke is told of fires, and "this conversation's last turn" beside
-// them names a turn nothing else in the brief speaks of.
+// and the endings block tell it: elsewhere in its brief a run its schedule woke
+// is told of fires, and "this conversation's last turn" would name a turn
+// nothing else there speaks of.
 //
 // ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
-// would ride every request of every run and say what their descriptions say,
-// and this is the one place a model cannot know a session it could read
-// exists — a launch that could not continue the turn's own, or the one its
-// conversation's last turn left.
+// would ride every request of every run and repeat their descriptions; this is
+// the one place a model cannot know a session it could read exists.
 //
-// NEVER WHY IT IS NOT CONTINUED. Why a launch continues no session is said in
-// words for the log, and they quote what said no: a store's or a router's
-// error, a refused capture's reason, which carries what a box printed. Told
-// to the run in the engine's own voice, they put what a box wrote outside any
-// fence and an error meant for an operator into a vendor model's prompt; and
-// what the run can do about it is the same whatever the reason — read what
-// that session did.
+// NEVER WHY IT IS NOT CONTINUED: the log's words quote what said no (a store's
+// or a router's error, a box's output); told in the engine's voice, they would
+// put a box's words outside any fence and an operator's error into a vendor
+// model's prompt, and what the run can do is the same whatever the reason:
+// read what that session did.
 func KeptSession(turn string, thisTurn, fire bool) string {
 	said := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, what := "This "+said.whole+"'s last "+said.turn, "it did"
+	whose, read := "This "+said.whole+"'s last "+said.turn, ". Read what it did"
 	if thisTurn {
-		whose, what = "This "+said.turn+"'s earlier launches", "they did"
+		whose = "This " + said.turn + "'s earlier launches"
+		read = ", kept until this run first saves its own. Until then, read what they did"
 	}
-	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
-		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
+	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue" + read +
+		" with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
 }
 
 // NextTurn is where the session a conversation's last turn left ends and the

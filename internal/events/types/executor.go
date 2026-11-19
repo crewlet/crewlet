@@ -86,18 +86,16 @@ func (e ExecutorLaunched) SummaryFor(actor string) string {
 
 // ExecutorFinished signals that an executor's run in its box finished.
 //
-// A pure control signal. It carries the original TurnID so the engine can load
-// the pending row, reconnect and collect the actual result from the sandbox —
-// the outcome (success, delivered refs, tokens) is read at collect time and
-// never rides on the event. The engine flips the row running→resumed atomically
-// so the resume happens at most once even when this is delivered more than
-// once, which it will be: successive poll ticks can both fire before the first
-// claim lands, and queue delivery is at-least-once.
+// A pure control signal carrying the TurnID, so the engine can load the pending
+// row and collect the result from the sandbox; the outcome is read at collect
+// time and never rides on the event. The engine flips the row running→resumed
+// atomically so the resume happens at most once, though this is delivered more
+// than once (poll ticks can both fire before the first claim lands; delivery is
+// at-least-once).
 //
-// LaunchID names WHICH job finished. The row is the turn's and a turn can run
-// more than one job, so a duplicate of this signal can arrive after the job it
-// was raised for has parked on a question or been replaced by the next one;
-// the claim takes the row only while it still holds this launch, running.
+// LaunchID names WHICH job finished: a turn can run more than one, so a
+// duplicate can arrive after its job parked on a question or was replaced; the
+// claim takes the row only while it still holds this launch, running.
 type ExecutorFinished struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -133,52 +131,17 @@ func (e ExecutorFinished) SummaryFor(actor string) string {
 }
 
 // ExecutorCollected is ONE LAUNCH of an executor's run, as its collection read
-// it off the box: what the launch's harness spent and reported, what it delivered,
-// its account of what it did and, where it did not finish, why. Published by
-// the sandbox coordinator once per launch it collects — one that finished, one
-// that stopped to ask a person, one a person stopped, and one lost with its
-// host whose box could still be read — because every one of them spent what it
-// spent.
-//
-// # Not a phase
-//
-// The executor's PHASE is the turn's own `execute` record
-// ([AgentPhaseCompleted]), which the segment that resumes the turn publishes:
-// the launch and the answer as the one round the engine saw, the calls the run
-// made over the seat's bridge, the submission's decision — and no tokens,
-// because the engine made no model call for it. A launch is part of that
-// round's work, and a round can have several: an answer carries a parked run
-// on in a second launch, and a launch lost with its host is relaunched. This
-// record was once an `agent_phase_completed` with a phase word of its own, and
-// every reader had to stitch the two back together — the spend rollup folded
-// the word into the executor's band, the live projection kept it from moving
-// the turn, the dashboard drew it as a sibling of the executor that launched
-// it. Its own type says what it is, as [AuxiliarySpend]'s does, and nothing
-// that reads a phase has to know to step around it.
-//
-// # The executor's spend
-//
-// It is where the executor's tokens are: every reader of spend — the event
-// store's writer, the live projection's window — files it under the `execute`
-// phase, with the harness's own turns as its calls (tokens.LaunchCalls), so the
-// executor's band holds what its run cost however many launches the round
-// took.
-//
-// # Once
-//
-// For the reason the launch is charged once: its publish sits inside the part
-// of the collection that is retried, every reader counts it as spend, and a
-// second copy would be a second charge on every surface that shows one. The
-// launch's own record holds whether it went out
-// (internal/sandbox's LaunchRecord.Published).
-//
-// # A failure of its turn
-//
-// `failed` is the key a phase's record carries and means what it means there:
-// the store promotes it into the tag that marks the turn failed in the turn
-// list, and the live projection makes it the seat's `last_error`. A launch
-// that stopped to ask, was stopped by a person or was cut off by its host did
-// not fail — what happened is its Notes.
+// it off the box: what the harness spent, reported and delivered and, if it did
+// not finish, why. Published by the sandbox coordinator once per launch it
+// collects (finished, stopped to ask, stopped by a person, or lost with a host
+// whose box could still be read): each spent what it spent. Not a phase: the
+// executor's PHASE is the turn's `execute` record ([AgentPhaseCompleted]),
+// with no tokens, and a round can have several launches. Spend readers file
+// the tokens under `execute` (tokens.LaunchCalls). The launch is charged ONCE:
+// a second copy of its publish, in the retried part of the collection, would
+// be a second charge (internal/sandbox's LaunchRecord.Published). `failed`
+// means what a phase's record means by it; a launch that stopped to ask or was
+// stopped or cut off did not fail, and its Notes say what happened.
 type ExecutorCollected struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -312,21 +275,17 @@ type ExecutorCollected struct {
 	// for a harness whose window the engine does not set.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// Brief is which of the four briefs the launch handed its run:
-	// `continued` (the turn's session, in the box it was last worked in),
-	// `continued_new_box` (the turn's session, restored into a box that
-	// replaced that one), `continued_conversation` (the session the turn's
-	// conversation's last turn left, restored into a box of its own) or
-	// `fresh` (a session of its own). Absent where the launch recorded none.
+	// `continued` (the turn's session, in its last box), `continued_new_box`
+	// (that session restored into a replacement box), `continued_conversation`
+	// (the session the conversation's last turn left, restored into a box of
+	// its own) or `fresh`. Absent where none was recorded.
 	//
 	// HarnessSessionContinued says the run did continue the session it was
-	// asked to — its box held it, or restored the archive carried in — and
-	// HarnessSessionFellBack why a run asked to continue one started a
-	// session of its own in its place, as its script said it: such a run is
-	// handed the fresh brief by its script, so a `continued` brief beside
-	// HarnessSessionContinued false is a run that read the fresh one. The
-	// reason is one sentence, redacted and cut to a KiB, marked `…`
-	// (internal/sandbox's MaxFellBackBytes): its whole is on the run's error
-	// stream, where its script prints it too.
+	// asked to; HarnessSessionFellBack why one asked to continue started its own,
+	// as its script said: it is handed the fresh brief, so `continued` beside
+	// HarnessSessionContinued false is a run that read the fresh one. The reason
+	// is one sentence, redacted and cut to a KiB, marked `…`
+	// (internal/sandbox's MaxFellBackBytes); the whole is on the error stream.
 	Brief                   string `json:"brief,omitempty"`
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
 	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
@@ -474,17 +433,13 @@ func (e ExecutorAsked) SummaryFor(actor string) string {
 // ever resuming.
 //
 // THE SILENT ENDING, given a voice. `settleFailed` kills the box, deletes the
-// run's record and frees the seat, and it published nothing, so a turn that
-// had been destroyed presented to the seat, the dashboard and the requester as
-// an identical silence. Several distinct conditions funnel into it, and the
-// first symptom of any of them was a wait that never ended: the run vanished
-// from the active board and the completion event that would have explained it
-// had already been acked. A failure has to be at least as loud as the question
-// [ExecutorAsked] already announces, and since a settled run
-// has no record, this event is the only account of how it ended.
+// run's record and frees the seat; a settled run has no record, so this event
+// is the only account of how it ended, and without it several distinct
+// conditions looked alike, as a wait that never ended. A failure has to be as
+// loud as the question [ExecutorAsked] announces.
 //
-// Reason is a closed set — see the ExecutorFailure constants — because it is
-// the one field a reader acts on differently.
+// Reason is a closed set (the ExecutorFailure constants): the one field a
+// reader acts on differently.
 type ExecutorFailed struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -612,29 +567,17 @@ func (e ExecutorFailed) SummaryFor(actor string) string {
 }
 
 // ExecutorStopped records an executor's run a PERSON ended: its seat was
-// paused with `stop_running` while the run was launching or running, and the
-// run was ended there rather than left to finish — its harness killed with its box,
-// its tool-bridge session closed, and what it had spent by then collected and
-// charged.
-//
-// NOT A FAILURE, which is why it is a type of its own rather than a reason of
-// [ExecutorFailed]: that type is a failure by its very name (see
-// failureEventTypes), so a stop announced through it would be counted with the
-// runs that broke, end the turn waiting on it as failed, and draw its seat as in
-// trouble for being stopped by somebody who meant to. A stopped turn is never a
-// failed one, here as for a turn stopped at its next round.
-//
-// THE RUN'S OWN ACCOUNT, beside the turn's. The turn that was parked on the run
-// is closed on the record as stopped by the same person, in the shape a turn
-// stopped at its next round takes: [AgentTurnStopped] naming who, and the
-// turn's own completion carrying `stopped`. A run stopped while its turn was
-// still launching it is closed by that turn as it unwinds; one whose turn had
-// parked is closed by whichever node finishes the run's ending.
+// paused with `stop_running` while the run was launching or running: its
+// harness killed with its box, its bridge session closed, its spend charged.
+// NOT A FAILURE, hence not a reason of [ExecutorFailed], a failure by its name
+// (see failureEventTypes): announced through it a stop would be counted with
+// the runs that broke and draw its seat as in trouble. The parked turn is closed
+// as stopped by the same person ([AgentTurnStopped], its completion carrying
+// `stopped`); one still launching is closed by that turn as it unwinds.
 //
 // PUBLISHED ONCE, under an id derived from the run and its ending, by whichever
-// node finishes that ending — the one that stopped it, or the seat's next
-// holder if that node stopped first — so a repeat after a crash is the same
-// event to every store that keeps it.
+// node finishes that ending (the stopper, or the seat's next holder), so a
+// repeat after a crash is the same event to every store.
 type ExecutorStopped struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -680,44 +623,14 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 
 // ExecutorAnswerGiven is the command an answer BY TURN puts on the seat's
 // control topic: a person answering a parked executor's question by naming
-// its turn, rather than by replying on the conversation it was asked in.
-//
-// # Why a second way in
-//
-// The chat route matches a reply to a run by conversation, and a run launched
-// by a task assignment or a colleague's ask stored none, while one a schedule
-// launched stores its schedule's, which nobody can reply into
-// (internal/notify's Derived). Such a run parked on a question nobody could
-// answer: there was no thread to reply in, and the question waited out its
-// pause TTL while the person who knew the answer had nowhere to put it. An
-// answer by turn names the run instead, and it can be given from any node.
-//
-// # Why on the seat's CONTROL topic
-//
-// Because only the node holding the seat can record and resume it, and the
-// seat's topics are how anything reaches that node: durable subscriptions the
-// holder, and only the holder, consumes. So an answer accepted on one node is
-// carried out on another, and it survives a restart in between.
-//
-// The control topic and not the inbox, because the answer is addressed to a
-// run, like the completion that topic was made for. The inbox is the seat's
-// mail: held for as long as any of the seat's executors holds the seat, and
-// worked oldest first after that. An answer that rode it waited behind every
-// job the seat took on and every message it had not got to, and on a busy
-// seat it never arrived. On the control topic it is recorded on arrival, and
-// its resume waits for what a resume must (another of the seat's runs holding
-// it, a turn in flight, a person's pause) and is then the seat's next turn.
-//
-// AND IT NAMES THE QUESTION, not only the run, because the resume can wait
-// longer than the question does: see [ExecutorAnswerGiven.LaunchID]. It resumes
-// the run only while the run still waits on the question it was given against.
-//
-// NEVER A TURN. The sandbox coordinator settles it, and whatever it becomes
-// (resumed, not awaiting, gone) the delivery is spent there.
-//
-// KEPT OUT OF THE EVENT STORE, like the other inbox wakes: what happened to
-// the answer is [ExecutorAnswered], and that the person gave it is their
-// `operator_acted` row. See internal/events/category.go.
+// its turn, since a run launched by an assignment or ask has no conversation to
+// reply in (a schedule's is unreachable: internal/notify's Derived).
+// It rides the CONTROL topic, not the inbox: only the seat's holder can record
+// and resume it, and the inbox is worked oldest first behind every job, so an
+// answer there never arrived on a busy seat. It NAMES THE QUESTION too
+// ([ExecutorAnswerGiven.LaunchID]). NEVER A TURN: the sandbox coordinator
+// settles it. KEPT OUT OF THE EVENT STORE like the other inbox wakes
+// (internal/events/category.go); see [ExecutorAnswered].
 type ExecutorAnswerGiven struct {
 	// TurnID is the run the answer is for — the parked run's own key.
 	TurnID string `json:"turn_id"`
@@ -763,22 +676,17 @@ type ExecutorAnswerGiven struct {
 	DelegatedRule int `json:"delegated_rule,omitempty"`
 
 	// LaunchID is the QUESTION this answers: the job the run held when it
-	// asked, off the row the answer was accepted against. Every new question
-	// comes with a new job — nothing but a launch opens one — so the job
-	// identifies it. An answer reaches the seat some time after it was given
-	// (after a seat handoff, after a NAK's backoff, as a retried copy), and
-	// by then the run can have been
-	// resumed by somebody else's answer and parked on a NEW question. Named
-	// only by its turn, the late answer then resumed the run a second time,
-	// as the answer to a question its giver never saw. Carrying the
-	// question, it resumes the run only while the run still waits on that
-	// one, and is spent as `not_awaiting` otherwise.
+	// asked, off the row the answer was accepted against (every new question
+	// comes with a new job). An answer reaches the seat late (a handoff, a NAK's
+	// backoff, a retried copy), by when the run can have been resumed by another
+	// answer and parked on a NEW question; named only by its turn it would resume
+	// the run a second time, for a question its giver never saw. It resumes the
+	// run only while it still waits on this one, else is spent `not_awaiting`.
 	//
-	// REQUIRED. An answer naming no question cannot be told from one given
-	// against a question the run has since moved past, so the node holding
-	// the seat spends it without resuming the run (internal/sandbox's
-	// Coordinator.AnswerByTurn); `answer_executor` stamps it off the row it
-	// checked, and the answer desk will not deliver one without it.
+	// REQUIRED: an answer naming none cannot be told from one against a question
+	// the run moved past, so the holder spends it without resuming
+	// (internal/sandbox's Coordinator.AnswerByTurn); `answer_executor` stamps it
+	// off the row it checked and the answer desk will not deliver one without it.
 	LaunchID string `json:"launch_id"`
 
 	// Approval names the held call this answers, by its id, where the
@@ -861,23 +769,16 @@ const (
 
 	// AnswerTooLarge is an answer past what its run may take as one
 	// ([ExecutorAnswered.AnswerBytes] past [ExecutorAnswered.AnswerMaxBytes]).
-	// By chat, a reply too large for the run's record to carry as its answer:
-	// its REFUSAL is recorded as the question's outcome in the answer's
-	// place, so the question no longer waits and nothing written after it is
-	// taken for its answer, and the run is resumed told, in the engine's
-	// words, that the person replied and the reply did not reach it — it
-	// asks again for something shorter, or another way to receive it, under
-	// a question of its own, or carries on and says so (ADR-0114). ONE
-	// RECORD per run, question and delivery: every publish of it carries the
-	// id and the instant (the reply's own) those derive, which the event
-	// store keeps as one row. No `resumed` is published of it, which would
-	// read the refusal as an answer the run carried on with; a refusal let go
-	// of before any turn told the run is followed by [AnswerDeclined], and the
-	// question waits again. By turn, an answer saying more than an answer may
-	// (internal/sandbox's MaxAnswerTextBytes, measured as `answer_executor`
-	// measures it, which refuses one before it is delivered): spent
-	// unrecorded, with no ordinary form to go on as, the question still
-	// waiting.
+	// By chat, a reply too large for the run's record: its REFUSAL is recorded
+	// as the question's outcome, so the question no longer waits and nothing
+	// later is taken for its answer, and the run is resumed told the reply did
+	// not reach it (ADR-0114). ONE RECORD per run, question and delivery: every
+	// publish carries the id and instant (the reply's own) those derive, kept as
+	// one row. No `resumed` is published, which would read the refusal as an
+	// answer; one let go of before any turn told the run is followed by
+	// [AnswerDeclined] and the question waits again. By turn, an answer past
+	// internal/sandbox's MaxAnswerTextBytes (as `answer_executor` measures it):
+	// spent unrecorded, the question still waiting.
 	AnswerTooLarge AnswerOutcome = "too_large"
 )
 

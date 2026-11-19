@@ -1097,6 +1097,20 @@ func NamesPassword(name string) bool {
 	return false
 }
 
+// PasswordKeyMaxBytes is the longest of [passwordKeys] in bytes, and so the
+// most runes of a name one of them spans once [NamesPassword] lowers it, since
+// every rune lowers to a byte or more. A reader that has a name a piece at a
+// time, and cannot hold it whole, asks NamesPassword of stretches of the name
+// that overlap by one rune fewer than this, and finds every key the whole
+// name's reading finds, with no second copy of the list.
+func PasswordKeyMaxBytes() int {
+	n := 0
+	for _, key := range passwordKeys {
+		n = max(n, len(key))
+	}
+	return n
+}
+
 // passwordClose is what closes a password's key before its separator, and
 // passwordSeparator the separator: the quote or the markup a key is written
 // in, and the operator a language assigns or compares it with.

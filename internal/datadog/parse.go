@@ -92,24 +92,14 @@ func (p *Parser) Source() string { return Backend }
 
 // Parse implements [notify.Parser].
 //
-// # A recovery reaches the same seats as the alert
+// A recovery reaches the same seats as the alert: the seat woken to
+// investigate must be told it cleared. The ASK differs, the prompt's job.
 //
-// Not filtered to triggers, deliberately. The seat woken to investigate an
-// alert is the one that has to be told it cleared, and a company whose
-// recoveries were dropped would have agents chasing incidents that ended
-// hours ago. What differs is the ASK, which is the prompt's job.
-//
-// # The registry is deliberately not consulted
-//
-// Every other parser here intersects its targets against the parties the
-// engine can route to, so a comment mentioning outsiders does not fan out to
-// notifications nobody can deliver. That reasoning does not carry over: an
-// outsider on GitHub is an ordinary occurrence, while a Datadog monitor
-// tagged with a seat that does not exist is a TYPO, and the operator has to
-// see it. The spine already records an undeliverable notification with the
-// handle on it, so passing it through is what makes the typo visible;
-// dropping it here would make it silent on the one surface where silence is
-// the failure that matters.
+// The registry is deliberately not consulted. Other parsers intersect targets
+// with routable parties because an outsider on GitHub is ordinary, but a
+// monitor tagged with a seat that does not exist is a TYPO the operator must
+// see: the spine records an undeliverable notification with the handle on it,
+// and dropping it here would make the typo silent.
 func (p *Parser) Parse(_ context.Context, w types.RawWebhook, _ *notify.Registry) ([]notify.Routed, error) {
 	alert := decode(w)
 

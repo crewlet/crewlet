@@ -70,49 +70,27 @@ type Routed struct {
 
 	// WakeID makes this wake RECOGNISABLE as a duplicate of itself.
 	//
-	// Nil takes an id derived from the DELIVERY's own and the recipient's
-	// ([DeliveryWakeID]), under the delivery's own instant: what a vendor's
-	// parser leaves it at, since there is nothing deterministic in most
-	// vendors' payloads to derive a stable id from. A webhook's redelivery
-	// by its vendor is collapsed by the inbound-delivery claim before a
-	// parser ever sees it, but the delivery itself is handled again — by
-	// the group, when one of its wakes failed and the queue redelivers it,
-	// and by a replay of its copy, which a replay whose drop failed, or two
-	// nodes' replays reading it together, handle twice — and a random id
-	// woke its seat once for each.
-	//
-	// The ENGINE'S OWN producers set it, and so does the Mattermost socket
-	// (every node reads every seat's socket and claims each post), because
-	// their first dedupe layer FAILS OPEN by design — a coordination store
-	// that cannot be reached must not silently stop notifications — and a
-	// redelivery that slips
-	// through it needs something else to catch it. A derived id lets the
-	// inbox's same-id dedupe and the fleet completion ledger recognise
-	// the pair; with a random one neither layer can see it, and the seat
-	// is woken twice about one change.
-	//
-	// PER RECIPIENT, because one change legitimately produces several
-	// wakes — an assignment that also names two watchers is three — and
-	// one id for all of them would deliver the first and deduplicate the
-	// rest away. See [changefeed.WakeID], which derives them.
+	// Nil takes an id derived from the delivery's and the recipient's
+	// ([DeliveryWakeID]); redeliveries and replays handle a delivery again,
+	// and a random id woke the seat each time. The engine's producers and the
+	// Mattermost socket set it, since their first dedupe layer fails open by
+	// design; a derived id lets the inbox dedupe and completion ledger catch
+	// what slips through. PER RECIPIENT: one change makes several wakes, and
+	// a shared id would deduplicate all but the first. See [changefeed.WakeID].
 	WakeID uuid.UUID
 
 	// WakeAt is when the change a DERIVED wake announces was made — the
 	// record's own instant — and it becomes the wake's timestamp.
 	//
-	// WITH THE ID, because a wake's timestamp is half of the identity a turn
-	// derives from it: the unit of work's instant is the earliest timestamp
-	// among its triggers ([inbox.WorkSinceFor]), and every operation id the
-	// turn derives carries it. A wake minted with the delivery's own clock
-	// took a FRESH instant on every producer retry while its id stayed put,
-	// so a turn re-run from a later copy derived different operation ids
-	// from the first run's and its writes were not collapsed onto them.
-	// The record's instant is the same on every copy, and it is earlier
-	// than the wake, which is the safe side for a lower bound.
+	// WITH THE ID: the timestamp is half of the identity a turn derives
+	// ([inbox.WorkSinceFor] takes the earliest trigger's, and every operation
+	// id carries it). A fresh clock on each producer retry gave a re-run turn
+	// different operation ids, so its writes were not collapsed. The record's
+	// instant is the same on every copy and earlier than the wake, the safe
+	// side for a lower bound.
 	//
-	// Zero keeps the wake's own instant, which is right only for a record
-	// that carries none; a wake whose id is derived from its delivery's
-	// takes the delivery's instant.
+	// Zero keeps the wake's own instant, right only for a record that
+	// carries none; a delivery-derived id takes the delivery's instant.
 	WakeAt time.Time
 
 	// Held is a recipient the change told and does not wake: nothing is
@@ -149,21 +127,15 @@ type Recipient struct {
 // Valve is the shared per-seat notification rate limiter.
 //
 // THREE-VALUED, and the error is which of the three: nil means the bool is an
-// answer — under the cap, or definitively over it — and a non-nil error means
-// the valve could not say, WHATEVER the bool beside it. The caller fails open
-// on that third answer, because a valve that cannot be reached must not stop
-// real notifications; an implementation is therefore free to return the false
-// that comes naturally when it cannot read a count, and does not have to
-// remember to invent a true.
+// answer (under the cap, or definitively over it); a non-nil error means the
+// valve could not say, WHATEVER the bool beside it. The caller fails open on
+// that, so an implementation may return the false that comes naturally.
 //
-// AND IT SAYS WHEN A REFUSAL ENDS: Reopens is the end of the window containing
-// now, the first instant a bucket it refused at now is counted afresh. The live
-// path never asks it for a live wake — a refused notification is dropped there,
-// which is what a safety valve is for — but a replayed one is paced: the
-// replay of the inbound group's unhandled deliveries (replay.go), and a change
-// feed's replay of its dead letters, whose wakes piled up over a roll and
-// arrive in one burst the live path would have spread, so a refused seat's
-// wake waits out to the window's end rather than being lost.
+// Reopens is the end of the window containing now, the first instant a bucket
+// refused at now is counted afresh. The live path drops a refused
+// notification and never asks; replays (replay.go, a change feed's dead
+// letters) arrive in a burst and are paced, so a refused seat's wake waits
+// out the window rather than being lost.
 type Valve interface {
 	Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error)
 	Reopens(now time.Time) time.Time
@@ -258,21 +230,15 @@ type Service struct {
 	// firstParty is [Options.FirstParty], as a set.
 	firstParty map[string]bool
 
-	// retired is every source whose parser this process once had and
-	// [Service.Unregister] took away, which is the only way to tell a
-	// delivery from a surface somebody DISCONNECTED from one nothing here
-	// ever parsed.
+	// retired is every source whose parser [Service.Unregister] took away,
+	// the only way to tell a DISCONNECTED surface from one nothing here ever
+	// parsed. The next steps differ: a webhook still registered at the app
+	// for a gone integration (remove it) versus an integration wired at the
+	// edge only (wire it); one warning for both read as parser failures
+	// (inbound_source_unparsed).
 	//
-	// The two are opposite facts with opposite next steps: the first is a
-	// webhook still registered at a third-party app for an integration that
-	// is gone (go and remove it), the second is an integration wired at the
-	// edge and nowhere else (go and wire it). Reported as one warning, a
-	// disconnect produced a page of what reads as parser failures — measured
-	// on a live GitHub disconnect, where every `installation` event GitHub
-	// sent afterwards logged inbound_source_unparsed.
-	//
-	// NEVER CLEARED BY ANYTHING BUT A RE-REGISTRATION, because that is the
-	// only event that makes the source parseable again.
+	// Cleared only by a re-registration, the one event that makes the source
+	// parseable again.
 	retired map[string]bool
 
 	mu      sync.RWMutex
@@ -387,18 +353,13 @@ func (s *Service) Prompts() Prompts {
 
 // Replace swaps the parser and prompt for a source already registered.
 //
-// The APPLY path. A parser is built from the company — which projects exist,
-// who leads them, which instance to read — and an epoch is published rather
-// than mutated, so a node that kept its boot-time parser would route a new
-// revision's events by the old company's org chart. That failure is silent:
-// every event still routes, just to whoever led the project when the process
-// started.
+// The APPLY path. A parser is built from the company (projects, leads,
+// instance), so a node that kept its boot-time parser would silently route a
+// new revision's events by the old org chart.
 //
-// Distinct from [Service.Register], which REFUSES a duplicate source, and
-// deliberately: at boot a second parser claiming one source name is two
-// integrations colliding, and swapping one for the other silently would make
-// whichever registered last win. The two callers want opposite answers to
-// the same situation, so they ask different questions.
+// Distinct from [Service.Register], which REFUSES a duplicate source: at boot
+// a second parser claiming one name is two integrations colliding, and
+// swapping would let whichever registered last win.
 func (s *Service) Replace(p Parser, prompt Prompt) error {
 	if p == nil || p.Source() == "" {
 		return fmt.Errorf("notify: a parser must name its source")
@@ -447,31 +408,12 @@ func (s *Service) Unregister(source string) bool {
 // offered (replay.go) — once at once and again whenever they move, for as long
 // as the service runs, and returns without waiting for it.
 //
-// THE REPLAY AFTER THE SUBSCRIBE, so this node is a member of the group
-// whatever the replay meets: a replay that failed part way leaves its copies
-// kept for a later pass, and must not leave the node deaf.
-//
-// AND ON A GOROUTINE OF ITS OWN, which [Service.Stop] ends — as a change
-// feed's replay runs on the feed's own (internal/changefeed). Start runs in
-// the engine's boot and in a first company's apply, ahead of the epoch it
-// publishes, and the replay handles its copies one after another, each a
-// frame's read, a delivery's publishes and a drop, as many as a paused roll
-// left: run here, it held both for the whole backlog, with nothing bounding
-// it. Nothing about correctness needs it here either: the subscription is live
-// before it begins, so live deliveries run beside it. Its context is ctx's
-// values without ctx's end, because a caller's context — an apply's — ends
-// when the call does, and the replay outlives the call; what ends it is Stop.
-// A replay stopped part way keeps every copy it did not reach, and every copy
-// it was handling when stopped that it could not settle, for another node's
-// replay or the next start.
-//
-// AND IT RUNS FOR AS LONG AS THE SERVICE DOES, not once: a copy kept after this
-// node started is one it reads as well, and replayed only at a start it waited
-// for a restart a paused roll never brings (replay.go).
-//
-// Outside the lock, because the replay handles each copy through
-// [Service.Handle], which takes the read lock, and Go's RWMutex is not
-// reentrant.
+// The replay follows the subscribe, so a failing replay never leaves the node
+// deaf. It runs on its own goroutine, which [Service.Stop] ends, because a
+// paused roll's backlog would hold boot and apply; its context keeps ctx's
+// values but not its end. It outlives start: a copy kept later would wait for
+// a restart (replay.go). Outside the lock, since the replay calls
+// [Service.Handle], which read-locks, and RWMutex is not reentrant.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.started {
@@ -541,39 +483,14 @@ func (s *Service) Sources() []string {
 //
 // # A failure NAKs, a shed DEFERS, a record a newer build wrote PASSES
 //
-// A wake that could not be published fails the delivery, which goes back for
-// a redelivery — as the NODE's failure, never the delivery's, where the node
-// is why ([nodeFault]: a broker it could not reach, a queue no longer live, a
-// stop that ended the handler), so a delivery whose budget it spends is kept
-// with the group's unhandled deliveries, for a replay, and not with its poison
-// ([queue.NakNode]).
-//
-// A shedding node DEFERS — hands the delivery back at once, at the head of the
-// group, and stops consuming until its posture admits work again (the
-// engine's resumeInbound) — rather than NAKing or republishing. A NAK is a
-// failure: the broker withholds it from every node for the failure's backoff,
-// a second doubling to thirty, while this node, still consuming, takes the
-// next delivery only to fail that too, so every delivery the shed lasts waits
-// out a backoff and spends a delivery of its budget on a node that will not
-// handle it. A republish is worse: inbound events are key-partitioned by
-// conversation, so a copy sent to the topic's tail while its siblings replay
-// from the head reorders that conversation, and it lands on a topic this node
-// is still attached to — so it comes straight back, is shed again and
-// republished again as fast as the broker will serve it. A deferral cannot
-// spin.
-//
-// A record a newer build wrote PASSES ([queue.Pass]): its parser answers a
-// [Deferral], since this node cannot read the record and a peer on that build
-// can. It goes back to the ONE group every node takes inbound mail from, for
-// that peer, and is never acked — an ack here was the wake gone for every
-// node (crewlet#993). Nor is it deferred: nothing is wrong with this node, so
-// it goes on taking its other mail, and the delivery's returns are spaced as a
-// failure's are, so the older nodes of a roll cannot spin it between them. The
-// group's 25 deliveries offer it to the fleet for about ten minutes, and
-// nothing steers them to a node that reads it; one no node handled by then is
-// dead-lettered with its copy among the group's unhandled deliveries, and a
-// node that reads it replays it (replay.go) — one running within a poll of the
-// keep, or the next to start — through this same handling.
+// A wake that could not publish fails as the NODE's failure where the node is
+// why ([nodeFault]), kept for a replay ([queue.NakNode]). A shedding node
+// DEFERS to the group's head and stops consuming until its posture admits
+// work (resumeInbound): a NAK is withheld group-wide while this node fails the
+// next too, and a republish reorders the conversation and returns here. A
+// record a newer build wrote PASSES ([queue.Pass], from a [Deferral]) to a
+// peer that can read it, never acked (crewlet#993) or deferred; unhandled after
+// the group's 25 deliveries it is dead-lettered, then replayed.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	return s.handle(ctx, ev, false)
 }
@@ -686,20 +603,13 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, replaying bool) 
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		// A publish failure is worth a redelivery: the wake never
-		// happened. The API's delivery ledger holds the claim, so the
-		// provider's own retry is refused — this redelivery is the only
-		// second chance the wake gets.
+		// A publish failure is worth a redelivery: the delivery ledger holds
+		// the claim, so the provider's own retry is refused.
 		//
-		// AND A FAILURE OF THIS NODE'S IS NOT THE DELIVERY'S: a broker it
-		// could not reach, a queue no longer live, a stop that ended this
-		// handler ([nodeFault]). Answered as the node's own, it is returned
-		// as any failure is and never counted against the delivery, so one
-		// whose budget it spends — a newer record's wake whose last delivery
-		// reached a newer node that could not publish it — is kept with
-		// the group's unhandled deliveries, which a later replay delivers,
-		// rather than with its poison, which nothing replays
-		// ([queue.RetiredTo]).
+		// A failure of THIS NODE's ([nodeFault]) is not the delivery's: it is
+		// never counted against the delivery, so one whose budget it spends
+		// is kept with the unhandled deliveries, which a replay delivers,
+		// not with the poison, which nothing replays ([queue.RetiredTo]).
 		if nodeFault(ctx, errs) {
 			return queue.NakNode(err)
 		}
@@ -845,18 +755,12 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		Origin:               r.Origin,
 	}
 	// BOTH KEYS ride on the event: the partition key so the inbox coalescer
-	// can group without re-deriving a third-party app's rule, and the
-	// conversation identity so the turn's rows on the executor log, the
-	// episodes and the event store's tag file this turn where the next turn
-	// will look for it.
-	// Derived here, where the third-party app's prompt is already in hand.
+	// groups without re-deriving a third-party app's rule, and the
+	// conversation identity so the turn's rows file where the next turn looks.
 	//
-	// THROUGH [Prompts.Partition] and [Prompts.Conversation], which exist so
-	// the namespacing rule has one caller each: a third-party app's local key
-	// is namespaced by source precisely so a Jira issue "42" and a GitLab
-	// issue "42" cannot merge into one trigger. Those are the two callers;
-	// hand-rolling the same two steps beside them made the rule's home a
-	// function nothing called.
+	// THROUGH [Prompts.Partition] and [Prompts.Conversation], the namespacing
+	// rule's one caller each: a local key is namespaced by source so a Jira
+	// issue "42" and a GitLab issue "42" cannot merge into one trigger.
 	partition := prompts.Partition(r.Inbound)
 	conversation := prompts.Conversation(r.Inbound)
 	// THE METADATA COPY CARRIES BOTH, under the envelope's own field names,
@@ -1042,20 +946,15 @@ func (s *Service) allowReopened(ctx context.Context, party Party) (bool, error) 
 }
 
 // allow consults the per-seat valve: in the live path's bucket, or, for a
-// paced wake, in the replays' own.
+// paced wake, in the replays' own. Off by default and then never reads the
+// counter.
 //
-// Off by default and skipped entirely when it is off, so a company that
-// never asked for a rate limit never reads the counter.
-//
-// THE REPLAYS' OWN BUCKET, at the same limit. Paced in the live path's, a
-// replay took the seat's slot as each window opened and filled the window,
-// and the live path skips and acks a wake the valve refuses: a person's
-// mention landing in that window was lost, where without the replay it would
-// have been the only wake there — while a refusal of a replayed wake costs
-// nothing, since it is kept or redelivered. So a replay never spends a slot
-// the live path would drop a wake for; the seat can be woken up to twice its
-// limit in a window while a replay runs, its live mail and the backlog of a
-// roll, and the backlog no faster than the limit.
+// THE REPLAYS' OWN BUCKET, at the same limit: paced in the live bucket, a
+// replay filled each window as it opened, and the live path drops a refused
+// wake, so a person's mention in that window was lost; a refused replayed
+// wake costs nothing, being kept or redelivered. A seat can thus be woken up
+// to twice its limit in a window while a replay runs, the backlog no faster
+// than the limit.
 func (s *Service) allow(ctx context.Context, party Party, paced bool) (bool, error) {
 	if s.valve == nil || s.limit == nil {
 		return true, nil
@@ -1074,16 +973,13 @@ func (s *Service) allow(ctx context.Context, party Party, paced bool) (bool, err
 // SkipReason is why a delivery woke nobody, in the words its
 // notification_skipped record carries.
 //
-// DECLARED ONCE, HERE, because the words are how every reader tells WHICH
-// gate dropped a delivery — an operator reading the event log, and the suites
-// that hold a delivery to the gate it should meet. Spelled again at each
-// reader, a reworded reason leaves every copy asserting the old words, and the
-// end-to-end suite kept such a copy until these were declared. The record's
-// field stays a string, since [types.NotificationSkipped] cannot import this
-// package, so a reader compares it as SkipReason(record.Reason) — and that
-// comparison holds for every reason, because the record's Reason is one of
-// these words and nothing more: what a gate says about one delivery goes in
-// the record's Detail ([ReasonParseFailed]).
+// DECLARED ONCE, HERE, because the words tell every reader WHICH gate dropped
+// a delivery; spelled again at each reader, a reworded reason leaves copies
+// asserting the old words. The record's field stays a string
+// ([types.NotificationSkipped] cannot import this package), compared as
+// SkipReason(record.Reason). Its Reason is one of these words and nothing
+// more: what a gate says about one delivery goes in the record's Detail
+// ([ReasonParseFailed]).
 type SkipReason string
 
 // The reasons a delivery is skipped for, in the order the service meets them.
