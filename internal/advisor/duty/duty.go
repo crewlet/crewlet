@@ -318,10 +318,17 @@ func (d *Duty) slot(now time.Time) time.Time {
 }
 
 // run runs the rule groups and the model pass as asked, reconciles each with
-// the log, and answers the run's record.
-func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigger Trigger, by, id string) Run {
-	run := Run{ID: id, Trigger: trigger, By: by, StartedAt: now, Status: RunDone}
-	defer func() { run.EndedAt = d.Now().UTC() }()
+// the log, and answers the run's record, ended when it returns. THE RESULT IS
+// NAMED so the deferred end lands in what is returned: an unnamed one is copied
+// before the defer runs, and a run with no end is one the log refuses.
+func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigger Trigger, by, id string) (run Run) {
+	run = Run{ID: id, Trigger: trigger, By: by, StartedAt: now, Status: RunDone}
+	defer func() {
+		// A clock stepped back mid-run still ends it no earlier than it began.
+		if run.EndedAt = d.Now().UTC(); run.EndedAt.Before(run.StartedAt) {
+			run.EndedAt = run.StartedAt
+		}
+	}()
 	reading := advisor.Reading{At: now}
 	var observed []advisor.Observation
 	if rules {
