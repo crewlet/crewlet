@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // A JUNIT REPORT is read in the one shape go-junit-report, gotestsum, JUnit 4
@@ -116,7 +117,7 @@ func (c testCase) failure(message, body string) gitlet.CheckFailure {
 }
 
 // text is the character data inside the element d has just opened, up to its
-// end: at most CheckFailureMessageBytes held, the rest read and dropped.
+// end: at most messageHeld bytes held, the rest read and dropped.
 func text(d *xml.Decoder) (string, error) {
 	var (
 		b     bytes.Buffer
@@ -135,13 +136,20 @@ func text(d *xml.Decoder) (string, error) {
 			depth--
 		}
 		if data, ok := tok.(xml.CharData); ok {
-			if room := gitlet.CheckFailureMessageBytes - b.Len(); room > 0 {
+			if room := messageHeld - b.Len(); room > 0 {
 				b.Write(data[:min(len(data), room)])
 			}
 		}
 	}
 	return b.String(), nil
 }
+
+// messageHeld is how much of a failure's body is held: the message's bound and
+// redact.MaxReach past it, with the bytes a credential's format spells around
+// that (redact's package doc: 85 at most, which its own stages round to 512),
+// so a credential the bound cuts is read whole by the redaction before the cut
+// (failures.add).
+const messageHeld = gitlet.CheckFailureMessageBytes + redact.MaxReach + 512
 
 // attr is t's attribute named name, "" where it has none.
 func attr(t xml.StartElement, name string) string {

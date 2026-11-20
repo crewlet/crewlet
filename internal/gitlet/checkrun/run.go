@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
-	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -36,7 +36,8 @@ const FinishPolls = 2
 // (exit status, reports, summary, tail, kept log) before what is still unread
 // is gone without: FOUR, a minute at CheckPoll. JUDGMENT: an ending reads at
 // most two reports of sandbox.MaxFileBytes and a log of
-// gitlet.MaxCheckLogBytes, 128 MiB, which a minute carries at about 2 MB/s; a
+// gitlet.MaxCheckLogBytes, 128 MiB, which a minute carries at about 2 MB/s (a
+// log whose redaction outgrows its bound is read twice, keptlog.go); a
 // slower box's ending goes without the rest, its summary saying so. Unbounded, a stalled
 // read outlasts the home's sweep, which queues the attempt again while its
 // box still runs. SweepPolls counts this in, and it sits well inside
@@ -349,10 +350,10 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 		if !now.Before(deadline) {
 			// PAST ITS OWN TIMEOUT: a measurement of the commit, failed, its
 			// log kept before its box is closed.
-			f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonTimedOut, nil,
-				fmt.Sprintf("ran past its %s timeout and was stopped", a.timeout))
+			said := fmt.Sprintf("ran past its %s timeout and was stopped", a.timeout)
+			f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonTimedOut, nil, said)
 			read, cancel := a.reading(ctx)
-			a.failed(read, box, f, nil)
+			a.failed(read, box, f, nil, said)
 			cancel()
 			return f, opID
 		}
@@ -386,31 +387,33 @@ func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Ti
 		return a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonBoxFailed, nil, why)
 	}
 	fs, unread := a.reports(ctx, box)
-	summary := a.summary(ctx, box, status, a.r.now().Sub(began).Round(time.Second), fs, unread)
+	said := a.summary(ctx, box, status, a.r.now().Sub(began).Round(time.Second), fs, unread)
 	if status == 0 {
-		f := a.ended(gitlet.CheckStatePassed, gitlet.CheckReasonExit, &status, summary)
+		f := a.ended(gitlet.CheckStatePassed, gitlet.CheckReasonExit, &status, said)
 		f.Tests = fs.counts()
 		return f
 	}
-	f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonExit, &status, summary)
+	f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonExit, &status, said)
 	f.Tests = fs.counts()
-	a.failed(ctx, box, f, fs)
+	a.failed(ctx, box, f, fs, said)
 	return f
 }
 
 // failed fills a failed run's ending beyond its summary: the failures its
-// reports named (fs, nil where none were read), the last CheckTailBytes of its
-// output, its kept log (keepLog) and its output's line count. A log that could
-// not be stored is said in the summary, and the ending recorded without it.
-func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *gitlet.CheckFinished, fs *failures) {
+// reports named (fs, nil where none were read), the end of its output (tail),
+// its kept log (keepLog) and its output's line count. A log that could not be
+// stored is said after said, the summary as written, and the ending recorded
+// without it.
+func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *gitlet.CheckFinished, fs *failures,
+	said string) {
 	if fs != nil {
 		f.Failures, f.FailuresOmitted = fs.kept, fs.omitted
 	}
 	t := a.tail(ctx, box)
-	f.Tail, f.TailCut = t.text, t.cut && t.text != ""
+	f.Tail, f.TailCut = t.text, t.cut
 	log, why := a.keepLog(ctx, box)
 	if why != "" {
-		f.Summary = summaryOf(f.Summary + " (" + why + ")")
+		f.Summary = summaryOf(said + " (" + why + ")")
 	}
 	f.Log = log
 	// Last, so a slow count never costs the log its share of the ending's bound.
@@ -504,10 +507,11 @@ func (c *capped) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// summary is the ending's summary: what the command wrote to
-// $CREWLET_CHECK_SUMMARY, whose words say what it measured better than
-// anything the runner reads off it, else what its reports say, else its exit
-// and how long it ran; then what of its reports could not be read.
+// summary is the ending's summary as written, uncut (summaryOf redacts and
+// cuts it): what the command wrote to $CREWLET_CHECK_SUMMARY, whose words say
+// what it measured better than anything the runner reads off it, else what its
+// reports say, else its exit and how long it ran; then what of its reports
+// could not be read.
 func (a *attempt) summary(ctx context.Context, box sandbox.Sandbox, status int, took time.Duration, fs *failures,
 	unread []string) string {
 
@@ -533,42 +537,57 @@ func (a *attempt) summary(ctx context.Context, box sandbox.Sandbox, status int, 
 	if len(unread) > 0 {
 		s += " — " + strings.Join(unread, "; ")
 	}
-	return summaryOf(s)
+	return s
 }
 
-// outputTail is the end of a run's output as an ending carries it: text, its last CheckTailBytes
-// as valid UTF-8; size, the output's size the read found; and cut, whether text begins inside a line.
+// outputTail is the end of a run's output as an ending carries it: text, at most CheckTailBytes of
+// its redacted end as valid UTF-8; size, the output's size the read found; cut, whether text begins
+// inside a line; and taken, the line breaks the redaction took out of the read text is the end of.
 type outputTail struct {
-	text string
-	size int64
-	cut  bool
+	text  string
+	size  int64
+	cut   bool
+	taken int
 }
 
-// tail is the last CheckTailBytes of the command's output as valid UTF-8,
-// partial characters dropped, and the zero value where it cannot be read. ONE
-// BYTE MORE is read, and dropped, to tell whether the tail's first line began
-// before it.
+// tail is the end of the command's output REDACTED BEFORE IT IS CUT: at most CheckTailBytes of whole
+// lines (sandbox.KeepEnd) of what the read's first redact.LookBack bytes settle (redact.SettledEnd),
+// read that much past the tail. Only a last line longer than the tail is kept in part, its end, and
+// cut; a read begun inside one line that runs to the end shows nothing. The zero value where it
+// cannot be read.
 func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) outputTail {
-	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes+1)
+	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes+redact.LookBack)
 	if err != nil {
 		return outputTail{}
 	}
-	data, cut := t.Data, false
-	if len(data) > gitlet.CheckTailBytes {
-		cut, data = data[0] != '\n', data[1:]
+	behind := 0
+	if t.Before() > 0 {
+		behind = redact.LookBack
 	}
-	return outputTail{text: strings.ToValidUTF8(string(data), ""), size: t.Size, cut: cut}
+	read := string(t.Data)
+	end, _ := redact.SettledEnd(read, behind)
+	end = strings.ToValidUTF8(end, "")
+	text, at := sandbox.KeepEnd(end, gitlet.CheckTailBytes)
+	cut := len(text) != len(end)-at
+	if cut {
+		// KeepEnd marks a line kept in part; the ending says so in TailCut instead.
+		text = text[len(sandbox.KeepEndMark):]
+	}
+	taken := strings.Count(read, "\n") - strings.Count(redact.Secrets(read), "\n")
+	return outputTail{text: text, size: t.Size, cut: cut, taken: taken}
 }
 
-// lines is how many lines the run's output had when t was read: its newlines up to t's end,
-// counted in its box, and one for an unterminated last line; 0 where the box could not count them,
-// a count no ending is refused for.
+// lines is how many lines the run's output had when t was read, as its tail numbers them: its
+// newlines up to t's end, counted in its box, less those the redaction took out of the read t is
+// the end of (t.taken: a key's block is one marker), and one for an unterminated last line; 0 where
+// the box could not count them, a count no ending is refused for.
 func (a *attempt) lines(ctx context.Context, box sandbox.Sandbox, t outputTail) int {
 	if t.size <= 0 || t.text == "" {
 		return 0
 	}
 	res, err := box.Exec(ctx, lineCount(outputFile, t.size), sandbox.ExecOptions{})
 	n, convErr := strconv.Atoi(strings.TrimSpace(res.Stdout))
+	n -= t.taken
 	if err == nil && res.ExitCode == 0 && convErr == nil && n >= 0 {
 		// THE TAIL'S OWN ENDING, never the output's last byte: an invalid byte the tail dropped
 		// after a newline is no line a reader is shown.
@@ -597,42 +616,13 @@ func lineCount(file string, size int64) string {
 	return "head -c " + strconv.FormatInt(size, 10) + " < " + sandbox.ShellQuote(file) + " | wc -l"
 }
 
-// keepLog stores the last MaxCheckLogBytes of the run's output as one object
-// through the runner's Logs, answering what the attempt's code_check_logs row
-// names it by: nil and "" for no output or no store, nil and why for a log
-// not stored. STREAMED from the box's end (Sandbox.OpenTail) into the store,
-// so output of any size costs the runner a buffer and the kept bytes'
-// transfer, never the whole output's.
-func (a *attempt) keepLog(ctx context.Context, box sandbox.Sandbox) (*gitlet.CheckLog, string) {
-	r := a.r
-	if r.o.Logs == nil {
-		return nil, ""
-	}
-	rc, size, err := box.OpenTail(ctx, outputFile, gitlet.MaxCheckLogBytes)
-	if err != nil {
-		return nil, "its log could not be read: " + err.Error()
-	}
-	defer func() { _ = rc.Close() }()
-	if size == 0 {
-		return nil, ""
-	}
-	o, err := r.o.Logs.Put(ctx, io.LimitReader(rc, gitlet.MaxCheckLogBytes), gitlet.MaxCheckLogBytes,
-		objstore.PutMeta{ContentType: logContentType})
-	switch {
-	case errors.Is(err, objstore.ErrFull):
-		return nil, "its log was not kept: the object store is full"
-	case err != nil:
-		r.log.WarnContext(ctx, "code_check_log_unkept", "repo_id", a.c.RepoID, "check", a.c.Name,
-			"attempt", a.c.Attempt, "error", err.Error())
-		return nil, "its log could not be stored"
-	}
-	return &gitlet.CheckLog{Object: o.Key, Hash: o.Hash, Size: o.Size}, ""
-}
-
-// summaryOf is s cut to CheckSummaryBytes at a character's boundary, its
-// invalid bytes dropped.
+// summaryOf is s REDACTED WHOLE, THEN CUT to CheckSummaryBytes at a
+// character's boundary, its invalid bytes dropped: cut first, a credential the
+// cut splits would be no shape the redaction knows. Only the opening the cut
+// reads is kept of the redaction ([redact.Prefix]).
 func summaryOf(s string) string {
-	return cut(strings.ToValidUTF8(s, ""), gitlet.CheckSummaryBytes)
+	opening, _ := redact.Prefix(strings.ToValidUTF8(s, ""), gitlet.CheckSummaryBytes+1)
+	return cut(opening, gitlet.CheckSummaryBytes)
 }
 
 // counted reports an ending carrying a count of [gitlet.CheckCountsVersion]'s.
