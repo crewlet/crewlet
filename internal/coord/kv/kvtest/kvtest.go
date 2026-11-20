@@ -57,6 +57,11 @@ type Across struct {
 	// node without `data` sends shares its one leaf link.
 	LeafBroker *js.Server
 
+	// Link is the relay between the two ([linktest.SlowEachWay]): a case
+	// reads what it has taken and carried of the leaf's bytes, or holds them
+	// back through [linktest.Link.Watch].
+	Link *linktest.Link
+
 	// MemberBroker is the member's own broker, the far end of the link: a
 	// case dials a connection of it to see, in the order they arrive, what the
 	// leaf's connections sent across the link.
@@ -94,6 +99,7 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 		Leaf:         open(t, client(t, "leaf", leaf), kv.AcrossLink),
 		LeafBroker:   leaf,
 		MemberBroker: member,
+		Link:         link,
 	}
 }
 
