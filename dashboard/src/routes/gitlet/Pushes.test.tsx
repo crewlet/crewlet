@@ -505,6 +505,36 @@ test("the first page asks the reader's own midnights and older pages ask none", 
   expect(older.searchParams.get("brief")).toBe("true");
 });
 
+// THE READER'S MIDNIGHT IS NO NEW QUESTION: the history stays on screen as the day turns, each day
+// still counted on the days its answer was read at, and the next poll reads the moved days
+// (`lib/useCodeQuery.ts`). Mutations: put `day_bounds` back in the question's key, and the rows
+// give way to the placeholder at midnight; count the answer on the reader's new days, and
+// yesterday reads the day before's 13.
+test("the history stays on screen as the reader's day turns, counted on the days it was read at", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(new Date("2026-11-16T23:59:30Z"));
+  pinZoneForTest("UTC");
+  const asked = stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web");
+  const feed = await feedOf();
+  const row = rowOf(feed, "Gitlet merged web!41");
+  expect(headings(feed)[0]).toBe("Today8");
+  const days = () => newest(asked).map((u) => u.searchParams.get("day_bounds")!.split(",").at(-1));
+  expect(days()).toEqual(["2026-11-17T00:00:00Z"]);
+  await act(
+    async () => void vi.advanceTimersByTime(Date.parse("2026-11-17T00:00:02Z") - Date.now()),
+  );
+  expect(row.isConnected).toBe(true);
+  expect(days()).toHaveLength(1);
+  expect(headings(feed)[0]).toBe("Yesterday8");
+  expect(headings(feed)[1]).toMatch(/2 of 13$/);
+  // THE NEXT POLL, a minute after the page asked, reads the moved days.
+  await act(async () => void vi.advanceTimersByTime(60_000));
+  await afterMicrotasks();
+  expect(row.isConnected).toBe(true);
+  expect(days()).toEqual(["2026-11-17T00:00:00Z", "2026-11-18T00:00:00Z"]);
+});
+
 // AN OLDER FLEET REFUSES THE DAY COUNTS, and the history says so: nothing asks again without them.
 // Mutation: retry without day_bounds, and a second request is made.
 test("a fleet that refuses the day counts refuses the history, and nothing asks again", async () => {

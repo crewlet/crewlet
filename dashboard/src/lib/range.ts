@@ -311,16 +311,41 @@ export function cutInto(span: number, cap: number): Cut {
   return { cell, cells: Math.max(1, Math.min(columns, Math.round(span / cell))) };
 }
 
+declare const CLOCK_EDGE: unique symbol;
+
+/**
+ * An instant a moving window stands at NOW: a value the clock moves, and so
+ * never part of a code question's key (`lib/useCodeQuery.ts`'s window).
+ *
+ * A BRAND, minted only where a clock reading becomes an edge: here
+ * ([edgeAt], the window's edges), `routes/gitlet/when.ts` and
+ * `routes/gitlet/activity.tsx`. A code question's parameters refuse one by
+ * type, so an edge put in a key is a `tsc` error naming the field; and the
+ * source gate (`app/source.test.ts`) refuses a screen that asks a code
+ * question minting an instant string itself, which would carry no brand.
+ */
+export type ClockEdge = string & { readonly [CLOCK_EDGE]: true };
+
+/** The edge at `ms`, RFC 3339 to the millisecond. */
+export function edgeAt(ms: number): ClockEdge {
+  return new Date(ms).toISOString() as ClockEdge;
+}
+
+/** Several edges as the one parameter the engine reads them in (`day_bounds`). */
+export function joinEdges(edges: readonly ClockEdge[]): ClockEdge {
+  return edges.join(",") as ClockEdge;
+}
+
 /** A window, as the engine's two parameters. */
 export interface TimeRange {
   /** What was chosen, for a control and a heading. */
   window: Window;
   /** The inclusive start, RFC3339. */
-  since: string;
+  since: ClockEdge;
   /** The exclusive end, RFC3339. */
-  until: string;
+  until: ClockEdge;
   /** The window immediately before this one, for a compare-to-previous. */
-  previous: { since: string; until: string };
+  previous: { since: ClockEdge; until: ClockEdge };
   /** The bucket a chart over this window draws in. */
   bucket: Bucket;
   /** What this screen offers, so one declaration reaches the control too. */
@@ -371,12 +396,10 @@ export function windowEdges(
   // TODAY STARTS WHERE THE COMPANY'S DAY DID, whatever the clock says now, so
   // its span is measured from that edge rather than carried in the value.
   const span = !isRange(w) && w.today ? edge - w.from : spanOf(w);
-  const since = new Date(edge - span);
-  const before = new Date(edge - span * 2);
   return {
-    since: since.toISOString(),
-    until: new Date(edge).toISOString(),
-    previous: { since: before.toISOString(), until: since.toISOString() },
+    since: edgeAt(edge - span),
+    until: edgeAt(edge),
+    previous: { since: edgeAt(edge - span * 2), until: edgeAt(edge - span) },
   };
 }
 
@@ -413,8 +436,7 @@ function dayEdges(
     last = covered.until;
   }
   const count = Math.round((Date.parse(last) - Date.parse(first)) / 86_400_000) + 1;
-  const at = (label: string) =>
-    new Date(dayStartIn(label, zone) ?? Date.parse(label)).toISOString();
+  const at = (label: string) => edgeAt(dayStartIn(label, zone) ?? Date.parse(label));
   return {
     since: at(first),
     until: at(shiftDay(last, 1)),

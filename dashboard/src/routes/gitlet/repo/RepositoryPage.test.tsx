@@ -30,7 +30,7 @@ import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
+import { afterMicrotasks, eventually, settled } from "~/test/settle.ts";
 import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
@@ -1687,6 +1687,42 @@ test("the branches are the engine's refs, each opening its files", async () => {
   }
 });
 
+// THE READER'S MIDNIGHT IS NO NEW QUESTION for the branches either: the active ones stay on screen
+// as the day turns, and within the spread they are read again from the moved start, the count
+// with it. Mutation: put `moved_since` back in the question's key, and the list gives way to its
+// placeholder at midnight.
+test("the active branches stay on screen as the reader's day turns", async () => {
+  vi.useFakeTimers({ toFake: [...MIDNIGHT_TIMERS] });
+  vi.setSystemTime(new Date("2026-11-16T22:59:30Z"));
+  const asked = stubListing((p) => json(refsListing(p)));
+  mount("#/gitlet/repos/web?tab=branches&view=active");
+  const row = await eventually(() =>
+    document.querySelector('a[href="#/gitlet/repos/web?ref=feature"]')!.closest("tr")!,
+  );
+  const starts = () =>
+    listed(asked).map((u) => [
+      u.searchParams.get("moved_since"),
+      u.searchParams.get("active_since"),
+    ]);
+  // NINETY OF THE READER'S DAYS BACK: Aug 18 in Berlin, summer time.
+  expect(starts().at(-1)).toEqual(["2026-08-17T22:00:00.000Z", "2026-08-17T22:00:00.000Z"]);
+  const before = starts().length;
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  try {
+    await clockTo("2026-11-16T23:00:02Z");
+    expect(row.isConnected).toBe(true);
+    expect(starts()).toHaveLength(before);
+    await clockTo("2026-11-16T23:01:02Z");
+    await settled(() => asked.length);
+    expect(row.isConnected).toBe(true);
+    expect(starts().slice(before)).toEqual([
+      ["2026-08-18T22:00:00.000Z", "2026-08-18T22:00:00.000Z"],
+    ]);
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
 // A CURSOR PAGE NEVER ASKS THE ACTIVE COUNT, which the engine refuses past a
 // first page. Mutation: spread the first page's parameters into the cursor's.
 test("a cursor page never asks the active count", async () => {
@@ -2374,6 +2410,53 @@ test("a history is narrowed by when it was committed", async () => {
   expect(new Set(reads(asked, "code_log").map((u) => u.searchParams.get("since")))).toEqual(
     new Set(["2026-11-09T23:00:00.000Z"]),
   );
+});
+
+/** The clock moved to `iso`, every timer due by then run: ticks, polls, a window's re-ask. */
+async function clockTo(iso: string) {
+  await act(async () => void vi.advanceTimersByTime(Date.parse(iso) - Date.now()));
+}
+
+/** The timers a case across the reader's midnight drives: the clock's tick, and the re-ask. */
+const MIDNIGHT_TIMERS = [
+  "setInterval",
+  "clearInterval",
+  "setTimeout",
+  "clearTimeout",
+  "Date",
+] as const;
+
+// THE READER'S MIDNIGHT IS NO NEW QUESTION: a history narrowed by when stays on screen as the
+// day turns (Berlin's, 23:00 UTC), and within the spread it is read again, quietly, from the
+// moved start (`lib/useCodeQuery.ts`). Mutation: put `since` back in the question's key, and the
+// list gives way to its placeholder at midnight, a new row in its place.
+test("a history narrowed by when stays on screen as the reader's day turns", async () => {
+  vi.useFakeTimers({ toFake: [...MIDNIGHT_TIMERS] });
+  vi.setSystemTime(new Date("2026-11-16T22:59:30Z"));
+  const asked = stubLog(() => ({
+    log: { commits: [logged(HEAD, "Newest", "2026-11-15T10:00:00Z")], scanned: 1, complete: true },
+  }));
+  mount("#/gitlet/repos/web?tab=commits&when=7d");
+  const row = await eventually(() =>
+    within(screen.getByRole("group", { name: /History of/ }))
+      .getByText("Newest")
+      .closest<HTMLElement>(".code-list__row")!,
+  );
+  const starts = () => reads(asked, "code_log").map((u) => u.searchParams.get("since"));
+  expect(new Set(starts())).toEqual(new Set(["2026-11-09T23:00:00.000Z"]));
+  const before = starts().length;
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  try {
+    await clockTo("2026-11-16T23:00:02Z");
+    expect(row.isConnected).toBe(true);
+    expect(starts()).toHaveLength(before);
+    await clockTo("2026-11-16T23:01:02Z");
+    await settled(() => asked.length);
+    expect(row.isConnected).toBe(true);
+    expect(starts().slice(before)).toEqual(["2026-11-10T23:00:00.000Z"]);
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 // COMMIT MESSAGES ARE SEARCHED ON ENTER, page by page as the reader asks: a page that matched
