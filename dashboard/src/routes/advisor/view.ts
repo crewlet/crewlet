@@ -53,7 +53,8 @@ export interface ViewChart {
   title: string;
   unit: StatUnit;
   kind: "columns" | "stacked_columns" | "bars";
-  x: { kind: "day" | "seat" | "entry" | "reason" | "state"; labels: string[] };
+  /** `keys` are stable ids (a day, a handle, a wake reason) and `labels` what is drawn. */
+  x: { kind: "day" | "seat" | "entry" | "reason" | "state"; keys: string[]; labels: string[] };
   /** For an x of days, each label's instant (epoch ms), so a line can be drawn over time. */
   at?: number[];
   series: { id: string; label: string; values: (number | null)[] }[];
@@ -197,7 +198,11 @@ export function openWorkChart(flow: WorkFlowAnswer | null): ViewChart | null {
     title: "Open work",
     unit: "items",
     kind: "columns",
-    x: { kind: "day", labels: flow.points.map((p) => p.window) },
+    x: {
+      kind: "day",
+      keys: flow.points.map((p) => p.window),
+      labels: flow.points.map((p) => p.window),
+    },
     at: flow.points.map((p) => Date.parse(p.start)),
     series: [
       { id: "open", label: "Open", values: flow.points.map((p) => p.not_started + p.active) },
@@ -231,7 +236,7 @@ export function flowBySeatChart(
     title: "Work in progress, by agent",
     unit: "items",
     kind: "stacked_columns",
-    x: { kind: "seat", labels: rows.map((r) => nameOf(r.handle)) },
+    x: { kind: "seat", keys: rows.map((r) => r.handle), labels: rows.map((r) => nameOf(r.handle)) },
     series: FLOW_STATES.map((s) => ({
       id: s.id,
       label: s.label,
@@ -266,10 +271,14 @@ export function wastedWakesChart(rows: readonly TurnOutcomeRow[] | null): ViewCh
     .slice(0, 6);
   return {
     id: "wasted_wakes",
-    title: "Turns that changed nothing, by what woke them",
+    title: "Wasted turns, by what woke them",
     unit: "turns",
     kind: "bars",
-    x: { kind: "reason", labels: top.map(([wake]) => wakeWords(wake, "").label) },
+    x: {
+      kind: "reason",
+      keys: top.map(([wake]) => wake),
+      labels: top.map(([wake]) => wakeWords(wake, "").label),
+    },
     series: [
       { id: "nothing", label: "Changed nothing", values: top.map(([, w]) => w.nothing) },
       { id: "moved", label: "Changed something", values: top.map(([, w]) => w.turns - w.nothing) },
@@ -303,7 +312,7 @@ export function tokensPerTurnChart(
     title: "Cost per turn",
     unit: "tokens",
     kind: "bars",
-    x: { kind: "seat", labels: top.map((p) => nameOf(p.seat)) },
+    x: { kind: "seat", keys: top.map((p) => p.seat), labels: top.map((p) => nameOf(p.seat)) },
     series: [{ id: "tokens", label: "Tokens a turn", values: top.map((p) => p.value) }],
     note: median === null ? null : `The median agent spends ${fmtCount(median)} tokens a turn.`,
   };

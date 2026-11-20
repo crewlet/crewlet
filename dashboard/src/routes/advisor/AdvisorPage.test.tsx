@@ -646,7 +646,7 @@ test("the numbers open the page, each linked to the finding that explains it", a
   const open = strip.querySelector<HTMLElement>('[data-stat="open_items"]')!;
   expect(within(open).getByText("15")).toBeDefined();
   expect(within(open).queryByRole("link")).toBeNull();
-  expect(screen.getByText("Turns that changed nothing, by what woke them")).toBeDefined();
+  expect(screen.getByText("Wasted turns, by what woke them")).toBeDefined();
 });
 
 test("the range picker asks the numbers for its range", async () => {

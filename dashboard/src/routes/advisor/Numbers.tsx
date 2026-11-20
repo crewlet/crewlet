@@ -312,7 +312,7 @@ function ChartBody({ chart, from, to }: { chart: ViewChart; from: number; to: nu
       }));
       const value = several ? parts.reduce((n, p) => n + p.value, 0) : (parts[0]?.value ?? 0);
       return {
-        id: `${chart.id}:${i}`,
+        id: chart.x.keys[i] ?? `${chart.id}:${i}`,
         label,
         value,
         display: several ? `${fmtCount(parts[0]!.value)} of ${format(value)}` : format(value),
