@@ -28,6 +28,7 @@ const running: ViewRun = {
   stoppedBy: null,
   budget: null,
   reason: null,
+  dropped: 0,
 };
 
 // A RUN IS FOLLOWED, NEVER WAITED ON: its elapsed time and what it is doing
@@ -81,6 +82,9 @@ test("a deep run says it is one, what it spent, the bound it stopped at, and why
   expect(runWords(ended, NOW)).toBe(
     "The deep run ended 3 minutes ago. It found 2 new findings, using 412k of 1M tokens in 6 of 20 minutes.",
   );
+  expect(runWords({ ...ended, opened: 0, dropped: 2 }, NOW)).toBe(
+    "The deep run ended 3 minutes ago. It used 412k of 1M tokens in 6 of 20 minutes, and left out 2 findings it could not ground in what it read.",
+  );
   expect(runWords({ ...ended, opened: 0, stoppedBy: "tokens" }, NOW)).toBe(
     "The deep run ended 3 minutes ago at its token limit, so its list may be short. It used 412k of 1M tokens in 6 of 20 minutes.",
   );
@@ -108,12 +112,24 @@ test("a deep run says it is one, what it spent, the bound it stopped at, and why
       classes_run: 0,
       opened: 1,
       resolved: 0,
-      model: { status: "ceiling", tokens: 1, listed: 1, dropped: {}, reason: "Bound." },
+      model: {
+        status: "ceiling",
+        tokens: 1,
+        listed: 1,
+        dropped: { unread_record: 2, unknown_seat: 1 },
+        reason: "Bound.",
+      },
       kind: "deep",
       progress: [],
       budget: null,
       stopped_by: "minutes",
       classes: [],
     }),
-  ).toMatchObject({ status: "done", kind: "deep", stoppedBy: "minutes", reason: "Bound." });
+  ).toMatchObject({
+    status: "done",
+    kind: "deep",
+    stoppedBy: "minutes",
+    reason: "Bound.",
+    dropped: 3,
+  });
 });

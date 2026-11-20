@@ -53,6 +53,8 @@ export interface ViewRun {
   budget: AdvisorRunSummary["budget"];
   /** Why its model pass ended as it did, in the engine's words. */
   reason: string | null;
+  /** The findings its model submitted that the engine left out, ungrounded. */
+  dropped: number;
 }
 
 /** One class a run ran, and why it could not judge where it could not. */
@@ -78,6 +80,7 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
       stoppedBy: null,
       budget: null,
       reason: null,
+      dropped: 0,
     };
   }
   const status = run.status === "running" ? "running" : run.status === "failed" ? "failed" : "done";
@@ -94,6 +97,7 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
     stoppedBy: run.stopped_by,
     budget: run.budget,
     reason: run.model?.reason || null,
+    dropped: Object.values(run.model?.dropped ?? {}).reduce((n, d) => n + d, 0),
   };
 }
 
@@ -144,9 +148,19 @@ export function runWords(run: ViewRun, now: number): string {
   const head = bound
     ? `The deep run ended ${ago(run.endedAt ?? run.startedAt, now)} at ${bound}, so its list may be short.`
     : `The deep run ended ${ago(run.endedAt ?? run.startedAt, now)}.`;
-  if (moved.length > 0)
-    return `${head} It ${moved.join(" and ")}${spent ? `, using ${spent}` : ""}.`;
-  return spent ? `${head} It used ${spent}.` : head;
+  // A FINDING IT COULD NOT GROUND IS COUNTED, so an empty list is read as
+  // one it found and could not stand behind, never as nothing found.
+  const did = [
+    moved.length > 0
+      ? `${moved.join(" and ")}${spent ? `, using ${spent}` : ""}`
+      : spent
+        ? `used ${spent}`
+        : "",
+    run.dropped > 0
+      ? `left out ${plural(run.dropped, "finding")} it could not ground in what it read`
+      : "",
+  ].filter(Boolean);
+  return did.length > 0 ? `${head} It ${did.join(", and ")}.` : head;
 }
 
 /**
