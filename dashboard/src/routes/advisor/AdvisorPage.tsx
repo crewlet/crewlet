@@ -29,17 +29,20 @@ import { AttentionList, Button, Callout, EmptyState, Link, Text } from "@crewlet
 import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { ago } from "~/lib/ago.ts";
 import { relTime } from "~/lib/format.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { ApplyPanel } from "./ApplyPanel.tsx";
-import { useFindings, useReports } from "./api.ts";
+import { useFindings } from "./api.ts";
 import { useAskAbout, useDecisions } from "./decisions.tsx";
 import { Charts, RangePicker, StatsStrip, useSnapshot } from "./Numbers.tsx";
 import { RunHead } from "./Run.tsx";
+import { pagedOn } from "./paged.ts";
+
+export { pagedOn };
+import { Reports } from "./Reports.tsx";
 import { AtlasFix, listItems, snoozed, type OpenApply, type RowActions } from "./rows.tsx";
-import type { AdvisorKeptFinding, AdvisorReportSummary } from "~/protocol/advisorFindings.ts";
-import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked, weekMoved, weekWords } from "./words.ts";
+import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
+import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked } from "./words.ts";
 import type { RangeDays } from "./view.ts";
 
 /** The Advisor page's tabs, as its address names them. */
@@ -170,71 +173,6 @@ function Findings({ days }: { days: RangeDays }) {
         {row.dialog}
       </QueryState>
     </>
-  );
-}
-
-/**
- * The rows already shown, then a page's rows not among them. Until the next
- * page answers, the question still holds the page before, whose rows are
- * already held: drawn twice, they would repeat on screen and share a key.
- */
-export function pagedOn<T>(
-  held: readonly T[],
-  page: readonly T[] | undefined,
-  key: (row: T) => string,
-): T[] {
-  const seen = new Set(held.map(key));
-  return [...held, ...(page ?? []).filter((row) => !seen.has(key(row)))];
-}
-
-/** The weekly reports, newest first: each opens its week's page. */
-function Reports() {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [held, setHeld] = useState<AdvisorReportSummary[]>([]);
-  const reports = useReports(cursor);
-  const now = useNow();
-  const rows = pagedOn(held, reports.data?.reports, (r) => r.week);
-  return (
-    <QueryState
-      error={reports.error}
-      detail={reports.detail}
-      refusal={reports.refusal}
-      loading={reports.loading && reports.data === null && held.length === 0}
-    >
-      {rows.length === 0 && reports.data ? (
-        <EmptyState
-          size="compact"
-          title="No report yet"
-          description="The Advisor writes a report every Monday morning: the week's numbers against the week before, and what it found."
-        />
-      ) : (
-        <ul className="advisor-reports" aria-label="Weekly reports">
-          {rows.map((r) => (
-            <li key={r.week} className="advisor-history__row">
-              <Link href={href(["advisor", "reports", r.week])}>{weekWords(r.week)}</Link>
-              <Text as="span" variant="caption" tone="secondary">
-                {weekMoved(r)}, written {ago(r.written_at, now)}
-              </Text>
-            </li>
-          ))}
-        </ul>
-      )}
-      {reports.data?.next_cursor ? (
-        <Button
-          size="small"
-          variant="ghost"
-          onClick={() => {
-            setHeld(rows);
-            setCursor(reports.data!.next_cursor);
-          }}
-        >
-          Show older reports
-        </Button>
-      ) : null}
-      {reports.error && held.length > 0 ? (
-        <Callout variant="warning">Older reports could not be read. Try again in a moment.</Callout>
-      ) : null}
-    </QueryState>
   );
 }
 

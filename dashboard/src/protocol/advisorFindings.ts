@@ -420,6 +420,8 @@ export interface AdvisorReportSummary {
   resolved: number;
   applied: number;
   dismissed: number;
+  /** The week's headline numbers (turns, turns that committed nothing, tokens, hours work waited), each beside the week before's. */
+  headline: AdvisorMetric[];
 }
 
 /** `GET /advisor/reports`: a page of weeks, the newest first. */
@@ -457,4 +459,15 @@ export interface AdvisorReport extends AdvisorReportSummary {
   unread: string[];
   top: AdvisorReportFinding[];
   summary: string | null;
+  /** The week day by day, Monday first; [] for a report kept before its days were. */
+  days: AdvisorReportDay[];
+}
+
+/** One company day of a week's report, counted as the week's totals are. */
+export interface AdvisorReportDay {
+  /** The company day, such as 2026-11-09. */
+  day: string;
+  turns: number;
+  turns_nothing: number;
+  tokens: number;
 }

@@ -76,6 +76,13 @@ type Reader interface {
 	Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error)
 }
 
+// DayReader is a [Reader] that reads a week day by day as well: each company
+// day's turns, those that committed nothing and their tokens, which a report
+// draws across its week. A reader without it writes reports with no days.
+type DayReader interface {
+	Days(ctx context.Context, from, to time.Time) ([]advisor.Day, error)
+}
+
 // Observed is one reading of the company.
 type Observed struct {
 	Observations []advisor.Observation
@@ -346,7 +353,7 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("read the report of %s: %w", before, err)
 	}
 	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
-		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to)}
+		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to), Days: d.days(ctx, week, from, to)}
 	// THE MODEL'S SUMMARY, where the company assigns one, from the report
 	// alone: a report is written without it rather than not at all.
 	if d.Model != nil && d.Model.Assigned() {
@@ -361,6 +368,22 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 	}
 	d.reported = week
 	return nil
+}
+
+// days is the week [from, to) day by day, where the reader reads days: a
+// picture of the week's totals, so a report is written without it rather than
+// not at all.
+func (d *Duty) days(ctx context.Context, week string, from, to time.Time) []advisor.Day {
+	reader, ok := d.Read.(DayReader)
+	if !ok {
+		return nil
+	}
+	days, err := reader.Days(ctx, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_report_days_unread", "week", week, "error", err.Error())
+		return nil
+	}
+	return days
 }
 
 // slot is the latest model pass start at or before now, on the company clock.

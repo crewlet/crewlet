@@ -42,7 +42,10 @@ type advisorObserver struct {
 	ask AskQuestion
 }
 
-var _ duty.Reader = advisorObserver{}
+var (
+	_ duty.Reader    = advisorObserver{}
+	_ duty.DayReader = advisorObserver{}
+)
 
 // Observe reads the company at now: every finding the rule groups raise, each
 // over the span its group reads, the sources it could not read, and the
