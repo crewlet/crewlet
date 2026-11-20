@@ -69,3 +69,13 @@ func Reports(ctx context.Context, box sandbox.Sandbox, def gitlet.CheckDef, repo
 func KeepLog(ctx context.Context, box sandbox.Sandbox, logs Uploader) (*gitlet.CheckLog, string) {
 	return attemptOf(gitlet.CheckDef{}, "web", logs).keepLog(ctx, box)
 }
+
+// KeepLogWithin keeps box's output as a failed run's log of at most limit
+// bytes, as a run's ending keeps one of gitlet.MaxCheckLogBytes.
+func KeepLogWithin(ctx context.Context, box sandbox.Sandbox, logs Uploader, limit int64) (*gitlet.CheckLog,
+	string) {
+	return attemptOf(gitlet.CheckDef{}, "web", logs).keepLogWithin(ctx, box, limit)
+}
+
+// SummaryOf is a summary as an ending carries it.
+func SummaryOf(s string) string { return summaryOf(s) }

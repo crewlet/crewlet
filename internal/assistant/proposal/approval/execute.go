@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -166,7 +167,7 @@ func outcomeOf(tool string, request exec.Request, resp exec.Response, err error)
 		return out
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
-	summary := "Applied"
+	summary := wire.Plain("Applied")
 	if json.Valid(resp.Body) && len(bytes.TrimSpace(resp.Body)) > 0 {
 		out.answer = json.RawMessage(resp.Body)
 		var stated actAnswer
@@ -245,15 +246,16 @@ func refusalOf(request exec.Request, resp exec.Response) wire.Refusal {
 // receiptSummary is an applied write's receipt in a line, naming the task it
 // is about where the act tool's own receipt names one: "Created ENG-156" for
 // a create, "Applied to ENG-156" for any other write to a task, and "Applied"
-// for a write that names none.
-func receiptSummary(tool, key string) string {
+// for a write that names none. The task is a ref, so the card links it.
+func receiptSummary(tool, key string) wire.Phrase {
+	task := catalog.Named(wire.ResourceTask, key, key)
 	switch {
 	case key == "":
-		return "Applied"
+		return wire.Plain("Applied")
 	case strings.HasPrefix(tool, "create_"):
-		return "Created " + key
+		return wire.Plain("Created ").Then(task)
 	}
-	return "Applied to " + key
+	return wire.Plain("Applied to ").Then(task)
 }
 
 // ToolDetailKey is the key the tool's own sentence about a refusal is handed to

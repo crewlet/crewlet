@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -326,20 +325,10 @@ func (t *transcriptLines) take(end bool) []string {
 	return lines
 }
 
-// redactContext is how much a reading that begins inside a stream reads
-// BEFORE what it shows, never shown ([settledEnd]), so what decides how its
-// first lines redact is read with them.
-//
-// THE REDACTION'S OWN LOOK-BACK ([redact.LookBack]): a key's block and a
-// password's value below its key are decided by text further back than one
-// line, and the redaction states how far, so the two cannot drift. Its doc
-// names the password's reads that reach further than any look-back.
-const redactContext = redact.LookBack
-
 // streamEnd is the end of a stream a person or model can be shown: at most
 // keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
 // first, and how many stream bytes came before it. tail is the stream's end
-// read [redactContext] past keep, or the whole stream.
+// read [redact.LookBack] past keep, or the whole stream.
 //
 // SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
 // bytes alone, the end could reach back into the context when redaction shrank
@@ -349,75 +338,23 @@ const redactContext = redact.LookBack
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	ctx := 0
 	if tail.Before() > 0 {
-		ctx = redactContext
+		ctx = redact.LookBack
 	}
 	kept, at := settledEnd(string(tail.Data), ctx, keep)
 	return kept, tail.Before() + int64(at)
 }
 
-// settledEnd is the redacted end of text that its first ctx bytes settle (at
-// most keep bytes, as [sandbox.KeepEnd] keeps them), and how much came before
-// it: in text's bytes up to the settled start, in redacted bytes past it, as
-// [failureDetail] counts what it cuts.
-//
-// WHAT IS SETTLED ([settledStart]) is shown as the WHOLE text redacts it:
-// redacted alone, a key whose BEGIN is in the context reads as cut off, and a
-// password whose key is there as no password. So only what both redactions
-// agree on is kept, from the line after the last place they part. A line
-// begun before that is not shown: read from a place that is not its start, it
-// is not read as the whole text reads it.
+// settledEnd is the redacted end of text that its first ctx bytes settle
+// ([redact.SettledEnd]), at most keep bytes of it as [sandbox.KeepEnd] keeps
+// them, and how much came before it: in text's bytes up to the settled start,
+// in redacted bytes past it, as [failureDetail] counts what it cuts.
 func settledEnd(text string, ctx, keep int) (string, int) {
-	from, opensLine := settledStart(text, ctx)
-	part := redact.Secrets(text[from:])
-	start := 0
-	if from > 0 {
-		start = len(part) - sharedSuffix(redact.Secrets(text), part)
+	end, at := redact.SettledEnd(text, ctx)
+	if end == "" {
+		return "", at
 	}
-	if start == len(part) {
-		return "", from + start
-	}
-	onLine := start == 0 && opensLine || start > 0 && part[start-1] == '\n'
-	if !onLine {
-		i := strings.IndexByte(part[start:], '\n')
-		if i < 0 {
-			return "", from + len(part)
-		}
-		start += i + 1
-	}
-	kept, at := sandbox.KeepEnd(part[start:], keep)
-	return kept, from + start + at
-}
-
-// settledStart is where what text's first ctx bytes settle begins, and
-// whether it opens a line: the first line starting ctx bytes in or later, else
-// the first character there, inside the last line.
-func settledStart(text string, ctx int) (int, bool) {
-	switch {
-	case ctx <= 0:
-		return 0, true
-	case ctx >= len(text):
-		return len(text), true
-	case text[ctx-1] == '\n':
-		return ctx, true
-	}
-	if i := strings.IndexByte(text[ctx:], '\n'); i >= 0 && ctx+i+1 < len(text) {
-		return ctx + i + 1, true
-	}
-	for ctx < len(text) && !utf8.RuneStart(text[ctx]) {
-		ctx++
-	}
-	return ctx, false
-}
-
-// sharedSuffix is how many bytes a and b end with alike.
-func sharedSuffix(a, b string) int {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[len(a)-1-i] != b[len(b)-1-i] {
-			return i
-		}
-	}
-	return n
+	kept, k := sandbox.KeepEnd(end, keep)
+	return kept, at + k
 }
 
 // humanSize renders a byte count as a reader would say it.

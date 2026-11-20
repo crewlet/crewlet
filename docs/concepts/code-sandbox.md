@@ -2162,8 +2162,8 @@ first page says it.
 its object is streamed out of the store and opened under its own associated
 data, and the archive is read by the runner that packs it, which alone knows
 its layout — Claude Code's transcript, one record a line, then each subagent's
-own from its sidecar; OpenCode's export, a message at a time, each read by the
-kind OpenCode 2 gives it. The entries are what the run was briefed, the notes a
+own from its sidecar; OpenCode's export, in one pass that holds no message,
+each read by the kind OpenCode 2 gives it. The entries are what the run was briefed, the notes a
 person sent it while it worked, the late calls the engine handed it while it
 worked (a call of the work that finished after the run that made it had stopped
 waiting for it), what its model wrote, every tool call and what
@@ -2181,9 +2181,12 @@ framing, so a tool's words the engine quotes on a line never head an entry. The
 line the run's own hook prints as it hands them over is an entry too: a late
 call where it names late calls alone, a note otherwise. It is
 read a page at a time and bounded — 200 entries and 1 MiB of text a page,
-16 KiB an entry, and 256 MiB a read of the archive as it inflates and, apart,
-of what a tar's members hand out, so an archive a box packed to inflate without
-end, or with a sparse member that declares more than it holds, stops there —
+16 KiB an entry, 2^20 lines of the record and the blocks and parts in them a
+read, and 256 MiB a read of the archive as it inflates and, apart, of what a
+tar's members hand out, so an archive a box packed to inflate without end, or
+with a sparse member that declares more than it holds, stops there; a line of
+any length is read, a value in it held to 2 MiB and past it streamed through
+the redaction into its entry, never held —
 and every entry's text is **redacted at this read before it is cut**, whatever
 the capture did, and is always an opening of what its whole text redacts to:
 all of it that can reach the entry's bound and a private key's length past it
@@ -2216,22 +2219,39 @@ row still names the object is the failure the store's or the archive's own, and
 the row is read again once. What the read already handed out stands: every byte
 of it came from a chunk that authenticated.
 
-**A node decodes two transcripts at a time.** One read can hold a line of the
-harness's record at its 32 MiB bound, as much again while the buffer gathering
-it grows, the copy decoding it makes and the entry's whole redaction: 134 MiB
-measured for a Claude Code line at that bound (97 MiB for an OpenCode export's
-message at it), and up to 93 MiB more where the redaction lengthens the text, so
-227 MiB at worst; a node answers every dashboard tab open on it and every REST
-caller, each with a read of its own. So each node decodes at most two
-transcripts at once (`TranscriptReadsAtOnce`), about 454 MiB live at their
-worst, whichever socket or route asks. The engine sets no `GOMEMLIMIT` and runs
-at Go's default `GOGC`, so two reads of credential-dense text can take the heap
-to about 800 MiB: the cost of redacting each entry whole, which a pod's memory
-limit has to leave room for. A relaunch's reading of a kept session for the
-calls it holds is none of them: one runs at a time, in a slot of its own
-(`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode session's at most
-2 MiB, however long one of its messages runs), so the two reads and a reading
-hold at most 497 MiB. A read past them waits for a slot before the session's
+**A node decodes two transcripts at a time.** One read holds no line and no
+message, only a value to 2 MiB, which a longer one streams past: at most 29 MiB
+measured, a value streamed at any length or one held just within the bound,
+where holding costs no more than streaming (held, a value is redacted whole,
+which holds about thirteen times a value of `pwd=x` lines, whose redaction
+lengthens most). Its time is the redaction's, and what harnesses and ordinary
+tools write sets the waits: of that, one value of `password:` lines streamed to
+the 256 MiB budget is the slowest, about 45 seconds on two cores for a person
+alone and 49 beside a second read, 58 for a seat's words beside a person's;
+every credential shape 33. Dense tokens and a kept
+session's text are mostly random bytes, which pack to three quarters of their
+size, so no archive within the 48 MiB bound holds the budget's worth of them. A
+value no harness or tool writes at that density, a
+password's value every six or seven bytes the whole budget long (`pwd=x`
+lines), takes 98 to 129 seconds for a person and about 163 for a seat's words,
+sets no wait, and fails closed once it runs past its reader's wait. A node
+answers every dashboard tab open on it and every REST caller, each with a read
+of its own, so each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), 58 MiB live at their worst, whichever socket or route
+asks; the engine sets no `GOMEMLIMIT` and runs at Go's default `GOGC`, at which
+two peak at about 116 MiB. A person's read is answered within 110 seconds
+(`TranscriptAnsweredWithin`: the slowest read with a tenth more for a busier
+node, 55 seconds, and one slot's wait), which the
+dashboard waits; past it the socket ends the read, and the dashboard shows
+nothing of the session and says it could not be read in time. A seat's read of
+its own session has two minutes (`SessionReadWithin`, set by the object store's
+pace): a read at the bounds of what harnesses write fits it alone; one queued
+behind other such reads, or of a value none writes, can run past it and is
+answered unavailable, never as a session that holds nothing. A relaunch's reading of a
+kept session for the calls it holds is none of them: one runs at a time, in a
+slot of its own (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode
+session's at most 2 MiB, however long one of its messages runs), so the two
+reads and a reading hold at most 101 MiB. A read past them waits for a slot before the session's
 object is opened — an opened object would hold its store's connection while it
 waited — for as long as its caller waits, holding no decoder meanwhile, and a
 slot frees within one bounded read; a caller that leaves first is answered

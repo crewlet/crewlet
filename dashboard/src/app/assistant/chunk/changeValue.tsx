@@ -12,6 +12,8 @@
  *   and no picture), so its headings and bullets read as they will.
  * - A COLOUR is its chip beside its hex. The chip is decoration; the hex is
  *   the words a screen reader hears.
+ * - A RECORD (a seat, an artifact, a task) is the engine's reference, drawn
+ *   by the one renderer (`refs.tsx`): its face or glyph, its name, its link.
  * - Anything else is its text, on the line.
  *
  * A list, a document or a text is a BLOCK value: it takes the card's width
@@ -20,7 +22,11 @@
 
 import type { ReactNode } from "react";
 import { ChangeListItems, CodeBlock, ColorChip, Inline, Prose } from "@crewlethq/ui";
+import type { AssistantPhrase } from "./phrase.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
+import type { InAppTarget } from "./openInApp.ts";
+import { namesRecord, phraseText } from "./phrase.ts";
+import { Phrase } from "./refs.tsx";
 
 /** A value as a row draws it, and whether it is a block. */
 export interface DrawnValue {
@@ -75,4 +81,26 @@ export function drawValue(text: string, items?: readonly string[] | null): Drawn
     };
   }
   return { node: text, block: false };
+}
+
+/** One engine value, by its phrase and, where it is a list, its items: a record in it drawn as itself. */
+export function drawPhrase(
+  value: AssistantPhrase | undefined,
+  items: readonly AssistantPhrase[] | undefined,
+  open: (target: InAppTarget) => void,
+): DrawnValue {
+  if (items && items.length > 0) {
+    return {
+      node: (
+        <ChangeListItems
+          items={items.map((item, i) => (
+            <Phrase key={i} phrase={item} open={open} />
+          ))}
+        />
+      ),
+      block: true,
+    };
+  }
+  if (!namesRecord(value)) return drawValue(phraseText(value));
+  return { node: <Phrase phrase={value ?? []} open={open} />, block: false };
 }

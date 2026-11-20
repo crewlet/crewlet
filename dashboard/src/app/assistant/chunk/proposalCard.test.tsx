@@ -20,6 +20,9 @@ import { TAINT_SOURCE_WORDS, cautionOf } from "./taint.ts";
 import type { ProposalLocal } from "./turn.ts";
 import { RestError } from "~/protocol/rest.ts";
 
+/** Words as a phrase that names nothing. */
+const w = (text: string) => [{ text }];
+
 // THE CARDS' OWN MOMENT, before their wait ends at 10:41: the kit draws a card
 // past its wait as expired. Only the clock is held; timers run.
 beforeEach(() => {
@@ -145,11 +148,16 @@ test("what a change takes away leads the card, above every row", () => {
     scope: "server",
     tool: "propose_api_change",
     title: "Remove seat QA Engineer",
-    summary: "This removes seat QA Engineer from unit Product and Engineering.",
-    note: "The previous version stays in the configuration history, so this can be reverted.",
+    summary: w("This removes seat QA Engineer from unit Product and Engineering."),
+    note: w("The previous version stays in the configuration history, so this can be reverted."),
     risk: "destructive",
     changes: [
-      { kind: "removed", field: "roles.qa.name", label: "QA Engineer › Name", from: "QA Engineer" },
+      {
+        kind: "removed",
+        field: "roles.qa.name",
+        label: "QA Engineer › Name",
+        from: w("QA Engineer"),
+      },
     ],
     approve_label: "Approve and remove",
   });
@@ -173,7 +181,7 @@ test("a change that removes nothing says nothing about removing", () => {
         kind: "added",
         field: "roles.tw.name",
         label: "Technical Writer › Name",
-        to: "Technical Writer",
+        to: w("Technical Writer"),
       },
     ],
     approve_label: "Approve and add",
@@ -196,22 +204,24 @@ test("a list, a page of text, a body and a colour each read as what they are", (
         kind: "added",
         field: "roles.qa.responsibilities",
         label: "QA Engineer › Responsibilities",
-        to: "Review the tests, Approve or send back",
-        items: ["Review the tests", "Approve or send back"],
+        to: w("Review the tests, Approve or send back"),
+        items: [w("Review the tests"), w("Approve or send back")],
       },
       {
         kind: "added",
         field: "content",
         label: "Page",
-        to: "# Proposed team\n\n## Roles\n\n- **Product Manager**: owns the brief\n- [a link](https://example.com)",
+        to: w(
+          "# Proposed team\n\n## Roles\n\n- **Product Manager**: owns the brief\n- [a link](https://example.com)",
+        ),
       },
-      { kind: "added", field: "settings", label: "Settings", to: '{\n  "name": "QA"\n}' },
+      { kind: "added", field: "settings", label: "Settings", to: w('{\n  "name": "QA"\n}') },
       {
         kind: "changed",
         field: "colors.ground",
         label: "Dark ground colour",
-        from: "#090019",
-        to: "#14102B",
+        from: w("#090019"),
+        to: w("#14102B"),
       },
     ],
   });
@@ -267,7 +277,7 @@ test("the technical details are drawn when the engine sends them, and only then"
     tool: "propose_api_change",
     title: "Add seat Technical Writer",
     changes: [
-      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: w("TW") },
     ],
     technical: { method: "PUT", path: "/config/units/core", body: '{\n  "id": "core"\n}' },
   });
@@ -278,7 +288,7 @@ test("the technical details are drawn when the engine sends them, and only then"
     tool: "propose_api_change",
     title: "Add seat Technical Writer",
     changes: [
-      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: w("TW") },
     ],
   });
   expect(screen.queryByText(/technical details/)).toBeNull();
@@ -300,8 +310,8 @@ test("a change to a page's body reads as a line diff, like its History", () => {
         kind: "text",
         field: "content",
         label: "Page",
-        from: before,
-        to: after,
+        from: w(before),
+        to: w(after),
         words: [
           { op: "same", text: "# Plan\n\n" },
           { op: "added", text: "## TL;DR\n- One owner\n\n" },
@@ -324,7 +334,7 @@ test("a change to a page's body reads as a line diff, like its History", () => {
 
 // A proposal made after outside text leads with where that text was, in words.
 test("a proposal made after reading outside text leads with where that text was", () => {
-  draw({ scope: "server", state: "proposed", taint: "work_comment", summary: "File a task." });
+  draw({ scope: "server", state: "proposed", taint: "work_comment", summary: w("File a task.") });
   const said = document.body.textContent ?? "";
   expect(said).toContain(cautionOf("work_comment"));
   expect(said).toContain("Prepared after reading a comment on a task");
@@ -332,7 +342,7 @@ test("a proposal made after reading outside text leads with where that text was"
   // It leads: read before what the change does.
   expect(said.indexOf("Prepared after reading")).toBeLessThan(said.indexOf("File a task."));
   cleanup();
-  draw({ scope: "server", state: "proposed", summary: "File a task." });
+  draw({ scope: "server", state: "proposed", summary: w("File a task.") });
   expect(document.body.textContent ?? "").not.toContain("Prepared after reading");
 });
 

@@ -445,11 +445,11 @@ func TestARequestsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
 // maintainer writes the graph first next pass. A chunk-format message names
 // neither file (I5′, the first chunk id zeroed: `terminating chunk id appears
 // earlier than expected`), so its repair drops BOTH. Each repair is asked with
-// a real git run's classification (cache.DamageReason).
-//
-// Mutations: set the commit-graph's OnReported to Keep (derived.go; I5′ logs
-// two repairs for one, I8's graph still falls to the forced check); have
-// PartChunk drop the index alone (I5′ keeps its graph).
+// a real git run's classification (cache.DamageReason) no cache observes: a
+// watched run's own report can drop first, counted as a report, not a rebuild.
+// Mutations: the commit-graph's OnReported Keep (derived.go; I5′ logs two
+// repairs, I8's graph falls to the forced check); PartChunk dropping the index
+// alone (I5′ keeps its graph).
 func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -487,8 +487,7 @@ func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 			graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
 			tc.damage(t, graph)
 
-			res, err := w.pool.Run(t.Context(), gitproc.Cmd{Dir: s.Dir, Args: []string{"rev-list", "--all"},
-				Class: gitproc.ClassRead, Deadline: time.Minute})
+			res, err := runIn(t, unobserved(t), s.Dir, "rev-list", "--all")
 			if err == nil {
 				err = res.Damage
 			}
@@ -521,8 +520,9 @@ func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "derived"); got != 1 {
 				t.Errorf("%s{reason=derived} = %d, want the one drop", metrics.CodeCacheRebuilds, got)
 			}
-			if lines := w.logs.lines(t, "code_cache_derived_repaired"); len(lines) != 1 {
-				t.Errorf("code_cache_derived_repaired = %v, want one line", lines)
+			lines := w.logs.lines(t, "code_cache_derived_repaired")
+			if len(lines) != 1 || lines[0]["trigger"] != "request" {
+				t.Errorf("code_cache_derived_repaired = %v, want the request's one drop", lines)
 			}
 
 			// Graph-first: the maintainer's next pass writes it again.

@@ -76,10 +76,10 @@ func draftRows(changes []wire.Change, draft *wire.PageDraft) []wire.Change {
 		}
 		// A LIST MAY ARRIVE AS ITS TEXT, one item per line, as the page
 		// context shows it.
-		if f.Kind == wire.DraftFieldList && len(row.Items) == 0 && row.To != "" {
-			for _, item := range strings.Split(row.To, "\n") {
+		if f.Kind == wire.DraftFieldList && len(row.Items) == 0 && len(row.To) > 0 {
+			for _, item := range strings.Split(row.To.Text(), "\n") {
 				if item = strings.TrimSpace(item); item != "" {
-					out[i].Items = append(out[i].Items, item)
+					out[i].Items = append(out[i].Items, wire.Plain(item))
 				}
 			}
 		}

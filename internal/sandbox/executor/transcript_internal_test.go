@@ -188,7 +188,7 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 	cases := map[string]entry{}
 
 	keys := strings.Repeat(key, 21)
-	at := TranscriptEntryMaxBytes + redactContext - 20
+	at := TranscriptEntryMaxBytes + redact.LookBack - 20
 	before := logLines(keys, at-len("a line of the build's log\n"))
 	before += strings.Repeat(" ", at-len(before))
 	cases["key blocks ahead of a token the window cuts"] = entry{
@@ -257,10 +257,8 @@ func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
 	t.Parallel()
 	opening := "## A note from ada, sent while this turn was running\nTarget main."
 	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
-	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}}
-	matched := &transcriptBuilder{bounds: SeatTranscriptBounds(), entries: []TranscriptEntry{},
-		calls: map[string]string{}, filter: TranscriptFilter{Terms: []string{"target"}}}
+	b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
+	matched := newTranscriptBuilder(0, SeatTranscriptBounds(), TranscriptFilter{Terms: []string{"target"}})
 	for shaping, by := range map[string]*transcriptBuilder{"an opening": b, "a match's window": matched} {
 		if err := by.add(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
 			decoded[:len(opening)]); err != nil || len(by.entries) != 1 {
@@ -337,7 +335,7 @@ func holdShapes(n int) map[string]string {
 
 // A STREAM'S END, AND ITS LIVE VIEW, ARE THE END OF ITS WHOLE REDACTION over
 // the hold shapes too: what each shows of a stream read from inside, with
-// [redactContext] before it, is how the whole stream's redaction ends. The
+// [redact.LookBack] before it, is how the whole stream's redaction ends. The
 // live view's shapes hold runs shorter than that context, as every
 // credential but a key's block is; the error stream's run past it.
 func TestAStreamsEndAndItsLiveViewAreTheEndOfItsWholeRedaction(t *testing.T) {
@@ -345,7 +343,7 @@ func TestAStreamsEndAndItsLiveViewAreTheEndOfItsWholeRedaction(t *testing.T) {
 	for name, text := range holdShapes(512 << 10) {
 		whole := redact.Secrets(text)
 		for _, keep := range []int{16 << 10, 64 << 10} {
-			data := text[len(text)-(keep+redactContext):]
+			data := text[len(text)-(keep+redact.LookBack):]
 			end, _ := streamEnd(sandbox.FileTail{Data: []byte(data), Size: int64(len(text))}, keep)
 			if end = strings.TrimPrefix(end, sandbox.KeepEndMark); !strings.HasSuffix(whole, end) {
 				t.Errorf("%s at %d: the stream's end shows %.120q, which the whole redaction does not end on",
@@ -354,7 +352,7 @@ func TestAStreamsEndAndItsLiveViewAreTheEndOfItsWholeRedaction(t *testing.T) {
 		}
 	}
 	filler := strings.Repeat("compiling a package of the build\n", 8<<10)
-	for name, shape := range holdShapes(redactContext / 2) {
+	for name, shape := range holdShapes(redact.LookBack / 2) {
 		text := filler + shape
 		whole := redact.Secrets(text)
 		for _, keep := range []int{16 << 10, 48 << 10} {

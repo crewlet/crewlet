@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -445,14 +447,31 @@ func canonicalFormat(format string) string {
 type stderrSink struct {
 	n       atomic.Int64
 	pending []byte
-	tailBuf []byte
-	cut     bool // the tail buffer has dropped bytes from its front
+	kept    keptTail
 	// known takes a remote run's secrets out of each line AS IT ARRIVES
 	// (Remote.known), or is nil: before the tail is cut, so no cut splits a
 	// secret. A secret holds no line break (Remote.WithHeader), so a line
 	// holds it whole, but for a line past MaxLine, kept in pieces, across
 	// whose cut only the secret's own remote could have written it.
 	known *strings.Replacer
+	// redacting is a remote run's way into the tail, or nil: the tail is
+	// then the end of what redact.Secrets makes of ALL git wrote, cut after
+	// the redaction. Cut first, the cut could split what a rule reads (a key
+	// from its value, a token in two) and leave the rest unread. refused is
+	// the stream's refusal, after which nothing it wrote is shown. A
+	// [redact.Stream] in every run, a test's own where one refuses.
+	redacting io.WriteCloser
+	refused   error
+}
+
+// newStderrSink is the sink of a run whose remote, if any, has the secrets
+// known; a remote run's text is from outside, so it is redacted ([stderrSink.redacting]).
+func newStderrSink(remote bool, known *strings.Replacer) *stderrSink {
+	s := &stderrSink{known: known}
+	if remote {
+		s.redacting = redact.NewStream(&s.kept)
+	}
+	return s
 }
 
 func (s *stderrSink) Write(p []byte) (int, error) {
@@ -466,7 +485,7 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 			// from the buffer, so a process writing without newlines
 			// cannot grow it without bound.
 			if len(s.pending) > MaxLine {
-				s.line(s.pending)
+				s.piece(s.pending)
 				s.pending = s.pending[:0]
 			}
 			break
@@ -483,39 +502,79 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// line appends one line to the tail, kept to at most twice StderrTail so the
-// copy it trims to is amortised.
+// line appends one line to the tail.
 func (s *stderrSink) line(l []byte) {
+	s.piece(l)
+	s.keep([]byte{'\n'})
+}
+
+// piece appends part of a line, its secrets taken out where it has a remote:
+// a line past MaxLine goes on in the next, unbroken, so the redaction reads it
+// as git wrote it.
+func (s *stderrSink) piece(l []byte) {
 	if s.known != nil {
 		l = []byte(s.known.Replace(string(l)))
 	}
-	s.tailBuf = append(s.tailBuf, l...)
-	s.tailBuf = append(s.tailBuf, '\n')
-	if len(s.tailBuf) > 2*StderrTail {
-		start := len(s.tailBuf) - StderrTail
-		for start < len(s.tailBuf) && !utf8.RuneStart(s.tailBuf[start]) {
-			start++
-		}
-		s.tailBuf = append(s.tailBuf[:0], s.tailBuf[start:]...)
-		s.cut = true
+	s.keep(l)
+}
+
+// keep hands b to the tail, through the redaction where there is one.
+func (s *stderrSink) keep(b []byte) {
+	switch {
+	case s.redacting == nil:
+		_, _ = s.kept.Write(b)
+	case s.refused == nil:
+		_, s.refused = s.redacting.Write(b)
 	}
 }
 
-// finish takes a last line with no newline as a line. Called once, after the
-// copier has ended.
+// finish takes a last line with no newline as a line, and ends the
+// redaction. Called once, after the copier has ended.
 func (s *stderrSink) finish() {
 	if len(s.pending) > 0 {
 		s.line(s.pending)
 		s.pending = nil
 	}
+	if s.redacting != nil && s.refused == nil {
+		s.refused = s.redacting.Close()
+	}
 }
 
-// tail is the last StderrTail bytes git wrote, marked where it was cut —
-// including a cut the buffer's own trimming made, which leaves fewer bytes
-// than textcut would mark on its own.
+// withheldStderr is a remote run's tail where its redaction refused the text
+// ([redact.ErrDecidedEarly]): what the stream wrote may hold what redaction
+// takes out, so none of it is shown.
+const withheldStderr = "gitproc: the remote's error output is withheld: its redaction was refused\n"
+
+// tail is the last StderrTail bytes git wrote, redacted first for a remote
+// run, marked where it was cut — including a cut the buffer's own trimming
+// made, which leaves fewer bytes than textcut would mark on its own.
 func (s *stderrSink) tail() string {
-	if s.cut && len(s.tailBuf) <= StderrTail {
-		return "…" + string(s.tailBuf)
+	if s.refused != nil {
+		return withheldStderr
 	}
-	return textcut.Tail(string(s.tailBuf), StderrTail)
+	if s.kept.cut && len(s.kept.b) <= StderrTail {
+		return "…" + string(s.kept.b)
+	}
+	return textcut.Tail(string(s.kept.b), StderrTail)
+}
+
+// keptTail is at least the last StderrTail bytes written to it, kept to at
+// most twice that so the copy it trims to is amortised; cut says it dropped
+// bytes from its front.
+type keptTail struct {
+	b   []byte
+	cut bool
+}
+
+func (k *keptTail) Write(p []byte) (int, error) {
+	k.b = append(k.b, p...)
+	if len(k.b) > 2*StderrTail {
+		start := len(k.b) - StderrTail
+		for start < len(k.b) && !utf8.RuneStart(k.b[start]) {
+			start++
+		}
+		k.b = append(k.b[:0], k.b[start:]...)
+		k.cut = true
+	}
+	return len(p), nil
 }

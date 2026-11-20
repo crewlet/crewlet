@@ -352,15 +352,16 @@ func previewRows(entity any, after []byte) ([]PreviewRow, error) {
 	rows := make([]PreviewRow, 0, len(changes))
 	for _, c := range changes {
 		row := PreviewRow{Field: c.Field, Label: c.Label}
+		from, to := c.From.Text(), c.To.Text()
 		switch c.Kind {
 		case wire.ChangeAdded:
-			row.After = &c.To
+			row.After = &to
 		case wire.ChangeRemoved:
-			row.Before = &c.From
+			row.Before = &from
 		case wire.ChangeFact:
-			row.Before, row.After = &c.To, &c.To
+			row.Before, row.After = &to, &to
 		default:
-			row.Before, row.After = &c.From, &c.To
+			row.Before, row.After = &from, &to
 		}
 		rows = append(rows, row)
 	}

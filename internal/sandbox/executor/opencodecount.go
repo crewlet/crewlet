@@ -310,6 +310,8 @@ func (*exportMeter) asks() *exportAsks { return meterAsks }
 
 func (*exportMeter) digest() *textDigest { return nil }
 
+func (*exportMeter) sink(exportFrame, int, jsonscan.Kind) io.Writer { return nil }
+
 // open starts what a frame's members fold into.
 func (e *exportMeter) open(f exportFrame) error {
 	switch f {

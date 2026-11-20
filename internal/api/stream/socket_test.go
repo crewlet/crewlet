@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -942,6 +944,172 @@ func TestEachSocketHasItsOwnInFlightBudget(t *testing.T) {
 	case <-entered:
 		t.Errorf("more than %d queries ran on one socket", stream.MaxInFlightQueries)
 	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// A QUESTION ITS CLIENT STOPPED WAITING FOR STOPS, AND FREES ITS SLOT: a frame
+// naming its wait (`wait_ms`) is asked under a deadline that ends the question
+// once the wait has passed, with no answer sent, so the socket's slots and the
+// engine's (a transcript read's, which ends with its context) are free for the
+// next question; a frame naming none is asked for as long as the socket lasts.
+//
+// Mutation: ask every question under the socket's context alone, and the
+// abandoned questions hold the socket's slots until it closes.
+func TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot(t *testing.T) {
+	t.Parallel()
+	ended := make(chan error, stream.MaxInFlightQueries)
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		_, bounded := ctx.Deadline()
+		if what == "events" {
+			return bounded, nil
+		}
+		<-ctx.Done()
+		ended <- context.Cause(ctx)
+		return nil, ctx.Err()
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "executor_session", "wait_ms": 1})
+	}
+	for range stream.MaxInFlightQueries {
+		if cause := <-ended; !errors.Is(cause, context.DeadlineExceeded) {
+			t.Fatalf("an abandoned question ended %v, want its client's wait passed", cause)
+		}
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
+	got := next(t, conn)
+	if kindOf(got) != stream.KindResult || got["id"] != float64(100) {
+		t.Fatalf("the frame after the abandoned questions = %v, want the next question's answer and none of "+
+			"theirs", got)
+	}
+	if got["data"] != false {
+		t.Errorf("a question naming no wait is asked under a deadline")
+	}
+}
+
+// A QUESTION ITS CLIENT CANCELS STOPS AT ONCE, AND FREES ITS SLOT: a
+// `query_cancel` frame naming a question in flight ends it with no answer sent,
+// though its wait is minutes off, so the socket's slots and the engine's (a
+// transcript read's) are free for the next question; one naming no question in
+// flight changes nothing.
+//
+// Mutation: ignore the frame, and the cancelled questions hold every slot until
+// their wait passes.
+func TestAQueryItsClientCancelsStopsAtOnceAndFreesItsSlot(t *testing.T) {
+	t.Parallel()
+	ended := make(chan error, stream.MaxInFlightQueries)
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		if what == "events" {
+			return "answered", nil
+		}
+		<-ctx.Done()
+		ended <- context.Cause(ctx)
+		return nil, ctx.Err()
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "executor_session", "wait_ms": 600_000})
+	}
+	write(t, conn, map[string]any{"kind": "query_cancel", "id": 99})
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query_cancel", "id": i})
+	}
+	for range stream.MaxInFlightQueries {
+		if cause := <-ended; !errors.Is(cause, context.Canceled) {
+			t.Fatalf("a cancelled question ended %v, want cancelled", cause)
+		}
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
+	if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(100) {
+		t.Fatalf("the frame after the cancelled questions = %v, want the next question's answer and none of "+
+			"theirs", got)
+	}
+}
+
+// A QUESTION THAT PANICS IS ANSWERED AS FAILED, AND THE SOCKET AND THE PROCESS
+// GO ON, as net/http answers a request whose handler panicked: [panics] hears
+// the panic once, in [panics.ScopeAPI], the question is answered
+// `query_failed`, and the socket answers the next question.
+//
+// Mutation: drop the query goroutine's containment, and the panic ends the
+// test binary.
+func TestAQueryThatPanicsIsAnsweredAsFailedAndTheSocketGoesOn(t *testing.T) {
+	t.Parallel()
+	defect := errors.New("a question's own defect")
+	var mu sync.Mutex
+	var heard []panics.Scope
+	defer panics.Observe(func(p *panics.Panic) {
+		if err, ok := p.Value.(error); ok && errors.Is(err, defect) {
+			mu.Lock()
+			heard = append(heard, p.Scope)
+			mu.Unlock()
+		}
+	})()
+	f := newSocket(t, nil, func(_ context.Context, what string, _ map[string]any) (any, error) {
+		if what == "executor_session" {
+			panic(defect)
+		}
+		return "answered", nil
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "executor_session"})
+	got := next(t, conn)
+	if kindOf(got) != stream.KindError || got["id"] != float64(1) || got["error"] != stream.CodeQueryFailed {
+		t.Fatalf("the answer to a question that panicked = %v, want its error query_failed", got)
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 2, "what": "events"})
+	if got = next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(2) {
+		t.Fatalf("the answer after a question that panicked = %v, want the next question's result", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 1 || heard[0] != panics.ScopeAPI {
+		t.Errorf("panics heard the question's panic in %v, want once in %q", heard, panics.ScopeAPI)
+	}
+}
+
+// A READ THAT TAKES ITS WAIT LEAVES THE SOCKET'S OTHER QUESTIONS ANSWERED: a
+// transcript page may take minutes in one of the socket's slots
+// ([stream.MaxInFlightQueries]), and every other question the tab asks
+// meanwhile is answered from the slots left.
+//
+// Mutation: hold every query to one slot, and the questions after the read
+// wait behind it.
+func TestAReadInFlightLeavesTheSocketsOtherQuestionsAnswered(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		if what == "executor_session" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return "answered", nil
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+	write(t, conn, map[string]any{"kind": "query", "id": 0, "what": "executor_session", "wait_ms": 600_000})
+	for i := 1; i <= 2*stream.MaxInFlightQueries; i++ {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "events"})
+		if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(i) {
+			t.Fatalf("question %d, asked while a read was in flight, was answered %v", i, got)
+		}
 	}
 }
 

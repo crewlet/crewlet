@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1140,39 +1142,49 @@ ln "$p/$s.jsonl" "$p/$s/subagents/agent-a1.jsonl"
 	})
 }
 
-// A PART OF THE RECORD PAST THE BOUND IS SAID WHERE IT WAS. A line of Claude
-// Code's record past the bound one line may hold reads as an entry saying so,
-// in its place, and the lines after it are read; a message of an OpenCode
-// export past the same bound is said too, and ends the read there, cut —
-// nothing after a value too large to hold can be found.
+// A VALUE OF ANY LENGTH IS READ, AND THE RECORD READS ON PAST IT. A Claude Code
+// line and an OpenCode message are read however long they run, a value past
+// [executor.TranscriptValueMaxBytes] shown as the opening of its whole
+// redaction, its whole size stated, and the line or message after it read.
 //
-// Mutation: drop the line past the bound silently, or carry on past an
-// oversized message, and the gap reads as continuity or the read misreads what
-// follows.
-func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
+// Mutation: say a line past a line bound in its place, or end a read at a value
+// past the bound, and the entry or the record after it goes.
+func TestAValueOfAnyLengthIsReadAndTheRecordReadsOn(t *testing.T) {
 	t.Parallel()
-	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
-	small := within(func(b *executor.TranscriptBounds) { b.LineBytes = 1 << 10 })
-	got := readClaude(t, raw, small)
-	kinds := make([]executor.EntryKind, len(got.Entries))
-	for i, e := range got.Entries {
-		kinds[i] = e.Kind
+	long := strings.Repeat("y", executor.TranscriptValueMaxBytes+1<<10)
+	record := []string{
+		`{"type":"user","message":{"role":"user","content":"first"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"` + long + `"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"after"}}`,
 	}
-	if len(got.Entries) != 12 || got.Entries[9].Kind != executor.EntryUnread ||
-		!strings.Contains(got.Entries[9].Text, "past the 1 KiB one line may hold") ||
-		got.Entries[10].Thread != "agent-a1" || got.Cut != "" {
-		t.Errorf("the long line read as %v (cut %q), want an unread entry in its place and the "+
-			"subagent's transcript after it", kinds, got.Cut)
+	// BUILT HERE, as no pack's script takes a line this long as its argument.
+	var member bytes.Buffer
+	tw := tar.NewWriter(&member)
+	body := strings.Join(record, "\n") + "\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "projects/" + executor.ClaudeProjectDir + "/ses.jsonl",
+		Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
 	}
-
+	if _, err := io.WriteString(tw, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	export := openCodeDoc(openCodeUser("first"),
-		`{"type":"assistant","content":[{"type":"text","text":"`+strings.Repeat("y", 4<<10)+`"}]}`,
-		openCodeUser("after"))
-	open := readOpenCode(t, openCodeCaptureOf(t, export), small)
-	if len(open.Entries) != 2 || open.Entries[0].Text != "first" ||
-		open.Entries[1].Kind != executor.EntryUnread || open.Cut != executor.CutRead {
-		t.Errorf("the export read as %+v cut %q, want the first message, then the oversized one "+
-			"said, cut where it was", shownOf(open.Entries), open.Cut)
+		`{"type":"assistant","content":[{"type":"text","text":"`+long+`"}]}`, openCodeUser("after"))
+	bounds := executor.TranscriptReadBounds()
+	for name, got := range map[string]executor.Transcript{
+		"claude code": readClaude(t, gzipped(t, member.String()), bounds),
+		"opencode":    readOpenCode(t, gzipped(t, export), bounds),
+	} {
+		if len(got.Entries) != 3 || got.Entries[0].Text != "first" || got.Entries[1].Kind != executor.EntryModel ||
+			got.Entries[1].Bytes != len(long) || !got.Entries[1].Cut ||
+			!strings.HasPrefix(got.Entries[1].Text, strings.Repeat("y", 1<<10)) ||
+			got.Entries[2].Text != "after" || got.Cut != "" {
+			t.Errorf("%s read as %+v cut %q, want the first, the long value's opening sized %d, and the one "+
+				"after it", name, shownOf(got.Entries), got.Cut, len(long))
+		}
 	}
 }
 
@@ -1421,14 +1433,13 @@ func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
 }
 
 // THE TRANSCRIPT'S BOUNDS ARE THE ENGINE'S OWN, and hold to what their values
-// argue: a page holds sixty-four entries at the entry's bound; a line is read
-// to the bound every read of a run's record takes; and at least two reads run
-// at once, at worst (each a line at its bound, as much again while its slice
-// grows, its decoded copy and its whole redaction) about 454 MiB.
+// argue: a page holds sixty-four entries at the entry's bound; a read frames
+// the lines its constant states; and at least two reads run at once, within
+// 200 MiB at their measured worst ([executor.TranscriptReadHeldBytes]).
 //
-// Mutation: raise the entry's bound past a sixty-fourth of the page's, read
-// lines to a bound of their own, or let one read at a time, or a third, run
-// at once, and a row goes red.
+// Mutation: raise the entry's bound past a sixty-fourth of the page's, state a
+// lines bound of another figure, or let one read at a time, or a fifth, run at
+// once, and a row goes red.
 func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	bounds := executor.TranscriptReadBounds()
@@ -1441,13 +1452,12 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 		t.Errorf("a page of %d bytes holds %d entries at the entry's %d", bounds.Bytes,
 			bounds.Bytes/bounds.EntryBytes, bounds.EntryBytes)
 	}
-	if bounds.LineBytes != executor.MaxLineBytes {
-		t.Errorf("a transcript's line is read to %d, and a run's record to %d", bounds.LineBytes,
-			executor.MaxLineBytes)
+	if bounds.ReadLines != executor.TranscriptReadLines {
+		t.Errorf("a read frames %d lines and elements, not the constant that states it", bounds.ReadLines)
 	}
-	if n := executor.TranscriptReadsAtOnce; n < 2 || n*3*bounds.LineBytes > 200<<20 {
+	if n := executor.TranscriptReadsAtOnce; n < 2 || n*executor.TranscriptReadHeldBytes > 200<<20 {
 		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",
-			n, n*3*bounds.LineBytes>>20)
+			n, n*executor.TranscriptReadHeldBytes>>20)
 	}
 }
 
@@ -1688,5 +1698,127 @@ func TestAReadHoldsItsSlotFromBeforeItOpensUntilAfterItCloses(t *testing.T) {
 	}
 	if held := executor.TranscriptReadsHeld(); held != 0 {
 		t.Errorf("%d slots are held once the read has ended, want none", held)
+	}
+}
+
+// stalledArchive is an archive whose bytes never come: a read of it says so
+// on inside and waits for its caller to leave.
+type stalledArchive struct {
+	ctx    context.Context
+	inside func()
+}
+
+func (a stalledArchive) Read([]byte) (int, error) {
+	a.inside()
+	<-a.ctx.Done()
+	return 0, a.ctx.Err()
+}
+
+func (stalledArchive) Close() error { return nil }
+
+// A READ ITS CALLER ABANDONS PART WAY GIVES ITS SLOT BACK. With every slot held
+// by a read inside an archive whose bytes never come, the callers leave (a
+// dashboard's query its client stopped waiting for, whose context the socket
+// ends): each read ends with its caller's own error and gives its slot back, so
+// the next read reads at once.
+//
+// Mutation: read the archive under a context the caller cannot end, or give
+// the slot back only from a read that ended on its own, and the reads never end
+// or the next read waits behind them.
+func TestAReadItsCallerAbandonsPartWayGivesItsSlotBack(t *testing.T) {
+	type stalled struct {
+		inside, done chan struct{}
+		err          error
+	}
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	reads := make([]*stalled, executor.TranscriptReadsAtOnce)
+	for i := range reads {
+		r := &stalled{inside: make(chan struct{}), done: make(chan struct{})}
+		reads[i] = r
+		seen := sync.OnceFunc(func() { close(r.inside) })
+		go func() {
+			defer close(r.done)
+			_, r.err = executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+				func(ctx context.Context) (io.ReadCloser, error) { return stalledArchive{ctx, seen}, nil }, 0)
+		}()
+		awaited(t, r.inside, "a read given a free slot reads its archive")
+	}
+	if held := executor.TranscriptReadsHeld(); held != executor.TranscriptReadsAtOnce {
+		t.Fatalf("%d slots are held by the reads inside their archives, want every one", held)
+	}
+	leave()
+	for _, r := range reads {
+		awaited(t, r.done, "a read inside its archive ends once its caller leaves")
+		if !errors.Is(r.err, context.Canceled) {
+			t.Errorf("a read its caller abandoned ended %v, want its caller's own error", r.err)
+		}
+	}
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Fatalf("%d slots are held once every abandoned read has ended, want none", held)
+	}
+	got, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		opener(bytes.NewReader(gzipped(t, briefs(1)))), 0)
+	if err != nil || len(got.Entries) != 1 {
+		t.Errorf("the read after the abandoned ones: (%d entries, %v), want the archive's one brief",
+			len(got.Entries), err)
+	}
+}
+
+// leavingArchive is an archive handing out r's bytes whose reader's caller
+// leaves once it has handed after of them; handed counts all it handed.
+type leavingArchive struct {
+	r      io.Reader
+	after  int
+	leave  context.CancelFunc
+	handed int
+}
+
+func (a *leavingArchive) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if a.handed += n; a.handed >= a.after {
+		a.leave()
+	}
+	return n, err
+}
+
+func (*leavingArchive) Close() error { return nil }
+
+// A READ ITS CALLER LEAVES INSIDE ONE LONG VALUE STOPS THERE. The slow read a
+// dashboard gives up on is one value streamed past the value bound, which the
+// export walk asks its context after only between records: a person's read of
+// a brief 4 MiB past the value bound whose caller leaves an eighth of the way through the archive
+// ends with its caller's own error, having read the archive no further than a
+// piece past where its caller left, and gives its slot back.
+//
+// Mutation: ask the context only between records, and the read streams the
+// value to its end.
+func TestAReadItsCallerLeavesInsideOneLongValueStopsThere(t *testing.T) {
+	// Words a box might write that gzip packs only so far, so the archive is
+	// read a piece at a time all through the value.
+	rng := rand.New(rand.NewChaCha8([32]byte{}))
+	var text strings.Builder
+	for text.Len() < executor.TranscriptValueMaxBytes+4<<20 {
+		for range 3 + rng.IntN(6) {
+			text.WriteByte(byte('a' + rng.IntN(26)))
+		}
+		text.WriteByte(' ')
+	}
+	raw := gzipped(t, openCodeDoc(openCodeUser(text.String())))
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	archive := &leavingArchive{r: bytes.NewReader(raw), after: len(raw) / 8, leave: leave}
+	_, err := executor.ReadTranscriptWithin(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		func(context.Context) (io.ReadCloser, error) { return archive, nil }, 0,
+		executor.TranscriptReadBounds())
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a read whose caller left inside a long value ended %v, want its caller's own error", err)
+	}
+	if archive.handed > len(raw)/2 {
+		t.Errorf("a read whose caller left %d bytes into an archive of %d read %d of it, want it stopped a "+
+			"piece past where its caller left", archive.after, len(raw), archive.handed)
+	}
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Errorf("%d slots are held once the read its caller left has ended, want none", held)
 	}
 }

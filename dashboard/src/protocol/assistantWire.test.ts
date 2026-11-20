@@ -19,6 +19,7 @@ import {
   ASSISTANT_ACTION_ARGS_MAX_ENUM,
   ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
+  ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_PAGE_VALUE_MAX_BYTES,
   type AssistantEventKind,
   type AssistantPageContext,
@@ -109,9 +110,15 @@ describe("a stream the parser must not trust", () => {
   const first = GOLDEN.slice(0, GOLDEN.indexOf("\n\n") + 2);
 
   test("stops at a frame of another protocol version", () => {
-    const { frames, faults } = parse(first.replace('"v":2', '"v":3') + GOLDEN, 4096);
+    const { frames, faults } = parse(
+      first.replace(`"v":${ASSISTANT_PROTOCOL_VERSION}`, `"v":${ASSISTANT_PROTOCOL_VERSION + 1}`) +
+        GOLDEN,
+      4096,
+    );
     expect(frames).toEqual([]);
-    expect(faults).toEqual([{ code: "protocol_mismatch", version: 3 }]);
+    expect(faults).toEqual([
+      { code: "protocol_mismatch", version: ASSISTANT_PROTOCOL_VERSION + 1 },
+    ]);
   });
 
   test("skips a kind this build does not know, within the version", () => {

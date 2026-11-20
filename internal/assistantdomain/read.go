@@ -918,23 +918,30 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 	if err != nil {
 		return Card{}, fmt.Errorf("card %s: %w", id, err)
 	}
+	// A BODY THIS CONTRACT CANNOT DECODE was written to another one, as is a
+	// body it refuses: both are the notice.
 	if err := json.Unmarshal(body, &c.Card); err != nil {
-		return Card{}, fmt.Errorf("assistantdomain: card %s: %w", id, err)
+		c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, wire.CardKind(kind), err)
+		return c, nil
 	}
 	if c.Card.Type.Valid() {
 		if err := c.Card.Validate(); err != nil {
-			// WHICH CARD AND WHY, NEVER ITS BODY: the body is what a person
-			// was shown, sealed for them alone.
-			r.logger.Warn("assistant_card_shown_as_notice", "card", c.ID.String(),
-				"type", string(c.Card.Type), "error", err.Error())
-			if r.metrics != nil {
-				r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1,
-					metrics.Attrs{"type": string(c.Card.Type)})
-			}
-			c.Type, c.Card = wire.CardNotice, UnshownCardNotice()
+			c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, c.Card.Type, err)
 		}
 	}
 	return c, nil
+}
+
+// unshown logs and counts a stored card of another contract, which is read as
+// [UnshownCardNotice]: which card and why, never its body, which is what a
+// person was shown, sealed for them alone.
+func (r *Reader) unshown(id uuid.UUID, kind wire.CardKind, err error) wire.Card {
+	r.logger.Warn("assistant_card_shown_as_notice", "card", id.String(),
+		"type", string(kind), "error", err.Error())
+	if r.metrics != nil {
+		r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1, metrics.Attrs{"type": string(kind)})
+	}
+	return UnshownCardNotice()
 }
 
 // UnshownCardNotice is what a stored card of a kind this build draws, but in
@@ -942,8 +949,9 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 // never the body.
 //
 // A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten, so a stored
-// card [wire.Card.Validate] refuses was written to another contract (an
-// earlier one, or a newer node's mid-upgrade). It is not migrated or tolerated
+// card [wire.Card.Validate] refuses, or one that does not decode into today's
+// shapes, was written to another contract (an earlier one, or a newer node's
+// mid-upgrade). It is not migrated or tolerated
 // field by field: the transcript, the dashboard and the model's re-read all
 // see this notice, and asking again writes the card in this node's shape. A
 // kind this build does not know passes through, as the dashboard draws one it
@@ -1003,8 +1011,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
+	// A CARD OR A RECEIPT OF ANOTHER CONTRACT is read as its card is
+	// ([Reader.scanCard]): the notice, and no receipt.
 	if err = json.Unmarshal(rawCard, &p.Card); err != nil {
-		return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's card: %w", id, err)
+		p.Card = r.unshown(p.ID, wire.CardProposal, err)
 	}
 	rawReceipt, err := open(receipt, ColumnReceipt)
 	if err != nil {
@@ -1013,9 +1023,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if len(rawReceipt) > 0 {
 		var s settlement
 		if err := json.Unmarshal(rawReceipt, &s); err != nil {
-			return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's receipt: %w", id, err)
+			p.Card = r.unshown(p.ID, wire.CardProposal, err)
+		} else {
+			p.Receipt, p.Failure = s.Receipt, s.Failure
 		}
-		p.Receipt, p.Failure = s.Receipt, s.Failure
 	}
 	p.Scope, p.State, p.StepUp = wire.ProposalScope(scope), wire.ProposalState(state), stepUp != 0
 	p.ExpiresAt, p.CreatedAt = store.DecodeTime(expires), store.DecodeTime(created)

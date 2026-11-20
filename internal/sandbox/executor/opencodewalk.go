@@ -177,6 +177,11 @@ const (
 	// ([textDigest]), a piece at a time, holding none of it; a value of
 	// another kind is passed, its kind told.
 	meansDigest
+	// meansStream writes a string's decoded text, a piece at a time, to the
+	// writer the visitor names for it ([exportVisitor.sink]), and any other
+	// value's bytes as written ([jsonscan.Scanner.Tee]), holding none of it;
+	// where the visitor names none, the value is passed.
+	meansStream
 )
 
 // exportAsks is a visitor's means for each member of each frame, by its index
@@ -239,6 +244,10 @@ type exportVisitor interface {
 	// digest is where a string the visitor reads by its digest is read into,
 	// nil for a visitor that reads none.
 	digest() *textDigest
+	// sink is where member i of frame f, a value of kind k the visitor reads
+	// by its stream, is written, nil to pass it; a write's error is the
+	// visitor's to keep, and never ends the walk.
+	sink(f exportFrame, i int, k jsonscan.Kind) io.Writer
 }
 
 // walkNameBytes is the most of a name the walk reads: one past the longest
@@ -260,6 +269,8 @@ type exportWalk struct {
 	asks *exportAsks
 	name [walkNameBytes]byte
 	word [walkWordBytes]byte
+	// piece is what a streamed string is read in, made for the first.
+	piece []byte
 }
 
 // scanExport walks plain, an OpenCode export document, once, handing v what
@@ -342,6 +353,8 @@ func (w *exportWalk) member(f exportFrame, i int) error {
 			break
 		}
 		err = w.digest(w.v.digest())
+	case meansStream:
+		err = w.stream(w.v.sink(f, i, k), k)
 	}
 	if err != nil {
 		return err
@@ -579,6 +592,39 @@ func (w *exportWalk) digest(d *textDigest) error {
 		switch {
 		case errors.Is(err, io.EOF):
 			d.end()
+			return nil
+		case err != nil:
+			return err
+		}
+	}
+}
+
+// stream writes the current value, whose first token is of kind k, to sink:
+// a string's decoded text a piece at a time, and any other value's bytes as
+// written; nil passes it. A writer's error ends no read: a tee's is answered
+// past the value ([jsonscan.TeeError]), and a piece's is the sink's own.
+func (w *exportWalk) stream(sink io.Writer, k jsonscan.Kind) error {
+	switch {
+	case sink == nil:
+		return w.sc.Skip()
+	case k != jsonscan.String:
+		err := w.sc.Tee(sink)
+		if err == nil {
+			err = w.sc.Skip()
+		}
+		if _, tee := errors.AsType[*jsonscan.TeeError](err); tee {
+			return nil
+		}
+		return err
+	}
+	if w.piece == nil {
+		w.piece = make([]byte, textDigestBytes)
+	}
+	for {
+		n, err := w.sc.Read(w.piece)
+		_, _ = sink.Write(w.piece[:n])
+		switch {
+		case errors.Is(err, io.EOF):
 			return nil
 		case err != nil:
 			return err
