@@ -11860,20 +11860,28 @@ written. The address only preselects: a seat the company no longer has, or
 coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
-menu. The page has no lenses: under that table come Ask Crewlet and the
-Advisor on one line, each its mark, its name and its model's picker, with no
-caption, whose picker writes the helper's one key in a step (the dry run, then
-the write under the revision it read), lists a model no helper can run on
-disabled beside the engine's reason, shows the choice at once while it is
-saved and then says where the helper runs now; then **Seats**, every agent
-seat as a row with its model. A seat on one model shows one picker that sets
-all three categories; *Split by job* shows a picker per category (*Coding*,
-*Reviews*, *Routines*), and a seat whose jobs differ shows its three, a
-category split by hand reading *Split*. Every model in a picker carries its
-harness's mark on the trigger and each option, with its condition in a word;
-a fast model is marked inside the Routines picker, and nothing is said per row
-or in a callout. A pick opens that model's wizard on *Use it for* with the
-seat's categories added. *Use it
+menu. The page has no lenses: under that table one card says who runs on
+which model, in two quiet groups, *Helpers* (Ask Crewlet and the Advisor)
+then *Seats*, with no header row. Every row has one anatomy: who on the left
+(a helper's product mark and name, a seat's avatar and name linking to the
+seat) and the model's picker on the right, in one column of one width. Every
+model is named in full on a picker's trigger and each option: its harness's
+mark, its key and, quieter, the model it runs by name ("sub-4 · Claude Opus
+5.5"), read from the entry's model id through the engine's `llm_models`
+answer (the harness's aliases with the version each follows, and the public
+catalogue's names); an id nothing names is said as itself. The list's model
+line, a model's page and the wizard's Review name the model the same way. A
+helper's picker writes its one key in a step (the dry run, then the write
+under the revision it read), lists a model no helper can run on disabled
+beside the engine's reason, shows the choice at once while it is saved and
+then says where the helper runs now. A seat on one model shows one picker that
+sets all three categories; *Split by job* in the row's menu shows a picker per
+category under the seat's name (*Coding*, *Reviews*, *Routines*), and *Use
+one model* folds them back; a seat whose jobs differ shows its three, a
+category split by hand reading *Split*. Each option says its model's
+condition in a word, and a fast model is marked inside the Routines picker;
+nothing is said per row or in a callout. A pick opens that model's wizard on
+*Use it for* with the seat's categories added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also

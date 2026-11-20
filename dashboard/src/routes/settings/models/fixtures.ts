@@ -171,6 +171,7 @@ export function modelsData({
   doc = null,
   assistant,
   seats = MODELS_SEATS,
+  names,
   reload = () => {},
 }: {
   entries: ModelEntry[];
@@ -179,6 +180,8 @@ export function modelsData({
   doc?: CompanyDocument | null;
   assistant?: ModelsData["assistant"];
   seats?: Seat[];
+  /** The models' names by `nameKey`, as `llm_models` gives them; left out, each is said by its id. */
+  names?: ReadonlyMap<string, string>;
   reload?: () => void;
 }): ModelsData {
   const answer: ModelEntriesAnswer = admin
@@ -196,7 +199,7 @@ export function modelsData({
         entries: entries.map(memberEntry),
         alarms: null,
       };
-  const models = modelViews(answer, admin ? doc : null);
+  const models = modelViews(answer, admin ? doc : null, names);
   return {
     admin,
     doc: admin ? doc : null,
