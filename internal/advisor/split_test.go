@@ -39,7 +39,7 @@ func TestACostFixStandsOnlyWhereFreshTokensDroveThem(t *testing.T) {
 			Subject: Subject{Kind: SubjectSeat, Seat: "app-engineer"}, Facts: facts, Fix: fix}
 	}
 	g := Grounding{Company: c, DryRun: func(Change) error { return nil }, RecordsOptional: true}
-	findings, dropped := Ground([]Submitted{
+	grounded := Ground([]Submitted{
 		submitted("The cache drove it.", budget, fact("input", "read_1.now.input_tokens", 1_384_000_000, ""),
 			fact("cache", "read_1.now.cache_read_tokens", 1_350_000_000, ""), fact("output", "read_1.now.output_tokens", 600_000, "")),
 		submitted("Fresh input drove the rise.", budget,
@@ -52,6 +52,7 @@ func TestACostFixStandsOnlyWhereFreshTokensDroveThem(t *testing.T) {
 		submitted("Its budget is below one run.", SubmittedFix{Builder: BuildTokenBudget, Seat: "qa", Period: "day", Value: 2_000_000},
 			fact("input", "read_1.now.output_tokens", 600_000, "")),
 	}, served, g)
+	findings, dropped := grounded.Findings, grounded.Dropped
 	if len(dropped) != 0 || len(findings) != 5 {
 		t.Fatalf("findings %+v, dropped %v: want all five listed", findings, dropped)
 	}
