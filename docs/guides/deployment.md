@@ -2573,7 +2573,8 @@ cache on its own disk. What such a node needs from its host:
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only
   now and then, so `gitlet.max_transfers` defaults to four a core and no more than
-  one for every 512 MiB of the node's memory; reads and background indexing
+  one for every 512 MiB of the memory the executor's pools leave
+  ([Sizing Gitlet nodes](#sizing-gitlet-nodes)); reads and background indexing
   take a core each, `gitlet.max_processes` of them. A large ZIP download is the
   one transfer that takes a core for its whole run, so a node makes one for
   every four of its read slots at once, two at least, and its git holds the
@@ -2665,6 +2666,14 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
+Every figure here is of the memory the executor's pools leave: a Gitlet node
+keeps them first and sizes Gitlet by what is left
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 116 MiB for the
+transcript reads its API answers and 1 980 MiB where it runs seats too, so
+give it that much more. They are the executor's in-process pools alone: a node
+running seats also holds its harness calls and boxes
+([Replica count](#replica-count)), and keeps its one transfer past its memory
+on 2 GiB.
 
 The node that publishes also holds:
 

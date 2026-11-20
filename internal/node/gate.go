@@ -66,18 +66,24 @@ type gate struct {
 // than open a hundred completions a provider would rate-limit anyway.
 const DefaultMaxConcurrent = 32
 
-// newGate builds a gate of the given size. A size below 1 is NEVER a
+// TurnsAtOnce is how many turns a process whose node.max_concurrent is
+// configured runs at once: its gate's size. A size below 1 is NEVER a
 // pass-through: zero takes [DefaultMaxConcurrent] (an absent config key), and
-// a negative — which config refuses — is clamped to one slot rather than to
+// a negative, which config refuses, is clamped to one slot rather than to
 // none, because a gate that admitted nothing would wedge the node silently.
-func newGate(size int) *gate {
+func TurnsAtOnce(configured int) int {
 	switch {
-	case size == 0:
-		size = DefaultMaxConcurrent
-	case size < 0:
-		size = 1
+	case configured == 0:
+		return DefaultMaxConcurrent
+	case configured < 0:
+		return 1
 	}
-	return &gate{slots: make(chan struct{}, size), closed: make(chan struct{})}
+	return configured
+}
+
+// newGate builds a gate of [TurnsAtOnce] size slots.
+func newGate(size int) *gate {
+	return &gate{slots: make(chan struct{}, TurnsAtOnce(size)), closed: make(chan struct{})}
 }
 
 // acquire takes a slot, returning the release and whether one was taken.

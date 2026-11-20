@@ -1,4 +1,4 @@
-package gitproc_test
+package nodememory_test
 
 import (
 	"errors"
@@ -8,12 +8,12 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/nodememory"
 )
 
 // THE NODE'S MEMORY IS THE LEAST OF WHAT LIMITS THE PROCESS: the machine's,
 // and every cgroup limit on the process's cgroup or above it that a mount
-// shows — v2's memory.max and v1's memory.limit_in_bytes alike, since a host
+// shows: v2's memory.max and v1's memory.limit_in_bytes alike, since a host
 // on the v1 hierarchy shows a container's limit nowhere else. Each case is a
 // fixture tree of the files the kernel writes, the way the kernel writes them.
 func TestTheNodesMemoryIsTheLeastOfWhatLimitsIt(t *testing.T) {
@@ -136,7 +136,7 @@ func TestTheNodesMemoryIsTheLeastOfWhatLimitsIt(t *testing.T) {
 			for name, text := range tc.limits {
 				files[name] = text
 			}
-			bytes, from, err := gitproc.ReadLinuxMemory(tree(files))
+			bytes, from, err := nodememory.ReadLinux(tree(files))
 			if err != nil {
 				t.Fatalf("reading the node's memory: %v", err)
 			}
@@ -193,7 +193,7 @@ func TestAnUnreadableMemoryNamesWhatItCouldNotRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, _, err := gitproc.ReadLinuxMemory(tree(tc.files))
+			_, _, err := nodememory.ReadLinux(tree(tc.files))
 			if err == nil || !strings.Contains(err.Error(), tc.names) {
 				t.Errorf("read the memory with %v, want an error naming %s", err, tc.names)
 			}
@@ -202,14 +202,14 @@ func TestAnUnreadableMemoryNamesWhatItCouldNotRead(t *testing.T) {
 }
 
 // THE MACHINE THE SUITE RUNS ON READS: a positive memory no larger than its
-// /proc/meminfo, and named — the production reader, over the real files.
+// /proc/meminfo, and named: the production reader, over the real files.
 func TestThisMachinesMemoryReads(t *testing.T) {
 	t.Parallel()
-	bytes, from, err := gitproc.ReadLinuxMemory(os.DirFS("/"))
+	bytes, from, err := nodememory.ReadLinux(os.DirFS("/"))
 	if err != nil {
 		t.Fatalf("reading this machine's memory: %v", err)
 	}
-	physical, _, err := gitproc.ReadLinuxMemory(tree(map[string]string{"proc/meminfo": readFile(t, "/proc/meminfo")}))
+	physical, _, err := nodememory.ReadLinux(tree(map[string]string{"proc/meminfo": readFile(t, "/proc/meminfo")}))
 	if err != nil {
 		t.Fatal(err)
 	}

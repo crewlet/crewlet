@@ -1,4 +1,4 @@
-package gitproc
+package nodememory
 
 import (
 	"fmt"
@@ -7,9 +7,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// readNodeMemory reads the machine's memory from sysctl hw.memsize. Darwin
+// Read reads the machine's memory from sysctl hw.memsize. Darwin
 // has no cgroups; a container on a Mac runs Linux and reads its limit there.
-func readNodeMemory() (Memory, error) {
+func Read() (Memory, error) {
 	n, err := unix.SysctlUint64("hw.memsize")
 	if err != nil {
 		return Memory{}, fmt.Errorf("reading sysctl hw.memsize: %w", err)

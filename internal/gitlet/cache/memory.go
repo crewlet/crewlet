@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -15,13 +16,13 @@ import (
 // node's memory is OOM-killed, and the kernel may as well pick the engine. So
 // each git process the cache starts or admits is charged by what it covers
 // (chargeOver, Write.charge) and runs only while its charge, beside everything
-// in flight (maintFlight), fits the BUDGET: the node's memory (gitproc.Memory,
-// re-read every pass: rereadMemory) less memoryReserve. A step whose charge
-// alone is past it never starts here, and the repository is served slower,
-// never wrong: a refused bitmap leaves an index without one (maintain.go), a
-// refused compaction lets packs gather (code_compaction_behind). Each refusal
-// is logged and counted once an incarnation and gauged while it stands
-// (noteRefusals); the alarm's threshold is the budget, never a knob.
+// in flight (maintFlight), fits the BUDGET: the node's memory
+// (nodememory.Memory, re-read every pass: rereadMemory) less memoryReserve. A
+// step whose charge alone is past it never starts here, and the repository is
+// served slower, never wrong: a refused bitmap leaves an index without one
+// (maintain.go), a refused compaction lets packs gather (code_compaction_behind).
+// Each refusal is logged and counted once an incarnation and gauged while it
+// stands (noteRefusals); the alarm's threshold is the budget, never a knob.
 
 // chargeOver is what a git process the cache starts or admits is charged at:
 // perObject bytes an object of the stepObjects it covers, and room for one
@@ -54,10 +55,13 @@ func perBackedCore(cores int, memory, share int64) int64 {
 }
 
 // memoryReserve is what a node of memory bytes keeps from its background work:
-// gitproc.TransferMemory for each of transfers, and ServingMemoryPerCore (the
-// store, the broker, the engine and the read lane) for each core it backs.
-func memoryReserve(transfers, cores int, memory int64) int64 {
-	return int64(transfers)*gitproc.TransferMemory + perBackedCore(cores, memory, ServingMemoryPerCore)
+// engine, the engine's pools beside Gitlet (gitproc.Pool.Reserved), first;
+// gitproc.TransferMemory for each of transfers; and ServingMemoryPerCore (the
+// store, the broker, the engine and the read lane) for each core what engine
+// leaves backs.
+func memoryReserve(transfers, cores int, memory, engine int64) int64 {
+	return engine + int64(transfers)*gitproc.TransferMemory +
+		perBackedCore(cores, max(0, memory-engine), ServingMemoryPerCore)
 }
 
 // maintenanceBudget is what a node of mem gives its background work after
@@ -70,13 +74,14 @@ func maintenanceBudget(mem, reserve int64) int64 {
 }
 
 // initMemory is Open's: the memory the pool's lanes were sized by, the reserve
-// fixed from them, MaintenanceMemoryPerCore for each backed core, the budget
-// left, and where each pass re-reads the memory.
+// fixed from them and the engine's pools, MaintenanceMemoryPerCore for each
+// core what those pools leave backs, the budget left, and where each pass
+// re-reads the memory.
 func (c *Cache) initMemory(pool *gitproc.Pool) {
-	m := pool.Memory()
+	m, engine := pool.Memory(), pool.Reserved()
 	cores := pool.Slots(gitproc.ClassRead)
-	c.memReserve = memoryReserve(pool.Slots(gitproc.ClassTransfer), cores, m.Bytes)
-	c.maintMemory = perBackedCore(cores, m.Bytes, MaintenanceMemoryPerCore)
+	c.memReserve = memoryReserve(pool.Slots(gitproc.ClassTransfer), cores, m.Bytes, engine)
+	c.maintMemory = perBackedCore(cores, max(0, m.Bytes-engine), MaintenanceMemoryPerCore)
 	c.memSource = pool.ReadMemory
 	c.memory = m
 	c.maint.setBudget(maintenanceBudget(m.Bytes, c.memReserve))
@@ -125,7 +130,7 @@ func (c *Cache) rereadMemory() {
 func (c *Cache) BackgroundBudget() int64 { return c.maint.budgetNow() }
 
 // nodeMemory is the node's memory as the cache last read it.
-func (c *Cache) nodeMemory() gitproc.Memory {
+func (c *Cache) nodeMemory() nodememory.Memory {
 	c.memMu.Lock()
 	defer c.memMu.Unlock()
 	return c.memory

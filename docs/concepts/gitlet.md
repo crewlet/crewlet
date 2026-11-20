@@ -2159,6 +2159,15 @@ which its maintainer must be able to hold.
 **The budget.** A Gitlet node reads its memory (the least of the machine's and
 any cgroup limit) and keeps 224 MiB of it for every git transfer it admits at once and 896 MiB for each core its git runs on,
 for the store, the broker, the engine and its reads. Both count only the cores the memory backs at 2 GiB a core: a container limited in memory and not in CPU sees its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers rather than 256, and runs as the eight-core node its memory makes it.
+Before both it keeps the executor's own pools it runs, each at its worst and
+twice that for the heap's growth at Go's default `GOGC`: 116 MiB for the
+[transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
+and on a node running seats too 1 980 MiB at the default `node.max_concurrent`
+(its collections of runs and reads of its boxes for its peers, 10.6 MiB a
+turn, the sessions it takes from boxes, and its seats' reads). Every figure in
+this section but the table below is of the memory those pools leave. They are the executor's
+in-process pools alone: a node running seats also holds its harness calls and
+boxes ([Replica count](../guides/deployment.md#replica-count)).
 The rest is the budget of its background work. Every step (the bitmap, the
 index without one, a cold cache's included, the commit-graph, the tip, a
 connectivity check, a compaction's build, a publication's) is held to the budget
@@ -2210,9 +2219,25 @@ memory, so a hand-set figure can leave the background work nothing: once its tra
 alone does not. A node whose memory cannot be read refuses to serve git rather
 than guess it.
 
+At the default lanes, with and without seats beside Gitlet (MiB, rounded):
+
+| Node | Seats | Executor's pools | Transfers | Kept for the store, the broker, the engine and its reads | Background budget |
+|---|---|---|---|---|---|
+| 2 GiB, one core | no | 116 | 3 | 845 | 415 |
+| 2 GiB, one core | yes | 1 980 | 1 | 30 | 0 |
+| 4 GiB, two cores | no | 116 | 7 | 1 741 | 671 |
+| 4 GiB, two cores | yes | 1 980 | 4 | 926 | 294 |
+| 8 GiB, four cores | no | 116 | 15 | 3 533 | 1 183 |
+| 8 GiB, four cores | yes | 1 980 | 12 | 2 718 | 806 |
+| 16 GiB, eight cores | no | 116 | 31 | 7 117 | 2 207 |
+| 16 GiB, eight cores | yes | 1 980 | 28 | 6 302 | 1 830 |
+
+A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
+186 MiB more than its memory: give such a node 4 GiB or more.
+
 The budget does not bound the clones themselves, which take the node's git
-transfer slots, four a core and no more than one for each 512 MiB of its memory, each kept
-224 MiB, whatever the repository. Serving repositories of millions of objects to
+transfer slots, four a core and no more than one for each 512 MiB of the memory the
+executor's pools leave, each kept 224 MiB, whatever the repository. Serving repositories of millions of objects to
 many cloning clients at once needs memory for each clone in flight:
 about 240 bytes an object of the repository, past the 224 MiB.
 
@@ -4882,7 +4907,7 @@ revised is one click from the terminal that pushed it.
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a single member's stalled write, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
 | `code_object_store_unavailable` | `WARN` | A fetch's sync could not read a pack from the object store for a reason that is no answer about the pack — a timeout, a throttle past its retries, the store unreachable, answered 503. A pack the store lacks or holds damaged is `code_pack_missing`. |
 | `code_cache_sized` | `INFO` | The node built Gitlet and sized its cache: `dir`, budget in `bytes`, whether `derived` from the volume or set as `gitlet.cache_max_bytes`, and every input. `room` is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the volume may still write under its limit, the request `spools`' allowance (64 MiB per pool `transfers`) and the revision facts' `patches` (two at once up to 256 MiB each, 512 MiB); `dedicated` says whether the volume is the cache's own (seven eighths of the room) or shared (half). `WARN`, with a `detail` naming what to change, when a derived budget is under 1 GiB or an explicit one exceeds the room. A room of nothing is never logged here: the node refuses to build Gitlet, and the error names the same figures and what to change. |
-| `code_git_ready` | `INFO` | The node's git is 2.55 or newer (the node floor, `gitproc.NodeMinVersion`) and its process pool is built: `path`, `version`, `read_slots`, `maintenance_slots`, `transfer_slots`, the empty `home` every git process runs with, the `memory` the lanes were sized by and where it was read (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), and the trace2 event stream format (`trace_evt`), from which a failure's damage is read. |
+| `code_git_ready` | `INFO` | The node's git is 2.55 or newer (the node floor, `gitproc.NodeMinVersion`) and its process pool is built: `path`, `version`, `read_slots`, `maintenance_slots`, `transfer_slots`, the empty `home` every git process runs with, the `memory` the lanes were sized by and where it was read (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what it kept of it before sizing them (`reserved`: the executor's pools the node runs), and the trace2 event stream format (`trace_evt`), from which a failure's damage is read. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`) past its deadline (`reason`: `deadline`), or after it read and wrote nothing for its stall bound (`stall`): a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
 | `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after 5 seconds. |
 | `code_git_signal_withheld`, `code_git_signal_failed` | `WARN` | The node could not read the kernel's record of a git process's group, so sent no signal rather than risk signalling a stranger; or sending one failed. |
@@ -4943,7 +4968,7 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 
 | Line | Level | Means |
 |---|---|---|
-| `code_cache_opened` | `INFO` | Cache opened at boot: `dir`, the `repos` and `bytes` already held, byte `budget`, leftovers moved aside (`trashed`); the node's `memory` as git read it, from where (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what is kept for everything but background work (`memory_reserved`), what that leaves the work (`maintenance_budget`); and the most runs of the index of pushes held mapped at once (`mapped_runs`: a quarter of the kernel's `vm.max_map_count`, [Kept like the rest of the copy](#which-push-landed-a-commit)). |
+| `code_cache_opened` | `INFO` | Cache opened at boot: `dir`, the `repos` and `bytes` already held, byte `budget`, leftovers moved aside (`trashed`); the node's `memory` as git read it, from where (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what is kept for everything but background work (`memory_reserved`, the executor's pools among it), what that leaves the work (`maintenance_budget`); and the most runs of the index of pushes held mapped at once (`mapped_runs`: a quarter of the kernel's `vm.max_map_count`, [Kept like the rest of the copy](#which-push-landed-a-commit)). |
 | `code_cache_map_count_unread` | `WARN` | `/proc/sys/vm/max_map_count` could not be read (`error`), so mapped runs are bounded as if the count were Linux's default (`assumed`, 65 530). A sandboxed kernel hiding `/proc/sys`; nothing to do unless the host lowered the count below default, which lowers what every process on it may map. |
 | `code_cache_memory_changed` | `INFO` | The node's memory read differently (a container resized in place) and `maintenance_budget` moved with it; `was` is the earlier reading. The git lanes keep their boot sizes until a restart. |
 | `code_cache_memory_unreadable` | `WARN` | Memory could not be read again; the last reading and budget stand until a read succeeds. Once until then. |
