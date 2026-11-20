@@ -348,3 +348,31 @@ func TestWindowsMergedPastTheLimitKeepTheEarliestWrite(t *testing.T) {
 		t.Errorf("the newest window waiting wrote %d, not its own %d", last.written, 999+3*earlyWindows)
 	}
 }
+
+// A FLUSH THAT STOPS SETTLING DECIDES NOTHING UNSETTLED: where the flush's
+// own settling runs past [unsettledBytes] and hands the stages a line not
+// yet ended, the stages trail it as a [NewStream] does rather than decide it
+// as at the text's end, and the stream still writes Secrets of the text.
+// A write asks [Settled] before that much is held, so the test lets it hold
+// more.
+//
+// Mutation: decide the stages after such a settle ([Stream.Flush]), and the
+// token is redacted as if it ended at the flush.
+func TestAFlushThatStopsSettlingDecidesNothingUnsettled(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1666, 5))
+	text := streamText(r, wholeBytes+pieceBytes) + "\nsk-" + testRun(r, testB64url, 2<<20) + " and on\n"
+	cut := len(text) - (1 << 20)
+	var out bytes.Buffer
+	s := NewLiveStream(&out)
+	_, _ = s.Write([]byte(text[:wholeBytes+1]))
+	s.live.due = 4 * unsettledBytes
+	_, _ = s.Write([]byte(text[wholeBytes+1 : cut]))
+	if _, _, err := s.Flush(); err != nil || !s.live.stopped {
+		t.Fatalf("a flush holding %d bytes unsettled answered %v; settling stopped: %v", cut-wholeBytes, err, s.live.stopped)
+	}
+	_, _ = s.Write([]byte(text[cut:]))
+	if err := s.Close(); err != nil || out.String() != Secrets(text) {
+		t.Errorf("Close answered %v, and the stream wrote another text than Secrets %s", err, parted(out.String(), Secrets(text)))
+	}
+}

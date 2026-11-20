@@ -303,8 +303,9 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 			l.settled += n
 		}
 	case s.p != nil && l != nil && !l.stopped:
-		s.settle()
-		if s.p != nil {
+		// Settling that stops hands the stages unsettled text, which no
+		// stage may decide as at an end ([unsettledBytes]).
+		if s.settle(); s.p != nil && !l.stopped {
 			s.p.decideHeld()
 			s.endErr()
 			s.stopOnMiss()
