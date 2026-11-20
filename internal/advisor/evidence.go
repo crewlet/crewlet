@@ -806,9 +806,11 @@ func AgentHandles(c *config.Company) []string {
 	return out
 }
 
-// tokensSaid is a token count as a person reads it: 26.5M, 812K, 940.
+// tokensSaid is a token count as a person reads it: 1.4B, 26.5M, 812K, 940.
 func tokensSaid(n int64) string {
 	switch {
+	case n >= 1_000_000_000:
+		return trimmed(fmt.Sprintf("%.1f", float64(n)/1_000_000_000)) + "B"
 	case n >= 1_000_000:
 		return trimmed(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"
 	case n >= 1_000:

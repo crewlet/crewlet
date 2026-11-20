@@ -79,7 +79,7 @@ import { RunQuestion } from "./RunQuestion.tsx";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { TokenScope } from "./InlineToken.tsx";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
-import type { ExecutorRow } from "~/protocol/index.ts";
+import type { ActResult, ExecutorRow } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
 /**
@@ -141,6 +141,54 @@ export function AssignButton({
         />
       )}
     </>
+  );
+}
+
+/**
+ * One item's move to a seat, through the work item's own write: the Reassign
+ * above, at the version the caller read (`if_match`), with the line its new
+ * holder is woken with.
+ */
+export type MoveWork = (
+  move: { item: string; version: number; reason: string },
+  assignee: string,
+) => Promise<ActResult | null>;
+
+/**
+ * Confirm work the Advisor moves: the press hands `onConfirm` the move it
+ * makes, and the caller moves each item with it, re-checking between them, so
+ * one press moves the work the person was shown and nothing else. Gated as
+ * every write is: a reader who cannot reassign is told why, and nothing moves.
+ */
+export function MoveWorkConfirm({
+  label,
+  blocked,
+  onConfirm,
+}: {
+  label: string;
+  /** Why the press is held now (a move in flight), or undefined. */
+  blocked?: string | undefined;
+  onConfirm: (move: MoveWork) => void;
+}) {
+  const write = useAct("update_work_item");
+  return (
+    <WriteButton
+      write={write}
+      size="small"
+      variant="primary"
+      showRefusal={false}
+      blocked={blocked}
+      onPress={() =>
+        onConfirm((m, assignee) =>
+          write.run(
+            { item: m.item, assignee, if_match: m.version, reason: m.reason },
+            { done: `Moved ${m.item}` },
+          ),
+        )
+      }
+    >
+      {label}
+    </WriteButton>
   );
 }
 
