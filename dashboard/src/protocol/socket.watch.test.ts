@@ -271,8 +271,8 @@ describe("a query frame", () => {
   // A QUESTION GIVEN UP ON IS CANCELLED AT THE ENGINE AND SETTLED HERE AT ONCE:
   // its signal aborting sends `query_cancel` naming it, so the engine stops
   // reading for it, rejects it with the signal's reason, and its answer, if one
-  // comes, finds nothing waiting. One given up on before its socket opened is
-  // never sent.
+  // comes, finds nothing waiting, nor is it asked again on the next socket. One
+  // given up on before its socket opened is never sent.
   // Mutation: keep the in-flight entry, or send no cancel, and an abandoned
   // transcript read holds the tab's slot and the node's for its whole wait.
   test("a question whose signal aborts is cancelled at the engine and settled", async () => {
@@ -311,6 +311,12 @@ describe("a query frame", () => {
     dial(0).onmessage?.({ data: JSON.stringify({ kind: "result", id, data: {} }) } as MessageEvent);
     await afterMicrotasks();
     expect(answered).toBe(false);
+    // NOR ASKED AGAIN on the socket after it, as a question still in flight is.
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(1_000);
+    dial(1).open();
+    const again = dial(1).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(again.filter((frame) => frame.kind === "query")).toEqual([]);
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the
