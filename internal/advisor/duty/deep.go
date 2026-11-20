@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisordomain"
@@ -60,6 +61,10 @@ type flight struct {
 type deepState struct {
 	mu     sync.Mutex
 	flying *flight
+	// unrecorded is each run this holder ran whose record the log has not
+	// taken yet, by its id: the tick records it again rather than run it
+	// again from the start.
+	unrecorded map[string]Run
 	// last is when this holder last started a deep run at a slot.
 	last time.Time
 }
@@ -144,7 +149,7 @@ func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by
 			var errs []error
 			for _, id := range ids {
 				run.ID = id
-				errs = append(errs, d.Log.RecordRun(ctx, run))
+				errs = append(errs, d.conclude(ctx, run))
 			}
 			if err := errors.Join(errs...); err != nil {
 				log.WarnContext(ctx, "advisor_deep_run_not_recorded", "error", err.Error())
@@ -225,8 +230,12 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 
 // pressedDeep answers the deep runs people asked for: one deep run recorded
 // under every press, or, where no model is assigned, each recorded as failed
-// saying why.
+// saying why. A press this holder already ran is recorded, never run again.
 func (d *Duty) pressedDeep(ctx context.Context, now time.Time, deep []Request) error {
+	deep, err := d.recordAgain(ctx, deep)
+	if len(deep) == 0 {
+		return err
+	}
 	ids := make([]string, len(deep))
 	for i, r := range deep {
 		ids[i] = r.Run
@@ -237,10 +246,89 @@ func (d *Duty) pressedDeep(ctx context.Context, now time.Time, deep []Request) e
 	}
 	var errs []error
 	for _, r := range deep {
-		errs = append(errs, d.Log.RecordRun(ctx, Run{ID: r.Run, Trigger: TriggerPerson, By: r.By, StartedAt: now,
+		errs = append(errs, d.conclude(ctx, Run{ID: r.Run, Trigger: TriggerPerson, By: r.By, StartedAt: now,
 			EndedAt: now, Status: RunFailed, Kind: advisordomain.RunKindDeep,
 			Model: map[string]any{"status": string(advisor.PassFailed),
 				"reason": "The Advisor has no model assigned (advisor.model), so it cannot investigate."}}))
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, err)...)
+}
+
+// A RUN ALWAYS CONCLUDES. A run whose record the log refuses would leave the
+// request that started it waiting, and the next tick would run it again from
+// the start, spending its whole budget each time. Its record is written again
+// as failed, saying why in a few words: the record that cannot be refused. One
+// the log could not take at all (it was unreachable) is kept here and recorded
+// again on the next tick, which never runs it again.
+
+// maxFailedWords bounds what a failed record says of why.
+const maxFailedWords = 240
+
+// conclude records run, and where the log refuses its record, records it as
+// failed saying why, its scopes kept and then without them; where neither is
+// taken, it is kept for the next tick to record.
+func (d *Duty) conclude(ctx context.Context, run Run) error {
+	err := d.Log.RecordRun(ctx, run)
+	if err == nil {
+		d.recorded(run.ID)
+		return nil
+	}
+	log.WarnContext(ctx, "advisor_run_not_recorded", "run", run.ID, "error", err.Error())
+	failed := run
+	failed.Status = RunFailed
+	failed.Model = map[string]any{"status": string(advisor.PassFailed),
+		"reason": cutWords("The run's record could not be kept, so it is recorded as failed: " + err.Error())}
+	ferr := d.Log.RecordRun(ctx, failed)
+	if ferr != nil {
+		failed.Scopes, failed.Classes = nil, nil
+		ferr = d.Log.RecordRun(ctx, failed)
+	}
+	if ferr != nil {
+		d.deep.mu.Lock()
+		if d.deep.unrecorded == nil {
+			d.deep.unrecorded = map[string]Run{}
+		}
+		d.deep.unrecorded[run.ID] = failed
+		d.deep.mu.Unlock()
+		return errors.Join(err, ferr)
+	}
+	d.recorded(run.ID)
+	return nil
+}
+
+// recorded forgets a run kept for its record, once the log took it.
+func (d *Duty) recorded(id string) {
+	d.deep.mu.Lock()
+	delete(d.deep.unrecorded, id)
+	d.deep.mu.Unlock()
+}
+
+// recordAgain records each of requests this holder already ran and could not
+// record, and answers the rest, still to run.
+func (d *Duty) recordAgain(ctx context.Context, requests []Request) ([]Request, error) {
+	var rest []Request
+	var errs []error
+	for _, r := range requests {
+		d.deep.mu.Lock()
+		run, ran := d.deep.unrecorded[r.Run]
+		d.deep.mu.Unlock()
+		if !ran {
+			rest = append(rest, r)
+			continue
+		}
+		errs = append(errs, d.conclude(ctx, run))
+	}
+	return rest, errors.Join(errs...)
+}
+
+// cutWords is s at most [maxFailedWords] bytes, whole runes.
+func cutWords(s string) string {
+	if len(s) <= maxFailedWords {
+		return s
+	}
+	s = s[:maxFailedWords]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
