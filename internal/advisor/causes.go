@@ -292,6 +292,23 @@ func Restates(m, r Finding) bool {
 	return strings.Contains(plainOf(m.Title+" "+m.Headline+" "+m.Item+" "+m.Why), plainOf(name))
 }
 
+// AboutTheSameWork reports whether rule finding r is about what model finding
+// m was about: it says it ([Restates]), or it names an item m named.
+func AboutTheSameWork(m, r Finding) bool {
+	if m.Source != SourceModel || r.Source == SourceModel {
+		return false
+	}
+	if Restates(m, r) {
+		return true
+	}
+	for _, rec := range m.Records {
+		if rec.Kind == RecordItem && slices.Contains(r.Records, rec) {
+			return true
+		}
+	}
+	return false
+}
+
 // seatsAbout is every seat a finding is about.
 func seatsAbout(f Finding) []string {
 	var out []string

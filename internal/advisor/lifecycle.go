@@ -58,13 +58,16 @@ const (
 	ReasonDismissedKnown   CloseReason = "dismissed_known"
 	// ReasonDuplicate is a model finding a rule's finding says too.
 	ReasonDuplicate CloseReason = "duplicate"
+	// ReasonReplaced is a model finding whose premise moved while what it
+	// was about still stands, now said by a rule's truer finding.
+	ReasonReplaced CloseReason = "replaced"
 )
 
 // CloseReasons is every reason.
 func CloseReasons() []CloseReason {
 	return []CloseReason{ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere, ReasonSubjectGone,
 		ReasonFixUnbuildable, ReasonNotConfirmed, ReasonDismissedWontFix, ReasonDismissedWrong, ReasonDismissedKnown,
-		ReasonDuplicate}
+		ReasonDuplicate, ReasonReplaced}
 }
 
 // Valid reports whether r is a reason this build knows.
@@ -182,6 +185,10 @@ type Reading struct {
 	// LastDone is when a run last concluded about each scope ([ScopeOf]), for
 	// the findings this run says nothing about.
 	LastDone map[string]time.Time
+	// Partial is a reading cut short by its bound that listed what it had:
+	// what it observed opens or refreshes, and what it did not observe stays
+	// as it is rather than closing.
+	Partial bool
 }
 
 // Concludes reports whether r says anything about f's class: its group ran,
@@ -284,6 +291,7 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 		f := s.Observation.Finding
 		switch {
 		case seen[key]:
+		case r.Partial && r.Concludes(f):
 		case !r.Concludes(f):
 			if last, ok := r.LastDone[ScopeOf(f)]; ok && r.At.Sub(last) > StaleAfter*GroupOf(f).Interval()+ExpireAfter {
 				out = append(out, Transition{Step: StepClose, Stored: s, State: StateExpired, Reason: ReasonNotConfirmed})

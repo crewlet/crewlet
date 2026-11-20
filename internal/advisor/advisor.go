@@ -169,6 +169,19 @@ type Fact struct {
 	Key   string `json:"key"`
 	Value int64  `json:"value"`
 	Label string `json:"label,omitempty"`
+	// Unit is what the number counts, where the finding says it rather than
+	// its key's words ([FactUnit]); an investigation's numbers say theirs.
+	Unit Unit `json:"unit,omitempty"`
+	// Was is the same number over the range before, where it was read.
+	Was *int64 `json:"was,omitempty"`
+}
+
+// Counts is what the fact's number counts: its own unit, else its key's.
+func (f Fact) Counts() Unit {
+	if f.Unit != "" {
+		return f.Unit
+	}
+	return FactUnit(f.Key)
 }
 
 // Said is how the fact is labelled: its own words where it carries them, else

@@ -79,9 +79,16 @@ const (
 func insightOf(f advisor.Finding, facts []AdvisorFact) AdvisorFindingInsight {
 	out := AdvisorFindingInsight{Headline: advisor.HeadlineOf(f), Stats: []advisor.Stat{}, Seats: []AdvisorSeatShare{},
 		Actions: actionsOf(f.Fix)}
+	was := map[string]*float64{}
+	for _, fact := range f.Evidence {
+		if fact.Was != nil {
+			v := float64(*fact.Was)
+			was[fact.Key] = &v
+		}
+	}
 	for _, fact := range facts {
 		out.Stats = append(out.Stats, advisor.Stat{Key: fact.Key, Label: fact.Label, Value: float64(fact.Value),
-			Unit: fact.Unit})
+			Unit: fact.Unit, Was: was[fact.Key]})
 	}
 	for _, s := range f.Seats {
 		unit := s.Unit

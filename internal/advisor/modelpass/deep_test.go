@@ -63,14 +63,17 @@ func TestADeepRunInvestigatesAndListsOnlyWhatItsReadsShow(t *testing.T) {
 	t.Parallel()
 	d := planted(t)
 	reads := &fakeReads{}
-	hits := map[string]any{"key": "hits", "label": "Times it hit its limit", "value": 4, "from": "read_1.entries[0].hits"}
-	hours := map[string]any{"key": "hours", "label": "Hours out", "value": 11, "from": "read_1.entries[0].total_hours"}
-	seats := map[string]any{"key": "seats", "label": "Seats held", "value": 2, "from": "read_1.entries[0].seat_count"}
+	hits := map[string]any{"key": "hits", "label": "Times it hit its limit", "value": 4, "from": "read_1.entries[0].hits",
+		"unit": "count"}
+	hours := map[string]any{"key": "hours", "label": "Hours out", "value": 11, "from": "read_1.entries[0].total_hours",
+		"unit": "hours"}
+	seats := map[string]any{"key": "seats", "label": "Seats held", "value": 2, "from": "read_1.entries[0].seat_count",
+		"unit": "count"}
 	raw, err := json.Marshal(map[string]any{"findings": []any{
 		deepFinding("2 seats sat out 11 h on 19 Nov: p hit its usage limit 4 times.", hits, hours, seats),
 		deepFinding("2 seats sat out 99 h: p hit its usage limit 4 times.", hits, seats),
 		deepFinding("p hit its usage limit 5 times.", map[string]any{"key": "hits", "label": "Times",
-			"value": 5, "from": "read_1.entries[0].hits"}),
+			"value": 5, "from": "read_1.entries[0].hits", "unit": "count"}),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +84,11 @@ func TestADeepRunInvestigatesAndListsOnlyWhatItsReadsShow(t *testing.T) {
 		{Text: "reading", Calls: []llmtest.Call{
 			{Name: ReadTool, Args: `{"name":"advisor_capacity","params":{"range":"7d"}}`},
 			{Name: ReadTool, Args: `{"name":"iam_credentials"}`}}},
+		{Text: "answering", Calls: []llmtest.Call{
+			{Name: VerdictTool, Args: `{"id":"A1","verdict":"confirmed","note":"2 agents, none may read health",` +
+				`"numbers":[{"label":"Seats","from":"read_1.entries[0].seat_count"}]}`},
+			{Name: VerdictTool, Args: `{"id":"A2","verdict":"confirmed","note":"p is out 11 hours",` +
+				`"numbers":[{"label":"Hours out","from":"read_1.entries[0].total_hours"}]}`}}},
 		{Text: "submitting", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
 	}}}}
 	var told []Progress
@@ -97,7 +105,8 @@ func TestADeepRunInvestigatesAndListsOnlyWhatItsReadsShow(t *testing.T) {
 	if got.Dropped[advisor.DropWords] != 1 || got.Dropped[advisor.DropWrongFact] != 1 {
 		t.Errorf("dropped %v, want the 99-hour headline and the wrong count", got.Dropped)
 	}
-	if len(told) != 1 || told[0].Text != "reading capacity" || len(got.Progress) != 1 {
+	if !slices.ContainsFunc(told, func(p Progress) bool { return p.Text == "reading capacity" }) ||
+		len(got.Progress) != len(told) {
 		t.Errorf("progress told %+v, kept %+v", told, got.Progress)
 	}
 	if slices.Contains(reads.asked, "iam_credentials") {

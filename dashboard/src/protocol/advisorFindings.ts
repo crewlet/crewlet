@@ -30,7 +30,8 @@ export type AdvisorCloseReason =
   | "dismissed_wont_fix"
   | "dismissed_wrong"
   | "dismissed_known"
-  | "duplicate";
+  | "duplicate"
+  | "replaced";
 
 /** What a fact's number counts. */
 export type AdvisorFactUnit =
