@@ -41,6 +41,8 @@ import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
 import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
+import { useQuery } from "~/lib/useQuery.ts";
+import { catalogueOf, nameIn } from "../../modelNames.ts";
 
 /** The write of a save that is running: the credential's seal, then the document. */
 export type SaveStage = "credential" | "document";
@@ -133,6 +135,9 @@ export function Review({
     unchanged: "As Configuration sets it",
   }[draft.method];
   const id = modelId(draft);
+  const asked = catalogueOf(draft.harness, id);
+  const listing = useQuery("llm_models", asked ?? undefined, { enabled: !!asked });
+  const named = asked ? nameIn(listing.data, id) : null;
 
   return (
     <div className="models-stack">
@@ -156,14 +161,15 @@ export function Review({
           <Text as="span" variant="body" className="mono models-clamp" title={draft.key}>
             {draft.key || "New model"}
           </Text>
+          {/* THE MODEL BY NAME where the engine's catalogue names it, else its id, in mono. */}
           <Text
             as="span"
             variant="caption"
             tone="secondary"
-            className={id ? "mono models-clamp" : undefined}
+            className={id ? (named ? "models-clamp" : "mono models-clamp") : undefined}
             title={id || undefined}
           >
-            {id || "No model chosen yet"}
+            {named ?? (id || "No model chosen yet")}
           </Text>
         </span>
       </div>

@@ -49,6 +49,8 @@ export interface HelperChoice {
   problem: string | null;
   /** Drawn before its key on the option and the trigger: its harness's mark. */
   leading?: ReactNode;
+  /** Its words on the option and the trigger, where they say more than its key (the model it runs, by name). */
+  label?: ReactNode;
 }
 
 /** The change that gives `helper` the model `key`, or takes its model away for null. */
@@ -80,10 +82,19 @@ export interface HelperModelProps {
   canAssign: boolean;
   /** Read again what the page draws, once the change is applied or a reload is the remedy. */
   onApplied: () => void;
+  /** How wide the picker is: its own words' width, or its place's whole width in a column of them. */
+  width?: "auto" | "full";
 }
 
 /** The helper's model: a picker for a reader who may choose, its name for anybody else. */
-export function HelperModel({ helper, current, choices, canAssign, onApplied }: HelperModelProps) {
+export function HelperModel({
+  helper,
+  current,
+  choices,
+  canAssign,
+  onApplied,
+  width = "auto",
+}: HelperModelProps) {
   const { name } = HELPERS[helper];
   const write = useSettingWrite({
     reread: `Reload to see ${name}'s model as it is now.`,
@@ -117,9 +128,11 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
   const options = [
     ...choices.map((c) => ({
       value: c.key,
-      label: c.key,
+      label: c.label ?? c.key,
+      text: c.key,
       ...(c.leading ? { leading: c.leading } : {}),
-      description: c.problem ?? c.model,
+      // THE MODEL IS IN THE LABEL where one is given; the line under it is then the reason alone.
+      ...(c.problem !== null || !c.label ? { description: c.problem ?? c.model } : {}),
       disabled: c.problem !== null && c.key !== shown,
     })),
     ...(shown !== null && !listed
@@ -132,7 +145,7 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
       <Select
         ariaLabel={`${name}'s model`}
         size="sm"
-        width="auto"
+        width={width}
         value={shown ?? NONE}
         options={options}
         disabled={write.busy}

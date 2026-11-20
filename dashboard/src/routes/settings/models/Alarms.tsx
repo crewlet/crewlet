@@ -478,7 +478,7 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
               key: m.key,
               label: m.key,
               icon: modelMark(m),
-              description: m.model,
+              description: m.modelName,
               onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
             }))
           : // NOTHING TO MOVE TO is said, not an empty list: the way out left is adding one.
