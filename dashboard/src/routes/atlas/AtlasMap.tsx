@@ -61,6 +61,9 @@ export const ATLAS_OPEN_MAX = 150;
 /** What a group of entries no vendor names is called. */
 const NO_VENDOR = "No vendor";
 
+/** The most columns a call chain stands across in Services: a deeper service stands in the last. */
+export const SERVICE_DEPTHS = 3;
+
 /** The group an entry stands in: its vendor's in its lane, or the lane's entries no vendor names (the engine's key). */
 function groupOf(summary: Pick<AtlasSummary, "lane" | "vendor">): string {
   return summary.vendor ? `${summary.lane}/${summary.vendor}` : summary.lane;
@@ -103,19 +106,18 @@ export function serviceColumns(answer: AtlasMapAnswer): Map<string, number> {
     depths.set(id, depth);
     return depth;
   };
-  const last = LANES.services.columns - 1;
+  const last = SERVICE_DEPTHS - 1;
   return new Map([...chained].map((id) => [id, Math.min(last, depthOf(id, new Set()))]));
 }
 
 /**
  * The lanes as the map draws them, row by row, each saying what would fill it
- * when it is empty.
+ * when it is empty. The kit sizes each lane to what it holds.
  *
  * A NARROWED MAP DRAWS THE LANES THAT HOLD SOMETHING (`onlyFilled`): every
- * lane drawn at its full width, empty ones included, set the fit, so the four
- * entries a filter left opened on a phone as four marks with no name. Each is
- * as wide as the columns its matches fill. While nothing at all matches, every
- * lane is drawn, each saying so.
+ * lane drawn, empty ones included, set the fit, so the four entries a filter
+ * left opened on a phone as four marks with no name. While nothing at all
+ * matches, every lane is drawn, each saying so.
  */
 function bandsOf(
   lanes: AtlasMapAnswer["lanes"],
@@ -125,18 +127,8 @@ function bandsOf(
   const filled = lanes.filter((one) => one.count > 0);
   const drawn = onlyFilled && filled.length > 0 ? filled : lanes;
   const answered = new Set(drawn.map((one) => one.lane));
-  const counts = new Map(drawn.map((one) => [one.lane, one.count]));
   const placed = new Set(MAP_ROWS.flatMap((row) => row.lanes));
-  const lane = (id: AtlasLane) => ({
-    id,
-    label: LANES[id].label,
-    // A NARROWED LANE IS AS WIDE AS WHAT MATCHED: two matches in a lane three
-    // columns wide stood beside an empty column the fit still had to hold.
-    columns: onlyFilled
-      ? Math.max(1, Math.min(LANES[id].columns, counts.get(id) ?? 0))
-      : LANES[id].columns,
-    empty: emptyOf(id),
-  });
+  const lane = (id: AtlasLane) => ({ id, label: LANES[id].label, empty: emptyOf(id) });
   return MAP_ROWS.map((row, i) => ({
     id: row.id,
     lanes: [
