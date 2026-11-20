@@ -786,7 +786,7 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // which another machine's clock wrote: past it, nothing that capture's taker
 // sends lands, so a capture still begun is one whose taker stopped or whose
 // stamp never reached the row, and the read takes the place after it
-// ([Coordinator.waitedOut]). An hour, twelve minutes and two seconds today.
+// ([Coordinator.waitedOut]). An hour, twenty minutes and two seconds today.
 var standbyWait = captureLife + captureWaitTick
 
 // standbyWindow is the longest a read standing by can still take the place
@@ -797,7 +797,7 @@ var standbyWait = captureLife + captureWaitTick
 // wait's end, the read of the turn's row past it and the settle it decides
 // ([Coordinator.namedAtWaitsEnd]), its last read, and its takeover. Each at
 // the slowest crossing, since the standby and the wait reading it may be any
-// two nodes. Two hours, forty-two minutes and thirty-two seconds today.
+// two nodes. Two hours, fifty minutes and thirty-two seconds today.
 var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureStampBudget
 
 // standbyBudget is how long after the instant a read stood by
@@ -806,7 +806,7 @@ var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureSt
 // the engine allows any one machine's clock (objstore.AssumedClockSkew), since
 // the instant is the standby's node's clock's and the reader any other node.
 // Past it, a wait reads the read as gone; a lapsed taker lease withdraws it
-// sooner ([Coordinator.standDownGone]). FOUR HOURS, FORTY-TWO MINUTES AND
+// sooner ([Coordinator.standDownGone]). FOUR HOURS, FIFTY MINUTES AND
 // THIRTY-TWO SECONDS today. Against the window alone, a reader whose clock
 // stood ahead read the standby as gone while its takeover could still land,
 // and a turn's end tombstoned the turn ahead of the session kept. A turn's end
@@ -899,7 +899,7 @@ const SessionTakeBudget = SessionPackWait + SessionScrubWait
 //
 // THE READS BESIDE THE UPLOAD'S PACE, never inside it: counted inside it, a
 // keep whose reads answered slowly left a session at its bound less than its
-// pace. Eighteen minutes today.
+// pace. Twenty-six minutes today.
 var SessionKeepBudget = 2*keepReadRoom + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 
 // SessionCaptureBudget is how long after its stamped instant
@@ -908,7 +908,7 @@ var SessionKeepBudget = 2*keepReadRoom + objstore.PaceFor(executorkeep.SealedMax
 // the skew the engine allows any one machine's clock
 // (objstore.AssumedClockSkew), since the instant is its taker's clock's and the
 // reader any other node. A capture begun longer ago than this is one whose
-// taker stopped, or whose stamp never reached the row. THREE HOURS AND TWELVE
+// taker stopped, or whose stamp never reached the row. THREE HOURS AND TWENTY
 // MINUTES today. Counting less, or reading another machine's stamp as one's
 // own, let a capture still being kept be read as abandoned: a standby took its
 // place over and uploaded again, and a turn's end recorded over the session.
@@ -947,8 +947,8 @@ const keepReadRoom = sessionRecordBudget
 // ([SessionTakeBudget], [captureStampBudget], [Coordinator.takeContext]), the
 // digest it leaves in the box ([discardGrace], [stampContext]), the keep, which
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
-// what came of it ([captureStampBudget]). Fifty-four and a half minutes and a
-// fraction at today's bounds.
+// what came of it ([captureStampBudget]). An hour, two and a half minutes and
+// a fraction at today's bounds.
 var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
 
 // takeOverLife is the same of a takeover's begun stamp, from its own instant
@@ -956,7 +956,7 @@ var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKe
 // the store did not answer it, the standby's withdrawal and its read of the
 // row back ([Coordinator.tookOver]), each one change of the row
 // ([captureStampBudget]); its keep ([SessionKeepBudget]); and the stamp of what
-// came of it. An hour and twelve minutes and a fraction at today's bounds.
+// came of it. An hour and twenty minutes and a fraction at today's bounds.
 var takeOverLife = 4*captureStampBudget + SessionKeepBudget
 
 // captureLife is the longest life of a begun capture, a take's or a
@@ -970,7 +970,7 @@ var takeOverLife = 4*captureStampBudget + SessionKeepBudget
 // EVERY STEP COUNTED, each at its bound at the slowest crossing: without the
 // reservation's room, a keep's reads and a takeover's steps, a rule reading a
 // begun stamp's age against it could read a capture still being kept as
-// abandoned. An hour and twelve minutes today, a takeover's being the longer.
+// abandoned. An hour and twenty minutes today, a takeover's being the longer.
 var captureLife = max(takeLife, takeOverLife)
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
@@ -3126,7 +3126,7 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within t
 // flight across retries). One pass at least, which settles a begun capture past
 // its age whose taker is gone. WHY AN END WAITS: it tombstones its turn, so a
 // capture recorded after it is refused and its session lost. At today's bounds
-// at most ~1h25m (a capture) or ~4h16m (a standby and its takeover).
+// at most ~1h33m (a capture) or ~4h37m (a standby and its takeover).
 func (c *Coordinator) awaitEndCaptures(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
 	seen := endSightings{}
 	within := captureLife

@@ -35,7 +35,7 @@ type SaveLedgers interface {
 const saveLedgerVersion = 1
 
 // saveLedgerCap bounds a seat's ledger: at the 300 s floor a seat running one
-// job at a time saves at most 346 times in [saveLedgerHold], plus its drain
+// job at a time saves at most 349 times in [saveLedgerHold], plus its drain
 // saves, and 512 entries are about 56 KiB, so even a clock gone wrong never
 // lets a seat's saves past its allowance by count.
 const saveLedgerCap = 512
@@ -61,7 +61,7 @@ const (
 // take's life before its object is stored, the collector's grace and two of
 // its passes, and twice the engine's assumed skew for an end written on one
 // node's clock and read on another's (the package doc's "A save taken as its
-// job works"). Twenty-eight hours and fifty-four and a half minutes at today's
+// job works"). Twenty-nine hours and two and a half minutes at today's
 // bounds, under the uploads bucket's age, which a test holds.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 

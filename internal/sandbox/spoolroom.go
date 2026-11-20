@@ -20,14 +20,16 @@ import (
 // session at its bound ([executorkeep.SealedMaxBytes]) for each save a node
 // takes at once ([maxConcurrentSaves]) and one more, so saves, which never
 // wait for it, always leave a final take room for a session at its bound.
+// 240.06 MiB today.
 var spoolRoomBytes = int64(maxConcurrentSaves+1) * executorkeep.SealedMaxBytes
 
 // spoolRoomWait is the longest a take waits for room in its spool before it
 // keeps nothing: room comes back as uploads end, seconds for a session at its
 // bound on a working store, so a minute without it is a store near its floor
 // pace, which no read should hold its seat for. Within the take's own budget:
-// the scrub's measured worst at the bound and this minute end in about five of
-// its seven minutes ([SessionScrubWait]).
+// this minute, the box's two readings at the bound (96 s) and the scrub's
+// measured worst (238 s) end in 394 s, inside its seven minutes
+// ([SessionScrubWait]).
 const spoolRoomWait = time.Minute
 
 // errSpoolPastHold is a seal refused before it wrote past the room its spool

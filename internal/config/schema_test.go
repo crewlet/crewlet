@@ -1583,6 +1583,38 @@ func TestAKeyringKeyIDIsBoundedWhereASealedStreamCanNameIt(t *testing.T) {
 	}
 }
 
+// THE SEAT BUDGET'S SCHEMA STATES ITS FLOOR AND CEILING. The js tag is a
+// literal beside SessionBytesPerSeatFloor and SessionBytesPerSeatCeiling that
+// nothing else compares, so a floor raised without its tag leaves an editor
+// accepting a budget the engine refuses at boot; and the description names
+// both, in whole mebibytes and gibibytes, as a person sets them.
+//
+// Mutation: leave the tag's min at an older floor (34603008) and the minimum
+// arm fails; leave the description's range behind and its arm fails.
+func TestTheSeatBudgetsSchemaStatesItsFloorAndCeiling(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	session, _ := defs["ConversationSession"].(map[string]any)
+	props, _ := session["properties"].(map[string]any)
+	budget, _ := props["max_bytes_per_seat"].(map[string]any)
+	if got, _ := budget["minimum"].(float64); int64(got) != SessionBytesPerSeatFloor {
+		t.Errorf("the schema's minimum is %v and the validator's floor %d", budget["minimum"],
+			SessionBytesPerSeatFloor)
+	}
+	if got, _ := budget["maximum"].(float64); int64(got) != SessionBytesPerSeatCeiling {
+		t.Errorf("the schema's maximum is %v and the validator's ceiling %d", budget["maximum"],
+			SessionBytesPerSeatCeiling)
+	}
+	if SessionBytesPerSeatFloor%(1<<20) != 0 || SessionBytesPerSeatCeiling%(1<<30) != 0 {
+		t.Fatalf("the floor (%d) is no whole MiB or the ceiling (%d) no whole GiB, which the description "+
+			"states them in", SessionBytesPerSeatFloor, SessionBytesPerSeatCeiling)
+	}
+	want := fmt.Sprintf("%d MiB..%d GiB", SessionBytesPerSeatFloor>>20, SessionBytesPerSeatCeiling>>30)
+	if desc, _ := budget["description"].(string); !strings.Contains(desc, want) {
+		t.Errorf("the schema's description %q does not state the bounds, %s", desc, want)
+	}
+}
+
 // The artifact has to work on the config it ships beside. The example
 // carries the `# yaml-language-server: $schema=` modeline, so a schema that
 // rejected it would put red underlines through the file a new operator

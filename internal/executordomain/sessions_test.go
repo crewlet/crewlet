@@ -267,18 +267,23 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 	}
 }
 
-// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND: a budget Tier B
-// accepts never refuses outright a capture the session bound admits, and the
-// default is no smaller than the floor. internal/config cannot import this
-// package, so the two are held together here.
+// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND, AND NO MORE: a budget
+// Tier B accepts never refuses outright a capture the session bound admits, a
+// budget that holds one is never refused at boot (the floor is that session
+// rounded up to a whole mebibyte), and the default is no smaller than the floor.
+// internal/config cannot import this package, so they are held together here.
 //
-// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor and
-// this fails.
+// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor, or
+// raise the floor to 64 MiB, and this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
 	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
 		t.Errorf("max_bytes_per_seat accepts %d bytes and one sealed session is up to %d",
 			config.SessionBytesPerSeatFloor, executorkeep.SealedMaxBytes)
+	}
+	if past := config.SessionBytesPerSeatFloor - executorkeep.SealedMaxBytes; past >= 1<<20 {
+		t.Errorf("max_bytes_per_seat's floor of %d bytes is %d past one sealed session at its bound, "+
+			"so it refuses budgets that hold one", config.SessionBytesPerSeatFloor, past)
 	}
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",

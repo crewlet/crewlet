@@ -29,7 +29,7 @@ import (
 // either as its read metric. Run one case at a time, reading GODEBUG=gctrace=1
 // between its stderr lines: held at most is the largest live heap at GOGC=10
 // (a cycle every tenth of growth), the peak the largest start or end heap at
-// the default GOGC. Times at the 32 MiB bounds overstate.
+// the default GOGC. Times at the archive's bound overstate.
 //
 //	[GOGC=10] GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAReadingAtItsBounds(b *testing.B) {

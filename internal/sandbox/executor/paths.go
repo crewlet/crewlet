@@ -374,32 +374,30 @@
 // hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
-// holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 32 to 34 MiB over five runs
-// (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
-// bytes, 3.8 to 4.2 s on two cores). Shared with
-// [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to about 22 s each and spends internal/sandbox's
+// holds 43 MiB at most, the chain at both bounds; a take with its meter, 32 to
+// 34 MiB over five runs (BenchmarkATakeAtItsLargeTier: as at its base, each
+// piece of [threadLineMax] bytes, 3.8 to 4.2 s on two cores). Shared with
+// [TranscriptReadsAtOnce]'s two, a collection's large pass would wait out two
+// transcript reads of up to about 22 s each within internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
-// turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 227 + 43 + 43 = 540 MiB
-// beside the base tier, a reading's 43 in its slot ([HoldingsReadsAtOnce]).
-// One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
-// the count and the next request's estimate, 5.7 s loaded) is through in
-// 11.4 s, within the 27 s.
-// Behind the slot's slowest holder, loaded, it is not: a pass keeping more than
-// [collectionBaseRecords] records holds the slot to its end whatever its lines,
-// so a collection whose chain keeps the records of 2^20 short lines of blocks
-// of an empty kind, at the bound (18.3 to 19.7 s with the count alone, 20.7 to
-// 21.6 s with the next request's estimate,
-// BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
-// own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
-// (20.8 to 21.7 s estimating), one record of few facts, holds none. That
-// waiter, or a later one, ends with [errLargeWait] and reads as no reading
-// (count unread), the safe side, as a read past MainThreadReadWait already
-// is; so does one behind a take's piece, which holds the slot its whole scrub
-// (238 s at the bound), other takes' pieces queuing too. The wait is spent
-// inside that wait, never added to it.
+// relaunch is told. One slot, not two: the thread readers then hold at worst
+// 2 x 227 + 43 + 43 = 540 MiB beside the base tier, a reading's 43 in its slot
+// ([HoldingsReadsAtOnce]). One waiter behind a pass over ordinary lines at the
+// bound (2.6 to 2.8 s estimating, 5.7 s loaded) is through in 11.4 s, within
+// the 27 s. Behind the slot's slowest holder, loaded, it is not: a pass keeping
+// more than [collectionBaseRecords] records holds the slot to its end whatever
+// its lines, so a chain keeping the records of 2^20 short lines of blocks of an
+// empty kind, at the bound (18.3 to 19.7 s with the count alone, 20.7 to 21.6 s
+// estimating, BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds
+// it until its own MainThreadReadWait cuts it. One such line to the bound, 18.6
+// to 18.8 s (20.8 to 21.7 s estimating), one record of few facts, holds none.
+// That waiter, or a later one, ends with [errLargeWait] and reads as no reading
+// (count unread), the safe side, as a read past MainThreadReadWait already is,
+// its wait spent inside that one; so does one behind a take's piece, which
+// holds the slot its whole scrub (238 s at the bound), other takes' pieces
+// queuing too. The longest piece the archive's bound admits, an OpenCode image
+// of 46 MiB (a 64.3 MB data URI), held it 8.7 s (4.8 from the memo) and 19 MiB
+// through the real take.
 //
 // # A hook's note, confirmed off its job's main thread
 //
