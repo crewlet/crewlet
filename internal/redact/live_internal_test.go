@@ -74,6 +74,9 @@ func SettledWhole(text string) int {
 // SettlingKeeps is [settlingKeeps].
 const SettlingKeeps = settlingKeeps
 
+// Asks is how many times a live stream asked Settled's readers.
+func Asks(s *Stream) int { return s.live.raw.asks }
+
 // CountEarly counts in n each window s's keys' stage decides early.
 func CountEarly(s *Stream, n *int) {
 	s.observe = &keyObserver{decided: func(int, int) { *n++ }}

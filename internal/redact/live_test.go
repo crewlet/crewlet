@@ -263,3 +263,42 @@ func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) 
 		}
 	}
 }
+
+// A LIVE STREAM BELOW WHOLEBYTES ASKS ONLY ONCE A LINE HAS ENDED: a text
+// shorter than [redact.WholeBytes] whose lines Settled holds back (an armour,
+// then password's keys), flushed, then flushed after each of 50 one-byte
+// writes with no line break, asks Settled's readers no more, and once more
+// when a line ends; Close then answers nil and it wrote [redact.Secrets].
+//
+// Mutation: read the held text with a fresh settling at each flush, and
+// every flush asks again.
+func TestALiveStreamBelowWholeBytesAsksOnlyOnceALineHasEnded(t *testing.T) {
+	t.Parallel()
+	text := "k: -----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n\n" + strings.Repeat("pwd:\n", 3000)
+	if len(text)+100 > redact.WholeBytes {
+		t.Fatalf("the text runs %d bytes, not below %d", len(text), redact.WholeBytes)
+	}
+	var out bytes.Buffer
+	s := redact.NewLiveStream(&out)
+	_, _ = s.Write([]byte(text))
+	if _, held, _ := s.Flush(); held < len(text)/2 {
+		t.Fatalf("Settled held %d of %d bytes, so a flush has little to ask of", held, len(text))
+	}
+	asked := redact.Asks(s)
+	for range 50 {
+		_, _ = s.Write([]byte("x"))
+		_, _, _ = s.Flush()
+	}
+	if n := redact.Asks(s) - asked; n != 0 {
+		t.Errorf("50 flushes with no line break since the last asked %d more times", n)
+	}
+	_, _ = s.Write([]byte("\nok\n"))
+	_, _, _ = s.Flush()
+	if n := redact.Asks(s) - asked; n != 1 {
+		t.Errorf("a flush after a line ended asked %d more times, not once", n)
+	}
+	text += strings.Repeat("x", 50) + "\nok\n"
+	if err := s.Close(); err != nil || out.String() != redact.Secrets(text) {
+		t.Errorf("Close answered %v, and the stream wrote another text than Secrets %s", err, streamParted(out.String(), redact.Secrets(text)))
+	}
+}
