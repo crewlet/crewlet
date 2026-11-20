@@ -117,7 +117,8 @@
 //     refused, since git copies the URL into every process it starts. The
 //     remote may echo the header back, so its value, what a Basic credential
 //     encodes and a proxy's password are taken out of every line the run hands
-//     back, and stderr and the damage then go through internal/redact.
+//     back, and the damage and ALL of stderr, before its tail is cut, then go
+//     through internal/redact.
 //   - NOTHING PROMPTS (GIT_TERMINAL_PROMPT=0) and no credential helper is
 //     configured, so a remote that asks for a password is refused at once.
 //   - A REMOTE PACES ITS RUN as a client paces a transfer, so it waits in the
