@@ -209,9 +209,9 @@ import (
 // must be asserted. A backend supplies them here, and a subtest whose
 // capability is absent skips with a named reason rather than silently passing.
 //
-// [Capabilities.Settle] is the one a backend must supply, and [RunWith] refuses
-// a backend without it: every case asserting that nothing more was delivered
-// reads behind it. Every other field may be left zero.
+// A backend must supply [Capabilities.Settle] and [Capabilities.Parked], and
+// [RunWith] refuses one without either: cases read an absence behind the one
+// and publish under a hold behind the other. Every other field may be zero.
 type Capabilities struct {
 	// Settle returns once q will dispatch nothing more until the next verb
 	// is sent to it: every handler call it already owes has been made. It
@@ -336,14 +336,14 @@ type Capabilities struct {
 	LingerClock func(t *testing.T, clock *Clock) queue.EventQueue
 
 	// Parked returns once q's consumer of (topic, group) has taken in the
-	// verbs sent to q before the call: it stands with its gate shut and
-	// holds nothing it took before the gate shut, so it hands a handler
-	// nothing until a verb opens the gate again. It fails, naming what it was
-	// still waiting for, when ctx ends first — and at once on a pair nothing
-	// of q's is attached to, where it would decide nothing.
+	// verbs sent to q before the call: its gate is shut and it holds nothing
+	// it took before, so it hands a handler nothing until a verb opens the
+	// gate. It fails, naming what it still waited for, when ctx ends first,
+	// and at once on a pair nothing of q's is attached to.
 	//
-	// A case ends a window behind it ([Capabilities.LingerClock]), else a
-	// consumer reading its gate between fetches would see the window end first.
+	// A case ends a window or publishes under a hold behind it
+	// ([Capabilities.LingerClock], [suite.holdTakenIn]), else a fetch open
+	// across the verb would see the window end, or take the mail, first.
 	// On the shipped backend the consume loop has come round to its gate and
 	// found it shut; on the twin, which reads gates under one lock, the verb
 	// has returned and no handler of q's runs.
@@ -461,7 +461,8 @@ type Factory func(t *testing.T, opts ...queue.Option) queue.EventQueue
 // RunWith executes the full conformance suite against the backend produced by
 // newQueue, with the capabilities it declares. A backend that can answer more
 // gets certified on more; nothing it cannot answer fails, but for
-// [Capabilities.Settle], which every backend must supply.
+// [Capabilities.Settle] and [Capabilities.Parked], which every backend must
+// supply.
 //
 // newQueue must return a FRESH, UNSTARTED queue on every call: the suite owns
 // the lifecycle, because start/stop ordering is itself part of the contract.
@@ -474,6 +475,11 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 		t.Fatal("queuetest: Capabilities.Settle is required: every case asserting that " +
 			"nothing more was delivered reads its journal behind it, and without it each " +
 			"would decide on a quiet window again")
+	}
+	if caps.Parked == nil {
+		t.Fatal("queuetest: Capabilities.Parked is required: every case publishing " +
+			"under a hold waits for the consumer to take the hold in, and without it a " +
+			"fetch open across the hold would take the case's mail")
 	}
 	s := &suite{newQueue: newQueue, caps: caps}
 	// EVERY GROUP RUNS IN PARALLEL WITH THE OTHERS, as every case inside
@@ -693,6 +699,20 @@ func (s *suite) awaitParked(ctx context.Context, t *testing.T, q queue.EventQueu
 		t.Fatalf("the %s consumer of (%s, %s) did not take the case's verb in: %v",
 			q.Backend(), topic, group, err)
 	}
+}
+
+// holdTakenIn takes a hold on (topic, group) for reason and returns once q's
+// consumer has taken it in ([suite.awaitParked]), so what the case publishes
+// next waits unfetched. PauseTopic alone can return while a fetch the consumer
+// opened before it is still open: what lands in that fetch is handed back,
+// spending a delivery no handler sees, so a case counting its handler's calls
+// against the budget would wait for one the budget forbids.
+func (s *suite) holdTakenIn(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group, reason string) {
+	t.Helper()
+	if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), reason); err != nil {
+		t.Fatalf("PauseTopic: %v", err)
+	}
+	s.awaitParked(ctx, t, q, topic, group)
 }
 
 // holdReason is the pause-hold reason the cases take when one reason is all a
@@ -1684,14 +1704,11 @@ func (s *suite) needInWindow(t *testing.T) func(q queue.EventQueue, topic, group
 }
 
 // needLingerClock returns a constructor for a queue whose linger windows end on
-// a clock the case moves, skipping the case unless the backend can also report
-// its consumer parked, which a case moving that clock behind a pause or a hold
-// waits for first ([suite.awaitParked]).
+// a clock the case moves.
 func (s *suite) needLingerClock(t *testing.T) func(t *testing.T, clock *Clock) queue.EventQueue {
 	t.Helper()
-	if s.caps.LingerClock == nil || s.caps.Parked == nil {
-		t.Skip("backend cannot end a linger window on a clock the case moves, " +
-			"or cannot report its consumer parked behind a verb")
+	if s.caps.LingerClock == nil {
+		t.Skip("backend cannot end a linger window on a clock the case moves")
 	}
 	return s.caps.LingerClock
 }

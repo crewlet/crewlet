@@ -1,1 +1,0 @@
-import{Vo as e,us as t}from"./Modal-Cb3coJ9P.js";import{t as n}from"./ago-tPuthAVU.js";import{cn as r}from"./index-C3KBmooO.js";import{t as i}from"./react-C1iE8mnY.js";var a=i();function o({value:i,now:o,...s}){let c=r(e=>n(i,o??e,s));return t(i)?(0,a.jsx)(`time`,{dateTime:i??void 0,title:e(i),children:c}):(0,a.jsx)(a.Fragment,{children:`–`})}export{o as t};

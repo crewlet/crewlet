@@ -99,10 +99,10 @@ func (s *suite) runAttachment(t *testing.T) {
 		// delivered, so the second one is already waiting when the first
 		// one's handler gives the seat up. Publishing them without the
 		// hold would let the first be delivered and acked before the
-		// second was even accepted, and the case would assert nothing.
-		if err := q.PauseTopic(ctx, "topic.detach1", "grp", attachmentOf(ctx, t, q, "topic.detach1", "grp"), "queuetest-fill"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
+		// second was even accepted, and the case would assert nothing;
+		// publishing before the consumer took the hold in (Parked) would
+		// let a fetch open across it take the first.
+		s.holdTakenIn(ctx, t, q, "topic.detach1", "grp", "queuetest-fill")
 		publish(ctx, t, q, "topic.detach1", newEvent("e1"))
 		publish(ctx, t, q, "topic.detach1", newEvent("e2"))
 		if err := q.ResumeTopic(ctx, "topic.detach1", "grp", attachmentOf(ctx, t, q, "topic.detach1", "grp"), "queuetest-fill"); err != nil {

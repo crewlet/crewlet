@@ -108,6 +108,38 @@
 // charged to any account: what it costs is its box's time, which its row
 // records as its duration.
 //
+// # What leaves the box is redacted before it is cut or kept
+//
+// The box holds the check's secrets and its token, which its command can
+// print. So every text an ending carries out of it — its summary, each
+// failure's message and test id, its output's tail and its kept log — is
+// redacted (internal/redact) BEFORE it is cut to its bound or kept: cut first,
+// a credential the cut splits is no shape the redaction knows. A bound cut at
+// the read is read past by what the redaction reads around a place (a
+// failure's body by redact.MaxReach). A test id is redacted because a
+// parametrised test's spells its values; a failure's path is kept as written.
+//
+// The tail and the log are an output's end read from inside it, so each is
+// read redact.LookBack past its bound and shows only what those bytes settle
+// (redact.SettledEnd), opening on a line: the tail is cut (TailCut) only where
+// its last line is longer than it, and the lines it numbers are those it
+// shows, a key's block one marker.
+//
+// THE KEPT LOG IS STREAMED from the box's end through one redact.Stream into
+// the store, so output of any size costs the stream's windows and the read's
+// transfer, never the whole output. A stream holds neither of SettledEnd's two
+// redactions whole, so where the log begins is found over the read's first two
+// LookBacks (its context and as much past it), and the stream's redaction is
+// dropped up to there, the dropped bytes checked against the head's: exact
+// where the two redactions part within those bytes, which is LookBack's own
+// promise. A marker can be longer than what it replaced, so a read of the
+// bound can redact to more than it: the stream hands the store at most the
+// bound, and past it the rest is counted, the same bytes read again (refused
+// if the output moved meanwhile) and the redaction dropped to the first line
+// that leaves the rest within the bound. A log that cannot be kept so, or that
+// the stream refuses (redact.ErrDecidedEarly), is not kept, its summary saying
+// why.
+//
 // # A runner that is gone
 //
 // A runner that dies holding attempts leaves their rows running, and nothing

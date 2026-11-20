@@ -771,9 +771,6 @@ function CommentRow({
   const handle = comment.author;
   const person = handle ? index.byHandle.get(handle) : undefined;
   const name = handle ? (chrome.seatName?.(handle) ?? handle) : "The engine";
-  const chosen = comment.choice
-    ? (comment.decision?.options.find((o) => o.id === comment.choice)?.label ?? comment.choice)
-    : "";
   const own = useOwnRemark(comment, item);
   return (
     <li className="task-entry" data-kind="comment">
@@ -824,13 +821,13 @@ function CommentRow({
         {own.editor ?? (
           <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
             <div className="prose md task-comment-body">
+              {/* AN ANSWER THAT CHOSE SAYS SO in its own words, which the
+                  engine opens with the option's label. */}
               {comment.removed ? (
                 <span className="muted">(this comment was removed)</span>
-              ) : comment.body.trim() ? (
+              ) : (
                 renderMarkdown(comment.body)
-              ) : chosen ? (
-                <p>{`Chose “${chosen}”.`}</p>
-              ) : null}
+              )}
             </div>
           </Clamp>
         )}

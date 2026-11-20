@@ -49,7 +49,8 @@ type AskAnswer struct {
 
 	// Choice is the option the answer chose, by id, for an ask that
 	// offered options and an answer that chose one; Body is the answer's
-	// words either way (the option's label where nothing else was written).
+	// words either way, an answer that chose opening with its option's
+	// label ([ChoiceWords]).
 	Choice string `json:"choice,omitempty"`
 	Body   string `json:"body"`
 

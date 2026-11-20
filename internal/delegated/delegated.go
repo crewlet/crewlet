@@ -32,10 +32,16 @@
 // # One open request per subject
 //
 // A request is identified by who asks, its act and what it decides
-// ([Subject]), never by its wording. A seat's repeat of a request still
-// waiting on a delegate or a person joins that request: nothing new is held,
-// put to a delegate or shown to people. A request already answered is no
-// longer open, so the same ask after it is a new request.
+// ([Subject]), never by its wording. A seat's repeat of a request that has not
+// come to its end joins that request: nothing new is held, put to a delegate or
+// shown to people. That is while it waits on a delegate or a person, and while
+// its answer is on its way to the turn that asked and, allowed, is being made
+// (a second request raised then reached its delegate after the first was
+// carried out). A request whose denial its turn read, or whose call was made,
+// is over, so the same ask after it is a new request. And a request whose act
+// already happened before anybody decided it (a merge of a pull request that
+// merged meanwhile) is answered by the engine, never put to a delegate
+// ([OverruledAlreadyMerged]).
 //
 // # What a person still sees
 //
@@ -125,8 +131,8 @@ func Confidences() []Confidence { return []Confidence{High, Low} }
 func (c Confidence) Valid() bool { return slices.Contains(Confidences(), c) }
 
 // The engine's closed words for why a request reached people over its
-// delegates, or how its answers combined; each kind adds its own (an SSH
-// always-escalate class's name).
+// delegates, how its answers combined, or why the engine answered it itself;
+// each kind adds its own (an SSH always-escalate class's name).
 const (
 	OverruledSelf            = "self"
 	OverruledLeads           = "leads"
@@ -137,6 +143,10 @@ const (
 	OverruledDeadline        = "deadline"
 	OverruledOff             = "delegation_off"
 	OverruledLabel           = "sensitive_label"
+	// OverruledAlreadyMerged is the engine's own answer to a merge whose pull
+	// request merged before anybody decided it: not carried out, and no
+	// delegate woken for it.
+	OverruledAlreadyMerged = "already_merged"
 )
 
 // Given is one delegate's answer.
