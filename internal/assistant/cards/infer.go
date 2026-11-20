@@ -15,16 +15,14 @@ import (
 // generic read of any route, catalog's read_api), shaped by its own JSON:
 //   - a LIST is a table, a column per plain field the first rows carry, known
 //     fields first; a list of plain values is a list card;
-//   - a record that WRAPS ONE LIST (beside plain values such as a cursor or
-//     count) is the table of that list;
+//   - a record that WRAPS ONE LIST is the table of that list;
 //   - ANY OTHER RECORD IS ONE THING, an entity card: plain values are its facts,
-//     a nested record's beneath its name, every list of records its list;
-//   - a route that serves ONE RECORD OF A KNOWN KIND says where its identity
-//     is (known), so its card is that record's: kind, id, title and page.
+//     a nested record's beneath its name, every list of records its list, and
+//     a route's KNOWN record (known) carries its kind, id, title and page.
 //
-// Every text value is prose (anybody may have written it; the reading tool is
-// fenced). Nothing here decides what the person may see: the route answered as
-// them, redacted before a card is drawn.
+// Every text value is prose (the reading tool is fenced). Nothing here decides
+// what the person may see: the route answered as them, redacted before a card
+// is drawn.
 
 // The bounds an inferred card is drawn to.
 const (
