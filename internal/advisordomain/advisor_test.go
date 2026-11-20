@@ -617,3 +617,37 @@ func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
 		t.Errorf("after its record the run is still live (%v, %v)", found, err)
 	}
 }
+
+// A DEEP RUN'S NEWEST CHECKPOINT IS WHAT A TAKEOVER READS: a checkpoint alone
+// writes no progress line, the newest the run wrote stands, and a checkpoint
+// that is not one JSON object, or past its bound, is refused.
+// Mutation: keep the first checkpoint, and a holder taking the run over
+// answers again what was already answered.
+func TestADeepRunsNewestCheckpointIsWhatATakeoverReads(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "3c2d1e0f-9a8b-4c7d-8e6f-5a4b3c2d1e0f"
+	if _, found, err := n.reader().Checkpoint(t.Context(), run, stale); err != nil || found {
+		t.Fatalf("a run that wrote none has a checkpoint (%v, %v)", found, err)
+	}
+	for i, body := range []string{`{"agenda":[{"id":"A1","verdict":"confirmed"}]}`,
+		`{"agenda":[{"id":"A1","verdict":"confirmed"},{"id":"A2","verdict":"refuted"}]}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Checkpoint: json.RawMessage(body)}); err != nil {
+			t.Fatalf("checkpoint %d: %v", i, err)
+		}
+	}
+	body, found, err := n.reader().Checkpoint(t.Context(), run, stale)
+	if err != nil || !found || !strings.Contains(string(body), `"A2"`) {
+		t.Errorf("checkpoint = %s (%v, %v), want the newest", body, found, err)
+	}
+	if _, lines, live, err := n.reader().LiveProgress(t.Context(), stale); err != nil || (live && len(lines) != 0) {
+		t.Errorf("a checkpoint alone said lines %+v (%v, %v)", lines, live, err)
+	}
+	for _, bad := range []string{`[1,2]`, `{"agenda":`, `{"x":"` + strings.Repeat("a", advisordomain.MaxCheckpointBytes) + `"}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run, At: writerClock,
+			Checkpoint: json.RawMessage(bad)}); !errors.Is(err, advisordomain.ErrInvalid) {
+			t.Errorf("checkpoint %.20s... answered %v, want refused", bad, err)
+		}
+	}
+}

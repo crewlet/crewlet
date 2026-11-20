@@ -827,5 +827,28 @@ func (r *Reader) LiveProgress(ctx context.Context, fresh statelog.Freshness) (st
 	return run, lines, run != "", nil
 }
 
+// Checkpoint is the newest checkpoint run wrote, as the deep run keeps it,
+// and whether it wrote one: what a holder taking the run over resumes from.
+func (r *Reader) Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error) {
+	var body string
+	found := false
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `SELECT body FROM advisor_run_checkpoint WHERE run_id = ?`, run).Scan(&body)
+		if errors.Is(err, sql.ErrNoRows) {
+			found = false
+			return nil
+		}
+		found = err == nil
+		return err
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("advisordomain: read run %s's checkpoint: %w", run, err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	return json.RawMessage(body), true, nil
+}
+
 // MaxProgressLines bounds the lines one read of a run's progress answers.
 const MaxProgressLines = 200

@@ -23,6 +23,7 @@ type LogReads interface {
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
 	Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (advisordomain.Tally, error)
+	Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error)
 }
 
 // LogWrites is the advisor log's write side as the duty writes it.
@@ -365,6 +366,22 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 			Observation: o, Body: r.Body})
 	}
 	return out, nil
+}
+
+// Checkpoint publishes where a deep run stands.
+func (l advisorLog) Checkpoint(ctx context.Context, run string, at time.Time, body json.RawMessage) error {
+	_, err := l.writes.Progress(ctx, l.call("advisor_checkpoint"), advisordomain.RunProgress{Run: run, At: at.UTC(),
+		Checkpoint: body})
+	return err
+}
+
+// Resume is the newest checkpoint run wrote, nil where it wrote none.
+func (l advisorLog) Resume(ctx context.Context, run string) (json.RawMessage, error) {
+	body, found, err := l.reads.Checkpoint(ctx, run, fresh)
+	if err != nil || !found {
+		return nil, err
+	}
+	return body, nil
 }
 
 // Progress publishes one line of a deep run's progress.

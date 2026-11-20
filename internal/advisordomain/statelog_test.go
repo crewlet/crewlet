@@ -240,6 +240,10 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	case "Op progress":
 		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-progress", advisordomain.OpProgress,
 			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity"})
+	case "RunProgress.Checkpoint":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-checkpoint", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped,
+				Checkpoint: []byte(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"reads":[]}`)})
 	}
 	return nil, fmt.Errorf("no suite record carries %s", field.Name)
 }

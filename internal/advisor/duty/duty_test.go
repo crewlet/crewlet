@@ -33,6 +33,8 @@ type fakeLog struct {
 	// progress is every deep run's progress line, as "run: text".
 	mu       sync.Mutex
 	progress []string
+	// checkpoints is the newest checkpoint each run wrote.
+	checkpoints map[string]json.RawMessage
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -57,6 +59,22 @@ func (l *fakeLog) Progress(_ context.Context, run string, _ time.Time, text stri
 	defer l.mu.Unlock()
 	l.progress = append(l.progress, run+": "+text)
 	return nil
+}
+
+func (l *fakeLog) Checkpoint(_ context.Context, run string, _ time.Time, body json.RawMessage) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.checkpoints == nil {
+		l.checkpoints = map[string]json.RawMessage{}
+	}
+	l.checkpoints[run] = body
+	return nil
+}
+
+func (l *fakeLog) Resume(_ context.Context, run string) (json.RawMessage, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.checkpoints[run], nil
 }
 
 func (l *fakeLog) Record(_ context.Context, t advisor.Transition, _ time.Time) error {
