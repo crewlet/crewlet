@@ -23,6 +23,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { ASSISTANT_PROTOCOL_VERSION } from "~/contract/assistant.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { on as onBus } from "../bus.ts";
@@ -189,7 +190,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   expect(new Headers(turn.init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   const body = JSON.parse(String(turn.init.body));
   expect(body).toMatchObject({
-    protocol_version: 2,
+    protocol_version: ASSISTANT_PROTOCOL_VERSION,
     input: { text: "Fix the flaky sign-in test" },
   });
   expect(body.page_context).toMatchObject({ screen: "worklet-tasks", title: "Worklet › Tasks" });

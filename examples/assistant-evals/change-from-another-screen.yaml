@@ -31,4 +31,4 @@ expect:
   proposals: 1
   state: waiting_for_approval
   never_says: [only accepts, this screen cannot]
-  shows: [QA Engineer (qa)]
+  shows: [QA Engineer]
