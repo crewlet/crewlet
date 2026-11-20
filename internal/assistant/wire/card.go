@@ -206,10 +206,10 @@ type ProposalCard struct {
 	Changes []Change `json:"changes"`
 	// Summary is what the change does, in a sentence above the rows, where
 	// the title alone does not say it: what a destructive change takes away.
-	Summary string `json:"summary,omitempty"`
+	Summary Phrase `json:"summary,omitempty"`
 	// Note is the consequence, in one sentence, under the rows: whether and
-	// how the change can be reverted.
-	Note string `json:"note,omitempty"`
+	// how the change can be reverted, and who it reaches.
+	Note Phrase `json:"note,omitempty"`
 	// Risk is how much care the approval asks ([ProposalRisk]); absent for
 	// an ordinary change.
 	Risk ProposalRisk `json:"risk,omitempty"`
@@ -219,8 +219,8 @@ type ProposalCard struct {
 	// built from the same request.
 	Technical *TechnicalRequest `json:"technical,omitempty"`
 	// Audience is who will see the result where visibility changes (a
-	// share, a comment others are notified of).
-	Audience []string `json:"audience,omitempty"`
+	// share, a comment others are notified of), one phrase each.
+	Audience []Phrase `json:"audience,omitempty"`
 	// Taint is the surface (one of provenance.Sources) whose outside text the
 	// turn read before proposing (D25); absent for none.
 	Taint provenance.Source `json:"taint,omitempty"`
@@ -273,15 +273,14 @@ type Change struct {
 	Field string     `json:"field"`
 	Label string     `json:"label"`
 	// From is the value before, for changed, removed and text; To the
-	// value after, for fact, changed, added and text.
-	From string `json:"from,omitempty"`
-	To   string `json:"to,omitempty"`
-	// Items is To as a list, one entry per item, where the value is a list of
-	// plain values (a seat's responsibilities, a voice's rules); FromItems is
-	// From as one. To and From still hold the list as one line, for a reader
-	// that draws one.
-	Items     []string `json:"items,omitempty"`
-	FromItems []string `json:"from_items,omitempty"`
+	// value after, for fact, changed, added and text. A record a value names
+	// is a [Ref] in its phrase, never its name in the words.
+	From Phrase `json:"from,omitempty"`
+	To   Phrase `json:"to,omitempty"`
+	// Items is To as a list, one entry per item (a room's members); FromItems
+	// is From as one. To and From still hold the list as one line.
+	Items     []Phrase `json:"items,omitempty"`
+	FromItems []Phrase `json:"from_items,omitempty"`
 	// Words is a text change as runs of words.
 	Words []Word `json:"words,omitempty"`
 	// New marks an added field on a record that already exists.
@@ -297,8 +296,9 @@ type Word struct {
 
 // Receipt is what an applied proposal did.
 type Receipt struct {
-	// Summary is the result in a line ("Created ENG-156").
-	Summary string `json:"summary"`
+	// Summary is the result in a line ("Created ENG-156"), the record it
+	// names a [Ref].
+	Summary Phrase `json:"summary"`
 	// Position is where the write landed, for a server write.
 	Position string `json:"position,omitempty"`
 	Open     *Link  `json:"open,omitempty"`
@@ -499,6 +499,20 @@ func (p *ProposalCard) validate() error {
 			return fmt.Errorf("%w: change %s carries words exactly when it is a text change",
 				ErrInvalid, ch.Field)
 		}
+		values := append([]Phrase{ch.From, ch.To}, ch.Items...)
+		for _, v := range append(values, ch.FromItems...) {
+			if err := v.validate("change " + ch.Field); err != nil {
+				return err
+			}
+		}
+	}
+	for _, p := range append([]Phrase{p.Summary, p.Note}, p.Audience...) {
+		if err := p.validate("a proposal's summary, note or audience"); err != nil {
+			return err
+		}
+	}
+	if p.Receipt != nil {
+		return p.Receipt.Summary.validate("a receipt")
 	}
 	return nil
 }

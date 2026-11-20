@@ -515,7 +515,7 @@ var threadDecoding = jsonv2.JoinOptions(
 // wireDecode decodes raw, one JSON value, into v under [threadDecoding]: every
 // small value the layer keeps as written and every value the package's other
 // readers of a harness's record read ([claudeEventWire], [claudeResultWire],
-// [claudeRecord], [openCodeMessageWire], [openCodeMeasuredWire]).
+// [openCodeMeasuredWire]).
 func wireDecode(raw []byte, v any) error {
 	return jsonv2.Unmarshal(raw, v, threadDecoding)
 }
@@ -530,8 +530,8 @@ func wireDecode(raw []byte, v any) error {
 // what one element costs at a time. Decoded whole, a 32 MiB event line of
 // sixteen million `1`s would cost hundreds of MiB before anything refused the
 // first. Readers: [threadLine.ToolResultsCleared], [readUsage],
-// [eachClaudeBlock], [toolAnswer], [eachOpenCodeItem],
-// [claudeResult.errorsSaid], [openCodeEvents.page].
+// [eachClaudeBlock], [toolAnswer], [claudeResult.errorsSaid],
+// [openCodeEvents.page].
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))

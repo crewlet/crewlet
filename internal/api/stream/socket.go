@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/presence"
 )
 
@@ -263,10 +265,17 @@ type Query func(ctx context.Context, what string, params map[string]any) (any, e
 
 // request is one client-to-server frame.
 type request struct {
-	Kind   string         `json:"kind"`
+	Kind string `json:"kind"`
+	// ID is a `query` frame's own, which its answer echoes, and what a
+	// `query_cancel` frame names the question it gives up on by.
 	ID     int64          `json:"id"`
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
+
+	// WaitMS is how long a `query` frame's client waits for its answer once
+	// it sent the frame, in milliseconds, and zero where it names no wait: the
+	// question is answered within it or not at all ([request.waited]).
+	WaitMS int64 `json:"wait_ms"`
 
 	// Seat is whose record a `watch` frame asks to be a recipient for —
 	// a seat's handle, or a login, which is resolved to the record its
@@ -497,6 +506,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		defer cancel()
+		defer containPanic(ctx, "socket_write", func() {})
 		writeLoop(ctx, conn, client)
 	})
 
@@ -514,6 +524,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
+		// A SOCKET NOBODY DECIDES AGAIN IS CLOSED, so its tab's handshake decides.
+		defer containPanic(ctx, "socket_decide", func() {
+			_ = conn.Close(CloseUndecided, "Sign-in could not be decided again. Reconnecting.")
+		})
 		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now,
 			func(ctx context.Context, p iam.Principal) bool {
 				return !svc.AudienceFor(ctx, p).Equal(client.Audience())
@@ -526,7 +540,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval, rooms)
+	code, reason := readFrames(ctx, conn, seats, client, query, who, svc.interval, rooms)
 
 	// THE ROOM FRAMES FIRST, so no join lands after the leave below.
 	close(rooms.ops)
@@ -567,6 +581,12 @@ func (r *socketRooms) queue(ctx context.Context, req request) {
 // room's on the chat arm, which decides who may be in a chat room as it
 // decides who is shown what is said there.
 func (s *Service) roomOp(ctx context.Context, client *Client, chat *ChatHub, req request) {
+	defer containPanic(ctx, req.Kind, func() {
+		if req.Kind == "artifact_join" {
+			client.Reply(Envelope{Kind: KindError, ID: req.ID, What: artifactJoinWhat, Error: CodeQueryFailed,
+				Artifact: req.Artifact})
+		}
+	})
 	switch req.Kind {
 	case "artifact_join":
 		s.joinArtifact(ctx, client, req)
@@ -622,6 +642,19 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 	}
 }
 
+// readFrames is [readLoop], a panic in it contained ([containPanic]) and ending
+// the socket as an internal error, so the socket's own teardown runs: escaped,
+// it would wait on the decider that only that teardown ends.
+func readFrames(ctx context.Context, conn *websocket.Conn,
+	seats *watching, client *Client, query Query, who *asking,
+	healthEvery time.Duration, rooms *socketRooms,
+) (code websocket.StatusCode, reason string) {
+	defer containPanic(ctx, "socket_read", func() {
+		code, reason = websocket.StatusInternalError, "The node failed reading a frame. Reconnecting."
+	})
+	return readLoop(ctx, conn, seats, client, query, who, healthEvery, rooms)
+}
+
 // readLoop handles client frames until the socket closes, and reports the
 // close code the connection should end with.
 //
@@ -644,6 +677,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 	slots := make(chan struct{}, MaxInFlightQueries)
 	var running sync.WaitGroup
 	defer running.Wait()
+	questions := askedQuestions{byID: map[int64]*askedQuestion{}}
 
 	for {
 		_, raw, err := conn.Read(ctx)
@@ -678,6 +712,12 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			if rooms.presence.take(seats.now()) {
 				rooms.queue(ctx, req)
 			}
+		case "query_cancel":
+			// A QUESTION ITS CLIENT GAVE UP ON STOPS NOW, not once its wait has
+			// passed: a screen left behind a transcript page's read held this
+			// socket's slot and the node's for minutes, for nobody. Nothing is
+			// answered for it, as for one whose wait passed.
+			questions.cancel(req.ID)
 		case "query":
 			// A DEGRADED NODE REFUSES rather than answers: its copy of the company is
 			// wrong rather than behind, and "there is no such work item" out of it is
@@ -705,21 +745,70 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// THIS goroutine, the reader. Moving it inside the spawned
 			// one would let the reader keep spawning past the cap and
 			// the backpressure would be a queue of blocked goroutines
-			// rather than a paused reader.
+			// rather than a paused reader. The client's wait starts as
+			// the frame is read, before the slot, as its own clock does.
+			asked, stop := req.waited(ctx)
+			mine := questions.add(req.ID, stop)
 			running.Add(1)
 			slots <- struct{}{}
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
+				defer questions.done(req.ID, mine)
+				defer stop()
+				defer containPanic(asked, req.What, func() {
+					if asked.Err() == nil {
+						client.Reply(queryError(req, CodeQueryFailed))
+					}
+				})
 				// AS WHOEVER THE LAST DECISION SAID, not whoever opened
 				// the socket: a permission taken away an hour ago must
 				// not still answer here. See lifetime.go.
-				runQuery(who.context(ctx), client, query, req)
+				runQuery(who.context(asked), client, query, req)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
 			// additive on both ends.
 		}
+	}
+}
+
+// askedQuestions is one socket's questions in flight, by the id each `query`
+// frame named, so a `query_cancel` frame stops the one its client gave up on.
+type askedQuestions struct {
+	mu   sync.Mutex
+	byID map[int64]*askedQuestion
+}
+
+// askedQuestion is one question in flight: what stops it.
+type askedQuestion struct{ stop context.CancelFunc }
+
+// add holds id's question, stopped by stop, until [askedQuestions.done]. An id
+// a client names twice cancels the latest question it named.
+func (q *askedQuestions) add(id int64, stop context.CancelFunc) *askedQuestion {
+	one := &askedQuestion{stop: stop}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.byID[id] = one
+	return one
+}
+
+// done lets go of id's question, one, unless a later one took its id.
+func (q *askedQuestions) done(id int64, one *askedQuestion) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.byID[id] == one {
+		delete(q.byID, id)
+	}
+}
+
+// cancel stops id's question, where one is in flight.
+func (q *askedQuestions) cancel(id int64) {
+	q.mu.Lock()
+	one := q.byID[id]
+	q.mu.Unlock()
+	if one != nil {
+		one.stop()
 	}
 }
 
@@ -965,9 +1054,10 @@ func (w *watching) recheck(ctx context.Context) {
 
 // runQuery answers one question onto the client's own queue.
 //
-// A QUESTION WHOSE SOCKET CLOSED WHILE IT RAN IS DROPPED: nobody is left to
-// answer, and the read failing on that cancellation is no fault of the node's.
-// Read off ctx rather than err, so a question's own deadline still logs.
+// A QUESTION NOBODY WAITS FOR IS DROPPED, its socket closed or its client's
+// wait passed ([request.waited]): nobody is left to answer, and the read
+// failing on that is no fault of the node's. Read off ctx rather than err, so
+// a deadline of the question's own still logs.
 func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	data, err := query(ctx, req.What, req.Params)
 	if ctx.Err() != nil {
@@ -1043,4 +1133,47 @@ func queryError(req request, code httpjson.Code) Envelope {
 // ignore — which is what makes a newer client safe against an older server.
 func decodeRequest(raw []byte, req *request) error {
 	return json.Unmarshal(raw, req)
+}
+
+// containPanic, deferred on a goroutine a socket's client is served on or a
+// loop serving every socket runs on, contains a panic there as net/http
+// contains a request handler's: [panics] hears it in [panics.ScopeAPI], the log
+// has its stack, and failed answers whoever waited (a query as failed, the
+// socket closed where nothing else can). Uncontained, one question's panic
+// ended the engine's process, every socket and seat on it. Deferred itself,
+// since recover answers only the function a defer calls.
+func containPanic(ctx context.Context, what string, failed func()) {
+	v := recover()
+	if v == nil {
+		return
+	}
+	p := panics.Recovered(panics.ScopeAPI, v)
+	log.ErrorContext(ctx, "stream_panicked", "what", what, "panic", fmt.Sprint(v), "stack", p.Stack)
+	failed()
+}
+
+// contained runs one pass of a loop that serves every socket on this node (a
+// health tick, a chat batch, a read-state watch, a room's decision), its panic
+// contained ([containPanic]), and reports whether the pass ran to its end. A
+// PASS, NOT THE LOOP: a loop ended by one pass's panic would serve no later
+// one, every socket on the node going without its pushes until a restart.
+func contained(ctx context.Context, what string, pass func()) (ended bool) {
+	defer containPanic(ctx, what, func() {})
+	pass()
+	return true
+}
+
+// maxWaitMS is the longest wait a frame names that a [time.Duration] holds;
+// a longer one is no deadline a socket outlives.
+const maxWaitMS = math.MaxInt64 / int64(time.Millisecond)
+
+// waited is ctx held to the wait r's client gives its answer ([request.WaitMS]),
+// and what lets it go. A QUESTION ITS CLIENT GAVE UP ON STOPS: unbounded, a read
+// the dashboard stopped waiting for ran on in the socket's slot and the
+// engine's (a transcript's, for one), holding both for nobody until it ended.
+func (r request) waited(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.WaitMS <= 0 || r.WaitMS > maxWaitMS {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Duration(r.WaitMS)*time.Millisecond)
 }

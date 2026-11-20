@@ -567,10 +567,10 @@ every other route.
 | `GET` | `/gitlet/repos/{name}/readers` | Who read a `visibility: unit` repository's contents over a range of company days — every credential and the person it acted as, and every seat, with how often and how many bytes — a page at a time. **An admin's** (see [below](#get-gitletreposnamereaders)) |
 | `POST` | `/gitlet/repos/{name}/verify` | Begin a check of this Gitlet node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-gitletreposnameverify)) |
 | `GET` | `/gitlet/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-gitletreposnameverifyid)) |
-| `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 2, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
+| `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 3, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and Ask Crewlet is told. `200` with the proposal's state |
 | `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported; its `revision`, `reason` and `receipt` are each one short line, at most 256 bytes, and a longer one is `400 invalid_body`. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
-| `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's Ask Crewlet conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never Ask Crewlet). `{"protocol_version": 2, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
+| `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's Ask Crewlet conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never Ask Crewlet). `{"protocol_version": 3, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#ask-crewlet). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
 > **Auth.** Every route needs a credential, reads included, and three shapes
@@ -6090,7 +6090,8 @@ Client → server kinds:
 | `artifact_join` | Enter an artifact's room: `{ kind, id, artifact, since? }`, where `since` is the `through` this tab last held. **Decided like reading the artifact** (`get_artifact`, the owner, a share naming you, your unit or the company, or leading the agent that owns it), three-valued, and none of the answers closes the socket. **Allowed** answers `result` with `{ artifact, session, role, roster, through, resync }`: your session in the room, your role, the room as this node's sockets were last shown it with you in it — every `artifact_presence` frame the room sends this socket comes after this answer and is the difference from that `roster`, so replace the room with it and apply each push after — the datastore's version, and `resync: true` when `since` is absent or older than the datastore can still account for (read the collections whole) and `false` when a catch-up with `since` is enough. **Refused** answers `error` with `not_found` and the `artifact`, in exactly the words an artifact nobody holds is answered with — or with `artifact_trashed` for an artifact disclosed to you and in the trash, whose room carries nothing until its owner restores it. **Undecidable** answers `unavailable` with `retry_after`. A socket is in at most **8** rooms; a ninth is `bad_params`. **The join is decided again** on every decision of the socket's credential and on every share, unshare, trash, transfer or purge of the artifact: a refusal withdraws the room with an `error` frame (`what: "artifact_join"`, `error: "not_found"` — `"artifact_trashed"` for the trash — `artifact`, no `id`) on a socket that stays open, and a role that moved shapes the pushes after it. From the moment such a movement lands until its decision does, the room's `artifact_data` pushes are held back, and a member the decision keeps is sent `resync`. **An undecidable answer fails closed**, as the join does: the room stays joined (its `artifact_changed` and `artifact_presence` frames keep flowing) but its `artifact_data` pushes stay held back, and the node asks again after a backoff (250 ms, doubling to at most 30 s, or the refusal's own longer wait) until a decision lands, which then resumes the room with `resync` or withdraws it. A room is never kept at the role it held before a share was withdrawn on an answer nobody could vouch for. |
 | `artifact_leave` | Leave an artifact's room: `{ kind, artifact }`. No answer; leaving a room the socket is not in is not an error. A socket that closes leaves every room it was in. |
 | `presence` | Say what you are doing in a room: `{ kind, room, … }`, where `room` names the kind of room and so the field that names it. **`room: "artifact"`** — `{ kind, room, artifact, activity, focus }` in an artifact's room you are in (joined with `artifact_join`), where `focus` is `{ version?, region?, collection?, doc?, field? }`. **`room: "chat"`** — `{ kind, room, channel_id, activity, focus? }` for the chat room this tab is looking at, and this frame IS the join: a tab looks at one chat room at a time, so naming a room takes the socket out of the one it was in and puts it in the one it names once that room's own visibility admits your seat (a room you may not read puts you in nobody's presence and shows you nobody's, with nothing said), and an empty `channel_id` leaves. Send `editing` while your person types, re-asserted at least every six seconds, and `viewing` otherwise; `focus.thread` is the thread they type under. A tab re-sends it after every reconnect, since the new socket is in no room. `activity` is `viewing`, `editing` or `idle`. No answer. **Who** is doing it is never the frame's to say: the room shows the seat your credential resolved to. At most **ten a second** per socket, whatever rooms they name; frames past that are dropped, and a frame naming no kind this build keeps is dropped too. |
-| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by what it is registered under — the overview's questions for everybody, an app's for that app, admin's for admin, and a seat's trail by `audit.seat.read`. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
+| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, wait_ms }` — `id` is any client-chosen value echoed back on the reply. **`wait_ms` is how long the client waits for the answer once it sent the frame** (the dashboard's ten seconds, and for a transcript page, `executor_session`, as long as a person's read of a session can take to answer, 90 seconds: [two transcripts at a time](#executor-sessions)): past it the node stops the question, ending any read it started and freeing what that read holds, and sends nothing for it; a frame without it is answered for as long as the socket lasts, and either is stopped so at once by a `query_cancel` naming its `id`. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by what it is registered under — the overview's questions for everybody, an app's for that app, admin's for admin, and a seat's trail by `audit.seat.read`. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
+| `query_cancel` | Give up on a question still in flight: `{ kind, id }`, the `id` its `query` frame named. The node stops it at once, ending any read it started (a transcript page's included) and freeing what that read holds, and sends nothing for it. No answer; naming a question already answered, or none, changes nothing. The dashboard sends it for a question a screen stops waiting for (left, or another session chosen). |
 
 #### Queries
 
@@ -9927,6 +9928,16 @@ A turn never streams a raw tool argument, a raw answer, a prompt, a token count
 or a grant: a step carries a label the engine renders and the route pattern it
 asked, and a card is built by the engine from the route's own answer.
 
+A record a proposal card names (in a change's `from`, `to` and `items`, its
+`summary`, `note` and `audience`, and its receipt's `summary`) is never its name
+inside the words: each of those values is a phrase, a list of runs, each run
+`{text}` or `{ref: {kind, id, name, artifact_kind?, open?}}`. `kind` is the
+record's kind (`seat`, `task`, `artifact`, `room`, ...), `name` is how it is
+shown (a seat's name on the chart, never its handle), `artifact_kind` is an
+artifact's kind, and `open` is the record's page, built from the engine's own
+route table. A reader that draws no records reads each run's text or name in
+order.
+
 A step or a card a request was refused on carries the refusal as a person
 reads it, `{code, message, hint?, reason?, grants?}`. `message` is the
 engine's sentence for that kind of refusal, never a `detail` the route wrote
@@ -11296,7 +11307,7 @@ head of its conversation the row's own read names; a later page leaves
   "cut": "entries",
   "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.2.200",
   "bounds": { "entries": 200, "bytes": 1048576, "entry_bytes": 16384,
-              "line_bytes": 33554432, "read_bytes": 268435456 },
+              "read_lines": 1048576, "read_bytes": 268435456 },
   "read_level": "stale",
   "position": { "stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 48207 },
   "complete": true
@@ -11318,7 +11329,7 @@ OpenCode 2 gives it (its `type`). Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, a record past the lines and elements one read reads (`bounds.read_lines`) — said where it was, so a gap never reads as continuity |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
@@ -11352,7 +11363,10 @@ entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bytes` is always the size of what its whole text redacts to, the text it would
 show whole. **Never the size as recorded**, which beside a text shown whole
 says how long each value its redaction took out was. A line of the
-record is read to `bounds.line_bytes` (32 MiB), and one read takes at most
+record is read however long it runs: a value in it (a text, a name, a call's
+input) is held to 2 MiB and past it streamed through the redaction into its
+entry, never held. One read frames at most `bounds.read_lines` (2^20) lines of
+the record and the blocks and parts in them, and takes at most
 `bounds.read_bytes` (256 MiB) of the archive as it inflates — and, apart, at
 most as many bytes as a tar's members hand out, which a sparse member can make
 up without the archive holding them. `cut` is why the page ends before the
@@ -11362,7 +11376,7 @@ transcript does:
 |---|---|
 | absent | The transcript ends on this page; `next_cursor` is absent |
 | `entries`, `bytes` | The page holds all it may; `next_cursor` is the cursor the rest is read from |
-| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or a part of an export too large to hold left the rest unreadable. The entries shown are all that can be |
+| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or the record more lines and elements than `bounds.read_lines`. The entries shown are all that can be |
 
 Every page is read again from the archive's start, so a page costs what the
 archive does rather than what is behind it. **The cursor names the object it
@@ -11382,14 +11396,25 @@ session budget released the object, or the turn's end did, its newest capture
 not kept — each only of a turn that ended — and an ended turn is never captured
 again.
 
-**Two transcripts at a time on each node.** One read can hold a line at
-`bounds.line_bytes`, as much again while the buffer gathering it grows, the
-copy decoding it makes and the entry's whole redaction, 227 MiB measured at
-worst, so a node decodes at most two transcripts at once, about 454 MiB at their
-worst, whichever socket question or REST request asks for them. A request past them waits for a slot,
+**Two transcripts at a time on each node.** One read holds at most 29 MiB
+measured (its heap peaking at about 58 MiB at Go's default `GOGC`), and of what
+harnesses and ordinary tools write takes up to about 49 seconds for a person (58
+for a seat's words): one value of `password:` lines streamed through its
+redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
+most two transcripts at once, 58 MiB live at their worst (about 116 MiB at their
+peak), whichever socket
+question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
-slot frees within one bounded read; nothing in the answer says it waited, and a
-caller that gives up first is answered nothing.
+slot frees within one such read, so an answer comes within 110 seconds (that
+read with a tenth to spare, and one slot's wait), which the dashboard waits;
+nothing in the answer says it waited, and a caller that gives up first is
+answered nothing. A value none writes at that density, a password's value every
+few bytes the whole budget long, takes 98 seconds or more and fails closed once
+it runs past that wait: a socket question's `wait_ms` ends its read, answered
+nothing, and the
+dashboard says the transcript could not be read in time. A seat reading its own
+sessions waits two minutes, so its read of such a session, or one queued behind
+other reads at their bounds, is answered unavailable.
 
 **An object that cannot be read is an answer, never a 500.** The row is still
 the turn's account of how it ended, so `state` says why no entries are shown

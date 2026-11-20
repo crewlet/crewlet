@@ -161,7 +161,7 @@ func (a *Approver) reported(ctx context.Context, d decider, p assistantdomain.Pr
 		if summary == "" {
 			summary = "Applied to the page"
 		}
-		receipt = &wire.Receipt{Summary: summary}
+		receipt = &wire.Receipt{Summary: wire.Plain(summary)}
 		m.Receipt, m.Outcome = receipt, "applied"
 	case wire.ProposalStale:
 		m.RefusalCode = string(report.State)

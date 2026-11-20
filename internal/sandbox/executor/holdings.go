@@ -99,7 +99,8 @@ var _ sandbox.HoldingsReader = (*Runner)(nil)
 // ONE: a reading is a relaunch's of a cut-off kept capture, rare, and holds
 // at its worst 43 MiB (Claude Code's model of a thread at both its bounds;
 // OpenCode's at most 2 MiB), so one adds that to the two transcript reads'
-// 227 MiB each at worst ([TranscriptReadsAtOnce]): 497 MiB.
+// [TranscriptReadHeldBytes] each ([TranscriptReadsAtOnce]): 101 MiB live, the
+// reads peaking at 116 MiB at the default GOGC.
 // A second waits behind the first (the slowest 21.4 to 22.6 s) inside its
 // caller's wait, or is no reading, which tells. No seat's read queues ahead
 // of a reading (internal/sandbox's holdingsReadWait).

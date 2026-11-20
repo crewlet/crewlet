@@ -1,7 +1,6 @@
 package redact
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -194,24 +193,25 @@ func runsOf(key, piece string, runBytes int) string {
 // every value, each cost the values the reach held, so a stream of
 // `password: x` lines, 12 bytes apart, spent half its time there.
 //
-// Timed as above ([withinFactor]): 64 Ki values 12 bytes apart against as
-// many 1200 apart, the spacing the text. Mutation: count from the first at
-// every value, and the dense ones cost some hundred times as much.
+// COUNTED, NOT TIMED ([priorVisits]): 64 Ki values 12 and 1200 bytes apart
+// visit about three values each, at most four and at least one, so a count
+// that stopped counting fails too. Mutation: count from the first at every
+// value, and they visit some 5,000 and 60 each.
 func TestAStageDenseInPasswordValuesCostsWhatItsValuesCost(t *testing.T) {
 	t.Parallel()
-	keep := func(spacing string) {
-		apart, err := strconv.Atoi(spacing)
-		if err != nil {
-			t.Fatal(err)
-		}
+	const values = 64 << 10
+	for _, apart := range []int{12, 1200} {
 		var prior [][2]int
-		for at := 0; at < (64<<10)*apart; at += apart {
-			prior = priorWith(prior, [2]int{at + 10, at + 11})
+		visited := 0
+		for at := 0; at < values*apart; at += apart {
+			var n int
+			prior, n = priorVisits(prior, [2]int{at + 10, at + 11})
+			visited += n
 		}
-	}
-	if ok, sparse, dense := withinFactor(keep, "1200", "12", 3); !ok {
-		t.Errorf("64 Ki values 12 bytes apart cost %v against %v 1200 apart — each counts the values "+
-			"its reach holds", dense, sparse)
+		if visited < values || visited > 4*values {
+			t.Errorf("64 Ki values %d bytes apart visited %d values to keep, %.1f each, not between "+
+				"one and four — each counts the values its reach holds", apart, visited, float64(visited)/values)
+		}
 	}
 }
 

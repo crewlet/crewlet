@@ -52,7 +52,7 @@ func TestASeatsPageIsHeldToASeatsBounds(t *testing.T) {
 	t.Parallel()
 	person := executor.TranscriptReadBounds()
 	if want := (executor.TranscriptBounds{Entries: 50, Bytes: 32 << 10, EntryBytes: 8 << 10,
-		LineBytes: person.LineBytes, ReadBytes: person.ReadBytes}); executor.SeatTranscriptBounds() != want ||
+		ReadLines: person.ReadLines, ReadBytes: person.ReadBytes}); executor.SeatTranscriptBounds() != want ||
 		executor.ReadBySeat.Bounds() != want {
 		t.Errorf("a seat's bounds are %+v, want %+v", executor.ReadBySeat.Bounds(), want)
 	}

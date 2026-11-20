@@ -150,7 +150,14 @@ func wordsOf[S ~string](set []S) []string {
 // source's or another person's words.
 type shownEntry struct {
 	id, label, ref, state string
-	doc                   any
+	// name and kind are its name and its kind's words, which [shownEntry.entry] draws.
+	name, kind string
+	doc        any
+}
+
+// entry is the entry as a card names it: the entry itself, then its kind's words.
+func (s shownEntry) entry() wire.Phrase {
+	return naming(wire.ResourceAtlasEntry, s.id, s.name).Plain(" (" + s.kind + ")")
 }
 
 // readAtlasEntry reads the entry id names through the grant: a read the route
@@ -165,9 +172,11 @@ func readAtlasEntry(ctx context.Context, read proposal.Read, id string) (shownEn
 		return shownEntry{}, err
 	}
 	e := cards.Lookup(doc, "entry")
-	label := value(e, "name") + " (" + strings.ReplaceAll(value(e, "ref.kind"), "_", " ") + ")"
+	kind := strings.ReplaceAll(value(e, "ref.kind"), "_", " ")
+	label := value(e, "name") + " (" + kind + ")"
 	return shownEntry{id: value(e, "id"), label: label, ref: value(e, "ref.kind") + ":" + value(e, "ref.key"),
-		state: value(e, "state"), doc: e}, nil
+		state: value(e, "state"), name: orDefault(value(e, "name"), value(e, "ref.key")), kind: kind,
+		doc: e}, nil
 }
 
 // facts is the entry's facts named f, each a decoded fact view.
@@ -298,7 +307,7 @@ func addAtlasPreview(t Tool) proposal.Previewer {
 		c.add("key", "Key", ref.Key)
 		c.add("name", "Name", name)
 		return proposal.Preview{Title: "Add atlas entry", Target: orDefault(name, ref.Key),
-			Note:         "The entry is shown as confirmed by you, and a source that reports it later joins it.",
+			Note:         wire.Plain("The entry is shown as confirmed by you, and a source that reports it later joins it."),
 			ApproveLabel: "Approve and add", Changes: c.rows(), Request: req}, nil
 	}
 }
@@ -342,7 +351,7 @@ func correctAtlasPreview(t Tool) proposal.Previewer {
 			}
 		}
 		var c changes
-		c.fact("entry", "Entry", s.label)
+		c.factOf("entry", "Entry", s.entry())
 		label := strings.ReplaceAll(string(f), "_", " ")
 		title, approve, note := "Correct atlas fact", "Approve and correct",
 			"Your value is shown over what any integration or agent reports, until one reports a "+
@@ -354,7 +363,7 @@ func correctAtlasPreview(t Tool) proposal.Previewer {
 					"only the value it shows is",
 					ErrInvalidArguments, label, s.ref)
 			}
-			c = append(c, proposal.Removed(string(f), label, shownValue(now)))
+			c = append(c, proposal.Removed(string(f), label, wire.Plain(shownValue(now))))
 			title, approve, note = "Mark atlas fact wrong", "Approve and mark wrong",
 				"The value is recorded as wrong in your name and leaves the entry."
 		case now != nil:
@@ -366,7 +375,7 @@ func correctAtlasPreview(t Tool) proposal.Previewer {
 		default:
 			c.add(string(f), label, given.Text)
 		}
-		return proposal.Preview{Title: title, Target: s.label, Note: note, ApproveLabel: approve,
+		return proposal.Preview{Title: title, Target: s.label, Note: wire.Plain(note), ApproveLabel: approve,
 			Changes: c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
 	}
 }
@@ -401,7 +410,7 @@ func confirmAtlasPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("entry", "Entry", s.label)
+		c.factOf("entry", "Entry", s.entry())
 		switch {
 		case a.String("fact") != "" && a.String("relation") != "":
 			return proposal.Preview{}, fmt.Errorf("%w: confirm a fact or a relation, one at a time",
@@ -443,7 +452,7 @@ func confirmAtlasPreview(t Tool) proposal.Previewer {
 					s.ref, f)
 			}
 			c = append(c, proposal.Changed(string(f), strings.ReplaceAll(string(f), "_", " "),
-				shownValue(now), pick+" (confirmed by you)"))
+				wire.Plain(shownValue(now)), wire.Plain(pick+" (confirmed by you)")))
 		case a.String("relation") != "":
 			to, err := readAtlasEntry(ctx, read, a.String("to"))
 			if err != nil {
@@ -458,7 +467,8 @@ func confirmAtlasPreview(t Tool) proposal.Previewer {
 			if confirmedAlready(views[i]) {
 				return proposal.Preview{}, fmt.Errorf("%w: that relation is confirmed already", ErrInvalidArguments)
 			}
-			c.fact("relation", strings.ReplaceAll(a.String("relation"), "_", " "), to.label+" (confirmed by you)")
+			c.factOf("relation", strings.ReplaceAll(a.String("relation"), "_", " "),
+				to.entry().Plain(" (confirmed by you)"))
 		default:
 			switch s.state {
 			case string(atlas.StateRetired):
@@ -467,10 +477,11 @@ func confirmAtlasPreview(t Tool) proposal.Previewer {
 			case string(atlas.StateConfirmed):
 				return proposal.Preview{}, fmt.Errorf("%w: %s is confirmed already", ErrInvalidArguments, s.ref)
 			}
-			c = append(c, proposal.Changed("state", "State", s.state, "confirmed by you"))
+			c = append(c, proposal.Changed("state", "State", wire.Plain(s.state),
+				wire.Plain("confirmed by you")))
 		}
 		return proposal.Preview{Title: "Confirm atlas entry", Target: s.label,
-			Note:         "What a source reported is shown as confirmed by you.",
+			Note:         wire.Plain("What a source reported is shown as confirmed by you."),
 			ApproveLabel: "Approve and confirm", Changes: c.rows(), Request: req,
 			SourceRevision: atlasRevision(s)}, nil
 	}
@@ -498,14 +509,15 @@ func relateAtlasPreview(remove bool) func(t Tool) proposal.Previewer {
 					ErrInvalidArguments, r, s.ref, to.ref)
 			}
 			var c changes
-			c.fact("entry", "Entry", s.label)
+			c.factOf("entry", "Entry", s.entry())
 			label := strings.ReplaceAll(string(r), "_", " ")
 			shown := slices.IndexFunc(s.relations(string(r)), func(v any) bool { return value(v, "to") == to.id })
 			if !remove {
-				c.add("relation", label, to.label)
+				c.addOf("relation", label, to.entry())
 				return proposal.Preview{Title: "Relate atlas entries", Target: s.label,
-					Note: "The map draws the relation, as confirmed by you.", ApproveLabel: "Approve and relate",
-					Changes: c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
+					Note:         wire.Plain("The map draws the relation, as confirmed by you."),
+					ApproveLabel: "Approve and relate",
+					Changes:      c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
 			}
 			if shown < 0 {
 				return proposal.Preview{}, fmt.Errorf("%w: the atlas shows no %s from %s to %s",
@@ -514,9 +526,9 @@ func relateAtlasPreview(remove bool) func(t Tool) proposal.Previewer {
 			if where := declaredBy(s.relations(string(r))[shown]); where != "" {
 				return proposal.Preview{}, refusedDeclared("that "+s.ref+" "+label+" "+to.ref, where)
 			}
-			c = append(c, proposal.Removed("relation", label, to.label))
+			c = append(c, proposal.Removed("relation", label, to.entry()))
 			return proposal.Preview{Title: "Remove atlas relation", Target: s.label,
-				Note:         "It is recorded in your name that the relation does not hold.",
+				Note:         wire.Plain("It is recorded in your name that the relation does not hold."),
 				ApproveLabel: "Approve and remove", Changes: c.rows(), Request: req,
 				SourceRevision: atlasRevision(s)}, nil
 		}
@@ -553,39 +565,39 @@ func ownerAtlasPreview(t Tool) proposal.Previewer {
 				return proposal.Preview{}, fmt.Errorf("%w: no seat of the chart has that handle", ErrInvalidArguments)
 			}
 		}
-		var owners []string
+		var owners []wire.Phrase
 		for _, v := range s.relations(string(atlas.RelationOwnedBy)) {
 			if where := declaredBy(v); where != "" {
 				return proposal.Preview{}, refusedDeclared("who owns "+s.ref, where)
 			}
-			owners = append(owners, ownerName(chart, value(v, "external"), value(v, "name")))
+			owners = append(owners, ownerOf(chart, value(v, "external"), value(v, "name")))
 		}
-		to := ""
+		var to wire.Phrase
 		switch {
 		case a.String("seat") != "":
-			to = ownerName(chart, string(atlas.ExternalSeat), a.String("seat"))
+			to = ownerOf(chart, string(atlas.ExternalSeat), a.String("seat"))
 		case a.String("unit") != "":
-			to = "unit " + a.String("unit")
+			to = ownerOf(chart, string(atlas.ExternalUnit), a.String("unit"))
 		}
 		var c changes
-		c.fact("entry", "Entry", s.label)
-		c.move("owner", "Owner", strings.Join(owners, ", "), to)
+		c.factOf("entry", "Entry", s.entry())
+		c.moveOf("owner", "Owner", wire.Join(owners, ", "), to)
 		if len(c) < 2 {
 			return proposal.Preview{}, fmt.Errorf("%w: %s is owned that way already", ErrInvalidArguments, s.ref)
 		}
 		return proposal.Preview{Title: "Set atlas owner", Target: s.label,
-			Note: "The owner is shown as named by you.", ApproveLabel: "Approve and set",
+			Note: wire.Plain("The owner is shown as named by you."), ApproveLabel: "Approve and set",
 			Changes: c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
 	}
 }
 
-// ownerName is an owner as a card names it: a seat by its name, a unit by its
-// key.
-func ownerName(c company, external, name string) string {
+// ownerOf is an owner as a card names it: a seat or a team, by its name on
+// the chart.
+func ownerOf(c company, external, name string) wire.Phrase {
 	if external == string(atlas.ExternalSeat) {
-		return c.seatName(name)
+		return c.seat(name)
 	}
-	return "unit " + name
+	return c.unit(name)
 }
 
 func retireAtlasPreview(retire bool) func(t Tool) proposal.Previewer {
@@ -608,15 +620,15 @@ func retireAtlasPreview(retire bool) func(t Tool) proposal.Previewer {
 				return proposal.Preview{}, refusedDeclared(s.ref, "the company's settings or the engine's records")
 			}
 			var c changes
-			c.fact("entry", "Entry", s.label)
+			c.factOf("entry", "Entry", s.entry())
 			title, label, to, note := "Restore atlas entry", "Approve and restore", "restored",
 				"The entry is on the map again."
 			if retire {
 				title, label, to = "Retire atlas entry", "Approve and retire", string(atlas.StateRetired)
 				note = "It leaves the map and stays in its history; restoring it brings it back."
 			}
-			c = append(c, proposal.Changed("state", "State", s.state, to))
-			return proposal.Preview{Title: title, Target: s.label, Note: note, ApproveLabel: label,
+			c = append(c, proposal.Changed("state", "State", wire.Plain(s.state), wire.Plain(to)))
+			return proposal.Preview{Title: title, Target: s.label, Note: wire.Plain(note), ApproveLabel: label,
 				Changes: c.rows(), Request: req, SourceRevision: atlasRevision(s)}, nil
 		}
 	}
@@ -644,15 +656,16 @@ func pairAtlasPreview(merge bool) func(t Tool) proposal.Previewer {
 			}
 			one := s.id == o.id
 			var c changes
-			c.fact("entry", "Entry", s.label)
-			c.fact("other", "Other", o.label)
+			c.factOf("entry", "Entry", s.entry())
+			c.factOf("other", "Other", o.entry())
 			if merge {
 				if one {
 					return proposal.Preview{}, fmt.Errorf("%w: they are one entry already", ErrInvalidArguments)
 				}
-				c = append(c, proposal.Changed("shown", "Shown as", "two entries", "one entry"))
+				c = append(c, proposal.Changed("shown", "Shown as", wire.Plain("two entries"),
+					wire.Plain("one entry")))
 				return proposal.Preview{Title: "Merge atlas entries", Target: s.label,
-					Note:         "A \"not the same\" somebody recorded between them is withdrawn first.",
+					Note:         wire.Plain("A \"not the same\" somebody recorded between them is withdrawn first."),
 					ApproveLabel: "Approve and merge", Changes: c.rows(), Request: req,
 					SourceRevision: atlasRevision(s)}, nil
 			}
@@ -660,9 +673,10 @@ func pairAtlasPreview(merge bool) func(t Tool) proposal.Previewer {
 			if one {
 				from = "one entry"
 			}
-			c = append(c, proposal.Changed("shown", "Shown as", from, "two entries, never merged"))
+			c = append(c, proposal.Changed("shown", "Shown as", wire.Plain(from),
+				wire.Plain("two entries, never merged")))
 			return proposal.Preview{Title: "Split atlas entries", Target: s.label,
-				Note:         "A person's \"not the same\" always wins over a key they share.",
+				Note:         wire.Plain("A person's \"not the same\" always wins over a key they share."),
 				ApproveLabel: "Approve and split", Changes: c.rows(), Request: req,
 				SourceRevision: atlasRevision(s)}, nil
 		}
@@ -685,12 +699,12 @@ func purgeAtlasPreview(t Tool) proposal.Previewer {
 		}
 		recency, _ := authz.RecencyOf(authz.ActionAtlasPurge)
 		var c changes
-		c.fact("entry", "Entry", s.label)
-		c = append(c, proposal.Removed("entry", "Entry and its history", s.label))
+		c.factOf("entry", "Entry", s.entry())
+		c = append(c, proposal.Removed("entry", "Entry and its history", s.entry()))
 		return proposal.Preview{Title: "Purge atlas entry", Target: s.label,
-			Summary: "Erases " + s.label + " and everything recorded about it, history included, and keeps " +
-				"it from being recorded again.",
-			Note: "Nothing undoes it.", Risk: wire.RiskDestructive, ApproveLabel: "Approve and purge",
+			Summary: wire.Plain("Erases ").Then(s.entry()).Plain(" and everything recorded about it, " +
+				"history included, and keeps it from being recorded again."),
+			Note: wire.Plain("Nothing undoes it."), Risk: wire.RiskDestructive, ApproveLabel: "Approve and purge",
 			Changes: c.rows(), Request: req, StepUp: recency.Demands(),
 			SourceRevision: atlasRevision(s)}, nil
 	}

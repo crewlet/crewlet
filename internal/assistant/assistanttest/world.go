@@ -80,7 +80,7 @@ func World() map[string]any {
 		"/doclet/pages/" + RecordID: map[string]any{"page": map[string]any{"id": RecordID,
 			"title": "Runbook", "body": "Step one.", "version": 2}},
 		"/artifacts/" + RecordID: map[string]any{"id": RecordID, "title": "Q3 deck",
-			"head_number": 5},
+			"kind": "slides", "head_number": 5},
 		// THE ATLAS: checkout-api, which a person confirmed, runs on web-2 and
 		// is owned by pm; checkout, which somebody retired; and web-2.
 		"/atlas/" + AtlasServiceID: atlasEntry(AtlasServiceID, "service", "checkout-api", "Checkout API",

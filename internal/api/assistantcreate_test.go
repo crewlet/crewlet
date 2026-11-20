@@ -226,8 +226,8 @@ func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 		case (r.Effect == authz.EffectDestroys) != destructive:
 			t.Errorf("%s destroys %v, and its card %q is at risk %q", r.Pattern,
 				r.Effect == authz.EffectDestroys, p.Title, p.Risk)
-		case destructive && (!strings.HasPrefix(p.Summary, "This ") || p.Note == ""):
-			t.Errorf("%s destroys, and its card says %q, %q", r.Pattern, p.Summary, p.Note)
+		case destructive && (!strings.HasPrefix(p.Summary.Text(), "This ") || len(p.Note) == 0):
+			t.Errorf("%s destroys, and its card says %q, %q", r.Pattern, p.Summary.Text(), p.Note.Text())
 		case creates && r.Effect != authz.EffectCreates:
 			t.Errorf("%s %s, and its card is titled %q", r.Pattern, r.Effect, p.Title)
 		}
@@ -260,8 +260,8 @@ func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 		args["route"] = route
 		p, err := change.Preview(t.Context(), read, time.Now(), args)
 		if err != nil || p.Title != want.title || p.ApproveLabel != want.approve ||
-			p.Summary != want.summary {
-			t.Errorf("%s reads %q / %q: %q (%v)", route, p.Title, p.ApproveLabel, p.Summary, err)
+			p.Summary.Text() != want.summary {
+			t.Errorf("%s reads %q / %q: %q (%v)", route, p.Title, p.ApproveLabel, p.Summary.Text(), err)
 		}
 	}
 }

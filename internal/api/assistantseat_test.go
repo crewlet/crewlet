@@ -156,7 +156,7 @@ func TestAnAgentSeatIsAddedThroughTheGenericChange(t *testing.T) {
 	added := map[string]string{}
 	for _, c := range p.Changes {
 		if c.Kind == wire.ChangeAdded {
-			added[c.Field] = c.To
+			added[c.Field] = c.To.Text()
 		}
 	}
 	if added["roles.crewlet-swe.name"] != "crewlet-swe" ||
@@ -384,7 +384,7 @@ func TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(p.Changes, func(c wire.Change) bool {
-		return c.Field == "request.summary" && c.To == line
+		return c.Field == "request.summary" && c.To.Text() == line
 	}) {
 		t.Errorf("the card does not show the history line: %+v", p.Changes)
 	}
