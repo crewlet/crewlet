@@ -358,6 +358,9 @@ func movedVerdict(was, now Finding) []Moved {
 // schedule. Every other kind is the company's own or read elsewhere, so held.
 func SubjectHeld(c *config.Company, s Subject) bool {
 	switch s.Kind {
+	case SubjectModel:
+		_, ok := c.Providers.LLM[s.Name]
+		return ok
 	case SubjectSeat, SubjectGroup:
 		role, _ := roleOf(c, s.Seat)
 		return role != nil
