@@ -133,7 +133,25 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	if !found {
 		return nil, nil
 	}
-	return runSummary(row)
+	out, err := runSummary(row)
+	if err != nil || row.Kind != advisordomain.RunKindDeep {
+		return out, err
+	}
+	// A FINISHED RUN'S WHOLE TRAIL is on its progress record, kept with the
+	// run: every read it asked and the verdict on each agenda item. Its own
+	// record keeps only its last lines, which stand where the record holds
+	// no line (a run older than its lines' retention).
+	trail, err := s.Advisor.RunProgress(ctx, row.ID, advisorFresh)
+	if err != nil {
+		return nil, advisorUnreadable(err)
+	}
+	if len(trail) > 0 {
+		out.Progress = make([]AdvisorProgress, 0, len(trail))
+		for _, l := range trail {
+			out.Progress = append(out.Progress, AdvisorProgress{At: l.At, Text: l.Text})
+		}
+	}
+	return out, nil
 }
 
 // runSummary is row as a person reads it.

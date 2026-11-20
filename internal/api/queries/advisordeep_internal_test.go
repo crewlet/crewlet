@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -95,6 +96,9 @@ type liveLog struct {
 func (liveLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "run-1", []advisordomain.ProgressLine{{At: time.Unix(100, 0).UTC(), Text: "reading capacity"}}, true, nil
 }
+func (liveLog) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
 
 func (l liveLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return l.pending, nil
@@ -115,5 +119,59 @@ func TestADeepRunInFlightIsTheLatestRunWithItsProgress(t *testing.T) {
 	got, err = Sources{Advisor: pressed}.latestRun(t.Context())
 	if err != nil || got.By != "ada" || got.Kind != "deep" || len(got.Progress) != 1 {
 		t.Errorf("latest = %+v (%v), want ada's deep run with its line", got, err)
+	}
+}
+
+// finishedLog is an advisor log whose latest run is a deep run that ended,
+// its record keeping its last lines and its progress record its whole trail.
+type finishedLog struct {
+	noticeLog
+	record json.RawMessage
+	trail  []advisordomain.ProgressLine
+}
+
+func (finishedLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (finishedLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
+	return nil, nil
+}
+func (l finishedLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
+	return advisordomain.RunRow{ID: "run-1", Status: advisordomain.RunDone, Kind: advisordomain.RunKindDeep,
+		Trigger: advisordomain.TriggerPerson, By: "ada", Model: l.record}, true, nil
+}
+func (l finishedLog) RunProgress(_ context.Context, run string, _ statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	if run != "run-1" {
+		return nil, nil
+	}
+	return l.trail, nil
+}
+
+// A FINISHED RUN KEEPS ITS WHOLE TRAIL READABLE: its record keeps only its
+// last lines, and the latest run answers every line it wrote, from its
+// progress record (each read and each verdict), oldest first; a run whose
+// lines are gone answers the ones its record kept. Mutation: answer the
+// record's lines, and the page loses the investigation once it ends.
+func TestAFinishedRunKeepsItsWholeTrailReadable(t *testing.T) {
+	t.Parallel()
+	run := modelpass.DeepRun{Pass: advisor.Pass{Status: advisor.PassDone}, StoppedBy: modelpass.StoppedDone}
+	var trail []advisordomain.ProgressLine
+	for i := range 30 {
+		line := advisordomain.ProgressLine{At: time.Unix(int64(100+i), 0).UTC(), Text: fmt.Sprintf("A%d confirmed: line %d", i+1, i)}
+		trail = append(trail, line)
+		run.Progress = append(run.Progress, modelpass.Progress{At: line.At, Text: line.Text})
+	}
+	record, err := json.Marshal(run.Kept())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Sources{Advisor: finishedLog{record: record, trail: trail}}.latestRun(t.Context())
+	if err != nil || got == nil || got.Kind != "deep" || len(got.Progress) != 30 ||
+		got.Progress[0].Text != "A1 confirmed: line 0" || got.Progress[29].Text != "A30 confirmed: line 29" {
+		t.Fatalf("latest = %+v (%v), want the run's thirty lines, oldest first", got, err)
+	}
+	gone, err := Sources{Advisor: finishedLog{record: record}}.latestRun(t.Context())
+	if err != nil || len(gone.Progress) != 3 || gone.Progress[2].Text != "A30 confirmed: line 29" {
+		t.Errorf("latest with its lines gone = %+v (%v), want the record's last three", gone, err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -649,5 +650,32 @@ func TestADeepRunsNewestCheckpointIsWhatATakeoverReads(t *testing.T) {
 			Checkpoint: json.RawMessage(bad)}); !errors.Is(err, advisordomain.ErrInvalid) {
 			t.Errorf("checkpoint %.20s... answered %v, want refused", bad, err)
 		}
+	}
+}
+
+// A RUN'S WHOLE TRAIL IS READ, PAST ITS RECORD: every line one run wrote,
+// oldest first, as many as a deep run writes, and no other run's.
+// Mutation: read the old 200 lines, and a long run's last verdicts are lost.
+func TestARunsWholeTrailIsRead(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run, other = "6d5c4b3a-2f1e-4d0c-9b8a-7f6e5d4c3b2a", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	const lines = 250
+	for i := range lines {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Second), Text: fmt.Sprintf("line %d", i)}); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: other,
+		At: writerClock, Text: "another run"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := n.reader().RunProgress(t.Context(), run, stale)
+	if err != nil || len(got) != lines || got[0].Text != "line 0" || got[lines-1].Text != "line 249" {
+		t.Fatalf("trail = %d lines (%v), want all %d, oldest first", len(got), err, lines)
+	}
+	if advisordomain.MaxProgressLines < 400 {
+		t.Errorf("a read answers %d lines, fewer than a deep run writes", advisordomain.MaxProgressLines)
 	}
 }

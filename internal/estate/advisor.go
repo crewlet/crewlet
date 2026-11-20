@@ -29,6 +29,7 @@ type AdvisorReader interface {
 	Counts(ctx context.Context, fresh statelog.Freshness) (map[advisordomain.Severity]int, error)
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error)
+	RunProgress(ctx context.Context, run string, fresh statelog.Freshness) ([]advisordomain.ProgressLine, error)
 	Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error)
 	Run(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
@@ -222,6 +223,11 @@ var opAdvisorCheckpoint = advisorRead("advisor.checkpoint",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorCheckpoint, error) {
 		body, found, err := r.Checkpoint(ctx, a.ID, a.Fresh)
 		return advisorCheckpoint{Body: body, Found: found}, err
+	})
+
+var opAdvisorRunProgress = advisorRead("advisor.run_progress",
+	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) ([]advisordomain.ProgressLine, error) {
+		return r.RunProgress(ctx, a.ID, a.Fresh)
 	})
 
 var opAdvisorRun = advisorRead("advisor.run",
@@ -503,6 +509,12 @@ func (x AdvisorReads) Checkpoint(ctx context.Context, run string,
 	fresh statelog.Freshness) (json.RawMessage, bool, error) {
 	out, err := call(ctx, x.r, opAdvisorCheckpoint, nil, advisorIDArgs{ID: run, Fresh: fresh})
 	return out.Body, out.Found, err
+}
+
+// RunProgress answers every progress line one run wrote, oldest first.
+func (x AdvisorReads) RunProgress(ctx context.Context, run string,
+	fresh statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return call(ctx, x.r, opAdvisorRunProgress, nil, advisorIDArgs{ID: run, Fresh: fresh})
 }
 
 // Run answers one run, and whether the log holds it.

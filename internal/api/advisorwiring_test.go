@@ -47,6 +47,9 @@ func (*memAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advi
 func (*memAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (*memAdvisor) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
 func (*memAdvisor) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
 	return nil, false, nil
 }

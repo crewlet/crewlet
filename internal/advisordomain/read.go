@@ -850,5 +850,37 @@ func (r *Reader) Checkpoint(ctx context.Context, run string, fresh statelog.Fres
 	return json.RawMessage(body), true, nil
 }
 
-// MaxProgressLines bounds the lines one read of a run's progress answers.
-const MaxProgressLines = 200
+// RunProgress is every progress line run wrote, oldest first, at most
+// [MaxProgressLines]: a finished deep run's whole trail (the reads it asked,
+// the verdict on each agenda item), kept with the run until its retention.
+func (r *Reader) RunProgress(ctx context.Context, run string, fresh statelog.Freshness) ([]ProgressLine, error) {
+	var lines []ProgressLine
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		lines = nil
+		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				at   int64
+				text string
+			)
+			if err := rows.Scan(&at, &text); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, fmt.Errorf("advisordomain: read run %s's progress: %w", run, err)
+	}
+	return lines, nil
+}
+
+// MaxProgressLines bounds the lines one read of a run's progress answers: as
+// many as a deep run writes, so its whole trail is read.
+const MaxProgressLines = 400
