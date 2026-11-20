@@ -85,6 +85,8 @@ var documented = []documentedDetector{
 	{ClassRoundCap, sourceRuns, roundCap, nil},
 	{ClassBudgetStopped, sourceStops, budgetStopped, nil},
 	{ClassWorkConcentrated, sourceWork, workConcentrated, nil},
+	{ClassWorkImbalance, sourceWork, workImbalance, nil},
+	{ClassBlockedNoCause, sourceWork, blockedNoCause, nil},
 	{ClassAlarmNoop, sourceLedger, alarmNoop, nil},
 	{ClassModelHeld, sourceFlow, modelHeld, nil},
 	{ClassModelLimit, sourceCapacity, modelLimit, nil},
@@ -145,6 +147,12 @@ var stallWords = map[Class]said{
 	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
 		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
 			"in a repository whose branch requires no check every merge waits on a person."},
+	ClassWorkImbalance: {"One seat holds most of its job's open work while another seat doing that job holds little.",
+		"Work queued on the busy seat waits its turn there while a seat that could take it sits " +
+			"idle, so moving the work not yet started shortens the wait without adding a seat."},
+	ClassBlockedNoCause: {"Work is blocked on something nobody holds.",
+		"These items wait on an item nobody holds, an item that was removed, or a change nothing is " +
+			"moving, so no seat's turn will end the wait and the item records nothing more about why."},
 }
 
 // stallFinding is an owner's finding of class in its class's words.
@@ -412,10 +420,12 @@ func workConcentrated(c *config.Company, ev Evidence) []Finding {
 		}
 	}
 	var out []Finding
+	twinned := imbalances(c, ev)
 	for _, seat := range agents {
 		h := open[seat]
-		if h.Open < minHeldOpen || h.Open*100 < heldSharePercent*total {
-			continue
+		if h.Open < minHeldOpen || h.Open*100 < heldSharePercent*total ||
+			slices.ContainsFunc(twinned, func(i imbalance) bool { return i.busy.Handle == seat }) {
+			continue // a seat whose twin holds little is that class's, with a fix moving the work
 		}
 		idle := 0
 		for _, other := range agents {

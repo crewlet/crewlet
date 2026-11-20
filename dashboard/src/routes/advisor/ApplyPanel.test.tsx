@@ -233,8 +233,9 @@ test("a finding that changed since it was found shows what moved, and sends noth
   expect(screen.getByRole("button", { name: "Confirm the updated change" })).toBeDefined();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
   expect(writes(sent)).toEqual([]);
-  // THE PAGE IS TOLD: the finding was revised.
-  expect(settled).toHaveBeenCalledTimes(1);
+  // THE PAGE IS TOLD: the finding was revised. Told from an effect after the
+  // render that shows it, so it is waited for, never assumed already done.
+  await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
 });
 
 test("a finding that no longer holds is closed, and nothing is sent", async () => {

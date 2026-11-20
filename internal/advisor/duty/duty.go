@@ -108,6 +108,9 @@ type ModelRun struct {
 	// Explained are the explanations the engine checked, each for the
 	// verdict it was written for.
 	Explained []advisor.Explained
+	// Partial reports a pass its bound cut short that listed what it had:
+	// its findings open or refresh, and nothing it did not list closes.
+	Partial bool
 }
 
 // Log is the advisor log as the duty reads and writes it.
@@ -451,9 +454,34 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 		}
 	}
 	if rules {
-		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, moved))
+		d.closeDuplicates(ctx, now, live, observed, moved)
+		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, observed, moved))
 	}
 	return run
+}
+
+// closeDuplicates closes every open model finding a rule's finding of this
+// run already says with its numbers ([advisor.Restates]), as a duplicate.
+func (d *Duty) closeDuplicates(ctx context.Context, now time.Time, live []advisor.Stored,
+	observed []advisor.Observation, moved map[string]bool) {
+	for i := range live {
+		s := &live[i]
+		if moved[s.ID] || s.State != advisor.StateOpen || s.Observation.Finding.Source != advisor.SourceModel {
+			continue
+		}
+		if !slices.ContainsFunc(observed, func(o advisor.Observation) bool {
+			return advisor.Restates(s.Observation.Finding, o.Finding)
+		}) {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateRetired,
+			Reason: advisor.ReasonDuplicate}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		moved[s.ID] = true
+	}
 }
 
 // PremiseScope is the scope a rules run records once it asked every open
@@ -461,10 +489,15 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 const PremiseScope = "premise"
 
 // recheckPremises asks again the premise of every open finding that states
-// one and this run did not move, and resolves each whose premise no longer
+// one and this run did not move, and closes each whose premise no longer
 // holds (ADR-0166). A premise that could not be asked is left as it stands.
+//
+// A MOVED PREMISE IS NOT A SOLVED PROBLEM: the number a finding rested on
+// can move while what it was about still stands (the blockers changed hands,
+// the items are still blocked). Where a rule's finding of this run is about
+// the same work, the finding is replaced by it rather than resolved.
 func (d *Duty) recheckPremises(ctx context.Context, now time.Time, live []advisor.Stored,
-	moved map[string]bool) ScopeRun {
+	observed []advisor.Observation, moved map[string]bool) ScopeRun {
 	scope := ScopeRun{Scope: PremiseScope, Status: ScopeDone, Steps: map[advisor.Step]int{}}
 	for i := range live {
 		s := &live[i]
@@ -483,6 +516,11 @@ func (d *Duty) recheckPremises(ctx context.Context, now time.Time, live []adviso
 		}
 		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateResolved,
 			Reason: advisor.ReasonConditionCleared}
+		if slices.ContainsFunc(observed, func(o advisor.Observation) bool {
+			return advisor.AboutTheSameWork(s.Observation.Finding, o.Finding)
+		}) {
+			t.State, t.Reason = advisor.StateRetired, advisor.ReasonReplaced
+		}
 		if err := d.Log.Record(ctx, t, now); err != nil {
 			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
 			continue

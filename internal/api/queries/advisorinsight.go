@@ -1,6 +1,7 @@
 package queries
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
@@ -15,8 +16,8 @@ import (
 
 // AdvisorFindingInsight is the part of a finding the Advisor's page leads with.
 type AdvisorFindingInsight struct {
-	// Headline is one line carrying the finding's number; the class's title
-	// where the finding states none.
+	// Headline is one line carrying the finding's number: the finding's own,
+	// else its class's from its facts, else its title.
 	Headline string         `json:"headline"`
 	Stats    []advisor.Stat `json:"stats"`
 	Chart    *advisor.Chart `json:"chart"`
@@ -76,14 +77,18 @@ const (
 
 // insightOf is f's insight, its stats read from facts as the finding shows them.
 func insightOf(f advisor.Finding, facts []AdvisorFact) AdvisorFindingInsight {
-	out := AdvisorFindingInsight{Headline: f.Headline, Stats: []advisor.Stat{}, Seats: []AdvisorSeatShare{},
+	out := AdvisorFindingInsight{Headline: advisor.HeadlineOf(f), Stats: []advisor.Stat{}, Seats: []AdvisorSeatShare{},
 		Actions: actionsOf(f.Fix)}
-	if out.Headline == "" {
-		out.Headline = f.Title
+	was := map[string]*float64{}
+	for _, fact := range f.Evidence {
+		if fact.Was != nil {
+			v := float64(*fact.Was)
+			was[fact.Key] = &v
+		}
 	}
 	for _, fact := range facts {
 		out.Stats = append(out.Stats, advisor.Stat{Key: fact.Key, Label: fact.Label, Value: float64(fact.Value),
-			Unit: fact.Unit})
+			Unit: fact.Unit, Was: was[fact.Key]})
 	}
 	for _, s := range f.Seats {
 		unit := s.Unit
@@ -148,6 +153,14 @@ func actionsOf(fix advisor.Fix) AdvisorActions {
 	case advisor.FixNone:
 	default:
 		out.Primary = &AdvisorAction{Kind: ActionFix, Label: "See the fix"}
+	}
+	// A FIX THAT MOVES WORK leads with the move, the kind's own step beside it.
+	if r := fix.Reassign; r != nil && len(r.Items) > 0 && r.To != "" {
+		if out.Primary != nil {
+			out.Secondary = append([]AdvisorAction{*out.Primary}, out.Secondary...)
+		}
+		to := r.To
+		out.Primary = &AdvisorAction{Kind: ActionReassign, Label: "Move the work", Items: slices.Clone(r.Items), To: &to}
 	}
 	return out
 }

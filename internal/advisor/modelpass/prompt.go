@@ -93,7 +93,9 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 						"required": []string{"key", "label", "value", "from"},
 						"properties": map[string]any{"key": map[string]any{"type": "string"},
 							"label": map[string]any{"type": "string", "maxLength": advisor.MaxAnalystFactLabel},
-							"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}}}},
+							"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"},
+							"unit":     map[string]any{"enum": unitNames()},
+							"was_from": map[string]any{"type": "string"}}}},
 					"records": map[string]any{"type": "array", "maxItems": advisor.MaxAnalystRecords,
 						"items": map[string]any{"type": "object", "additionalProperties": false,
 							"required": []string{"kind", "id"}, "properties": map[string]any{
@@ -111,6 +113,15 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 		}},
 	}
 })
+
+// unitNames is every unit a cited number may count in.
+func unitNames() []string {
+	var out []string
+	for _, u := range advisor.Units() {
+		out = append(out, string(u))
+	}
+	return out
+}
 
 func builderNames() []string {
 	var out []string

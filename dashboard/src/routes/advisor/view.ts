@@ -142,6 +142,19 @@ export function stripOf(snapshot: AdvisorSnapshot | null): ViewStat[] {
   ];
 }
 
+/**
+ * How a chart is drawn. NAMES GO DOWN A LIST, DAYS GO ACROSS: a chart over
+ * seats, entries or reasons is a list of named bars, each row its full name
+ * (split by its series where there are several), because a column chart
+ * names only its first, middle and last columns, as a time axis does, and
+ * long names under columns collide. Over days, one series of columns is a
+ * line and several are stacked columns.
+ */
+export function chartShape(c: AdvisorChart): "line" | "columns" | "bars" {
+  if (c.kind === "bars" || c.x.kind !== "day") return "bars";
+  return c.kind === "columns" ? "line" : "columns";
+}
+
 /** A chart as the page draws it: over days, each point's instant. */
 export function chartView(c: AdvisorChart): ViewChart {
   return c.x.kind === "day" ? { ...c, at: c.x.keys.map((k) => Date.parse(k)) } : c;
@@ -289,6 +302,29 @@ export function actionView(a: AdvisorAction, f: AdvisorKeptFinding): ViewAction 
   return null;
 }
 
+const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A row's words with its seat said once. The row's prefix names its subject,
+ * so a label, the why or the headline that OPENS on the subject (by its name
+ * or its seat's handle, "app-engineer tokens on 17 Nov") drops it and starts
+ * on what follows ("Tokens on 17 Nov"), and a seat's handle anywhere else is
+ * said by its name, never as a key. A row that names no subject keeps its
+ * words.
+ */
+export function withoutSubject(text: string, f: AdvisorKeptFinding): string {
+  const name = f.subject.name;
+  if (!name) return text;
+  const who = [name, f.subject.seat].filter(Boolean).map(escaped).join("|");
+  const opening = new RegExp(`^(?:${who})(?:'s|’s)?(?![\\w-])[\\s:,]*`, "i");
+  const rest = text.replace(opening, "");
+  const said = rest === text ? text : rest.charAt(0).toUpperCase() + rest.slice(1);
+  const handle = f.subject.seat;
+  return handle && handle !== name
+    ? said.replace(new RegExp(`(?<![\\w-])${escaped(handle)}(?![\\w-])`, "g"), name)
+    : said;
+}
+
 /** The first sentence of the engine's why: the row's one line. */
 export function firstSentence(why: string): string {
   const at = why.search(/[.!?](\s|$)/);
@@ -299,16 +335,19 @@ export function firstSentence(why: string): string {
 export function findingView(f: AdvisorKeptFinding): ViewFinding {
   const routed = (a: AdvisorAction | null) => (a ? actionView(a, f) : null);
   const open = f.state === "open";
+  const secondary = f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null);
+  // ONE PRESS A ROW, one this page can take: a primary it does not route
+  // gives its place to the first secondary it does.
+  const primary = routed(f.actions.primary);
   return {
     finding: f,
-    headline: f.headline,
-    why: firstSentence(f.why),
-    stats: f.stats.slice(0, 3),
-    actions: {
-      primary: open ? routed(f.actions.primary) : null,
-      secondary: open
-        ? f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null)
-        : [],
-    },
+    headline: withoutSubject(f.headline, f),
+    why: withoutSubject(firstSentence(f.why), f),
+    stats: f.stats.slice(0, 3).map((s) => ({ ...s, label: withoutSubject(s.label, f) })),
+    actions: !open
+      ? { primary: null, secondary: [] }
+      : primary
+        ? { primary, secondary }
+        : { primary: secondary[0] ?? null, secondary: secondary.slice(1) },
   };
 }

@@ -136,7 +136,8 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 			progress(p.At, p.Text)
 		}
 	})
-	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone}
+	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone,
+		Partial: run.Status == advisor.PassCeiling && run.Listed > 0}
 	window := advisor.Span{From: now.Add(-advisor.Window), To: now}
 	for _, f := range run.Findings {
 		out.Observations = append(out.Observations, advisor.Observe(f, window, d.Revision))

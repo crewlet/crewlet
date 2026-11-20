@@ -56,9 +56,9 @@ export function useLatestRun(watching: boolean) {
 }
 
 /** Run every check and the model pass now; a run already going is the one this asked for. */
-export async function runNow(): Promise<void> {
+export async function runNow(kind: "rules" | "deep" = "rules"): Promise<void> {
   try {
-    await rest.request("POST", "/advisor/runs", { body: {} });
+    await rest.request("POST", "/advisor/runs", { body: { kind } });
   } catch (err) {
     if (err instanceof RestError && err.status === 409) return;
     throw err;

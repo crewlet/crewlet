@@ -148,8 +148,10 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// THE ASKER BY THE NAME THE CALL RECORDS: a seat's handle, or an API
+	// token's or an operator's own name, never a seat that is not there.
 	if _, err := a.advisor.RequestRun(r.Context(), call, advisordomain.RunRequest{Run: run,
-		By: principal.Seat, RunKind: body.Kind}); err != nil {
+		By: call.By.Name, RunKind: body.Kind}); err != nil {
 		refuseAdvisorLog(w, r, log, "advisor_run", err)
 		return
 	}

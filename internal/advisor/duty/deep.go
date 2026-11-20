@@ -171,10 +171,10 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 		log.WarnContext(ctx, "advisor_deep_run_failed", "error", err.Error())
 		return run
 	}
-	if !result.Concluded {
+	if !result.Concluded && !result.Partial {
 		return run
 	}
-	reading := advisor.Reading{At: now, Groups: []advisor.Group{advisor.GroupModel}}
+	reading := advisor.Reading{At: now, Groups: []advisor.Group{advisor.GroupModel}, Partial: !result.Concluded}
 	if reading.LastDone, err = d.Log.LastDone(ctx); err != nil {
 		log.WarnContext(ctx, "advisor_findings_unread", "error", err.Error())
 		run.Status = RunFailed
