@@ -1,55 +1,46 @@
 /**
- * The Advisor's page (`#/advisor`): what its checks found that is worth an
- * operator's attention, each with the change that fixes it, its weekly
- * what was found before.
+ * The Advisor's page (`#/advisor`): the company's numbers, what is worth
+ * changing with the change that fixes each, its weekly reports, and what was
+ * found before.
  *
  * # Anatomy
  *
- * The HEAD says when every check last ran ("All checks ran 4 minutes ago"), offers
- * Run now. Its model is chosen in Settings › Models and not named here.
+ * THE HEAD says when every check last ran, and while a run is going how long
+ * it has run and what it is doing (`Run.tsx`), with Run now and the range the
+ * numbers cover.
  *
- * FINDINGS, the first tab: the go-live check while anything blocks the
- * company, then what the owner can change, most costly first (Blocks, Costs,
- * Worth knowing; within each, the largest measured cost, then the newest),
- * then what the engine is handling, then what a person snoozed, each saying
- * until when. Each row says how fresh it is and offers its fix; Apply
- * re-checks the finding before anything is sent (`apply.ts`). Under them, while
- * anything blocks, the review of what each agent can do, folded: the go-live
- * check's reading, after what to change rather than between the check and it.
+ * FINDINGS, the first tab, opens on the NUMBERS: a strip of figures, each
+ * against the previous range and linked to the finding that explains it, and
+ * charts of the same range (`Numbers.tsx`, `view.ts`). Then WHAT TO CHANGE,
+ * most costly first (Blocks, Costs, Worth knowing; within each, the largest
+ * measured cost, then the newest): each row one line of what is wrong, one of
+ * why, its numbers, and ONE press that says what it does (`rows.tsx`). Apply
+ * re-checks the finding and confirms in place, under its row
+ * (`ApplyPanel.tsx`). Then what the engine is handling, what a person
+ * snoozed, and, while anything blocks, the review of what each agent can do,
+ * folded.
  *
  * REPORTS, the second tab: each week's report, newest first, a page at a
  * time. HISTORY, the third: what was found and closed, and why it closed.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import {
-  AttentionList,
-  Button,
-  Callout,
-  EmptyState,
-  Link,
-  StepList,
-  Text,
-  useToast,
-  type StepListStep,
-} from "@crewlethq/ui";
+import { useCallback, useState } from "react";
+import { AttentionList, Button, Callout, EmptyState, Link, Text } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { ago } from "~/lib/ago.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { relTime } from "~/lib/format.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
-import { ApplyDialog } from "./ApplyDialog.tsx";
-import { runNow, useFindings, useLatestRun, useReports } from "./api.ts";
+import { ApplyPanel } from "./ApplyPanel.tsx";
+import { useFindings, useReports } from "./api.ts";
 import { useAskAbout, useDecisions } from "./decisions.tsx";
-import { AtlasFix, listItems, snoozed, type RowActions } from "./rows.tsx";
-import type {
-  AdvisorKeptFinding,
-  AdvisorReportSummary,
-  AdvisorRunSummary,
-} from "~/protocol/advisorFindings.ts";
-import type { AdvisorSeverity } from "~/protocol/advisor.ts";
+import { Charts, RangePicker, StatsStrip, useSnapshot } from "./Numbers.tsx";
+import { RunHead } from "./Run.tsx";
+import { AtlasFix, listItems, snoozed, type OpenApply, type RowActions } from "./rows.tsx";
+import type { AdvisorKeptFinding, AdvisorReportSummary } from "~/protocol/advisorFindings.ts";
 import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked, weekMoved, weekWords } from "./words.ts";
+import type { RangeDays } from "./view.ts";
 
 /** The Advisor page's tabs, as its address names them. */
 export type AdvisorSection = "findings" | "reports" | "history";
@@ -58,231 +49,127 @@ export function AdvisorPage({ section }: { section: AdvisorSection }) {
   // A RUN THAT ENDED is read by the list under it: its key moves, so it reads again.
   const [runs, setRuns] = useState(0);
   const ended = useCallback(() => setRuns((n) => n + 1), []);
+  const [days, setDays] = useState<RangeDays>(7);
   return (
     <div className="col gap-4">
-      <RunHead onEnded={ended} />
-      {section === "findings" ? <Findings key={runs} /> : null}
+      <RunHead onEnded={ended}>
+        {section === "findings" ? <RangePicker days={days} onChange={setDays} /> : null}
+      </RunHead>
+      {section === "findings" ? <Findings key={runs} days={days} /> : null}
       {section === "reports" ? <Reports /> : null}
       {section === "history" ? <History /> : null}
     </div>
   );
 }
 
-/** When the checks last ran, Run now, and the model. */
-function RunHead({ onEnded }: { onEnded: () => void }) {
-  const [started, setStarted] = useState(false);
-  const latest = useLatestRun(started);
-  const run = latest.data ?? null;
-  const running = run?.status === "running";
-  const now = useNow();
-  const toast = useToast();
-  // A RUN THIS PAGE STARTED is followed until it ends, then the findings are
-  // read again for what it found.
-  const ended = started && run !== null && !running && run.ended_at !== null;
-  useEffect(() => {
-    if (!ended) return;
-    setStarted(false);
-    onEnded();
-  }, [ended, onEnded]);
-  return (
-    <div className="advisor-head">
-      {/* THE PLACEMENT IS ON A BOX OF OUR OWN, never on the kit's Text: its
-          own rule (min-width: 0) ties with ours, and whichever chunk's style
-          loads last won, squeezing the line to a word a line on a phone. */}
-      <div className="advisor-head__run">
-        <Text as="p" tone="secondary">
-          {runWords(run, now)}
-        </Text>
-      </div>
-      <div className="advisor-head__controls">
-        <Button
-          size="small"
-          variant="secondary"
-          disabledReason={running ? "The checks are running" : undefined}
-          onClick={() => {
-            setStarted(true);
-            void runNow().then(
-              () => latest.refetch(),
-              () =>
-                toast.show({
-                  variant: "danger",
-                  title: "The checks could not be started",
-                  message: "Try again in a moment.",
-                }),
-            );
-          }}
-        >
-          {running ? "Running" : "Run now"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The last run, in words.
- *
- * A RUN IS EVERY CHECK, and it is said so: "All checks ran 18 minutes ago".
- * A row's own "checked just now" is that finding's, which an Apply's
- * re-check confirms on its own between runs (the duty runs every check
- * hourly, or when the company's setup changes). Said alike, "Checked 18
- * minutes ago" over a row "checked just now" read as a list 18 minutes old.
- */
-export function runWords(run: AdvisorRunSummary | null, now: number): string {
-  if (run === null) return "The checks have not run yet.";
-  if (run.status === "running") return `Checking now, started ${ago(run.started_at, now)}.`;
-  if (run.status === "failed")
-    return `The last run did not finish. It started ${ago(run.started_at, now)}.`;
-  // WHAT IT MOVED, and only that: "closed 0" said nothing a reader needed.
-  const moved = [
-    run.opened > 0 ? `found ${plural(run.opened, "new finding")}` : "",
-    run.resolved > 0 ? `closed ${plural(run.resolved, "finding")}` : "",
-  ].filter(Boolean);
-  const found = moved.length > 0 ? ` It ${moved.join(" and ")}.` : "";
-  return `All checks ran ${ago(run.ended_at ?? run.started_at, now)}.${found}`;
-}
-
-/** The go-live check's own words for a step's state. */
-const GO_LIVE_LABELS = { done: "Done", waiting: "To do", pending: "Can't say yet" };
-
-/**
- * THE GO-LIVE CHECK: the owner's open findings counted by what ignoring them
- * costs, as three things to do before the agents start, each done when none
- * is left. Read off the same list as the rows under it, so the two cannot
- * differ.
- */
-export function goLiveSteps(owner: readonly AdvisorKeptFinding[]): StepListStep[] {
-  const count = (severity: AdvisorSeverity) => owner.filter((f) => f.severity === severity).length;
-  const blocks = count("blocks");
-  const costs = count("costs");
-  const notes = count("note");
-  return [
-    {
-      id: "blocks",
-      label: blocks ? `Fix what blocks the company (${blocks})` : "Nothing blocks the company",
-      state: blocks ? "waiting" : "done",
-    },
-    {
-      id: "costs",
-      label: costs ? `Look at what costs it (${costs})` : "Nothing costs it",
-      state: costs ? "waiting" : "done",
-    },
-    {
-      id: "notes",
-      label: notes ? `Read what is worth knowing (${notes})` : "Nothing else to read",
-      state: notes ? "waiting" : "done",
-    },
-  ];
-}
-
-/** The row actions every list on the page shares, and the dialog Apply opens. */
+/** The row actions every list on the page shares, the Apply open in place, and the atlas dialog. */
 function useRowActions(reload: () => void) {
   const askAbout = useAskAbout();
   const decisions = useDecisions(reload);
-  const [applying, setApplying] = useState<AdvisorKeptFinding | null>(null);
+  const [open, setOpen] = useState<OpenApply | null>(null);
   const [reviewing, setReviewing] = useState<AdvisorKeptFinding | null>(null);
   const actions: RowActions = {
-    apply: setApplying,
+    apply: (f, option) => setOpen({ id: f.id, option }),
     review: setReviewing,
     ask: askAbout,
     snooze: decisions.snooze,
     wake: decisions.wake,
     dismiss: decisions.dismiss,
   };
-  const dialog = (
-    <>
-      {applying ? (
-        <ApplyDialog finding={applying} onClose={() => setApplying(null)} onSettled={reload} />
-      ) : null}
-      <AtlasFix
-        finding={reviewing}
-        onClose={() => {
-          setReviewing(null);
-          reload();
-        }}
-      />
-    </>
+  const applyFor = (f: AdvisorKeptFinding, option: number) => (
+    <ApplyPanel
+      key={`${f.id}:${option}`}
+      finding={f}
+      option={option}
+      onClose={() => setOpen(null)}
+      onSettled={reload}
+    />
   );
-  return { actions, dialog };
+  const dialog = (
+    <AtlasFix
+      finding={reviewing}
+      onClose={() => {
+        setReviewing(null);
+        reload();
+      }}
+    />
+  );
+  return { actions, open, applyFor, dialog };
 }
 
-function Findings() {
+function Findings({ days }: { days: RangeDays }) {
   const open = useFindings("open");
   const now = useNow();
   const { refetch } = open;
   const reload = useCallback(() => refetch(), [refetch]);
-  const { actions, dialog } = useRowActions(reload);
+  const row = useRowActions(reload);
   const all = ranked(open.data?.findings ?? []);
+  const { snapshot, loading } = useSnapshot(days, all);
   // A SNOOZED FINDING LEAVES THE LISTS it would stand in, for one of its own
-  // that says until when, and still counts toward the go-live check: the
-  // condition holds, the person only asked not to see it for a while.
-  const owner = all.filter((f) => f.actor === "owner");
+  // that says until when.
   const shown = all.filter((f) => !snoozed(f, now));
   const asleep = all.filter((f) => snoozed(f, now));
   const engine = shown.filter((f) => f.actor === "engine");
-  const steps = goLiveSteps(owner);
-  const blocked = owner.some((f) => f.severity === "blocks");
   const change = shown.filter((f) => f.actor === "owner");
+  const blocked = all.some((f) => f.actor === "owner" && f.severity === "blocks");
+  const items = (list: readonly AdvisorKeptFinding[]) =>
+    listItems(list, now, row.actions, row.open, row.applyFor);
   return (
-    <QueryState
-      error={open.error}
-      detail={open.detail}
-      refusal={open.refusal}
-      loading={open.loading && open.data === null}
-    >
-      {open.data ? (
-        <>
-          {/* UNTIL NOTHING BLOCKS, the go-live check leads. */}
-          {blocked ? (
-            <StepList
-              label="Go-live check"
-              steps={steps}
-              labels={GO_LIVE_LABELS}
-              summary={`Go-live check: ${steps.filter((s) => s.state === "done").length} of ${steps.length} done`}
-            />
-          ) : null}
-          {change.length === 0 ? (
-            <EmptyState
-              size="compact"
-              title="Nothing to change"
-              description={
-                asleep.length > 0
-                  ? "Nothing to change right now beyond what you snoozed."
-                  : "The Advisor's checks found nothing worth changing right now."
-              }
-            />
-          ) : (
-            <AttentionList
-              items={listItems(change, now, actions)}
-              labels={{
-                title: "What to change",
-                tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
-              }}
-            />
-          )}
-          {engine.length > 0 ? (
-            <AttentionList
-              items={listItems(engine, now, actions)}
-              labels={{
-                title: "What the engine is handling",
-                tones: { danger: "Engine", warning: "Engine", info: "Engine" },
-              }}
-            />
-          ) : null}
-          {asleep.length > 0 ? (
-            <AttentionList
-              items={listItems(asleep, now, actions)}
-              labels={{
-                title: "Snoozed",
-                tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
-              }}
-            />
-          ) : null}
-          {blocked ? <GoLiveReview /> : null}
-        </>
-      ) : null}
-      {dialog}
-    </QueryState>
+    <>
+      <StatsStrip snapshot={snapshot} findings={all} loading={loading} />
+      <Charts snapshot={snapshot} findings={all} now={now} />
+      <QueryState
+        error={open.error}
+        detail={open.detail}
+        refusal={open.refusal}
+        loading={open.loading && open.data === null}
+      >
+        {open.data ? (
+          <>
+            {change.length === 0 ? (
+              <EmptyState
+                size="compact"
+                title="Nothing to change"
+                description={
+                  asleep.length > 0
+                    ? "Nothing to change right now beyond what you snoozed."
+                    : "The Advisor's checks found nothing worth changing right now."
+                }
+              />
+            ) : (
+              <AttentionList
+                items={items(change)}
+                collapseAfter={6}
+                labels={{
+                  title: "What to change",
+                  tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
+                }}
+              />
+            )}
+            {engine.length > 0 ? (
+              <AttentionList
+                items={items(engine)}
+                labels={{
+                  title: "What the engine is handling",
+                  tones: { danger: "Engine", warning: "Engine", info: "Engine" },
+                }}
+              />
+            ) : null}
+            {asleep.length > 0 ? (
+              <AttentionList
+                items={items(asleep)}
+                labels={{
+                  title: "Snoozed",
+                  tones: Object.fromEntries(SEVERITIES.map((s) => [s.tone, s.label])),
+                }}
+              />
+            ) : null}
+            {blocked ? <GoLiveReview /> : null}
+          </>
+        ) : null}
+        {row.dialog}
+      </QueryState>
+    </>
   );
 }
 

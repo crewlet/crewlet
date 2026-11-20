@@ -135,3 +135,55 @@
   text-align: start;
   font-variant-numeric: tabular-nums;
 }
+
+/* The range's charts, side by side where they fit (three on a laptop's
+   width) and one a row on a phone. */
+.advisor-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--spacing-3);
+}
+
+.advisor-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+/* Apply, in place: the state's line, the change, its effect, and the presses. */
+.advisor-apply {
+  display: grid;
+  gap: var(--spacing-2);
+}
+
+.advisor-apply:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.advisor-apply__state,
+.advisor-apply__effect {
+  margin: 0;
+}
+
+.advisor-apply__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* On a finding's page the panel stands under its fix on the quiet ground. */
+.advisor-apply-place {
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+/* A running run's steps so far, under its line, the newest last. */
+.advisor-run__steps {
+  display: grid;
+  gap: var(--spacing-1);
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
+}

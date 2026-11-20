@@ -34,21 +34,24 @@ import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtAt, fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { ApplyDialog } from "./ApplyDialog.tsx";
+import { ApplyPanel } from "./ApplyPanel.tsx";
 import { useFinding } from "./api.ts";
 import { useAskAbout, useDecisions } from "./decisions.tsx";
 import {
+  ActionButton,
   AtlasFix,
   FindingMenu,
   RecordLinks,
-  appliable,
-  fixAction,
   freshness,
+  marks,
   snoozed,
+  statWords,
+  type OpenApply,
   type RowActions,
 } from "./rows.tsx";
 import type { AdvisorFindingDetail } from "~/protocol/advisorFindings.ts";
 import { CLOSE_REASONS, STATE_WORDS, factWords, severityWord, toneOf } from "./words.ts";
+import { findingView } from "./view.ts";
 
 /** What each transition is called on the timeline; one this build does not know is said by its name. */
 const EVENTS: Readonly<Record<string, string>> = {
@@ -88,10 +91,11 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
   const now = useNow();
   const askAbout = useAskAbout();
   const decisions = useDecisions(reload);
-  const [applying, setApplying] = useState(false);
+  const [applying, setApplying] = useState<OpenApply | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const view = findingView(f);
   const actions: RowActions = {
-    apply: () => setApplying(true),
+    apply: (_, option) => setApplying({ id: f.id, option }),
     review: () => setReviewing(true),
     ask: askAbout,
     snooze: decisions.snooze,
@@ -133,7 +137,7 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
           {marked(f.title)}
         </Text>
         <Text as="p" variant="caption" tone="secondary">
-          {freshness(f, now).join(" · ")}
+          {[...view.stats.map(statWords), ...marks(f, now), freshness(f, now)].join(" · ")}
         </Text>
         {f.close_reason ? (
           <Callout variant="neutral">
@@ -181,13 +185,9 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         <div className="advisor-fix-line">
           <Text as="p">{marked(f.fix.sentence)}</Text>
           <span className="advisor-row-actions">
-            {appliable(f) ? (
-              <Button variant="primary" onClick={() => setApplying(true)}>
-                Apply
-              </Button>
-            ) : (
-              fixAction(f, actions)
-            )}
+            {view.actions.primary ? (
+              <ActionButton f={f} action={view.actions.primary} actions={actions} />
+            ) : null}
             {asleep ? (
               <Button size="small" variant="secondary" onClick={() => decisions.wake(f)}>
                 End the snooze
@@ -201,6 +201,18 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
             ) : null}
           </span>
         </div>
+        {/* APPLY CONFIRMS IN PLACE, under the fix it was pressed on. */}
+        {applying ? (
+          <section className="advisor-apply-place" aria-label="Apply">
+            <ApplyPanel
+              key={applying.option}
+              finding={f}
+              option={applying.option}
+              onClose={() => setApplying(null)}
+              onSettled={reload}
+            />
+          </section>
+        ) : null}
       </section>
 
       {f.history.length > 0 ? (
@@ -247,9 +259,6 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         </section>
       ) : null}
 
-      {applying ? (
-        <ApplyDialog finding={f} onClose={() => setApplying(false)} onSettled={reload} />
-      ) : null}
       <AtlasFix
         finding={reviewing ? f : null}
         onClose={() => {
