@@ -338,7 +338,7 @@ test("while anything blocks, the review of each agent's access is offered after 
   expect(screen.queryByText(/Go-live check/)).toBeNull();
 });
 
-test("the head says when the checks last ran, and Run now starts them", async () => {
+test("the head says when the checks last ran, and Run starts them", async () => {
   const run: AdvisorRunSummary = {
     run_id: "r1",
     trigger: "schedule",
@@ -363,28 +363,28 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     "All checks ran 4 minutes ago. It found 2 new findings and closed 1 finding.",
   );
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
   });
   await waitFor(() =>
     expect(sent.some((r) => r.method === "POST" && r.path === "/advisor/runs")).toBe(true),
   );
-  expect(sent.find((r) => r.path === "/advisor/runs")?.body).toEqual({ kind: "rules" });
+  expect(sent.find((r) => r.path === "/advisor/runs")?.body).toEqual({});
   expect(runWords(runView(null), NOW)).toBe("The checks have not run yet.");
 });
 
-// A DEEP RUN IS ASKED FOR BY NAME, beside the checks: it investigates with the
-// Advisor's model and can take many minutes, so it is its own press.
-test("Run deep asks the engine for a deep run", async () => {
+// ONE PRESS, NO KIND TO CHOOSE: the head offers Run alone, and the press asks
+// for one run, the checks and then the investigation, naming no kind.
+test("the head offers one Run, which asks for one run naming no kind", async () => {
   const { sent, answer } = engine([], null);
   mount(answer);
-  const press = await screen.findByRole("button", { name: "Run deep" });
+  const press = await screen.findByRole("button", { name: "Run" });
+  expect(screen.queryByRole("button", { name: "Run deep" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
   await act(async () => {
     fireEvent.click(press);
   });
   await waitFor(() =>
-    expect(sent.find((r) => r.method === "POST" && r.path === "/advisor/runs")?.body).toEqual({
-      kind: "deep",
-    }),
+    expect(sent.find((r) => r.method === "POST" && r.path === "/advisor/runs")?.body).toEqual({}),
   );
 });
 

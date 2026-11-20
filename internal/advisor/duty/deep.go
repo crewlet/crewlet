@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -13,7 +14,7 @@ import (
 )
 
 // THE DEEP RUN ON THE DUTY (ADR-0166): an investigation on the Advisor's model,
-// asked for by a person (Run deep) or due at its slots (nightly, and early on
+// asked for by a person (Run, after its checks) or due at its slots (nightly, and early on
 // Monday before the weekly report). It runs for minutes, longer than the
 // lease's time to live, so it runs beside the tick rather than in it: the tick
 // keeps renewing the lease and runs nothing else while it is in flight, and a
@@ -134,8 +135,10 @@ func (d *Duty) deepDue(now time.Time, last map[string]time.Time) bool {
 const DeepScope = "deep"
 
 // startDeep starts one deep run beside the tick, recorded under each of ids
-// when it ends (a person's presses), or under a new id at a slot.
-func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by string, ids []string) {
+// when it ends (a person's presses), or under a new id at a slot. Where it
+// goes on from a press's checks, rules is that part, recorded with it as one
+// run.
+func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by string, ids []string, rules *Run) {
 	runCtx, cancel := context.WithCancel(ctx)
 	f := &flight{cancel: cancel, done: make(chan struct{})}
 	d.deep.mu.Lock()
@@ -145,6 +148,9 @@ func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by
 		defer close(f.done)
 		defer cancel()
 		run := d.runDeep(runCtx, now, trigger, by, ids[0])
+		if rules != nil {
+			run = joined(*rules, run)
+		}
 		if runCtx.Err() == nil {
 			var errs []error
 			for _, id := range ids {
@@ -159,6 +165,18 @@ func (d *Duty) startDeep(ctx context.Context, now time.Time, trigger Trigger, by
 		d.deep.flying = nil
 		d.deep.mu.Unlock()
 	}()
+}
+
+// joined is a press's run: its checks and its investigation as one run,
+// begun when the checks began, failed where either part failed.
+func joined(rules, deep Run) Run {
+	out := deep
+	out.StartedAt, out.Classes = rules.StartedAt, rules.Classes
+	out.Scopes = append(append([]ScopeRun{}, rules.Scopes...), deep.Scopes...)
+	if rules.Status == RunFailed {
+		out.Status = RunFailed
+	}
+	return out
 }
 
 // runDeep is one deep run, reconciled with the log where it concluded.
@@ -228,30 +246,122 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 	return run
 }
 
-// pressedDeep answers the deep runs people asked for: one deep run recorded
-// under every press, or, where no model is assigned, each recorded as failed
-// saying why. A press this holder already ran is recorded, never run again.
-func (d *Duty) pressedDeep(ctx context.Context, now time.Time, deep []Request) error {
-	deep, err := d.recordAgain(ctx, deep)
-	if len(deep) == 0 {
+// ONE PRESS, ONE RUN (ADR-0166). A person presses Run and never chooses a kind
+// of run: the checks run at once, their findings recorded as they are found,
+// and the run goes on into the deep investigation beside the tick, under the
+// same id and the same progress line, recorded as one run with both parts.
+// The deep part is kept, not run, where an investigation concluded within
+// [DeepFreshFor], and cannot run where no model is assigned; the run says
+// which, and why.
+
+// DeepFreshFor is how long an investigation that concluded stands for a
+// press: a press within it runs the checks and keeps that investigation
+// rather than spend another. Six hours: the nightly one at 03:00 (and
+// Monday's at 05:00, before the weekly report) serves the presses of the
+// working morning, a press in the afternoon investigates again, and a
+// company that presses all day pays for at most four investigations beside
+// the nightly one, each within its own bound (2M tokens and 20 minutes by
+// default), where every press investigating would pay for one a press.
+const DeepFreshFor = 6 * time.Hour
+
+// Why a run's deep part did not run, as its record says it.
+const (
+	// DeepKept is a deep part kept from an investigation that concluded
+	// within [DeepFreshFor].
+	DeepKept = "kept"
+	// DeepNoModel is a deep part that could not run: no model is assigned.
+	DeepNoModel = "no_model"
+)
+
+// pressed answers every press waiting with one run, recorded under each
+// press's own id, so a press during a run joins the next. A press this
+// holder already ran is recorded, never run again.
+func (d *Duty) pressed(ctx context.Context, now time.Time, requests []Request) error {
+	requests, err := d.recordAgain(ctx, requests)
+	if len(requests) == 0 {
 		return err
 	}
-	ids := make([]string, len(deep))
-	for i, r := range deep {
+	if err != nil {
+		log.WarnContext(ctx, "advisor_run_not_recorded", "error", err.Error())
+	}
+	last, err := d.Log.LastDone(ctx)
+	if err != nil {
+		return fmt.Errorf("read when each group last ran: %w", err)
+	}
+	ids := make([]string, len(requests))
+	for i, r := range requests {
 		ids[i] = r.Run
 	}
-	if d.Deep != nil && d.Deep.Assigned() {
-		d.startDeep(ctx, now, TriggerPerson, deep[0].By, ids)
-		return nil
+	first := requests[0]
+	skipped, why := "", ""
+	switch {
+	case d.Deep == nil || !d.Deep.Assigned():
+		skipped, why = DeepNoModel, "The Advisor has no model assigned (advisor.model), so the deep investigation could not run."
+	case now.Sub(last[DeepScope]) < DeepFreshFor:
+		skipped, why = DeepKept, fmt.Sprintf("The deep investigation from %s ago is kept: another runs on a press "+
+			"%s after it, and every night.", hoursAgo(now.Sub(last[DeepScope])), hoursAgo(DeepFreshFor))
 	}
+	// THE CHECKS FIRST, their findings recorded as they are found; the daily
+	// model pass with them only where no investigation follows and it is due.
+	model := skipped != "" && d.Model != nil && d.Model.Assigned() &&
+		last[string(advisor.GroupModel)].Before(d.slot(now))
+	rules := d.run(ctx, now, true, model, TriggerPerson, first.By, first.Run)
+	rules.Kind = advisordomain.RunKindDeep
+	if skipped == "" {
+		if perr := d.Log.Progress(ctx, first.Run, d.Now().UTC(), checksSaid(rules)); perr != nil {
+			log.WarnContext(ctx, "advisor_progress_not_recorded", "run", first.Run, "error", perr.Error())
+		}
+		d.startDeep(ctx, now, TriggerPerson, first.By, ids, &rules)
+		return d.Log.Expire(ctx, now)
+	}
+	rules.Model = withSkipped(rules.Model, skipped, why, last[DeepScope])
 	var errs []error
-	for _, r := range deep {
-		errs = append(errs, d.conclude(ctx, Run{ID: r.Run, Trigger: TriggerPerson, By: r.By, StartedAt: now,
-			EndedAt: now, Status: RunFailed, Kind: advisordomain.RunKindDeep,
-			Model: map[string]any{"status": string(advisor.PassFailed),
-				"reason": "The Advisor has no model assigned (advisor.model), so it cannot investigate."}}))
+	for _, r := range requests {
+		rules.ID, rules.By = r.Run, r.By
+		errs = append(errs, d.conclude(ctx, rules))
 	}
-	return errors.Join(append(errs, err)...)
+	return errors.Join(append(errs, d.Log.Expire(ctx, now))...)
+}
+
+// checksSaid is the progress line a run's checks end on, before it goes on
+// into the investigation.
+func checksSaid(r Run) string {
+	return fmt.Sprintf("checks done: %d opened, %d closed; investigating", r.Count(advisor.StepOpen),
+		r.Count(advisor.StepClose))
+}
+
+// withSkipped is a run's model summary saying why its deep part did not run:
+// skipped (kept or no_model), the reason in words, and for a kept part when
+// the investigation it keeps ran.
+func withSkipped(model any, skipped, why string, from time.Time) map[string]any {
+	out := map[string]any{}
+	if model != nil {
+		if raw, err := json.Marshal(model); err == nil {
+			_ = json.Unmarshal(raw, &out)
+		}
+	}
+	out["skipped"] = skipped
+	if _, said := out["reason"]; !said || skipped == DeepNoModel {
+		out["reason"] = why
+	}
+	if skipped == DeepKept {
+		out["kept_from"] = from.UTC()
+	}
+	if _, has := out["status"]; !has {
+		out["status"] = string(advisor.PassDone)
+		if skipped == DeepNoModel {
+			out["status"] = string(advisor.PassFailed)
+		}
+	}
+	return out
+}
+
+// hoursAgo is a span as a person reads it: whole hours, or minutes under one.
+func hoursAgo(d time.Duration) string {
+	if d < time.Hour {
+		return fmt.Sprintf("%d min", int(d/time.Minute))
+	}
+	return fmt.Sprintf("%d h", int(d/time.Hour))
 }
 
 // A RUN ALWAYS CONCLUDES. A run whose record the log refuses would leave the

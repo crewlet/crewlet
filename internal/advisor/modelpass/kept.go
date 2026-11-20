@@ -59,7 +59,7 @@ func tallyOf(items []AgendaItem) AgendaTally {
 // whatever the run did.
 func (r DeepRun) Kept() DeepRun {
 	out := DeepRun{Pass: r.Pass, StoppedBy: cut(r.StoppedBy, keptWordBytes), Minutes: r.Minutes, Bounds: r.Bounds,
-		Progress: []Progress{}, Resumed: r.Resumed}
+		Progress: []Progress{}, Resumed: r.Resumed, Skipped: cut(r.Skipped, keptWordBytes), KeptFrom: r.KeptFrom}
 	out.Findings, out.Explained = nil, nil
 	out.Model, out.Reason = cut(r.Model, keptWordBytes), cut(r.Reason, keptReasonByte)
 	out.Unread = []string{}

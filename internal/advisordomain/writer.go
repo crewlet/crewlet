@@ -370,7 +370,7 @@ func (w *Writer) Progress(ctx context.Context, c Call, p RunProgress) (statelog.
 		OpProgress, p, func(*sql.Tx) (int64, error) { return 0, nil })
 }
 
-// RequestRun writes a person's press of Run now. A run already requested or
+// RequestRun writes a person's press of Run. A run already requested or
 // recorded answers [ErrExists].
 func (w *Writer) RequestRun(ctx context.Context, c Call, r RunRequest) (statelog.Result, error) {
 	if err := c.validate(); err != nil {

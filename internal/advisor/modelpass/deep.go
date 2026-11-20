@@ -115,6 +115,11 @@ type DeepRun struct {
 	// Resumed is how many agenda items came answered from a run taken over,
 	// 0 for a run that started fresh.
 	Resumed int `json:"resumed"`
+	// Skipped is why a press's deep part did not run, as the duty records it
+	// (duty.DeepKept, duty.DeepNoModel), "" where it ran; KeptFrom is when
+	// the investigation a kept part keeps ran.
+	Skipped  string     `json:"skipped,omitempty"`
+	KeptFrom *time.Time `json:"kept_from,omitempty"`
 }
 
 // The deep run's own tools.
