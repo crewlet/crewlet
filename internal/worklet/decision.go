@@ -21,8 +21,7 @@ import (
 // check: cited tasks and pages exist ([ValidateDecision]), an agent's decision
 // recommends an option and says why (ADR-0100), a decision rides only an asking
 // comment and an `inform` only an agent seat's ([checkCommentShape]), and a
-// choice names an option of the ask it answers and says so in its words
-// ([checkStatesChoice], the writer's decide).
+// choice names an option of its ask and says so ([checkStatesChoice]).
 //
 // Immutable once asked, as answers name options by id, and no write is refused
 // for trying: a post naming an existing remark is answered from its row
