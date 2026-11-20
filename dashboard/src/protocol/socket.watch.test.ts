@@ -308,15 +308,15 @@ describe("a query frame", () => {
     expect(frames().filter((frame) => frame.kind === "query_cancel")).toEqual([
       { kind: "query_cancel", id },
     ]);
-    dial(0).onmessage?.({ data: JSON.stringify({ kind: "result", id, data: {} }) } as MessageEvent);
-    await afterMicrotasks();
-    expect(answered).toBe(false);
-    // NOR ASKED AGAIN on the socket after it, as a question still in flight is.
+    // NOT ASKED AGAIN on the socket after it, as a question still in flight is.
     dial(0).closeWith(1006);
     await vi.advanceTimersByTimeAsync(1_000);
     dial(1).open();
     const again = dial(1).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
     expect(again.filter((frame) => frame.kind === "query")).toEqual([]);
+    dial(1).onmessage?.({ data: JSON.stringify({ kind: "result", id, data: {} }) } as MessageEvent);
+    await afterMicrotasks();
+    expect(answered).toBe(false);
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the
