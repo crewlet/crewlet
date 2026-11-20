@@ -44,9 +44,9 @@ import { KIND_WORDS } from "~/lib/artifacts/words.ts";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { accessNote } from "~/lib/decisions.ts";
-import { firstLine } from "~/lib/format.ts";
 import { TokenScope } from "~/components/InlineToken.tsx";
-import { renderTokens } from "~/lib/markdown.ts";
+import { renderQuoted, renderTokens, type RenderOptions } from "~/lib/markdown.ts";
+import { Said } from "~/components/Said.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
 import {
@@ -637,45 +637,37 @@ function givenWords(answer: AskAnswer): AnswerWords {
 }
 
 /**
- * The most of an answer in words a row carries: its first line, cut at a
- * word near ninety characters. The pane and the thread carry it whole.
+ * What was written in an answer, as a row draws it: the row is a link, so no
+ * link of its own and no stop inside it, a picture is its alt text, and a
+ * heading is a line of the words, never a heading in the page's outline.
  */
-const SAID_MAX = 90;
-
-function shortSaid(text: string): string {
-  const line = firstLine(text);
-  if (line.length <= SAID_MAX) return line;
-  const cut = line.slice(0, SAID_MAX);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), SAID_MAX / 2)).trimEnd()}…`;
-}
+const ROW_WORDS: RenderOptions = { links: "text", image: () => null, headings: "text" };
 
 /**
- * "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**",
- * "You chose **Hold release** and wrote **“Tell support first.”**",
- * "Release manager withdrew it: **“Covered by the pull request.”**".
+ * "You chose **Hold release**", "Maya Ops replied “Hold it a week.”",
+ * "You chose **Hold release** and wrote “Tell support first.”",
+ * "Release manager withdrew it: “Covered by the pull request.”".
+ *
+ * WHAT WAS WRITTEN IS MARKDOWN (`Said`), and the line stops at three lines
+ * with an ellipsis, cut where it is drawn: a cut in the source landed inside
+ * a mark and left it showing. The pane and the thread carry the words whole.
  */
 function AnswerLine({ words }: { words: AnswerWords }) {
-  if (words.kind === "withdrawn") {
-    return words.said ? (
-      <>
-        {`${words.who} ${words.verb}: `}
-        <strong>{`“${shortSaid(words.said)}”`}</strong>
-      </>
-    ) : (
-      <>{`${words.who} ${words.verb}`}</>
-    );
-  }
+  const written = words.kind === "choice" ? words.note : words.said;
+  const quoted = written ? renderQuoted(written, ROW_WORDS) : null;
   return (
-    <>
-      {`${words.who} ${words.verb} `}
-      <strong>{words.kind === "reply" ? `“${shortSaid(words.said)}”` : words.said}</strong>
-      {words.note && (
+    <Text variant="inherit" clamp={3} titleWhenCut={false}>
+      {words.kind === "choice" ? (
         <>
-          {" and wrote "}
-          <strong>{`“${shortSaid(words.note)}”`}</strong>
+          {`${words.who} ${words.verb} `}
+          <strong>{words.said}</strong>
+          {quoted && " and wrote"}
         </>
+      ) : (
+        `${words.who} ${words.verb}${words.kind === "withdrawn" && quoted ? ":" : ""}`
       )}
-    </>
+      {quoted && <Said quoted={quoted} />}
+    </Text>
   );
 }
 

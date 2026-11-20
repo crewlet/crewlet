@@ -88,8 +88,7 @@
   gap: var(--spacing-2);
 }
 
-/* Reports and closed findings, one row each. */
-.advisor-reports,
+/* Closed findings, one row each. */
 .advisor-history {
   display: grid;
   gap: var(--spacing-2);
@@ -105,24 +104,92 @@
   gap: var(--spacing-1) var(--spacing-2);
 }
 
-/* A week's measures against the week before. */
-.advisor-report__metrics {
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 40rem;
+/* A week's report: its head, then its sections, one under the other. */
+.advisor-report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
 }
 
-.advisor-report__metrics caption {
-  text-align: start;
-  padding-bottom: var(--spacing-1);
+.advisor-report__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-4);
 }
 
-.advisor-report__metrics th,
-.advisor-report__metrics td {
-  padding: var(--spacing-1) var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: start;
+.advisor-report__title,
+.advisor-report__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* The weeks either side, at the head's end. */
+.advisor-report__weeks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+/* What the week moved: four counts in one strip, wrapping on a phone. */
+.advisor-moved {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-6);
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.advisor-moved__count,
+.advisor-report__number {
   font-variant-numeric: tabular-nums;
+}
+
+.advisor-moved__count {
+  font-weight: var(--font-weight-semibold);
+}
+
+/* A number's change against the week before, in the ink of whether it is the one wanted. */
+.advisor-change {
+  margin-inline-start: var(--spacing-2);
+  color: var(--color-text-secondary);
+}
+
+.advisor-change--good {
+  color: var(--color-feedback-success-ink);
+}
+
+.advisor-change--bad {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* The weeks, a card each, the newest first. */
+.advisor-weeks {
+  display: grid;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-week__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4) 0;
+}
+
+.advisor-week__written {
+  margin-inline-start: auto;
 }
 
 /* The range's charts, side by side where they fit (three on a laptop's
