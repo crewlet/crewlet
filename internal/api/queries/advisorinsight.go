@@ -85,7 +85,11 @@ func insightOf(f advisor.Finding, facts []AdvisorFact) AdvisorFindingInsight {
 		out.Stats = append(out.Stats, advisor.Stat{Key: fact.Key, Label: fact.Label, Value: float64(fact.Value),
 			Unit: fact.Unit})
 	}
-	if f.Subject.Kind == advisor.SubjectSeat && f.Subject.Seat != "" {
+	for _, s := range f.Seats {
+		unit := s.Unit
+		out.Seats = append(out.Seats, AdvisorSeatShare{Handle: s.Seat, Name: s.Name, Value: &s.Value, Unit: &unit})
+	}
+	if len(f.Seats) == 0 && f.Subject.Kind == advisor.SubjectSeat && f.Subject.Seat != "" {
 		name := f.Subject.Name
 		if name == "" {
 			name = f.Subject.Seat

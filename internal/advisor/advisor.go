@@ -236,6 +236,9 @@ type Finding struct {
 	// Premise is the fact the finding rests on, asked again every hour; a
 	// premise that no longer holds resolves the finding (ADR-0166).
 	Premise *Premise `json:"premise,omitempty"`
+	// Seats are the seats a finding about one cause is about, each with its
+	// share of the number, where the class states them (ADR-0166).
+	Seats []SeatShare `json:"seats,omitempty"`
 	// Why says what it costs, in the owner's words.
 	Why string `json:"why"`
 	// Item is the one thing within the subject the finding is about, as a
@@ -271,6 +274,14 @@ type Answer struct {
 	Silent []Silence `json:"silent,omitempty"`
 }
 
+// SeatShare is one seat a finding is about, and its share of the number.
+type SeatShare struct {
+	Seat  string  `json:"seat"`
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+	Unit  Unit    `json:"unit"`
+}
+
 // Silence is what a class could not judge, and why, in words.
 type Silence struct {
 	Class  Class  `json:"class"`
@@ -297,6 +308,7 @@ const (
 	UnreadFlow         = "flow"
 	UnreadSkips        = "schedule_skips"
 	UnreadStaffing     = "staffing"
+	UnreadCapacity     = "capacity"
 )
 
 // Inputs is what one answer is read from.

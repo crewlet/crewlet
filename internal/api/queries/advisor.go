@@ -233,6 +233,10 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 			ev.StaffingUnread, *read.into = true, nil
 		}
 	}
+	if ev.Capacity, err = s.advisorCapacityOf(ctx, company, now, advisor.LedgerDays); err != nil {
+		log.WarnContext(ctx, "advisor_capacity_unreadable", "error", err.Error())
+		ev.CapacityUnread, ev.Capacity = true, nil
+	}
 	return ev
 }
 
