@@ -100,8 +100,12 @@ entry's open signals, and activity is a count of recorded lines.
 The map reads the way a request travels. The first row is **Entry** (domains,
 host names, certificates), **Services** and **Data**; the second is what those
 stand on, **Runtime** and **Platforms**; the third is what stands around them,
-**Code and delivery**, **Observability**, and **Tools and models**. Inside
-Services, a service stands one column right of the service that calls it.
+**Code and delivery**, **Observability**, and **Tools and models**. The map
+arranges these rows for the space it has: on a wide screen a row's lanes take
+more columns and wider cards, and rows may stand side by side; on a phone a row
+splits into one lane or two at a time. The order always reads the same way,
+left to right and top to bottom. Inside Services, a service stands one column
+right of the service that calls it.
 Each entry is a card: its kind's glyph, its vendor's mark on the corner, and
 its name.
 
@@ -144,9 +148,11 @@ its name.
 
 **The map opens with all of it in view**, centred and zoomed to fit the space
 it has, so a large company opens zoomed out and a phone shows the whole map
-small. It fits again when a filter changes what it draws, and when its space
-changes size (a sheet opening beside the page, fullscreen) while you have not
-moved it. Once you zoom or pan, the map keeps your view as it refreshes. A
+small. It fits again when a filter changes what it draws. When its space
+changes shape (fullscreen, a wider window), the map is arranged again for it
+and fits, unless an entry is selected, so a sheet opening for the selection
+never moves the entries; a smaller change fits it again only while you have
+not moved it. Once you zoom or pan, the map keeps your view as it refreshes. A
 link to one entry (**Show it on the map** from its page or its sheet, or an
 address with the entry selected) opens the map on that entry instead, in the
 middle, at a size its card reads.

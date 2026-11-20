@@ -3715,9 +3715,27 @@ fullscreen), in one look: fine grid, see-through cluster panes with the title in
 the outline, outlined cards on the ground's colour, right-angled lines routed
 round every card. That drawing stays inside the map's world; legend, dock, hover
 card and zoom bar are the kit's own shapes. Lanes are the engine's (`lane` on
-every entry), in three rows (`MAP_ROWS`): what a request travels (Entry,
+every entry), read in three rows (`MAP_ROWS`): what a request travels (Entry,
 Services, Data), what that stands on (Runtime, Platforms), what stands around it
-(Code and delivery, Observability, Tools and models). **Every lane is drawn**: an
+(Code and delivery, Observability, Tools and models).
+
+**The lanes are arranged for the canvas** (`routes/atlas/arrange.ts`): which
+lanes share a row, how many columns of cards each takes and how wide a card is
+(the kit's to twice it) are chosen from the map's box (the screen when
+fullscreen) and what each lane holds, so the fitted map fills its canvas. A row
+of `MAP_ROWS` is split into consecutive rows or stood whole beside the next,
+never mixed with part of another, so the reading order holds. Each arrangement
+is scored by the fit it gets, planned with the kit's sizes and chrome: nothing
+under the zoom bar; no name drawn smaller than a tile's 10px (from half size to
+about three quarters a card draws its name at its own scale, so such a fit
+draws tiles with wider cards instead), clear of each level's edge; a zoom
+within a tenth of the largest; every lane's title showing its first letters
+and its figures (ahead of the zoom where every fit draws marks); then the card
+width that says the most names whole, and the arrangement nearest `MAP_ROWS`.
+The same entries on the same box arrange alike. A new arrangement is a new
+canvas, measured and fitted afresh, with the open groups kept; it follows the
+box when it changes by more than 3%, and is held while an entry is selected,
+so a sheet opening beside the page never moves the entries. **Every lane is drawn**: an
 empty one says what in this build fills it (the Cloudflare integration's zones,
 the SSH servers, the integrations' accounts, Gitlet and the repositories the
 code hosts name, the models and tool servers) or, for a lane only people fill,
@@ -3751,9 +3769,10 @@ vendor inside their lane, each one card saying what it holds, with the vendor's
 mark where the kit has one and the card's glyph where not; under it every entry
 is its own card. A service on a call chain stands one column right of the
 deepest service calling it; one on none flows across the lane like any other
-lane's entries. A narrowed map draws only the lanes holding what matched (every
-lane while nothing does), each no wider than the columns its matches fill, so a
-few matches open at a readable size, on a phone too. A map past what the engine
+lane's entries, and a chain deeper than the lane is wide ends in its last
+column. A narrowed map draws only the lanes holding what matched (every lane
+while nothing does), arranged like any other, so a few matches open at a
+readable size, on a phone too. A map past what the engine
 draws at once arrives with groups the engine closed (`collapsed`), named in a
 banner above the map with a link to read each in the catalogue, so a partial map
 is never taken for the whole.
