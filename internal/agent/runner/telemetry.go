@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -226,8 +227,9 @@ type Spend struct {
 	Refusals []types.RefusalTally
 
 	// Review is the notes of the NEWEST review that sent the work back (a
-	// turn sent back twice was answered on the second), empty if none did.
-	// A task's turn card quotes it beside the send-back count.
+	// turn sent back twice was answered on the second), empty if none did,
+	// REDACTED as the phase's record holds them: a task's turn card quotes it
+	// beside the send-back count, on a record of its own.
 	Review string
 
 	// Phases are the phases that completed, in the order each first ran.
@@ -313,7 +315,7 @@ func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 		}
 		if rec.Decision == string(phase.SelfIterate) {
 			s.SentBack++
-			s.Review = rec.Notes
+			s.Review = redact.Secrets(rec.Notes)
 		}
 	}
 	if rec.Result.Text != "" {

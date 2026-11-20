@@ -387,3 +387,24 @@ func TestAnExecutorRunsRecordHoldsNoSecretItsLogsCutRanAcross(t *testing.T) {
 		}
 	}
 }
+
+// A TURN'S SPEND HOLDS NO SECRET A REVIEW'S NOTES CARRIED: the notes of a
+// review that sent the work back, which a task's turn card quotes on a record
+// of its own, are held redacted, as the phase's record holds them.
+//
+// Mutation: hold the notes as they came (Spend.record), and the spend holds
+// the plant.
+func TestATurnsSpendHoldsNoSecretAReviewsNotesCarried(t *testing.T) {
+	t.Parallel()
+	for _, p := range planted(t) {
+		pub := &collector{}
+		var mu sync.Mutex
+		e := quietEmitter(pub, &mu)
+		e.completed(context.Background(), phaseRecord{Phase: phase.Review,
+			Decision: string(phase.SelfIterate), Notes: "redo it:\n" + p.text + "\nthen check the logs"})
+		holdsNone(t, p.name+" in the spend's review", e.tally.Review, p)
+		if !strings.Contains(e.tally.Review, "then check the logs") {
+			t.Errorf("%s: the spend's review is %q, want the words around the marker", p.name, e.tally.Review)
+		}
+	}
+}
