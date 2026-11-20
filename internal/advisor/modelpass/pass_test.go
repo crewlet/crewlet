@@ -125,8 +125,10 @@ func TestTheModelPassListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 	if f.Evidence[0].Said() != "Tokens one run spent" || f.Evidence[1].Said() != "Tokens a day the seat may spend" {
 		t.Errorf("facts = %+v, want each said in the words the model labelled it with", f.Evidence)
 	}
+	// THE NUMBER WITH NO WORDS is labelled from its key and listed no more
+	// than once: it says what the finding already listed does.
 	want := map[advisor.Drop]int{advisor.DropUnread: 1, advisor.DropWrongFact: 1, advisor.DropNoEvidence: 1,
-		advisor.DropWords: 1}
+		advisor.DropRepeat: 1}
 	for drop, n := range want {
 		if got.Dropped[drop] != n {
 			t.Errorf("dropped %v, want %v", got.Dropped, want)

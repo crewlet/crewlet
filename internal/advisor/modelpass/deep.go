@@ -8,7 +8,6 @@ import (
 	"maps"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -217,36 +216,42 @@ func RunDeepFrom(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progr
 			out.StoppedBy)
 	}
 	checked, refused := stated(submitted)
-	findings, dropped := advisor.Ground(checked, surf.served, advisor.Grounding{
-		Company: d.Company, Rules: d.Rules, DryRun: deps.DryRun, Answered: d.Answers.Holding(now()),
-		RecordsOptional: true})
+	grounded := advisor.Ground(checked, surf.served, deepGrounding(d, deps.DryRun, d.Answers.Holding(now())))
 	for why, n := range refused {
-		dropped[why] += n
+		grounded.Dropped[why] += n
 	}
-	kept := findings[:0]
-	for _, f := range findings {
-		if f.Headline != "" && !headlineGrounded(f) {
-			dropped[advisor.DropWords]++
-			continue
-		}
+	// WHAT THE MODEL REWROTE once told why counts as its own repair.
+	if n := surf.reworded(); n > 0 {
+		grounded.Repaired[advisor.RepairReworded] += n
+	}
+	kept := make([]advisor.Finding, 0, len(grounded.Findings))
+	for _, f := range grounded.Findings {
 		kept = append(kept, advisor.SayNumbers(f))
 	}
-	out.Findings, out.Dropped, out.Listed = kept, dropped, len(kept)
+	out.Findings, out.Dropped, out.Listed = kept, grounded.Dropped, len(kept)
+	out.Repaired = grounded.Repaired
 	return out
 }
 
-// stated is the submissions whose every number says what it counts and whose
-// token totals say how much of them was cache reads, and how many of the
-// rest were dropped and why. A JUMP IN A SEAT'S TOKENS IS MOST OFTEN THE
-// CACHE: a finding about tokens cites the cache reads beside the total, so
-// the split was read before the seat was blamed.
+// deepGrounding is how a deep run's findings are checked: on cited numbers
+// alone where its reads name no record, each number saying what it counts,
+// and every number a headline says one of its facts.
+func deepGrounding(d DeepData, dryRun func(advisor.Change) error, answered map[string]bool) advisor.Grounding {
+	return advisor.Grounding{Company: d.Company, Rules: d.Rules, DryRun: dryRun, Answered: answered,
+		RecordsOptional: true, Units: true, Headlines: true}
+}
+
+// stated is the submissions whose token totals say how much of them was cache
+// reads, and how many of the rest were dropped and why. A JUMP IN A SEAT'S
+// TOKENS IS MOST OFTEN THE CACHE: a finding about tokens cites the cache reads
+// beside the total, so the split was read before the seat was blamed. A number
+// that says no unit is not dropped: grounding reads its unit off where it was
+// cited ([advisor.Grounding.Units]).
 func stated(submitted []advisor.Submitted) ([]advisor.Submitted, map[advisor.Drop]int) {
 	out := []advisor.Submitted{}
 	dropped := map[advisor.Drop]int{}
 	for _, sub := range submitted {
 		switch {
-		case slices.ContainsFunc(sub.Facts, func(c advisor.CitedFact) bool { return c.Unit == "" }):
-			dropped[advisor.DropWords]++
 		case tokensUnsplit(sub):
 			dropped[advisor.DropTokensUnsplit]++
 		default:
@@ -271,46 +276,6 @@ func tokensUnsplit(sub advisor.Submitted) bool {
 	return tokens && !cache
 }
 
-// headlineGrounded reports whether every number a headline says is one of
-// its finding's cited numbers, a day of a month aside.
-func headlineGrounded(f advisor.Finding) bool {
-	allowed := map[int64]bool{}
-	for _, fact := range f.Evidence {
-		allowed[fact.Value] = true
-	}
-	for _, m := range headlineNumber().FindAllStringSubmatchIndex(f.Headline, -1) {
-		raw := strings.ReplaceAll(f.Headline[m[2]:m[3]], ",", "")
-		n, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return false
-		}
-		rest := strings.TrimSpace(f.Headline[m[1]:])
-		if n >= 1 && n <= 31 && monthAhead(rest) {
-			continue
-		}
-		if !allowed[n] {
-			return false
-		}
-	}
-	return true
-}
-
-// headlineNumber is a number as a headline says it, thousands grouped or not.
-// Compiled at first use, not at init: Gitlet's push hook is this binary.
-var headlineNumber = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`\b(\d[\d,]*)\b`)
-})
-
-// monthAhead reports whether s starts with a month's name or its first three letters.
-func monthAhead(s string) bool {
-	for _, m := range []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"} {
-		if strings.HasPrefix(s, m) {
-			return true
-		}
-	}
-	return false
-}
-
 // deepSurface serves the deep run's reads, its progress and its submission.
 type deepSurface struct {
 	data     DeepData
@@ -328,9 +293,13 @@ type deepSurface struct {
 	submitted []advisor.Submitted
 	accepted  bool
 	attempts  int
-	stopping  string
-	agenda    []AgendaItem
-	added     int
+	// rewrites is how many submissions were sent back for their words,
+	// flagged how many findings the first held that broke the rule, and
+	// remaining how many the one taken still did.
+	rewrites, flagged, remaining int
+	stopping                     string
+	agenda                       []AgendaItem
+	added                        int
 	// asked is each read asked, by its name and parameters, as it is cited;
 	// failed is each read name that could not be read.
 	asked  map[string]string
@@ -849,8 +818,57 @@ func (s *deepSurface) submit(args map[string]any) toolloop.ToolResult {
 			Output: "the findings do not match the schema: " + err.Error() +
 				"; write them again, exactly as the schema says."}
 	}
+	// WORDS THE RULE REFUSES GO BACK WITH ITS REASONS, a bounded number of
+	// times, so the model rewrites them rather than lose what it found; what
+	// still breaks the rule after that is said by the engine from its facts.
+	said, flagged := s.precheck(sub.Findings)
+	if flagged > 0 && s.rewrites < maxRewrites && winding == "" {
+		s.rewrites++
+		s.attempts--
+		if s.flagged == 0 {
+			s.flagged = flagged
+		}
+		return toolloop.ToolResult{Failed: true, Cause: mcp.RefusalInvalid,
+			Output: "Rewrite these findings and submit all of them again; every number stands as you cited it. " +
+				said}
+	}
+	s.remaining = flagged
 	s.submitted, s.accepted = sub.Findings, true
 	return toolloop.ToolResult{Output: "received"}
+}
+
+// maxRewrites is how many times a submission is sent back for its words.
+const maxRewrites = 2
+
+// precheck is what in findings breaks the wording rule, in words a model
+// rewrites them by, and how many findings it is in.
+func (s *deepSurface) precheck(findings []advisor.Submitted) (string, int) {
+	g := deepGrounding(s.data, nil, nil)
+	var said []string
+	flagged := 0
+	for i, f := range findings {
+		problems := advisor.Precheck(f, g)
+		if tokensUnsplit(f) {
+			problems = append(problems, "it cites tokens without the cache reads: read the split and cite "+
+				"cache_read_tokens beside the total")
+		}
+		if len(problems) == 0 {
+			continue
+		}
+		flagged++
+		title := []rune(strings.Join(strings.Fields(f.Title), " "))
+		said = append(said, fmt.Sprintf("Finding %d (%q): %s.", i+1, string(title[:min(len(title), 60)]),
+			strings.Join(problems, "; ")))
+	}
+	return strings.Join(said, " "), flagged
+}
+
+// reworded is how many findings the model rewrote once told why: those sent
+// back for their words, less those still breaking the rule when taken.
+func (s *deepSurface) reworded() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return max(0, s.flagged-s.remaining)
 }
 
 // result is what the run submitted, and whether it did.
