@@ -43,7 +43,7 @@ var rowInventory = map[string]int{
 	"authz/orgchart":  1184,
 	"capability":      1657,
 	"conflictmarkers": 1192,
-	"coord":           24352,
+	"coord":           24302,
 	"costlimit":       782,
 	"decision":        1064,
 	"delegated":       1684,
