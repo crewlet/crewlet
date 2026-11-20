@@ -225,3 +225,41 @@ func BenchmarkALiveStream(b *testing.B) {
 		}
 	}
 }
+
+// A LIVE STREAM SETTLES PAST A LINE OF ANY LENGTH AS THE WHOLE TEXT DOES: a
+// line longer than any window (1.1 MiB, ending in a key that awaits its
+// separator, a key pending, or a quoted key), then a line of 300 KiB of
+// keys whose pairing that line's end decides, then a line that is the last
+// key's value or not, at both parities: written in 64 KiB pieces and flushed
+// at every line end, Close answers nil and the stream wrote [redact.Secrets].
+//
+// Mutation: past 1 MiB unsettled, hand the stages the text and settle again
+// from the line's end once four reaches settle there, and the stream writes
+// another text than Secrets.
+func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) {
+	t.Parallel()
+	filler := "filler " + strings.Repeat("x", 1100<<10) + " "
+	for _, sh := range [][3]string{
+		{"passwd ", ": ", "password: "}, {"passwd ", ": ", `"password": "`}, {"passwd ", ": ", "pwd: "},
+		{"password: ", "", "password: "}, {`"password": "`, "", `"password": "`},
+	} {
+		for _, k := range []int{30000, 30001} {
+			text := filler + sh[0] + "\n" + sh[1] + strings.Repeat(sh[2], k) + "\nhunter2secretvalue9\n" + strings.Repeat("ok\n", 20)
+			var out bytes.Buffer
+			s := redact.NewLiveStream(&out)
+			for at := 0; at < len(text); {
+				n := min(len(text)-at, 64<<10)
+				if i := strings.IndexByte(text[at:at+n], '\n'); i >= 0 {
+					n = i + 1
+				}
+				_, _ = s.Write([]byte(text[at : at+n]))
+				if at += n; text[at-1] == '\n' {
+					_, _, _ = s.Flush()
+				}
+			}
+			if err := s.Close(); err != nil || out.String() != redact.Secrets(text) {
+				t.Errorf("a line ending %q, then %q and %q x %d: Close answered %v, and the stream wrote another text than Secrets %s", sh[0], sh[1], sh[2], k, err, streamParted(out.String(), redact.Secrets(text)))
+			}
+		}
+	}
+}

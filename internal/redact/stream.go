@@ -80,34 +80,6 @@ const (
 // every stage at once, with no window held.
 const wholeBytes = stageStep
 
-// settleEvery is how much text a live stream takes past the last place it
-// asked [Settled] before it asks again on a write ([Stream.settleIn]): four
-// reaches, so Settled reads each byte about once more, plus what it held
-// back, and a reader that writes megabytes between two flushes holds no more
-// of them unsettled than a flush would.
-const settleEvery = 4 * MaxReach
-
-// unsettledBytes is the most text a live stream holds unsettled. Past it the
-// stream hands that text to its stages and trails its text as a [NewStream]
-// does until a line ends, then holds the text after it again and settles
-// once [resumeAfter] allows. Settled holds back complete lines only while a
-// key's block or a password's value may still be read across them
-// ([MaxKeyBlockBytes], [MaxReach]), so only a line longer than this,
-// unfinished or held whole by Settled, gets here.
-const unsettledBytes = 1 << 20
-
-// resumeAfter is how much of the text after a line too long to hold [Settled]
-// must settle, read from that line's end, before a live stream's stages
-// decide there again: what a line's last password's key takes as its value
-// turns on every key before it on the line, which a read from its end does
-// not see. What came before the line's end bears on the text after it for two
-// reaches at most (a key's block or an END's read back across it,
-// [MaxKeyBlockBytes], then a value read below a key, [MaxReach]), and a hold
-// that begins there is decided within one more, so a point Settled settles
-// four reaches on, read from the line's end, is one it settles read from the
-// whole text: three reaches, and one to spare.
-const resumeAfter = 4 * MaxReach
-
 // ErrDecidedEarly is what a [Stream] answers, wrapped with the first byte of
 // the text from which what it wrote may differ from [Secrets], once it finds
 // it decided a window of its text before what the rules claim
@@ -135,7 +107,7 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // Stream redacts a text written to it in pieces, writing the redacted text to
 // the writer it was made with, in one pass and bounded memory, or refuses it.
 // However the text is cut into writes, it holds its stages' windows (and a
-// live stream what is not settled, [unsettledBytes] at most), whether it
+// live stream the text past its settled point, [settling]), whether it
 // refuses depends on the text and its flushes alone ([Stream.Flush]), and
 // where Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
 //
@@ -174,24 +146,10 @@ type Stream struct {
 // settled point, which its stages have not been handed.
 type live struct {
 	// settled is the settled point in head while the text is held whole,
-	// up to which Flush wrote head's redaction.
+	// up to which Flush wrote head's redaction; raw is the text past it
+	// once the stages run.
 	settled int
-	// raw is the text past the settled point once the stages run, and due
-	// the length at which a write asks [Settled] again ([settleEvery]).
-	raw []byte
-	due int
-	// stopped is whether raw ran past [unsettledBytes] in a line that has
-	// not ended, the stages handed all of it; least is how far Settled must
-	// settle raw before the stages decide there ([resumeAfter]), and 0 once
-	// they hold a settled point.
-	stopped bool
-	least   int
-}
-
-// resume holds the text from a line end on again, once the stages hold all
-// before it, settling there once [resumeAfter] allows.
-func (l *live) resume() {
-	l.stopped, l.least, l.raw, l.due = false, resumeAfter, l.raw[:0], settleEvery
+	raw     settling
 }
 
 // NewStream is a Stream that writes what it redacts to w.
@@ -200,11 +158,11 @@ func NewStream(w io.Writer) *Stream {
 }
 
 // NewLiveStream is a Stream whose Flush writes the text's redaction as far as
-// [Settled] settles it: its stages are handed only settled text, held back up
-// to [unsettledBytes].
+// [Settled] settles it: its stages are handed only settled text, asked of as
+// each line ends ([settling]).
 func NewLiveStream(w io.Writer) *Stream {
 	s := NewStream(w)
-	s.live = &live{due: settleEvery}
+	s.live = &live{}
 	return s
 }
 
@@ -250,7 +208,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 			// stages write ([Settled]), so the end drops it.
 			s.end.skip = s.emitted
 			s.p.feed(s.head[:l.settled])
-			l.raw = append(l.raw, s.head[l.settled:]...)
+			l.raw.write(s.head[l.settled:])
 			s.head = nil
 			s.settleIn(p[n:])
 			return len(p), s.err
@@ -264,58 +222,17 @@ func (s *Stream) Write(p []byte) (int, error) {
 	return len(p), s.err
 }
 
-// settleIn takes p as the next of a live stream's text: held unsettled, the
-// stages handed what [Settled] settles each time [settleEvery] more of it has
-// arrived, and all of it once it runs past [unsettledBytes], up to the end of
-// the line it is in, after which it is held again ([live.resume]).
+// settleIn takes p as the next of a live stream's text, and hands its stages
+// what is settled.
 func (s *Stream) settleIn(p []byte) {
-	l := s.live
-	for s.p != nil && len(p) > 0 {
-		if l.stopped {
-			k := bytes.IndexByte(p, '\n') + 1
-			if k == 0 {
-				s.p.feed(p)
-				break
-			}
-			s.p.feed(p[:k])
-			p = p[k:]
-			l.resume()
-			continue
-		}
-		k := min(len(p), l.due-len(l.raw))
-		l.raw = append(l.raw, p[:k]...)
-		p = p[k:]
-		if len(l.raw) < l.due {
-			break
-		}
-		s.settle()
-	}
-	s.endErr()
-	s.stopOnMiss()
+	s.live.raw.write(p)
+	s.settle()
 }
 
-// settle hands a live stream's stages the text [Settled] settles past the
-// settled point, none short of [resumeAfter] after a line too long to hold,
-// or, past [unsettledBytes], all of it, held again after its line ends.
+// settle hands a live stream's stages the text [Settled] settled since it
+// last asked.
 func (s *Stream) settle() {
-	l := s.live
-	n := Settled(string(l.raw))
-	if n < l.least {
-		n = 0
-	} else {
-		l.least = 0
-	}
-	s.p.feed(l.raw[:n])
-	l.raw = l.raw[:copy(l.raw, l.raw[n:])]
-	if len(l.raw) > unsettledBytes {
-		s.p.feed(l.raw)
-		ended := l.raw[len(l.raw)-1] == '\n'
-		l.raw, l.stopped = nil, true
-		if ended {
-			l.resume()
-		}
-	}
-	l.due = min(len(l.raw)+settleEvery, unsettledBytes+1)
+	s.live.raw.settle(s.p.feed)
 	s.endErr()
 	s.stopOnMiss()
 }
@@ -325,8 +242,8 @@ func (s *Stream) settle() {
 // of the text whatever is written after it or the stream answers later) and
 // how many bytes of the text are not yet in what it wrote. On a Stream from
 // NewStream it writes nothing and counts only what no window decided early
-// waits on, and held is a lower bound, as it is while a live stream trails
-// past [unsettledBytes]. After an error it answers the counts it last had.
+// waits on, and held is a lower bound. After an error it answers the counts
+// it last had.
 //
 // Each stage is handed only settled text, and decides all it holds as it does
 // at the text's end ([pipeline.decideHeld]): the redaction composes there. So
@@ -340,14 +257,13 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 	case s.closed:
 		return s.written(), 0, nil
 	case s.p == nil && l != nil:
-		if n := Settled(string(s.head[l.settled:])); n > 0 {
+		rest := settling{text: s.head[l.settled:]}
+		if n := rest.next(); n > 0 {
 			s.emit(Secrets(string(s.head[l.settled : l.settled+n])))
 			l.settled += n
 		}
-	case s.p != nil && l != nil && !l.stopped:
-		// Settling that stops, or has not resumed, leaves the stages text
-		// no stage may decide as at an end ([unsettledBytes]).
-		if s.settle(); s.p != nil && !l.stopped && l.least == 0 {
+	case s.p != nil && l != nil:
+		if s.settle(); s.p != nil {
 			s.p.decideHeld()
 			s.endErr()
 			s.stopOnMiss()
@@ -368,14 +284,10 @@ func (s *Stream) counts() (final int64, held int) {
 		return s.emitted, len(s.head) - l.settled
 	case s.p == nil:
 		return 0, len(s.head)
-	case l != nil && !l.stopped && l.least == 0:
-		return s.written(), len(l.raw)
+	case l != nil:
+		return s.written(), len(l.raw.text)
 	}
-	held = s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
-	if l != nil {
-		held += len(l.raw)
-	}
-	return s.emitted + s.p.keys.finalWritten(), held
+	return s.emitted + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
 }
 
 // written is how many bytes the stream has written.
@@ -423,9 +335,9 @@ func (s *Stream) Close() error {
 		s.head = nil
 		return s.err
 	}
-	if l := s.live; l != nil && !l.stopped {
-		s.p.feed(l.raw)
-		l.raw = nil
+	if l := s.live; l != nil {
+		s.p.feed(l.raw.text)
+		l.raw.text = nil
 	}
 	s.p.close()
 	s.endErr()

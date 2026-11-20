@@ -32,9 +32,8 @@
 // reader never sees a key's body that its END line, arriving later, redacts. A
 // rule that can reach across a line break is one Settled has to learn; its test
 // feeds it every shape here a line at a time. A stream from [NewLiveStream]
-// hands its stages only what Settled settles, but for a line too long to hold,
-// until a little after it ends ([unsettledBytes]), and [Stream.Flush] decides
-// each stage there as at the text's end. Unflushed, it answers as a [NewStream]
+// hands its stages only what Settled settles, and [Stream.Flush] decides each
+// stage there as at the text's end. Unflushed, it answers as a [NewStream]
 // does; flushed, it writes Secrets where Close answers nil, and refuses
 // otherwise only in a layout named below.
 //
@@ -138,7 +137,8 @@
 // and claims the stages keep beside it, where a text is markers end to end (a
 // JSON Web Token every fifteen bytes). So a stream allocates its buffers, about
 // 16 MiB, and past them under a quarter of a byte a byte of a session or a PDF,
-// a few where passwords are dense. Tests hold each.
+// a few where passwords are dense. Tests hold each. A live stream holds the
+// text past its settled point besides ([settling]).
 //
 // A WINDOW DECIDED EARLY IS CHECKED, AND A STREAM THAT FINDS IT READ A CLAIM
 // OTHERWISE REFUSES ([ErrDecidedEarly]). Every token's and AWS secret's claim
