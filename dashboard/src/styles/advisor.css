@@ -88,23 +88,6 @@
   gap: var(--spacing-2);
 }
 
-/* The facts a re-check read now: each label beside its number. */
-.advisor-facts {
-  display: grid;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.advisor-facts__label {
-  color: var(--color-text-secondary);
-}
-
-.advisor-facts__value {
-  font-variant-numeric: tabular-nums;
-}
-
 /* Reports and closed findings, one row each. */
 .advisor-reports,
 .advisor-history {
