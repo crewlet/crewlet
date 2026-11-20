@@ -812,6 +812,21 @@ describe("a wide table", () => {
     expect(scroller?.getAttribute("aria-label")).toBe("Table: Step, Owner");
   });
 
+  // INSIDE A CONTROL THE TABLE IS NO STOP: a row that is a link quotes an
+  // answer, and a tab stop inside it lands on words the row already names.
+  // Mutation: keep the stop under `links: "text"`, and the table is one.
+  it("is no tab stop where the document sits inside a control", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("| Step | Owner |\n|---|---|\n| Drain | SRE |", { links: "text" })}
+      </div>,
+    );
+    const scroller = container.querySelector(".md-table");
+    expect(scroller?.querySelector("td")?.textContent).toBe("Drain");
+    expect(scroller?.hasAttribute("tabindex")).toBe(false);
+    expect(scroller?.hasAttribute("role")).toBe(false);
+  });
+
   // TWO TABLES OF THE SAME COLUMNS ARE NO PAIR OF LANDMARKS. A region is a
   // landmark, so a page with two "Element, Text" tables drew two landmarks of
   // one name, which a landmark list cannot tell apart. Mutation: make the

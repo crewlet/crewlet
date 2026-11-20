@@ -885,15 +885,20 @@ function renderBlock(
       // tables of the same columns (a runbook's two "Element, Text" tables)
       // drew two landmarks of the same name, which a landmark list cannot
       // tell apart; nor is a table a section of the page anybody jumps to.
+      //
+      // INSIDE A CONTROL (`links: "text"`) IT IS NO STOP: the control is, and
+      // a stop inside it is as unreachable as itself as a link there would be.
       return createElement(
         "div",
-        {
-          key,
-          className: "md-table",
-          tabIndex: 0,
-          role: "group",
-          "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
-        },
+        options.links === "text"
+          ? { key, className: "md-table" }
+          : {
+              key,
+              className: "md-table",
+              tabIndex: 0,
+              role: "group",
+              "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
+            },
         createElement(
           "table",
           null,
