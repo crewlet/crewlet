@@ -6118,6 +6118,20 @@ a.work-cal-chip {
   color: var(--color-text-secondary);
 }
 
+/* WORDS QUOTED UNDER A LINE (`components/Said.tsx`): a reply under "You
+   replied" in an Inbox row or a decision row. Set in the line's own size and
+   leading, with no air between blocks, since a row stops at its lines and a
+   gap there spends one on nothing. */
+.prose.md.said {
+  max-width: none;
+  font-size: inherit;
+  line-height: inherit;
+}
+.prose.md.said > * + *,
+.prose.md.said li + li {
+  margin-top: 0;
+}
+
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
    written for a document and can be wider than the column it lands in here.
    SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc

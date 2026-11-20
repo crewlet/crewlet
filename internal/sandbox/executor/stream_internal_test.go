@@ -51,7 +51,7 @@ func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 }
 
 // A KEY THAT BEGAN BEFORE THE WINDOW IS STILL REDACTED: the end is read with
-// [redactContext] before it and redacted over all of it before anything is
+// [redact.LookBack] before it and redacted over all of it before anything is
 // dropped.
 func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 	t.Parallel()
@@ -61,7 +61,7 @@ func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 	// The key's BEGIN sits before the last `keep` bytes, its body and END inside.
 	stream := strings.Repeat("noise\n", 2000) + key + "done\n"
 	data := []byte(stream)
-	window := keep + redactContext
+	window := keep + redact.LookBack
 	tail := sandbox.FileTail{Data: data[max(0, len(data)-window):], Size: int64(len(data))}
 
 	got, unread := streamEnd(tail, keep)
@@ -89,8 +89,8 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	t.Parallel()
 	const keep = 1000
 	const line = "a line the process wrote\n"
-	stream := strings.Repeat(line, (keep+redactContext)/len(line)+100)
-	read := keep + redactContext
+	stream := strings.Repeat(line, (keep+redact.LookBack)/len(line)+100)
+	read := keep + redact.LookBack
 	if (len(stream)-read)%len(line) == 0 {
 		t.Fatal("the read opens on a line; the case needs one that opens inside a line, as a byte count lands")
 	}
@@ -109,7 +109,7 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 		t.Errorf("a line longer than the window = %q; want its end, marked, on a character", got)
 	}
 
-	for _, one := range []string{strings.Repeat("x", 3*redactContext), strings.Repeat("x", 3*redactContext) + "\n"} {
+	for _, one := range []string{strings.Repeat("x", 3*redact.LookBack), strings.Repeat("x", 3*redact.LookBack) + "\n"} {
 		tail = sandbox.FileTail{Data: []byte(one[len(one)-read:]), Size: int64(len(one))}
 		got, unread = streamEnd(tail, keep)
 		if got != "" || unread != int64(len(one)) {
@@ -139,16 +139,16 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 	s.WriteString(strings.Repeat("retrying the upload in two seconds\n", 3))
 	s.WriteString(strings.Repeat(body+"\n", 5) + end)
 	// Keys enough to fill the context, each a 22-byte marker once redacted.
-	for range redactContext/(25*len(other)) + 8 {
+	for range redact.LookBack/(25*len(other)) + 8 {
 		s.WriteString(begin + strings.Repeat(other+"\n", 25) + end)
 	}
 	s.WriteString("done\n")
 	stream := s.String()
 	// The read opens inside the key's body, ten lines and a few bytes in.
 	data := []byte(stream[opened+10*(len(body)+1)+7:])
-	keep := len(data) - redactContext
+	keep := len(data) - redact.LookBack
 	if keep <= 0 {
-		t.Fatalf("the read is %d bytes; the case needs more than the %d of context", len(data), redactContext)
+		t.Fatalf("the read is %d bytes; the case needs more than the %d of context", len(data), redact.LookBack)
 	}
 	got, unread := streamEnd(sandbox.FileTail{Data: data, Size: int64(len(stream))}, keep)
 	if strings.Contains(got, body[:24]) || strings.Contains(got, other[:24]) || redact.Contains(got) {
@@ -165,16 +165,16 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 // is the end of the whole stream's redaction.
 //
 // Mutation: settle a key block's reach (redact.MaxKeyBlockBytes) into the read
-// rather than [redactContext], and the case goes red.
+// rather than [redact.LookBack], and the case goes red.
 func TestAStreamsEndIsShownOnlyPastAllItsContext(t *testing.T) {
 	t.Parallel()
-	filler := strings.Repeat("compiling a package of the build\n", 2*redactContext/33+1)
+	filler := strings.Repeat("compiling a package of the build\n", 2*redact.LookBack/33+1)
 	label := "**" + strings.Repeat("a", 6000) + " password:**\n" + strings.Repeat("\n", 60000)
 	// The read begins ten bytes into the label, after its opening markup.
 	read := len(filler) + 10
 	head := filler + label + "hunter2x9\n"
-	head += strings.Repeat("x\n", (read+redactContext-len(head))/2)
-	head += strings.Repeat("\n", read+redactContext-len(head))
+	head += strings.Repeat("x\n", (read+redact.LookBack-len(head))/2)
+	head += strings.Repeat("\n", read+redact.LookBack-len(head))
 	end := strings.Repeat("sk-"+strings.Repeat("B", 50000)+"\n", 8) + strings.Repeat("ok\n", 100)
 	stream := head + end
 	whole := redact.Secrets(stream)

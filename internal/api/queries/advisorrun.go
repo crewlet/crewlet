@@ -22,10 +22,13 @@ type AdvisorModelSummary struct {
 	Tokens  int                  `json:"tokens"`
 	Listed  int                  `json:"listed"`
 	Dropped map[advisor.Drop]int `json:"dropped"`
-	Reason  string               `json:"reason"`
+	// Repaired counts the findings listed after a repair (a fix not built,
+	// words reworded by the model or said by the engine), by the repair.
+	Repaired map[advisor.Repair]int `json:"repaired"`
+	Reason   string                 `json:"reason"`
 }
 
-// RunRunning is the status of a Run now no run has answered yet.
+// RunRunning is the status of a Run no run has answered yet.
 const RunRunning = "running"
 
 // AdvisorRunSummary is one run as a person reads it.
@@ -56,6 +59,11 @@ type AdvisorRunSummary struct {
 	// Classes is what the run concluded about each class: found, clear,
 	// silent (with why) or unread; [] for a run that ran no rules.
 	Classes []AdvisorClassOutcome `json:"classes"`
+	// DeepSkipped is why a press's deep part did not run: "kept" (an
+	// investigation from DeepKeptFrom stands) or "no_model"; nil where it
+	// ran, or for a run that has none.
+	DeepSkipped  *string    `json:"deep_skipped"`
+	DeepKeptFrom *time.Time `json:"deep_kept_from"`
 }
 
 // AdvisorProgress is one line of a deep run's progress.
@@ -82,7 +90,7 @@ type AdvisorClassOutcome struct {
 // RunKindRules is a run of the detectors, the model pass beside them where one ran.
 const RunKindRules = "rules"
 
-// advisorRun answers `advisor_run`: the latest run, or a Run now waiting for
+// advisorRun answers `advisor_run`: the latest run, or a Run waiting for
 // the duty's next tick, which reads as running.
 func (s Sources) advisorRun(ctx context.Context, _ Params) (any, error) {
 	run, err := s.latestRun(ctx)
@@ -93,7 +101,7 @@ func (s Sources) advisorRun(ctx context.Context, _ Params) (any, error) {
 }
 
 // latestRun is the run a person reads as the latest: a deep run in flight
-// with its progress so far, a Run now waiting for the duty's next tick, which
+// with its progress so far, a Run waiting for the duty's next tick, which
 // reads as running, or the run that ended last; nil where none ran.
 func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	live, lines, flying, err := s.Advisor.LiveProgress(ctx, advisorFresh)
@@ -194,14 +202,20 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 			return nil, fmt.Errorf("queries: run %s's model pass does not decode: %w", row.ID, err)
 		}
 		out.Model = &AdvisorModelSummary{Status: pass.Status, Tokens: pass.InputTokens + pass.OutputTokens,
-			Listed: pass.Listed, Dropped: nonNilMap(pass.Dropped), Reason: pass.Reason}
+			Listed: pass.Listed, Dropped: nonNilMap(pass.Dropped), Repaired: nonNilMap(pass.Repaired),
+			Reason: pass.Reason}
 		if row.Kind == advisordomain.RunKindDeep {
 			for _, p := range pass.Progress {
 				out.Progress = append(out.Progress, AdvisorProgress{At: p.At, Text: p.Text})
 			}
-			out.Budget = &AdvisorRunBudget{Tokens: int64(pass.InputTokens + pass.OutputTokens),
-				TokensCeiling: int64(pass.Bounds.Tokens), Minutes: int64(math.Ceil(pass.Minutes)),
-				MinutesCeiling: int64(pass.Bounds.Minutes)}
+			// A DEEP PART THAT DID NOT RUN spent nothing of bounds it never had.
+			if pass.Skipped != "" {
+				out.DeepSkipped, out.DeepKeptFrom = &pass.Skipped, pass.KeptFrom
+			} else {
+				out.Budget = &AdvisorRunBudget{Tokens: int64(pass.InputTokens + pass.OutputTokens),
+					TokensCeiling: int64(pass.Bounds.Tokens), Minutes: int64(math.Ceil(pass.Minutes)),
+					MinutesCeiling: int64(pass.Bounds.Minutes)}
+			}
 			if pass.StoppedBy != "" {
 				out.StoppedBy = &pass.StoppedBy
 			}
