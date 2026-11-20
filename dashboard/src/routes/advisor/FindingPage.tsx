@@ -17,22 +17,12 @@
  */
 
 import { useCallback, useState } from "react";
-import {
-  Button,
-  Callout,
-  DescriptionList,
-  Link,
-  Tag,
-  Text,
-  Timeline,
-  TimelineItem,
-  type DescriptionListEntry,
-} from "@crewlethq/ui";
+import { Button, Callout, Link, Tag, Text, Timeline, TimelineItem } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtAt, fmtDateTime } from "~/lib/format.ts";
+import { fmtAt, fmtDateCompact, fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { ApplyPanel } from "./ApplyPanel.tsx";
 import { useFinding } from "./api.ts";
@@ -45,7 +35,6 @@ import {
   freshness,
   marks,
   snoozed,
-  statWords,
   type OpenApply,
   type RowActions,
 } from "./rows.tsx";
@@ -102,10 +91,6 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
     wake: decisions.wake,
     dismiss: decisions.dismiss,
   };
-  const facts: DescriptionListEntry[] = f.evidence.facts.map((fact) => [
-    fact.label,
-    factWords(fact),
-  ]);
   const asleep = snoozed(f, now);
   // A DISMISSAL ALREADY LIFTED is not offered again: its last move is the lift.
   const lifted = f.history.at(-1)?.event === "released";
@@ -136,8 +121,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         <Text as="h2" variant="heading">
           {marked(f.title)}
         </Text>
-        <Text as="p" variant="caption" tone="secondary">
-          {[...view.stats.map(statWords), ...marks(f, now), freshness(f, now)].join(" · ")}
+        {/* EVERY NUMBER ONCE, on one line under the headline: the facts it
+            rests on and what became of it. */}
+        <Text as="p" className="advisor-finding__stats">
+          {[
+            ...f.evidence.facts.map((fact) => `${fact.label}: ${factWords(fact)}`),
+            ...marks(f, now),
+          ].join(" · ")}
         </Text>
         {f.close_reason ? (
           <Callout variant="neutral">
@@ -163,18 +153,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         </section>
       ) : null}
 
-      {facts.length > 0 ? (
-        <section className="col gap-1" aria-labelledby="advisor-facts">
-          <Text as="h3" variant="label" id="advisor-facts">
-            What it rests on, {fmtDateTime(f.evidence.window.from)} to{" "}
-            {fmtDateTime(f.evidence.window.to)}
-          </Text>
-          <DescriptionList items={facts} />
-          <RecordLinks records={f.evidence.records} />
-        </section>
-      ) : (
-        <RecordLinks records={f.evidence.records} />
-      )}
+      {/* WHEN AND OVER WHAT: the window it was measured over, when it was
+          found and checked, and the records it cites, in one quiet line. */}
+      <Text as="p" variant="caption" tone="secondary">
+        Measured {fmtDateCompact(f.evidence.window.from, now)} to{" "}
+        {fmtDateCompact(f.evidence.window.to, now)} · {freshness(f, now)}
+      </Text>
+      <RecordLinks records={f.evidence.records} />
 
       <section className="col gap-2" aria-labelledby="advisor-fix">
         <Text as="h3" variant="label" id="advisor-fix">

@@ -75,6 +75,12 @@
   margin: 0;
 }
 
+/* A finding's numbers, once, under its headline: in the figures' own digits. */
+.advisor-finding__stats {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .advisor-finding__tags {
   display: flex;
   flex-wrap: wrap;
