@@ -218,6 +218,9 @@ func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain
 	raw, err := json.Marshal(scopes)
 	return advisordomain.RunRow{ID: "r", Status: advisordomain.RunDone, Classes: raw}, true, err
 }
+func (noticeLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
 func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }

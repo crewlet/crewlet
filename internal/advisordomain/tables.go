@@ -10,7 +10,7 @@ import "slices"
 var ReproducibleTables = []string{
 	"advisor_keys", "advisor_findings", "advisor_finding_history", "advisor_runs",
 	"advisor_class_runs", "advisor_reports", "advisor_alarm_episodes", "advisor_expiries",
-	"advisor_evictions", "advisor_log_generations",
+	"advisor_evictions", "advisor_log_generations", "advisor_run_progress",
 }
 
 // MachineryTables are the log's own: the ledger, which travels in a donated

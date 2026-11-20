@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ type fakeLog struct {
 	order   []string
 	// explained is every explanation written.
 	explained []advisor.Explained
+	// progress is every deep run's progress line, as "run: text".
+	mu       sync.Mutex
+	progress []string
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -46,6 +50,13 @@ func (l *fakeLog) LastDone(context.Context) (map[string]time.Time, error) {
 		}
 	}
 	return out, nil
+}
+
+func (l *fakeLog) Progress(_ context.Context, run string, _ time.Time, text string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.progress = append(l.progress, run+": "+text)
+	return nil
 }
 
 func (l *fakeLog) Record(_ context.Context, t advisor.Transition, _ time.Time) error {
@@ -97,6 +108,8 @@ type fakeReader struct {
 	weekErr error
 	// silent is what the rule pass could not judge.
 	silent []advisor.Silence
+	// premises is whether each premise holds, by its read.
+	premises map[string]bool
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
@@ -105,6 +118,14 @@ func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) 
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
+
+// Holds answers whether a premise holds by its read's name, holding where unnamed.
+func (r *fakeReader) Holds(_ context.Context, p advisor.Premise) (bool, error) {
+	if held, named := r.premises[p.Read]; named {
+		return held, nil
+	}
+	return true, nil
+}
 
 // Week answers the metrics it holds, and records the period it was asked for.
 func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {

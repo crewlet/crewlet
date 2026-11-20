@@ -32,6 +32,7 @@ type LogWrites interface {
 	Refresh(ctx context.Context, c advisordomain.Call, key string, r advisordomain.Refresh, ifMatch uint64) (statelog.Result, error)
 	Move(ctx context.Context, c advisordomain.Call, key string, m advisordomain.Move, ifMatch uint64) (statelog.Result, error)
 	RecordRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRecord) (statelog.Result, error)
+	Progress(ctx context.Context, c advisordomain.Call, p advisordomain.RunProgress) (statelog.Result, error)
 	Expire(ctx context.Context, c advisordomain.Call, day time.Time, e advisordomain.Expiry) (statelog.Result, error)
 	WriteReport(ctx context.Context, c advisordomain.Call, r advisordomain.Report) (statelog.Result, error)
 	Explain(ctx context.Context, c advisordomain.Call, key string, e advisordomain.Explanation) (statelog.Result, error)
@@ -122,7 +123,7 @@ func (l advisorLog) Requested(ctx context.Context) ([]Request, error) {
 	}
 	out := make([]Request, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Request{Run: r.ID, By: r.By})
+		out = append(out, Request{Run: r.ID, By: r.By, Kind: r.Kind})
 	}
 	return out, nil
 }
@@ -280,7 +281,7 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 	}
 	_, err = l.writes.RecordRun(ctx, l.call("advisor_run"), advisordomain.RunRecord{
 		Run: r.ID, Trigger: advisordomain.Trigger(r.Trigger), By: r.By, StartedAt: r.StartedAt,
-		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model})
+		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model, RunKind: r.Kind})
 	return err
 }
 
@@ -364,4 +365,11 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 			Observation: o, Body: r.Body})
 	}
 	return out, nil
+}
+
+// Progress publishes one line of a deep run's progress.
+func (l advisorLog) Progress(ctx context.Context, run string, at time.Time, text string) error {
+	_, err := l.writes.Progress(ctx, l.call("advisor_progress"), advisordomain.RunProgress{Run: run, At: at.UTC(),
+		Text: text})
+	return err
 }

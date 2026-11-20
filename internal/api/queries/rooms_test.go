@@ -95,6 +95,9 @@ func (emptyAdvisor) Finding(context.Context, string, statelog.Freshness) (adviso
 func (emptyAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
 	return nil, nil
 }
+func (emptyAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
 func (emptyAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }

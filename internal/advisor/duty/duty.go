@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -66,6 +67,8 @@ type Reader interface {
 	// Signature is a cheap read of everything the setup group reads, which
 	// changes when any of it does.
 	Signature(ctx context.Context) (string, error)
+	// Holds asks a finding's premise again: whether it holds now.
+	Holds(ctx context.Context, p advisor.Premise) (bool, error)
 	// Week reads the week [from, to) a report is written for: its numbers,
 	// and the sources it could not read; [advisor.ErrWeekUnmeasured] for a
 	// week the company's records do not reach back over all of.
@@ -129,6 +132,8 @@ type Log interface {
 	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
 	// WriteReport writes a week's report, once.
 	WriteReport(ctx context.Context, r advisor.Report) error
+	// Progress writes one line of a deep run's progress.
+	Progress(ctx context.Context, run string, at time.Time, text string) error
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error
@@ -138,6 +143,8 @@ type Log interface {
 type Request struct {
 	Run string
 	By  string
+	// Kind is what the person asked to run: the rules, or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Run is how one run ended, as the log keeps it.
@@ -156,6 +163,8 @@ type Run struct {
 	Classes []advisor.ClassOutcome
 	// Model is the model pass's summary, nil where none ran.
 	Model any
+	// Kind is what the run did: the rules (the empty kind), or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Count is how many findings of the run took step, every scope together.
@@ -198,6 +207,8 @@ type Duty struct {
 	Log   Log
 	Read  Reader
 	Model ModelPass
+	// Deep is the Advisor's investigation, nil where none runs (ADR-0166).
+	Deep DeepPass
 	// Claim claims or renews the lease, nil on a node with no fleet.
 	Claim func(ctx context.Context) (bool, error)
 	// NewID mints a run's id.
@@ -208,6 +219,8 @@ type Duty struct {
 	signature string
 	// reported is the week whose report this holder saw written.
 	reported string
+	// deep is the deep run in flight on this holder.
+	deep deepState
 }
 
 // Serve runs the duty until ctx ends.
@@ -235,15 +248,32 @@ func (d *Duty) Step(ctx context.Context) error {
 		}
 		if !held {
 			// A peer runs it, and this node's setup signature would be
-			// stale when it next takes over: forget it.
+			// stale when it next takes over: forget it. A deep run in
+			// flight here is the new holder's to run again.
 			d.signature = ""
+			d.cancelDeep()
 			return nil
 		}
 	}
+	if d.deepFlying() {
+		// THE LEASE IS RENEWED, and nothing else runs beside the deep run.
+		return nil
+	}
 	now := d.Now().UTC()
-	requests, err := d.Log.Requested(ctx)
+	all, err := d.Log.Requested(ctx)
 	if err != nil {
 		return fmt.Errorf("read the requested runs: %w", err)
+	}
+	var requests, deep []Request
+	for _, r := range all {
+		if r.Kind == advisordomain.RunKindDeep {
+			deep = append(deep, r)
+			continue
+		}
+		requests = append(requests, r)
+	}
+	if len(requests) == 0 && len(deep) > 0 {
+		return d.pressedDeep(ctx, now, deep)
 	}
 	if len(requests) > 0 {
 		// EVERY PRESS WAITING IS ANSWERED BY ONE RUN of everything, recorded
@@ -270,6 +300,10 @@ func (d *Duty) Step(ctx context.Context) error {
 		now.Sub(last[string(advisor.GroupSetup)]) >= RulePassEvery
 	if !rules && err == nil && signature != d.signature {
 		rules, trigger = true, TriggerEvent
+	}
+	if d.deepDue(now, last) {
+		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()})
+		return nil
 	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
 	if !rules && !model {
@@ -396,10 +430,14 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 		return run
 	}
 	run.Scopes = scopesOf(reading)
+	moved := map[string]bool{}
 	for _, t := range advisor.Reconcile(live, observed, reading) {
 		if err := d.Log.Record(ctx, t, now); err != nil {
 			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
 			continue
+		}
+		if t.Stored != nil {
+			moved[t.Stored.ID] = true
 		}
 		f := t.Observed
 		if f == nil {
@@ -412,7 +450,46 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			}
 		}
 	}
+	if rules {
+		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, moved))
+	}
 	return run
+}
+
+// PremiseScope is the scope a rules run records once it asked every open
+// finding's premise again, which a finding's premise_checked_at reads.
+const PremiseScope = "premise"
+
+// recheckPremises asks again the premise of every open finding that states
+// one and this run did not move, and resolves each whose premise no longer
+// holds (ADR-0166). A premise that could not be asked is left as it stands.
+func (d *Duty) recheckPremises(ctx context.Context, now time.Time, live []advisor.Stored,
+	moved map[string]bool) ScopeRun {
+	scope := ScopeRun{Scope: PremiseScope, Status: ScopeDone, Steps: map[advisor.Step]int{}}
+	for i := range live {
+		s := &live[i]
+		p := s.Observation.Finding.Premise
+		if p == nil || moved[s.ID] || s.State != advisor.StateOpen {
+			continue
+		}
+		holds, err := d.Read.Holds(ctx, *p)
+		if err != nil {
+			log.WarnContext(ctx, "advisor_premise_unread", "finding", s.ID, "error", err.Error())
+			scope.Status = ScopeUnread
+			continue
+		}
+		if holds {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateResolved,
+			Reason: advisor.ReasonConditionCleared}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		scope.Steps[advisor.StepClose]++
+	}
+	return scope
 }
 
 // modelPass runs the model, adding its group to reading where it concluded.

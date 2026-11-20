@@ -66,6 +66,9 @@ func (l *applyLog) Episodes(context.Context, string, statelog.Freshness) ([]advi
 func (l *applyLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }
+func (l *applyLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
 func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
@@ -115,6 +118,9 @@ func (l *applyLog) Move(_ context.Context, _ advisordomain.Call, _ string, m adv
 	l.row.State, l.row.KeyVersion = m.State, l.row.KeyVersion+1
 	return statelog.Result{}, nil
 }
+func (*applyLog) Progress(context.Context, advisordomain.Call, advisordomain.RunProgress) (statelog.Result, error) {
+	return statelog.Result{}, nil
+}
 func (l *applyLog) RecordRun(context.Context, advisordomain.Call, advisordomain.RunRecord) (statelog.Result, error) {
 	return statelog.Result{}, nil
 }
@@ -134,7 +140,8 @@ type applyReader struct{ observed []advisor.Observation }
 func (r applyReader) Observe(context.Context, time.Time) (duty.Observed, error) {
 	return duty.Observed{Observations: r.observed}, nil
 }
-func (applyReader) Signature(context.Context) (string, error) { return "", nil }
+func (applyReader) Signature(context.Context) (string, error)            { return "", nil }
+func (applyReader) Holds(context.Context, advisor.Premise) (bool, error) { return true, nil }
 func (applyReader) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, []string, error) {
 	return nil, nil, nil
 }

@@ -86,3 +86,60 @@ func AnswersOf(dismissed []advisor.Stored) advisor.Answers {
 	}
 	return out
 }
+
+// DeepService is the Advisor's deep run over the duty (ADR-0166).
+type DeepService struct {
+	Models Models
+	// Read is what one deep run reads at now: the company, its rule
+	// findings, its snapshot and the reads it may ask.
+	Read func(ctx context.Context, now time.Time) (DeepData, error)
+	// Bounds are the run's bounds for company c.
+	Bounds func(c *config.Company) DeepBounds
+}
+
+var _ duty.DeepPass = (*DeepService)(nil)
+
+// Assigned reports whether the company assigns the Advisor a model.
+func (s *DeepService) Assigned() bool { return s.Models.Assigned() }
+
+// Deep is one deep run at now: what it found, grounded, as observations, and
+// its record. It concluded only where it submitted within its bounds, so a
+// run cut short leaves earlier model findings as they stand.
+func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
+	progress func(at time.Time, text string)) (duty.ModelRun, error) {
+	failed := func(reason string, err error) (duty.ModelRun, error) {
+		run := DeepRun{Pass: advisor.Pass{Status: advisor.PassFailed, Reason: reason + err.Error(),
+			Dropped: map[advisor.Drop]int{}, Unread: []string{}}, Progress: []Progress{}}
+		return duty.ModelRun{Summary: run}, fmt.Errorf("modelpass: %s%w", reason, err)
+	}
+	d, err := s.Read(ctx, now)
+	if err != nil {
+		return failed("the company's records could not be read: ", err)
+	}
+	d.Answers = AnswersOf(dismissed)
+	deps, err := s.Models.Deps(ctx, d.Company)
+	if err != nil {
+		return failed("the Advisor's model could not start: ", err)
+	}
+	if deps.DryRun == nil {
+		deps.DryRun = func(ch advisor.Change) error { return advisor.CheckChange(d.Company, ch) }
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	bounds := DefaultDeepBounds
+	if s.Bounds != nil {
+		bounds = s.Bounds(d.Company)
+	}
+	run := RunDeep(ctx, deps, d, bounds, func(p Progress) {
+		if progress != nil {
+			progress(p.At, p.Text)
+		}
+	})
+	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone}
+	window := advisor.Span{From: now.Add(-advisor.Window), To: now}
+	for _, f := range run.Findings {
+		out.Observations = append(out.Observations, advisor.Observe(f, window, d.Revision))
+	}
+	return out, nil
+}

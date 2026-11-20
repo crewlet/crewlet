@@ -464,27 +464,29 @@ type RunRow struct {
 
 	Classes json.RawMessage
 	Model   json.RawMessage
+	// Kind is what the run does, [RunKindRules] for every run before kinds.
+	Kind RunKind
 }
 
 // runColumns are a [RunRow]'s columns, in [scanRun]'s order.
-const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model
-	FROM advisor_runs`
+const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model,
+	kind FROM advisor_runs`
 
 // scanRun reads one row of [runColumns].
 func scanRun(rows interface{ Scan(...any) error }) (RunRow, error) {
 	var (
-		r                               RunRow
-		trigger, status, classes, model string
-		requested, started, ended       int64
+		r                                     RunRow
+		trigger, status, classes, model, kind string
+		requested, started, ended             int64
 	)
 	if err := rows.Scan(&r.ID, &trigger, &r.By, &requested, &started, &ended, &status, &classes,
-		&model); err != nil {
+		&model, &kind); err != nil {
 		return RunRow{}, err
 	}
 	r.Trigger, r.Status = Trigger(trigger), RunStatus(status)
 	r.RequestedAt, r.StartedAt, r.EndedAt = decodeOptional(requested), decodeOptional(started),
 		decodeOptional(ended)
-	r.Classes, r.Model = json.RawMessage(classes), json.RawMessage(model)
+	r.Classes, r.Model, r.Kind = json.RawMessage(classes), json.RawMessage(model), RunKind(kind).OrRules()
 	return r, nil
 }
 
@@ -775,3 +777,55 @@ func (r *Reader) AlarmEpisodes(ctx context.Context, since time.Time,
 	}
 	return out, nil
 }
+
+// ProgressLine is one line of a deep run's progress as the log keeps it.
+type ProgressLine struct {
+	At   time.Time
+	Text string
+}
+
+// LiveProgress is the newest run with progress lines and no record yet, and
+// its lines oldest first: a deep run in flight. false where none is.
+func (r *Reader) LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []ProgressLine, bool, error) {
+	var (
+		run   string
+		lines []ProgressLine
+	)
+	_, err := r.log.Read(ctx, fresh.Query(RunsScope(), true), func(tx *sql.Tx) error {
+		run, lines = "", nil
+		err := tx.QueryRowContext(ctx, `SELECT p.run_id FROM advisor_run_progress p
+			LEFT JOIN advisor_runs r ON r.run_id = p.run_id
+			WHERE r.run_id IS NULL OR r.status = ''
+			ORDER BY p.at DESC, p.position DESC LIMIT 1`).Scan(&run)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT at, text FROM advisor_run_progress WHERE run_id = ?
+			ORDER BY at, position LIMIT ?`, run, MaxProgressLines)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				at   int64
+				text string
+			)
+			if err := rows.Scan(&at, &text); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			lines = append(lines, ProgressLine{At: store.DecodeTime(at), Text: text})
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return "", nil, false, fmt.Errorf("advisordomain: read the live run's progress: %w", err)
+	}
+	return run, lines, run != "", nil
+}
+
+// MaxProgressLines bounds the lines one read of a run's progress answers.
+const MaxProgressLines = 200

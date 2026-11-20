@@ -27,6 +27,7 @@ type AdvisorReader interface {
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 	Counts(ctx context.Context, fresh statelog.Freshness) (map[advisordomain.Severity]int, error)
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
+	LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error)
 	Run(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
@@ -53,6 +54,7 @@ type AdvisorWriter interface {
 	Release(ctx context.Context, c advisordomain.Call, key string, ifMatch uint64) (statelog.Result, error)
 	RequestRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRequest) (statelog.Result, error)
 	RecordRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRecord) (statelog.Result, error)
+	Progress(ctx context.Context, c advisordomain.Call, p advisordomain.RunProgress) (statelog.Result, error)
 	WriteReport(ctx context.Context, c advisordomain.Call, r advisordomain.Report) (statelog.Result, error)
 	RaiseAlarm(ctx context.Context, c advisordomain.Call, a advisordomain.AlarmRaise) (statelog.Result, error)
 	ClearAlarm(ctx context.Context, c advisordomain.Call, node, kind, instance string,
@@ -195,6 +197,18 @@ var opAdvisorLatestRun = advisorRead("advisor.latest_run",
 	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (advisorRun, error) {
 		run, found, err := r.LatestRun(ctx, a.Fresh)
 		return advisorRun{Run: run, Found: found}, err
+	})
+
+type advisorLive struct {
+	Run   string
+	Lines []advisordomain.ProgressLine
+	Found bool
+}
+
+var opAdvisorLiveProgress = advisorRead("advisor.live_progress",
+	func(ctx context.Context, r AdvisorReader, a advisorFreshArgs) (advisorLive, error) {
+		run, lines, found, err := r.LiveProgress(ctx, a.Fresh)
+		return advisorLive{Run: run, Lines: lines, Found: found}, err
 	})
 
 var opAdvisorRun = advisorRead("advisor.run",
@@ -356,6 +370,16 @@ var opAdvisorRecordRun = advisorWrite("advisor.record_run",
 		return w.RecordRun(ctx, a.Call, a.Record)
 	})
 
+type advisorProgressArgs struct {
+	Call     advisordomain.Call
+	Progress advisordomain.RunProgress
+}
+
+var opAdvisorProgress = advisorWrite("advisor.progress",
+	func(ctx context.Context, w AdvisorWriter, a advisorProgressArgs) (statelog.Result, error) {
+		return w.Progress(ctx, a.Call, a.Progress)
+	})
+
 type advisorReportArgs struct {
 	Call   advisordomain.Call
 	Report advisordomain.Report
@@ -450,6 +474,14 @@ func (x AdvisorReads) Counts(ctx context.Context, fresh statelog.Freshness) (map
 func (x AdvisorReads) LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	out, err := call(ctx, x.r, opAdvisorLatestRun, nil, advisorFreshArgs{Fresh: fresh})
 	return out.Run, out.Found, err
+}
+
+// LiveProgress answers the deep run in flight and its progress lines, and
+// whether one is.
+func (x AdvisorReads) LiveProgress(ctx context.Context,
+	fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	out, err := call(ctx, x.r, opAdvisorLiveProgress, nil, advisorFreshArgs{Fresh: fresh})
+	return out.Run, out.Lines, out.Found, err
 }
 
 // Run answers one run, and whether the log holds it.
@@ -551,6 +583,12 @@ func (x AdvisorWrites) RequestRun(ctx context.Context, c advisordomain.Call,
 func (x AdvisorWrites) RecordRun(ctx context.Context, c advisordomain.Call,
 	r advisordomain.RunRecord) (statelog.Result, error) {
 	return call(ctx, x.r, opAdvisorRecordRun, nil, advisorRecordArgs{Call: c, Record: r})
+}
+
+// Progress writes one line of a deep run's progress.
+func (x AdvisorWrites) Progress(ctx context.Context, c advisordomain.Call,
+	p advisordomain.RunProgress) (statelog.Result, error) {
+	return call(ctx, x.r, opAdvisorProgress, nil, advisorProgressArgs{Call: c, Progress: p})
 }
 
 // WriteReport writes one week's report.

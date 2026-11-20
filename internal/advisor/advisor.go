@@ -233,6 +233,9 @@ type Finding struct {
 	// class or the investigation wrote one; the title stands in for it
 	// otherwise (ADR-0166).
 	Headline string `json:"headline,omitempty"`
+	// Premise is the fact the finding rests on, asked again every hour; a
+	// premise that no longer holds resolves the finding (ADR-0166).
+	Premise *Premise `json:"premise,omitempty"`
 	// Seats are the seats a finding about one cause is about, each with its
 	// share of the number, where the class states them (ADR-0166).
 	Seats []SeatShare `json:"seats,omitempty"`

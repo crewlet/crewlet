@@ -974,7 +974,11 @@ func New(opts Options) (*App, error) {
 	// THE ADVISOR'S DUTY AND ITS FINDING READS take sources by value, so
 	// they are built from the sources as complete as the questions are.
 	if a.advisor != nil {
-		a.advisorDuty = sources.AdvisorDuty(duty.LogOf(a.advisor, a.advisor, time.Now), advisorRT.AdvisorClaim())
+		// ITS DEEP RUN ASKS THE REGISTRY built below, at the time it asks.
+		a.advisorDuty = sources.AdvisorDuty(duty.LogOf(a.advisor, a.advisor, time.Now), advisorRT.AdvisorClaim(),
+			func(ctx context.Context, what string, p queries.Params) (any, error) {
+				return a.queries.AnswerWith(ctx, what, p)
+			})
 		a.advisorFinding = sources.AdvisorFindingOf
 		if sources.Config != nil {
 			a.advisorConfig = sources.Config

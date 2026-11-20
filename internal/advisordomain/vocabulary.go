@@ -202,3 +202,27 @@ var ClassStatuses = []ClassStatus{ClassDone, ClassUnread, ClassFailed}
 
 // Valid reports whether a status is one this build knows.
 func (s ClassStatus) Valid() bool { return slices.Contains(ClassStatuses, s) }
+
+// RunKind is what a run does: its rules (with the daily model pass where one
+// runs), or an investigation on the Advisor's model (ADR-0166).
+type RunKind string
+
+// The kinds; the empty kind is a run of the rules, as every run before kinds was.
+const (
+	RunKindRules RunKind = "rules"
+	RunKindDeep  RunKind = "deep"
+)
+
+// RunKinds is every kind.
+var RunKinds = []RunKind{RunKindRules, RunKindDeep}
+
+// Valid reports whether k is a kind, the empty one included.
+func (k RunKind) Valid() bool { return k == "" || slices.Contains(RunKinds, k) }
+
+// OrRules is k, or the rules where it names none.
+func (k RunKind) OrRules() RunKind {
+	if k == "" {
+		return RunKindRules
+	}
+	return k
+}

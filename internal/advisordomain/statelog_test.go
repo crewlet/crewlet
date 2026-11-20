@@ -3,6 +3,7 @@ package advisordomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,7 +27,10 @@ func TestTheAdvisorDomainIsACertifiedDomain(t *testing.T) {
 			Applier: advisordomain.NewApplier(),
 			// Migrate is nil: the tables ship in the replicated estate's own
 			// migration (0193).
-			Encode:        encodeSuiteRecord,
+			Encode: encodeSuiteRecord,
+			// THE RUN'S KIND, at 2: a request carrying it ([carryingSuiteField]).
+			Fields:        advisordomain.VersionedFields(),
+			Carrying:      carryingSuiteField,
 			Kinds:         kindNames(),
 			Rows:          advisordomain.NewRows,
 			Write:         suiteWrite,
@@ -223,4 +227,19 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "suite"),
 	}, o, advisordomain.IfNoRecord)
 	return err
+}
+
+// carryingSuiteField is a valid record carrying the named versioned field
+// alone, its version left to the encoder: a Run deep request for the run's kind.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	run := uuid.NewSHA1(uuid.NameSpaceOID, []byte("run/"+field.Name)).String()
+	switch field.Name {
+	case "Run.RunKind":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-kind", advisordomain.OpRequest, sentinel(),
+			advisordomain.RunRequest{Run: run, By: "owner", RunKind: advisordomain.RunKindDeep})
+	case "Op progress":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-progress", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity"})
+	}
+	return nil, fmt.Errorf("no suite record carries %s", field.Name)
 }
