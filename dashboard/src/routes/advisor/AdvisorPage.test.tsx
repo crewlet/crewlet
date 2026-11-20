@@ -11,15 +11,10 @@ import { AssistantControlContext, type AssistantControl } from "~/app/assistant/
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import {
-  AdvisorPage,
-  type AdvisorSection,
-  goLiveSteps,
-  pagedOn,
-  runWords,
-} from "./AdvisorPage.tsx";
+import { AdvisorPage, type AdvisorSection, pagedOn } from "./AdvisorPage.tsx";
 import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
 import { ranked } from "./words.ts";
+import { runView, runWords } from "./Run.tsx";
 
 vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>Review what each agent can do</p> }));
 
@@ -70,9 +65,68 @@ function finding(patch: Partial<AdvisorKeptFinding> = {}): AdvisorKeptFinding {
     impact: null,
     evidence: { window: { from: ago(60 * 24 * 7), to: ago(0) }, facts: [], records: [] },
     fix: { kind: "none", sentence: "Nothing to change by hand.", options: [] },
+    headline: patch.title ?? `Finding ${serial}`,
+    stats: [],
+    chart: null,
+    seats: [],
+    actions: { primary: null, secondary: [] },
+    premise_checked_at: null,
     ...patch,
   };
 }
+
+/** The company's numbers over the range, as `advisor_snapshot` answers them. */
+const SNAPSHOT = {
+  as_of: ago(0),
+  run_id: null,
+  range: { from: ago(60 * 24 * 7), to: ago(0), days: 7 },
+  stats: [
+    { key: "open_items", label: "Open items", value: 15, unit: "items", was: 12, better: "down" },
+    { key: "turns", label: "Turns", value: 40, unit: "turns", was: null, better: null },
+    {
+      key: "wasted_turns_percent",
+      label: "Wasted",
+      value: 75,
+      unit: "percent",
+      was: null,
+      better: "down",
+    },
+  ],
+  charts: [
+    {
+      id: "wasted_wakes",
+      title: "Turns that changed nothing, by what woke them",
+      unit: "turns",
+      kind: "bars",
+      x: {
+        kind: "reason",
+        keys: ["work_item:lead_fallback"],
+        labels: ["Work items (the unit's lead)"],
+      },
+      series: [
+        { id: "nothing", label: "Changed nothing", values: [30] },
+        { id: "moved", label: "Moved work", values: [10] },
+      ],
+      note: null,
+    },
+  ],
+  unread: [],
+};
+
+/** A press of the engine's, every key sent. */
+const press = (patch: Record<string, unknown>) => ({
+  kind: "apply",
+  label: "",
+  option: null,
+  items: null,
+  to: null,
+  page: null,
+  target: null,
+  setting: null,
+  url: null,
+  question: null,
+  ...patch,
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -111,6 +165,7 @@ function engine(findings: AdvisorKeptFinding[], run: AdvisorRunSummary | null = 
       };
     }
     if (name === "advisor_run") return run;
+    if (name === "advisor_snapshot") return SNAPSHOT;
     return {};
   };
   return { sent, asked, answer };
@@ -188,9 +243,16 @@ test("findings are ranked by severity, then measured cost, then recency", () => 
   ]);
 });
 
-test("each row says how fresh it is: checked when, or not re-checked since, and what became of a fix", async () => {
+// A ROW IS ITS NUMBERS AND WHAT BECAME OF IT; when it was found and checked
+// is behind Details.
+test("each row says its numbers and what became of it, and Details when it was checked", async () => {
   const { answer } = engine([
-    finding({ title: "Fresh one", impact: { hours_per_week: 12, tokens_per_week: null } }),
+    finding({
+      title: "Fresh one",
+      stats: [
+        { key: "h", label: "Hours a week", value: 12, unit: "hours", was: null, better: null },
+      ],
+    }),
     finding({ title: "Stale one", confirmed: "stale", last_confirmed_at: "2026-11-01T08:00:00Z" }),
     finding({
       title: "Applied one",
@@ -201,13 +263,19 @@ test("each row says how fresh it is: checked when, or not re-checked since, and 
   ]);
   mount(answer);
   await screen.findByText("Fresh one");
-  expect(screen.getByText(/^12 h a week · found .+ · checked 4 minutes ago$/)).toBeDefined();
+  expect(screen.getByText(/Hours a week: 12 h/)).toBeDefined();
   expect(screen.getByText(/not re-checked since/)).toBeDefined();
   expect(screen.getByText(/applied, checking its effect until/)).toBeDefined();
   expect(screen.getByText(/seen 2 times before/)).toBeDefined();
+  expect(screen.queryByText(/checked 4 minutes ago/)).toBeNull();
+  const fresh = screen
+    .getAllByRole("listitem")
+    .find((li) => li.textContent?.includes("Fresh one"))!;
+  fireEvent.click(within(fresh).getByRole("button", { name: /Details/ }));
+  expect(await within(fresh).findByText(/checked 4 minutes ago/)).toBeDefined();
 });
 
-test("a finding the engine builds a change for offers Apply, which re-checks it first", async () => {
+test("a fix's press says what it does and opens its Apply in place, on a re-check", async () => {
   const add = finding({
     title: "Add a seat",
     fix: {
@@ -217,21 +285,25 @@ test("a finding the engine builds a change for offers Apply, which re-checks it 
         { label: "Add one", change: { entity: "units", id: "eng", set: {}, summary: "add" } },
       ],
     },
+    actions: { primary: press({ kind: "apply", label: "Add one", option: 0 }), secondary: [] },
   });
   const { id } = add;
   const { sent, answer } = engine([add]);
   mount(answer);
   await screen.findByText("Add a seat");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add one" }));
   });
-  // THE DIALOG OPENS ON A RE-CHECK, never on the finding as it was stored.
+  // APPLY OPENS IN PLACE, under its row, on a re-check, never on the finding
+  // as it was stored, and never in a dialog over the list.
   await waitFor(() =>
     expect(
       sent.some((r) => r.method === "POST" && r.path === `/advisor/findings/${id}/recheck`),
     ).toBe(true),
   );
-  expect(screen.getByRole("dialog")).toBeDefined();
+  const panel = screen.getByRole("region", { name: "Apply: Add one" });
+  expect(screen.getAllByRole("listitem").find((li) => li.contains(panel))).toBeDefined();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("Snooze and Dismiss send the person's answer and read the list again", async () => {
@@ -255,22 +327,15 @@ test("Snooze and Dismiss send the person's answer and read the list again", asyn
   await waitFor(() => expect(reads()).toBeGreaterThan(before));
 });
 
-test("what blocks the company brings the go-live check to the top", async () => {
+test("while anything blocks, the review of each agent's access is offered after the findings", async () => {
   const { answer } = engine([
     finding({ severity: "blocks", title: "No model signs in" }),
     finding({ title: "Slow" }),
   ]);
   mount(answer);
-  const check = await screen
-    .findByRole("list", { name: /Go-live check/ })
-    .catch(() => screen.findByLabelText(/Go-live check/));
-  expect(within(check as HTMLElement).getByText("Fix what blocks the company (1)")).toBeDefined();
+  await screen.findByText("No model signs in");
   expect(screen.getByText("Review what each agent can do")).toBeDefined();
-  expect(goLiveSteps([finding({ severity: "note" })]).map((s) => s.state)).toEqual([
-    "done",
-    "done",
-    "waiting",
-  ]);
+  expect(screen.queryByText(/Go-live check/)).toBeNull();
 });
 
 test("the head says when the checks last ran, and Run now starts them", async () => {
@@ -286,6 +351,11 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     opened: 2,
     resolved: 1,
     model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
   };
   const { sent, answer } = engine([], run);
   mount(answer);
@@ -298,7 +368,7 @@ test("the head says when the checks last ran, and Run now starts them", async ()
   await waitFor(() =>
     expect(sent.some((r) => r.method === "POST" && r.path === "/advisor/runs")).toBe(true),
   );
-  expect(runWords(null, NOW)).toBe("The checks have not run yet.");
+  expect(runWords(runView(null), NOW)).toBe("The checks have not run yet.");
 });
 
 // R5: AN ATLAS FIX IS OFFERED ON THE ENTRIES THE ENGINE NAMES, only to a reader
@@ -311,12 +381,14 @@ test("an atlas finding offers its fix where the engine named its entries, and th
     options: [],
     act: { tool: "atlas_set_owner", asks: "owner" },
   };
+  const actions = { primary: press({ kind: "fix", label: "Review the fix" }), secondary: [] };
   const named = finding({
     title: "3 services have no owner",
     fix: act,
     entries: [{ id: "e1", kind: "service", key: "checkout", name: "Checkout" }],
+    actions,
   });
-  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null });
+  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null, actions });
   const { answer } = engine([named, unnamed]);
   mount(answer);
   await screen.findByText("3 services have no owner");
@@ -406,10 +478,19 @@ test("the run line says only what the run moved", () => {
     opened,
     resolved,
     model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
   });
-  expect(runWords(run(1, 0), NOW)).toBe("All checks ran 6 minutes ago. It found 1 new finding.");
-  expect(runWords(run(0, 2), NOW)).toBe("All checks ran 6 minutes ago. It closed 2 findings.");
-  expect(runWords(run(0, 0), NOW)).toBe("All checks ran 6 minutes ago.");
+  expect(runWords(runView(run(1, 0)), NOW)).toBe(
+    "All checks ran 6 minutes ago. It found 1 new finding.",
+  );
+  expect(runWords(runView(run(0, 2)), NOW)).toBe(
+    "All checks ran 6 minutes ago. It closed 2 findings.",
+  );
+  expect(runWords(runView(run(0, 0)), NOW)).toBe("All checks ran 6 minutes ago.");
 });
 
 // THE HEAD'S PLACEMENT IS ON A BOX OF OUR OWN: on the kit's Text, our rule
@@ -502,6 +583,10 @@ test("findings of one class are one row, each subject inside it with its own fix
       title: "Agents that learn on their main model.",
       severity: "note",
       fix,
+      actions: {
+        primary: press({ kind: "apply", label: "Learn on Haiku", option: 0 }),
+        secondary: [],
+      },
     });
   const { answer } = engine([same(1), same(2), same(3), finding({ title: "Alone" })]);
   mount(answer);
@@ -519,7 +604,7 @@ test("findings of one class are one row, each subject inside it with its own fix
       .getAllByRole("link")
       .map((a) => a.textContent),
   ).toEqual(["Seat 1", "Seat 2", "Seat 3"]);
-  expect(within(inside).getByRole("button", { name: "Apply for Seat 2" })).toBeDefined();
+  expect(within(inside).getByRole("button", { name: "Learn on Haiku for Seat 2" })).toBeDefined();
   expect(within(inside).getByRole("button", { name: /More for Seat 3/ })).toBeDefined();
 });
 
@@ -576,4 +661,38 @@ test("the head shows no model line, no model link and no picker, and reads no mo
   expect(document.querySelector('a[href="#/settings/models"]')).toBeNull();
   expect(asked.map((q) => q.name)).not.toContain("llm_entries");
   expect(asked.map((q) => q.name)).not.toContain("config");
+});
+
+// THE PAGE OPENS ON THE NUMBERS: each figure against the previous range, and
+// linked to the open finding that explains it.
+test("the numbers open the page, each linked to the finding that explains it", async () => {
+  const waste = finding({ class: "wake.noop_share", title: "Turns that changed nothing" });
+  const { answer } = engine([waste]);
+  mount(answer);
+  const strip = await screen.findByLabelText("The company's numbers");
+  const wakes = strip.querySelector<HTMLElement>('[data-stat="wasted_turns_percent"]')!;
+  expect(within(wakes).getByText("75%")).toBeDefined();
+  expect(
+    within(wakes)
+      .getByRole("link", { name: "Why: Turns that changed nothing" })
+      .getAttribute("href"),
+  ).toBe(`#/advisor/findings/${waste.id}`);
+  const open = strip.querySelector<HTMLElement>('[data-stat="open_items"]')!;
+  expect(within(open).getByText("15")).toBeDefined();
+  expect(within(open).queryByRole("link")).toBeNull();
+  expect(screen.getByText("Turns that changed nothing, by what woke them")).toBeDefined();
+});
+
+test("the range picker asks the numbers for its range", async () => {
+  const { asked, answer } = engine([]);
+  mount(answer);
+  await screen.findByLabelText("The company's numbers");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: "30 days" }));
+  });
+  await waitFor(() =>
+    expect(asked.filter((q) => q.name === "advisor_snapshot").map((q) => q.params.range)).toContain(
+      "30d",
+    ),
+  );
 });
