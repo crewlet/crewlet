@@ -311,6 +311,14 @@ func (s scrubber) unitBegins() {
 	}
 }
 
+// unitAt is the first reading's last unit begun, 0 in any other reading.
+func (s scrubber) unitAt() int64 {
+	if s.first == nil {
+		return 0
+	}
+	return s.first.r.unit
+}
+
 // keepWay plans what way of the first reading found unchanged in the unit.
 func (s scrubber) keepWay(way int) {
 	if s.first != nil {
@@ -889,13 +897,23 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	b scrubBounds) error {
 
 	plan, err := firstReadings(first, reopen, s, b, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		member := -1
 		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
+			member++
+			from, resumed, err := plan.memberAt(member, body)
+			if !resumed {
+				return err
+			}
+			membersBits := plan.members.count()
 			plan.members.putByte(h.Typeflag)
 			if h.Typeflag != tar.TypeReg {
 				return plan.holdPast()
 			}
-			s.unitBegins()
-			from := plan.lines.count()
+			if plan.carry == nil {
+				s.unitBegins()
+				from = plan.lines.count()
+			}
+			plan.markMember(member, membersBits, from, s)
 			size, text, err := measureFile(h.Name, body, s, plan)
 			if errors.Is(err, errLinesChanged) {
 				return errMemberChanged(h.Name)
@@ -986,11 +1004,12 @@ func errMemberChanged(name string) error {
 
 // firstReadings runs read, a first reading of an archive, on first, planning
 // on a plan it answers, which holds the large slot until its letGo. It reads
-// again, reopened, from where a reading ended: at the first line or `.json`
-// file it read as JSON alone that is no JSON ([errReadBothWays]), once; and
-// where the memo's answer for a text diverged ([errMemoDiverged]), once with
-// that text's first chunk looked up no more, so the take's other texts keep
-// their answers, and again with no lookups where that diverged too.
+// again, reopened: on from the first line or `.json` file a reading read as
+// JSON alone that is no JSON, its plan up to that unit kept
+// ([errReadBothWays], [tarPlan.memberAt]), once; and from the start where the
+// memo's answer for a text diverged ([errMemoDiverged]), once with that
+// text's first chunk looked up no more, so the take's other texts keep their
+// answers, and again with no lookups where that diverged too.
 func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
 	read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
 
@@ -999,15 +1018,16 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 	for src, diverged := first, 0; ; {
 		err := read(src, s.firstReading(pieces, plan), plan)
 		switch {
+		case errors.Is(err, errReadBothWays):
 		case errors.Is(err, errMemoDiverged):
 			if diverged++; diverged == 2 {
 				pieces.lookups = false
 			}
-		case !errors.Is(err, errReadBothWays):
+			plan.letGo()
+			plan = &tarPlan{gate: b.gate, bothFrom: plan.bothFrom}
+		default:
 			return plan, err
 		}
-		plan.letGo()
-		plan = &tarPlan{gate: b.gate, bothFrom: plan.bothFrom}
 		next, openErr := reopen()
 		if openErr != nil {
 			return plan, fmt.Errorf("executor: opening the session's archive again to read it: %w", openErr)
@@ -1119,6 +1139,7 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 		}
 		return n.n, false, err
 	}
+	plan.carry = nil
 	both := plan.unitAhead()
 	// ONE PIECE, THE WHOLE FILE: its text is redacted as one, so the
 	// document's strings within it need no gate of their own.
@@ -1248,6 +1269,12 @@ type tarPlan struct {
 	// first reading has begun, from 1; bothFrom is the first it reads both
 	// ways, and every one after it ([tarPlan.unitAhead]), 0 for none.
 	units, bothFrom int
+	// mark is the plan where the first reading's current unit began; resume
+	// the mark of the first unit that was no JSON, where the next reading
+	// goes on ([tarPlan.memberAt]); carry what of the unit's member that
+	// reading reads past, until the member's own reading takes it.
+	mark          planMark
+	resume, carry *planMark
 	// verbatimUnit is the unit of the last text verbatim plans, which the
 	// next one's counts from.
 	verbatimUnit int64
@@ -1306,27 +1333,82 @@ func (p *tarPlan) addVerbatim(v verbatimText) {
 // known only at its end and none is held, and a JSON unit's text scrub, never
 // written, cost two fifths of the scrub of a password-dense string. So the
 // first that is not ends the reading at once ([tarPlan.notJSON]), and the
-// next reads it and every one after it both ways: a transcript of text costs
-// what it did, and one of JSON torn at its last line a reading of its JSON
-// more.
+// next goes on from it ([tarPlan.memberAt]), reading it and every one after
+// it both ways: a transcript of text costs what it did, and one torn at its
+// last line nothing more.
 func (p *tarPlan) unitAhead() bool {
 	p.units++
 	return p.bothFrom > 0 && p.units >= p.bothFrom
 }
 
 // notJSON is the failure of the unit [tarPlan.unitAhead] began, read as JSON
-// alone and found no JSON: errReadBothWays, the reading to end there; or, where
-// an earlier reading read it as JSON, an archive that changed.
+// alone and found no JSON: errReadBothWays, the reading to end there and the
+// next to go on from its mark. One before where an earlier reading turned to
+// both ways is an archive that changed, which the second reading refuses;
+// each such unit comes sooner, so the readings end.
 func (p *tarPlan) notJSON() error {
-	if p.bothFrom > 0 {
-		return errLinesChanged
-	}
 	p.bothFrom = p.units
+	mark := p.mark
+	p.resume = &mark
 	return errReadBothWays
 }
 
+// planMark is where a unit began: its member, by its place among the
+// archive's members, the bits the members' stream held before the member's
+// own and the line bits it began at; the line's offset in the member and what
+// the member's lines before it come to as kept; and the unit the reading's
+// stage had begun. A reading ends at a unit having planned nothing of it but
+// its member's kind ([tarPlan.notJSON]), so every other stream stands at the
+// mark as the reading left it.
+type planMark struct {
+	member, membersBits, from int
+	offset, size, unit        int64
+}
+
+// markMember marks the regular member at its place among the archive's
+// members, its kind's bits written past membersBits and its line bits from
+// from, as its unit begins.
+func (p *tarPlan) markMember(member, membersBits, from int, s scrubber) {
+	p.mark.member, p.mark.membersBits, p.mark.from = member, membersBits, from
+	p.markUnit(0, 0, s)
+}
+
+// markUnit marks where the member's next unit begins: offset bytes into it,
+// its lines before it come to size as kept.
+func (p *tarPlan) markUnit(offset, size int64, s scrubber) {
+	p.mark.offset, p.mark.size, p.mark.unit = offset, size, s.unitAt()
+}
+
+// memberAt begins the member at its place among the archive's members, body
+// its bytes, in a reading that goes on from resume ([firstReadings]): one
+// before resume's, which the plan holds already, is read past (resumed
+// false); resume's own has its kind's bits cut and its bytes before the unit
+// read past, the line bits it began at its from; every one after it, and
+// every one of a reading that goes on from none, is read as it comes.
+//
+// A READING GOES ON FROM WHERE THE ONE BEFORE ENDED, not from the start: the
+// plan before that unit is the same whoever reads it, and read again, a
+// transcript torn at its last line, as any take that lands mid-write finds,
+// cost its JSON a second reading.
+func (p *tarPlan) memberAt(member int, body io.Reader) (from int, resumed bool, err error) {
+	r := p.resume
+	switch {
+	case r == nil || member > r.member:
+		p.resume = nil
+		return 0, true, nil
+	case member < r.member:
+		return 0, false, nil
+	}
+	p.members.list.truncate(r.membersBits)
+	p.resume, p.carry = nil, r
+	if _, err = io.CopyN(io.Discard, body, r.offset); err != nil {
+		return 0, false, fmt.Errorf("executor: reading the session's archive: %w", err)
+	}
+	return r.from, true, nil
+}
+
 // errReadBothWays ends a first reading at the first unit it read as JSON alone
-// that is no JSON, to be read again from there both ways ([firstReadings]).
+// that is no JSON, the next to read on from it both ways ([firstReadings]).
 var errReadBothWays = errors.New("executor: a line or a `.json` file is no JSON, read again both ways")
 
 // letGo drops the slot the plan holds, once the take is done with it.
@@ -1412,6 +1494,9 @@ type lineReader struct {
 	done, ended bool
 	// err is an error of the transcript's reader, which ends the reading.
 	err error
+	// at is how many of the text's bytes are read: where the next line
+	// begins.
+	at int64
 	// sc and j rewrite a line as JSON, each allocated once for every line
 	// of a reading; drain is what a line's rest is read into.
 	sc    *jsonscan.Scanner
@@ -1476,6 +1561,7 @@ func (l *lineReader) Read(p []byte) (int, error) {
 		}
 	}
 	_, _ = l.r.Discard(took)
+	l.at += int64(took)
 	if n == 0 && l.done {
 		return 0, io.EOF
 	}
@@ -1510,7 +1596,11 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 	defs := &definitionsReading{}
 	var asJSON rewriteOut
 	var size int64
+	if c := plan.carry; c != nil {
+		l.at, size, plan.carry = c.offset, c.size, nil
+	}
 	for {
+		plan.markUnit(l.at, size, s)
 		s.unitBegins()
 		short, more, err := l.next(nil)
 		if err != nil || !more {
