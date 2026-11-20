@@ -29,13 +29,35 @@ import type {
 import { plural } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { companyZone } from "~/lib/companyDay.ts";
+import { companyMidnight } from "~/lib/range.ts";
 import { shownStateOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
-  { value: "today", label: "Today", days: 1, words: "today", previous: "yesterday" },
-  { value: "7d", label: "7 days", days: 7, words: "7 days", previous: "previous 7 days" },
-  { value: "30d", label: "30 days", days: 30, words: "30 days", previous: "previous 30 days" },
+  {
+    value: "today",
+    label: "Today",
+    days: 1,
+    words: "today",
+    previous: "yesterday",
+    ago: "yesterday",
+  },
+  {
+    value: "7d",
+    label: "7 days",
+    days: 7,
+    words: "7 days",
+    previous: "previous 7 days",
+    ago: "7 days ago",
+  },
+  {
+    value: "30d",
+    label: "30 days",
+    days: 30,
+    words: "30 days",
+    previous: "previous 30 days",
+    ago: "30 days ago",
+  },
 ] as const;
 
 export type HomeRange = (typeof HOME_RANGES)[number];
@@ -60,12 +82,29 @@ export function rangeOf(value: string): HomeRange {
 }
 
 /**
- * How many days of the series the screen asks for: the fortnight the
- * completed-per-day chart draws, or two of the window where the window is
- * longer — the window itself and the one before it, which the delta compares.
+ * How many days of the series the screen asks for: two of the window, the
+ * window itself and the one before it, which the deltas compare; and at least
+ * a fortnight, which a figure's sparkline draws.
  */
 export function flowPoints(range: HomeRange): number {
   return Math.max(14, 2 * range.days);
+}
+
+/**
+ * Where Home's window opens: the company's midnight of its first day, today's
+ * for "Today" and `days - 1` before it otherwise. The day series' last
+ * `days` points are the same days, so a list over the window and a chart of
+ * it count one span.
+ */
+export function rangeSince(range: HomeRange, now: number, zone: string | undefined): number {
+  let at = companyMidnight(now, zone);
+  for (let day = 1; day < range.days; day++) at = companyMidnight(at - 1, zone);
+  return at;
+}
+
+/** "Per day · last 30 days", or "Today" for a window of one day. */
+export function rangeSpan(range: HomeRange): string {
+  return range.days === 1 ? "Today" : `Per day · last ${range.words}`;
 }
 
 /** How many tasks were delivered in the last `days` days of a day series, and
@@ -160,10 +199,11 @@ export function troubleParts(now: { blocked: number; overdue: number }): string[
   ].filter(Boolean) as string[];
 }
 
-/** The in-progress tile's second line: what its delta compares against, and
- *  the shapes of trouble that are there — "vs last week · 2 blocked". */
-export function inProgressParts(compared: boolean, trouble: readonly string[]): string[] {
-  return [...(compared ? ["vs last week"] : []), ...trouble];
+/** The in-progress tile's second line: what its delta compares against (the
+ *  count the window's length ago), and the shapes of trouble that are there:
+ *  "vs 7 days ago · 2 blocked". */
+export function inProgressParts(range: HomeRange | null, trouble: readonly string[]): string[] {
+  return [...(range ? [`vs ${range.ago}`] : []), ...trouble];
 }
 
 /** The company week window a meter draws, off the org meter, or undefined

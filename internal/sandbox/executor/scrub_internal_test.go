@@ -161,7 +161,15 @@ func keptLines(t testing.TB, text string, s scrubber) string {
 	var size int64
 	plan, err := firstReadings(strings.NewReader(text), func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(text)), nil
-	}, s, scrubBounds{}, func(src io.Reader, s scrubber, plan *tarPlan) (err error) {
+	}, s, scrubBounds{}, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		from, _, err := plan.memberAt(0, src)
+		if err != nil {
+			return err
+		}
+		if plan.carry == nil {
+			s.unitBegins()
+		}
+		plan.markMember(0, 0, from, s)
 		size, err = measureLines(src, s, plan)
 		return err
 	})

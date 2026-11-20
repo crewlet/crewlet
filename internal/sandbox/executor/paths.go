@@ -778,12 +778,12 @@
 // before its bytes. So a tar is read TWICE: the first reading reads each line
 // and each `.json` file as JSON alone, counting what it would write, and keeps
 // a PLAN; the second writes what the first counted. The first that is no JSON
-// ends it, and the next reads it and every one after it both ways
-// ([tarPlan.unitAhead]). Every rewrite here
-// is a pure function of what it reads, so the second reading writes what the
-// first counted, and a member that comes out another length is a member that
-// changed between the two, which fails the take. Both ways run on the scrub's
-// own goroutine, where the take contains a panic ([measureFile]).
+// ends it; the next goes on from it, reading it and every later one both ways
+// ([tarPlan.unitAhead]). Every rewrite here is a pure function of what it
+// reads, so the second reading writes what the first counted, and a member
+// that comes out another length changed between the two, which fails the
+// take. Both ways run on the scrub's own goroutine, where the take contains a
+// panic ([measureFile]).
 //
 // THE PLAN ([tarPlan]) is four streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
@@ -872,8 +872,8 @@
 // archive's two readings out of a box at its floor pace of a mebibyte a second
 // among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
 // for the scrub's own work where the two do not overlap), each arm fits, the
-// short lines the closest; the string redacts each byte once, in its first
-// reading as JSON alone, and its second copies it as checked.
+// short lines the closest; the string redacts each byte once, as JSON in its
+// first reading, and its second copies it as checked.
 //
 // # A definition the scrub renamed is cut out of its line
 //
