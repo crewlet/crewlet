@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -196,6 +197,13 @@ func (v findingView) finding(row advisordomain.FindingRow) (AdvisorFinding, erro
 		out.Evidence.Records = append(out.Evidence.Records, AdvisorRecordRef{Kind: r.Kind, ID: r.ID})
 	}
 	out.AdvisorFindingInsight = insightOf(f, out.Evidence.Facts)
+	// A PREMISE'S LAST CHECK is the last rules run that asked every open
+	// finding's premise again (ADR-0166).
+	if f.Premise != nil {
+		if at := v.lastDone[duty.PremiseScope]; !at.IsZero() {
+			out.PremiseCheckedAt = &at
+		}
+	}
 	if row.Explanation != "" && row.ExplainedDigest == row.VerdictDigest {
 		out.Explanation = &row.Explanation
 	}

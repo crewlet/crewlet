@@ -381,7 +381,7 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 	s.reads++
 	as := fmt.Sprintf("read_%d", s.reads)
 	s.mu.Unlock()
-	if err := s.served.Serve(as, answer, recordsIn(raw)); err != nil {
+	if err := s.served.ServeRead(as, advisor.ReadSource{Read: name, Params: params}, answer, recordsIn(raw)); err != nil {
 		return toolloop.ToolResult{}, err
 	}
 	return toolloop.ToolResult{Output: fmt.Sprintf(`{"cite_as":%q,"answer":%s}`, as, raw)}, nil
@@ -500,6 +500,9 @@ How each finding is checked before anyone sees it:
 - The headline is one line of at most 120 characters that leads with the number, such as "4 seats sat out 11 h on
   19 Nov: main hit its usage limit 3 times". Every number it says must be one of its facts (a day of a month aside).
 - Cite records (item keys, turn ids) where an answer named them. Never repeat what rule_findings lists.
+- Give each finding a premise: the one number it rests on, cited from a read (not the snapshot) as
+  {"from": "read_N.<path>", "op": "ge", "value": 3} (op is eq, ne, ge, gt, le or lt), which must hold now. The
+  engine asks that read again every hour and resolves the finding once its premise no longer holds.
 - One finding per cause: put every affected seat in one finding rather than one finding per seat.
 - Offer only a fix the engine builds: round_cap or token_budget for an agent seat, auxiliary_model with a
   providers.llm entry, open_item with an item key you cite, open_seat with an agent's handle, or none.

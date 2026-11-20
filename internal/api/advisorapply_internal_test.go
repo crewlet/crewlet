@@ -134,7 +134,8 @@ type applyReader struct{ observed []advisor.Observation }
 func (r applyReader) Observe(context.Context, time.Time) (duty.Observed, error) {
 	return duty.Observed{Observations: r.observed}, nil
 }
-func (applyReader) Signature(context.Context) (string, error) { return "", nil }
+func (applyReader) Signature(context.Context) (string, error)            { return "", nil }
+func (applyReader) Holds(context.Context, advisor.Premise) (bool, error) { return true, nil }
 func (applyReader) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, []string, error) {
 	return nil, nil, nil
 }

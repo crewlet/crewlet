@@ -90,6 +90,9 @@ type Submitted struct {
 	Facts    []CitedFact  `json:"facts"`
 	Records  []Record     `json:"records"`
 	Fix      SubmittedFix `json:"fix"`
+	// Premise is the fact an investigation's finding rests on, re-checked
+	// every hour; nil states none.
+	Premise *SubmittedPremise `json:"premise,omitempty"`
 }
 
 // CitedFact is one number, what it counts in a few plain words, and where in
@@ -135,6 +138,8 @@ type SubmittedFix struct {
 type Served struct {
 	answers map[string]any
 	records map[Record]bool
+	// sources is the read each investigation's answer came from, by name.
+	sources map[string]ReadSource
 }
 
 // NewServed is an empty record of what a run's tools answered.
@@ -286,6 +291,13 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
 		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item, Headline: s.Headline,
 		Evidence: facts, Records: records, Fix: fix}
+	if s.Premise != nil {
+		premise, ok := premiseOf(*s.Premise, served)
+		if !ok {
+			return Finding{}, DropWrongFact
+		}
+		f.Premise = &premise
+	}
 	f.Focus = Fingerprint(f)
 	if repeats(f, g.Rules) {
 		return Finding{}, DropRepeat

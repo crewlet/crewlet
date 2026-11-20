@@ -67,6 +67,8 @@ type Reader interface {
 	// Signature is a cheap read of everything the setup group reads, which
 	// changes when any of it does.
 	Signature(ctx context.Context) (string, error)
+	// Holds asks a finding's premise again: whether it holds now.
+	Holds(ctx context.Context, p advisor.Premise) (bool, error)
 	// Week reads the week [from, to) a report is written for: its numbers,
 	// and the sources it could not read; [advisor.ErrWeekUnmeasured] for a
 	// week the company's records do not reach back over all of.
@@ -426,10 +428,14 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 		return run
 	}
 	run.Scopes = scopesOf(reading)
+	moved := map[string]bool{}
 	for _, t := range advisor.Reconcile(live, observed, reading) {
 		if err := d.Log.Record(ctx, t, now); err != nil {
 			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
 			continue
+		}
+		if t.Stored != nil {
+			moved[t.Stored.ID] = true
 		}
 		f := t.Observed
 		if f == nil {
@@ -442,7 +448,46 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			}
 		}
 	}
+	if rules {
+		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, moved))
+	}
 	return run
+}
+
+// PremiseScope is the scope a rules run records once it asked every open
+// finding's premise again, which a finding's premise_checked_at reads.
+const PremiseScope = "premise"
+
+// recheckPremises asks again the premise of every open finding that states
+// one and this run did not move, and resolves each whose premise no longer
+// holds (ADR-0166). A premise that could not be asked is left as it stands.
+func (d *Duty) recheckPremises(ctx context.Context, now time.Time, live []advisor.Stored,
+	moved map[string]bool) ScopeRun {
+	scope := ScopeRun{Scope: PremiseScope, Status: ScopeDone, Steps: map[advisor.Step]int{}}
+	for i := range live {
+		s := &live[i]
+		p := s.Observation.Finding.Premise
+		if p == nil || moved[s.ID] || s.State != advisor.StateOpen {
+			continue
+		}
+		holds, err := d.Read.Holds(ctx, *p)
+		if err != nil {
+			log.WarnContext(ctx, "advisor_premise_unread", "finding", s.ID, "error", err.Error())
+			scope.Status = ScopeUnread
+			continue
+		}
+		if holds {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateResolved,
+			Reason: advisor.ReasonConditionCleared}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		scope.Steps[advisor.StepClose]++
+	}
+	return scope
 }
 
 // modelPass runs the model, adding its group to reading where it concluded.

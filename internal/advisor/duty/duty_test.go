@@ -97,6 +97,8 @@ type fakeReader struct {
 	weekErr error
 	// silent is what the rule pass could not judge.
 	silent []advisor.Silence
+	// premises is whether each premise holds, by its read.
+	premises map[string]bool
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
@@ -105,6 +107,14 @@ func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) 
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
+
+// Holds answers whether a premise holds by its read's name, holding where unnamed.
+func (r *fakeReader) Holds(_ context.Context, p advisor.Premise) (bool, error) {
+	if held, named := r.premises[p.Read]; named {
+		return held, nil
+	}
+	return true, nil
+}
 
 // Week answers the metrics it holds, and records the period it was asked for.
 func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {

@@ -74,6 +74,11 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 				"required": []string{"title", "why", "severity", "subject", "facts", "records", "fix"},
 				"properties": map[string]any{
 					"headline": map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
+					"premise": map[string]any{"type": "object", "additionalProperties": false,
+						"required": []string{"from", "op", "value"}, "properties": map[string]any{
+							"from":  map[string]any{"type": "string"},
+							"op":    map[string]any{"enum": []string{"eq", "ne", "ge", "gt", "le", "lt"}},
+							"value": map[string]any{"type": "number"}}},
 					"title":    map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
 					"why":      map[string]any{"type": "string", "maxLength": advisor.MaxAnalystWhy},
 					"item":     map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
