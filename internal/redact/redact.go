@@ -34,8 +34,8 @@
 // feeds it every shape here a line at a time. A stream from [NewLiveStream]
 // hands its stages only what Settled settles, and [Stream.Flush] decides each
 // stage there as at the text's end. Unflushed, it answers as a [NewStream]
-// does; flushed, it writes Secrets where Close answers nil, and refuses
-// otherwise only in a layout named below.
+// does; flushed, it writes Secrets where Close answers nil, and refuses only
+// in a layout named below.
 //
 // # How far a rule reads
 //
@@ -137,8 +137,8 @@
 // and claims the stages keep beside it, where a text is markers end to end (a
 // JSON Web Token every fifteen bytes). So a stream allocates its buffers, about
 // 16 MiB, and past them under a quarter of a byte a byte of a session or a PDF,
-// a few where passwords are dense. Tests hold each. A live stream holds the
-// text past its settled point besides ([settling]).
+// a few where passwords are dense. Tests hold each. A live stream also holds
+// its text past the settled point, any length ([settling]).
 //
 // A WINDOW DECIDED EARLY IS CHECKED, AND A STREAM THAT FINDS IT READ A CLAIM
 // OTHERWISE REFUSES ([ErrDecidedEarly]). Every token's and AWS secret's claim
