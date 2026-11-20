@@ -668,7 +668,7 @@ func (r rule) decide(text string, from int, prior [][2]int) (key, replaced [2]in
 }
 
 func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, found bool) {
-	key, replaced, _, found = decideReadIn(r, text, from, prior)
+	key, replaced, _, _, found = decideReadIn(r, text, from, prior)
 	return key, replaced, found
 }
 
@@ -677,37 +677,39 @@ func decideIn[T textual](r rule, text T, from int, prior [][2]int) (key, replace
 // ends in begins, and where the markup the key's line opened ends, each or 0
 // ([aValue]).
 func (r rule) decideRead(text string, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, found bool) {
-	return decideReadIn(r, text, from, prior)
+	key, replaced, seams, _, found = decideReadIn(r, text, from, prior)
+	return key, replaced, seams, found
 }
 
-// decideReadIn is [rule.decideRead] of a text of either kind ([textual]).
-func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, found bool) {
+// decideReadIn is [rule.decideRead] of a text of either kind ([textual]), and
+// whether a password's value is its run read in the whole text ([aValue]).
+func decideReadIn[T textual](r rule, text T, from int, prior [][2]int) (key, replaced [2]int, seams [3]int, ran, found bool) {
 	for from <= len(text) {
 		start, end, found := findIn(r, text, from)
 		if !found {
-			return key, replaced, seams, false
+			return key, replaced, seams, false, false
 		}
 		if r.read != nil {
 			v := callRead(r.read, text, start, end, prior)
-			return [2]int{start, end}, [2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, true
+			return [2]int{start, end}, [2]int{v.from, v.to}, [3]int{v.gutter, v.ending, v.opening}, v.ran, true
 		}
 		if r.value != nil {
 			valueStart, valueEnd := callValue(r.value, text, start, end, prior)
-			return [2]int{start, end}, [2]int{valueStart, valueEnd}, seams, true
+			return [2]int{start, end}, [2]int{valueStart, valueEnd}, seams, false, true
 		}
 		at := armourIn(text, start, end)
 		if at == end {
-			return [2]int{start, end}, [2]int{start, end}, seams, true
+			return [2]int{start, end}, [2]int{start, end}, seams, false, true
 		}
 		// The match as if the text ended at the armour: the rule's first
 		// match there, which no place before start has, since none had
 		// one in the whole text. None, and the search goes on past it.
 		if s, e, found := findIn(r, text[:at], start); found {
-			return [2]int{s, e}, [2]int{s, e}, seams, true
+			return [2]int{s, e}, [2]int{s, e}, seams, false, true
 		}
 		from = at + reFindIndex(pemArmourAt(), text[at:])[1]
 	}
-	return key, replaced, seams, false
+	return key, replaced, seams, false, false
 }
 
 // find is the rule's first match at or after from: its pattern's, held to its

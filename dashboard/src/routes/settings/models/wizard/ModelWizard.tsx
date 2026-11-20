@@ -935,11 +935,6 @@ export function ModelWizard({
             <Review
               draft={draft}
               data={data}
-              before={prepared?.before ?? data.doc}
-              after={
-                prepared?.next.doc ??
-                (data.doc ? nextDocument(data.doc, draft, editingArg).doc : null)
-              }
               dropped={
                 (prepared?.next ?? (data.doc ? nextDocument(data.doc, draft, editingArg) : null))
                   ?.dropped ?? []

@@ -1,7 +1,7 @@
 /**
  * What a model is for, in two questions: what it should do (every seat job,
  * one category of work, Ask Crewlet, the Advisor, or none yet) and for which seats
- * (chips, with all of them a switch away). Each category is named for the
+ * (chips, with the seats that have no model for it a switch away). Each category is named for the
  * work it covers, with its glyph; the engine fields it sets are in its
  * tooltip, and choosing it writes every one of them in the same revision.
  * Setting categories seat by seat is there, folded, for a model one choice
@@ -20,6 +20,11 @@
  * or beside its seat work from the per-seat switch, so a model the Advisor
  * shares with seats keeps both. Unlike Ask Crewlet it may run with no model,
  * so the switch also takes it off the model it runs on.
+ *
+ * A NEW MODEL TAKES ONLY SEATS WITH NO MODEL FOR IT. Choosing what a model
+ * does, in an add, preselects the seats none of whose chosen jobs runs on a
+ * model today ([seatsWithoutModel]): a seat that already has one keeps it
+ * unless the reader picks it, and its chip says picking it replaces that.
  *
  * AN EDIT KEEPS ITS SEATS. Choosing what a model does, in an edit, starts from
  * the seats it serves now, never every seat: an edit made for its sign-in
@@ -165,23 +170,46 @@ const jobsOf = (intent: Exclude<Intent, "custom">): readonly SeatJob[] =>
       ? []
       : CATEGORY_JOBS[intent];
 
-/** The seats a choice starts with: those whose model for it cannot answer now, or else every seat. */
-export function sensibleSeats(
-  data: Pick<ModelsData, "models" | "seats">,
-  intent: Exclude<Intent, "custom">,
-): string[] {
-  const all = data.seats.map((s) => s.handle);
-  const jobs = jobsOf(intent);
-  if (jobs.length === 0) return [];
-  if (intent === "all") return all;
-  const stuck = new Set<string>();
+/**
+ * The models other than `key` each seat runs one of `jobs` on today, by
+ * handle: the engine's own resolution (`used_by`, the model a job runs on
+ * first), so a job that falls back to the seat's executor or to the
+ * company's models counts as having one, as By job shows it.
+ */
+export function modelsNow(
+  data: Pick<ModelsData, "models">,
+  jobs: readonly SeatJob[],
+  key: string,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
   for (const m of data.models) {
-    const health = m.entry.health;
-    if (health !== "sitting_out" && health !== "rejected" && health !== "no_sign_in") continue;
-    for (const job of jobs) for (const seat of m.uses.jobs[job]) stuck.add(seat);
+    if (m.key === key) continue;
+    for (const job of jobs)
+      for (const seat of m.uses.jobs[job]) {
+        const keys = out.get(seat) ?? [];
+        if (!keys.includes(m.key)) out.set(seat, [...keys, m.key]);
+      }
   }
-  return stuck.size > 0 ? all.filter((h) => stuck.has(h)) : all;
+  return out;
 }
+
+/**
+ * The seats a choice preselects: those with no model today for ANY of its
+ * jobs. A seat with a model for even one of them is left alone, so a
+ * preselection never moves a job that runs; the reader may still pick it.
+ */
+export function seatsWithoutModel(
+  data: Pick<ModelsData, "models" | "seats">,
+  jobs: readonly SeatJob[],
+  key: string,
+): string[] {
+  if (jobs.length === 0) return [];
+  const now = modelsNow(data, jobs, key);
+  return data.seats.map((s) => s.handle).filter((h) => !now.has(h));
+}
+
+const sameSeats = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((h) => b.includes(h));
 
 /**
  * The plain-language account of a draft's uses, for the review: one sentence
@@ -201,7 +229,7 @@ export function summaryOf(
   const lines: string[] = [];
   if (draft.intent === "all") {
     const seats = draft.uses.jobs.executor;
-    lines.push(`${who(seats)} will use ${key} for everything.`);
+    if (seats.length > 0) lines.push(`${who(seats)} will use ${key} for everything.`);
   } else {
     const groups = new Map<string, JobCategory[]>();
     for (const c of CATEGORY_ORDER) {
@@ -253,7 +281,6 @@ export function UseItFor({
   error?: string | undefined;
   onChange: (patch: Patch) => void;
 }) {
-  const all = data.seats.map((s) => s.handle);
   const executor = canExecute(draft);
   const was = data.assistant.key;
   // A MODEL ASK CREWLET RUNS ON keeps it here: Ask Crewlet runs on something
@@ -357,8 +384,8 @@ export function UseItFor({
       intent,
       uses: usesForIntent(
         intent,
-        // AN EDIT KEEPS THE SEATS IT SERVES; only an add starts from a sensible set.
-        served ? servedBy(served) : sensibleSeats(data, intent),
+        // AN EDIT KEEPS THE SEATS IT SERVES; an add starts from the seats with no model for it.
+        served ? servedBy(served) : seatsWithoutModel(data, jobsOf(intent), draft.key),
         intent === "assistant" || holdsAssistant,
         intent === "advisor" || (holdsAdvisor && draft.uses.advisor),
       ),
@@ -386,6 +413,9 @@ export function UseItFor({
     draft.intent !== "custom" &&
     draft.intent !== "assistant" &&
     draft.intent !== "advisor";
+  const chosenJobs = seatPicker && draft.intent !== "custom" ? jobsOf(draft.intent) : [];
+  const now = modelsNow(data, chosenJobs, draft.key);
+  const open = seatsWithoutModel(data, chosenJobs, draft.key);
   // A HELPER BESIDE ANOTHER USE is said under the choice, since the choice names one use.
   const assistantBeside = draft.uses.assistant && draft.intent !== "assistant";
   const advisorBeside = draft.uses.advisor && draft.intent !== "advisor";
@@ -423,29 +453,53 @@ export function UseItFor({
             <Text as="h3" variant="label">
               For which seats?
             </Text>
-            <Switch
-              label="All seats"
-              checked={all.length > 0 && intentSeats.length === all.length}
-              onCheckedChange={(on) => pickSeats(on ? all : [])}
-            />
+            {/* EVERY SEAT HAS A MODEL FOR IT: there is nothing for the switch to pick. */}
+            {open.length > 0 ? (
+              <Switch
+                label="Seats without a model"
+                checked={sameSeats(intentSeats, open)}
+                onCheckedChange={(on) => pickSeats(on ? open : [])}
+              />
+            ) : null}
           </div>
           <FilterChipGroup label="Seats that use this model" hideLabel>
-            {data.seats.map((s) => (
-              <FilterChip
-                key={s.handle}
-                pressed={intentSeats.includes(s.handle)}
-                onPressedChange={(on) =>
-                  pickSeats(
-                    on ? [...intentSeats, s.handle] : intentSeats.filter((h) => h !== s.handle),
-                  )
-                }
-              >
-                <span className="models-who__chip">
-                  <SeatAvatar name={s.name} kind={s.kind} avatar={s.avatar} size="xs" decorative />
-                  {s.name}
-                </span>
-              </FilterChip>
-            ))}
+            {data.seats.map((s) => {
+              const chip = (
+                <FilterChip
+                  key={s.handle}
+                  pressed={intentSeats.includes(s.handle)}
+                  onPressedChange={(on) =>
+                    pickSeats(
+                      on ? [...intentSeats, s.handle] : intentSeats.filter((h) => h !== s.handle),
+                    )
+                  }
+                >
+                  <span className="models-who__chip">
+                    <SeatAvatar
+                      name={s.name}
+                      kind={s.kind}
+                      avatar={s.avatar}
+                      size="xs"
+                      decorative
+                    />
+                    {s.name}
+                  </span>
+                </FilterChip>
+              );
+              const today = now.get(s.handle);
+              // A SEAT WITH A MODEL SAYS, ON ITS OWN CHIP, WHAT PICKING IT DOES.
+              return today ? (
+                <Tooltip
+                  key={s.handle}
+                  content={`On ${listed(today)} now. Picking it replaces that.`}
+                  placement="top"
+                >
+                  {chip}
+                </Tooltip>
+              ) : (
+                chip
+              );
+            })}
           </FilterChipGroup>
         </div>
       ) : null}
