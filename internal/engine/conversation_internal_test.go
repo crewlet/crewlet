@@ -284,21 +284,6 @@ func (l *headLog) Session(_ context.Context, handle, turn string,
 	return row, nil
 }
 
-func (l *headLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	body, ok := l.archives[row.Object.Key.String()]
-	if !ok {
-		return executordomain.ErrUnreadable
-	}
-	_, err := dst.Write(body)
-	return err
-}
-
-func (l *headLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
-	return sealed, nil
-}
-
 func (l *headLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -26,15 +26,16 @@ type keptRestore struct {
 	mu       sync.Mutex
 	rows     map[string]executorkeep.TurnRow
 	archives map[string][]byte
-	// unreadable fails every fetch as an object the store no longer holds.
+	// unreadable fails every read as an object the store no longer holds.
 	unreadable bool
-	// failOpen fails the open of a spool numbered so, from 1 — the fetch's
-	// own check that the seal opens whole is the first, the launch's open of
-	// what it carries the second — as a seal that does not authenticate does.
-	failOpen int
-	opened   int
-	// streamed counts the objects [keptRestore.Open] streamed, as a reading
-	// of what a session holds streams one.
+	// failOpen fails the open numbered so, from 1 — a restore's read of the
+	// whole is the first, its read again into the box the second — as a seal
+	// that does not authenticate does; readAgain, when set, is what every open
+	// after the first hands out in the object's place, as a store that
+	// answered otherwise the second time.
+	failOpen  int
+	readAgain func(stored []byte) []byte
+	// streamed counts the objects [keptRestore.Open] streamed.
 	streamed int
 	asked    []string
 	// unreadRows, when set, is every read's answer: a log that could not be
@@ -76,27 +77,6 @@ func (k *keptRestore) Session(ctx context.Context, handle, turn string) (executo
 	return row, nil
 }
 
-func (k *keptRestore) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	body, ok := k.archives[row.Object.Key.String()]
-	if k.unreadable || !ok {
-		return errUnreadable
-	}
-	_, err := dst.Write(body)
-	return err
-}
-
-func (k *keptRestore) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.opened++
-	if k.opened == k.failOpen {
-		return nil, errUnreadable
-	}
-	return sealed, nil
-}
-
 // Open streams the archive row's object holds, as the store streams one
 // opened: an object it does not hold, or every object where fetches fail, is
 // unreadable.
@@ -105,8 +85,11 @@ func (k *keptRestore) Open(_ context.Context, row executorkeep.TurnRow) (io.Read
 	defer k.mu.Unlock()
 	k.streamed++
 	body, ok := k.archives[row.Object.Key.String()]
-	if k.unreadable || !ok {
+	if k.unreadable || !ok || k.streamed == k.failOpen {
 		return nil, errUnreadable
+	}
+	if k.readAgain != nil && k.streamed > 1 {
+		body = k.readAgain(slices.Clone(body))
 	}
 	return io.NopCloser(bytes.NewReader(body)), nil
 }
@@ -208,12 +191,12 @@ func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req La
 	return c.Launch(t.Context(), rig.manager, req)
 }
 
-// restoreSpools is every spool a launch left of a session it carried, in any
-// coordinator's own directory under the rig's spool directory.
+// restoreSpools is every spool in any coordinator's own directory under the
+// rig's spool directory: a restore spools none.
 func restoreSpools(t *testing.T, rig *coordRig) []string {
 	t.Helper()
 	left, err := filepath.Glob(filepath.Join(rig.coordinator.spoolDirectory(), spoolDirPrefix+"*",
-		restoreSpoolPrefix+"*"))
+		spoolPrefix+"*"))
 	if err != nil {
 		t.Fatalf("listing the restore spools: %v", err)
 	}
@@ -270,6 +253,46 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 			t.Errorf("the launch left the spool it carried the session in: %v", left)
 		}
 	})
+}
+
+// A KEPT SESSION READ AGAIN OTHERWISE FAILS ITS LAUNCH. A restore reads the
+// object whole once, then again as the run starts, streamed into its box and
+// held to the first read: a store that hands one byte more, or a byte changed,
+// the second time fails the run's start, so the turn retries the launch, and
+// the box is handed nothing whole to restore.
+//
+// Mutation: hand out the second read unchecked, and the run starts with what
+// the store answered the second time.
+func TestAKeptSessionReadAgainOtherwiseFailsTheLaunch(t *testing.T) {
+	t.Parallel()
+	for name, again := range map[string]func([]byte) []byte{
+		"one byte more": func(stored []byte) []byte { return append(stored, '!') },
+		"a byte changed": func(stored []byte) []byte {
+			stored[len(stored)/2] ^= 1
+			return stored
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, restore, kept := keptTurn(t)
+				restore.readAgain = again
+				started := len(rig.runner.Started())
+				if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err == nil {
+					t.Fatal("the relaunch started on a second read that was not the first, want it failed")
+				}
+				if carried := rig.runner.Carried(); len(carried) != 0 {
+					t.Errorf("the box was handed %+v to restore, want nothing", carried)
+				}
+				if now := len(rig.runner.Started()); now != started {
+					t.Errorf("%d runs started, want none past the %d before", now-started, started)
+				}
+				if left := restoreSpools(t, rig); len(left) != 0 {
+					t.Errorf("the launch spooled the session: %v", left)
+				}
+			})
+		})
+	}
 }
 
 // A RUN THAT CONTINUES A SESSION IS WIRED FOR EITHER SESSION ITS BOX MAY START,
@@ -344,11 +367,11 @@ func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing
 // continuation in any other box, and the fresh brief where it cannot be taken
 // up at all (a harness that cannot, an object gone, a kept session moved, a row
 // naming another capture or an earlier job's, a seal or a spool that does not
-// open). A newer capture not kept is none of these. It leaves no fetched spool
-// behind either way.
+// open, or a second read of it that does not). A newer capture not kept is none
+// of these. It spools nothing either way.
 //
 // Mutation: choose the brief before the box and object are asked, restore over
-// a clean copy, skip a check of the record as opened, or leave a spool behind,
+// a clean copy, skip a check of the record as opened, or spool the session,
 // and a row goes red.
 func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	t.Parallel()
@@ -361,19 +384,19 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 		session                                         string
 		carried, replace                                bool
 	}{
-		"its own box, ended cleanly":    {reused: true, want: BriefContinued, session: "s-1"},
-		"its own box, cut off":          {reused: true, interrupted: true, want: BriefContinued, session: "s-1", carried: true, replace: true},
-		"a new box":                     {want: BriefContinuedNewBox, session: "s-1", carried: true},
-		"a box that cannot take it up":  {carryWhy: "this box runs Claude Code 2.1.263", want: BriefFresh},
-		"an unreadable object":          {unreadable: true, want: BriefFresh},
-		"a kept session that moved":     {moved: true, want: BriefFresh},
-		"a newer capture, not kept":     {newerUnkept: true, want: BriefContinuedNewBox, session: "s-1", carried: true},
-		"a log naming another capture":  {logMoved: true, want: BriefFresh},
-		"an earlier job's kept capture": {earlierJob: true, want: BriefFresh},
-		"in place, its own box":         {reused: true, inPlace: true, want: BriefContinued, session: "sess-ask"},
-		"in place, a new box":           {inPlace: true, want: BriefFresh},
-		"a seal that does not open":     {failOpen: 1, want: BriefFresh},
-		"a spool that does not reopen":  {failOpen: 2, want: BriefFresh},
+		"its own box, ended cleanly":      {reused: true, want: BriefContinued, session: "s-1"},
+		"its own box, cut off":            {reused: true, interrupted: true, want: BriefContinued, session: "s-1", carried: true, replace: true},
+		"a new box":                       {want: BriefContinuedNewBox, session: "s-1", carried: true},
+		"a box that cannot take it up":    {carryWhy: "this box runs Claude Code 2.1.263", want: BriefFresh},
+		"an unreadable object":            {unreadable: true, want: BriefFresh},
+		"a kept session that moved":       {moved: true, want: BriefFresh},
+		"a newer capture, not kept":       {newerUnkept: true, want: BriefContinuedNewBox, session: "s-1", carried: true},
+		"a log naming another capture":    {logMoved: true, want: BriefFresh},
+		"an earlier job's kept capture":   {earlierJob: true, want: BriefFresh},
+		"in place, its own box":           {reused: true, inPlace: true, want: BriefContinued, session: "sess-ask"},
+		"in place, a new box":             {inPlace: true, want: BriefFresh},
+		"a seal that does not open":       {failOpen: 1, want: BriefFresh},
+		"a read again that does not open": {failOpen: 2, want: BriefFresh},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -431,16 +454,9 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			if want := (LaunchDecision{Brief: tc.want, Kept: tc.want != BriefFresh && !tc.inPlace}); got.decision() != want {
 				t.Errorf("the launch tells its caller %+v, want %+v", got.decision(), want)
 			}
-			// NO SPOOL LEFT once the run has started, or a fresh one in its
-			// place: one the launch fetched and could not use is gone already.
-			if !tc.carried {
-				if left := restoreSpools(t, rig); len(left) != 0 {
-					t.Errorf("the launch left a spool of the session behind: %v", left)
-				}
-			}
-			got.release()
+			// NO SPOOL, while the run is handed what it carries as after.
 			if left := restoreSpools(t, rig); len(left) != 0 {
-				t.Errorf("the run's start left the spool it carried the session in: %v", left)
+				t.Errorf("the launch spooled the session: %v", left)
 			}
 		})
 	}

@@ -173,7 +173,9 @@
 //
 // An unreadable object, a silent log or a box that cannot take the session up
 // starts one of its own (`executor_session_not_continued`). The session is
-// fetched sealed and opened whole before a byte reaches the box. A cut-off
+// read whole before a byte reaches the box, then streamed in held to that
+// read, never spooled ([Coordinator.fetchSession]); one that differs the second
+// time fails the run's start. A cut-off
 // session's calls are read by id (Claude Code) or by content (OpenCode): a held
 // class is never a false hold ([HoldingsByContent]).
 //

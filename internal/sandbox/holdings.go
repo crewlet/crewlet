@@ -26,12 +26,11 @@ import (
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
 // restores what it reads ([ArchiveRestorer]), since whether the session is
-// continued at all is asked of the same runner first. It reads the archive a
-// second time, streamed and never spooled ([SessionRestore.Open]): a spool of
-// its own would sit on the node's scratch disk beside the launch's, which is
-// not what crewlet-operator sizes an engine pod's scratch volume by, and one
-// handed to the launch would change the fetch crewlet-operator copies
-// ([Coordinator.fetchSession]).
+// continued at all is asked of the same runner first. It streams the archive
+// and never spools it ([SessionRestore.Open]), as a restore does
+// ([Coordinator.fetchSession]): the node's scratch disk holds the spool room
+// alone ([spoolRoomBytes]), which crewlet-operator sizes an engine pod's
+// scratch volume by.
 type HoldingsReader interface {
 	ArchiveRestorer
 
