@@ -161,7 +161,7 @@ func checkLineBytes(t *testing.T, line []byte, next func(left int) int) {
 	for rest := line; len(rest) > 0; {
 		n := min(next(len(rest)), len(rest))
 		sizes = append(sizes, n)
-		l.write(rest[:n])
+		_, _ = l.Write(rest[:n])
 		rest = rest[n:]
 	}
 	got, want := l.facts(), wholeLineBytes(line)

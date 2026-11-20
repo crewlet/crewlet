@@ -828,29 +828,31 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				// ONE HEALTH READ PER TICK, feeding both the frame
-				// and the posture derived from it. Read twice, a tab
-				// could be told "shed" in the frame it is handed
-				// while the posture that decided whether to hand it
-				// anything came from a different instant.
-				health := s.currentHealth()
-				s.hub.SetPosture(s.posture(health))
-				s.hub.Broadcast(Push(KindHealth, health, s.now()))
-				s.flushTokens()
-				// PLACEMENT ON THE SAME TICK: a seat moves between
-				// nodes on a lease, which publishes nothing, so an open
-				// screen learns a seat went unplaced — or was taken up
-				// by a peer — only from a read. The seat host sweeps on
-				// five seconds too (seat.SweepInterval), so a faster
-				// read would find nothing newer.
-				s.RefreshPlacement()
-				// AND THE INBOX COUNTS OF A NODE THAT WENT AWAY, which
-				// publishes nothing that could clear them
-				// ([livestate.LiveState.ExpireWaiting]).
-				s.pushAgents(s.state.ExpireWaiting(), s.now())
+				contained(ctx, "health_tick", s.tick)
 			}
 		}
 	}()
+}
+
+// tick is one pass of the shared tick.
+func (s *Service) tick() {
+	// ONE HEALTH READ PER TICK, feeding both the frame and the posture derived
+	// from it. Read twice, a tab could be told "shed" in the frame it is handed
+	// while the posture that decided whether to hand it anything came from a
+	// different instant.
+	health := s.currentHealth()
+	s.hub.SetPosture(s.posture(health))
+	s.hub.Broadcast(Push(KindHealth, health, s.now()))
+	s.flushTokens()
+	// PLACEMENT ON THE SAME TICK: a seat moves between nodes on a lease, which
+	// publishes nothing, so an open screen learns a seat went unplaced — or was
+	// taken up by a peer — only from a read. The seat host sweeps on five
+	// seconds too (seat.SweepInterval), so a faster read would find nothing
+	// newer.
+	s.RefreshPlacement()
+	// AND THE INBOX COUNTS OF A NODE THAT WENT AWAY, which publishes nothing that
+	// could clear them ([livestate.LiveState.ExpireWaiting]).
+	s.pushAgents(s.state.ExpireWaiting(), s.now())
 }
 
 // flushTokens sends the spend rollup if it moved since the last one: a spend

@@ -12,7 +12,9 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
+import { QUERY_TIMEOUT_MS, TRANSCRIPT_QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
+import { afterMicrotasks } from "../test/settle.ts";
 import { Store } from "./store.ts";
 
 /** The engine's sentence for a read refused on a log at its ceiling
@@ -223,7 +225,98 @@ describe("a query frame", () => {
     const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
     const query = frames.find((frame) => frame.kind === "query");
     expect(query).toBeDefined();
-    expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "what"]);
+    expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "wait_ms", "what"]);
+  });
+
+  // THE FRAME NAMES HOW LONG THE TAB WAITS FOR ITS ANSWER, the wait its own
+  // timer rejects the query at, so the engine stops a question nobody is
+  // waiting for and frees the read it holds.
+  test("names the wait the tab gives its answer", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    dial(0).open();
+    void socket.query("fleet");
+    const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(frames.find((frame) => frame.kind === "query")?.wait_ms).toBe(QUERY_TIMEOUT_MS);
+  });
+
+  // A QUESTION THAT NAMES ITS OWN WAIT is sent with it and given up on only once
+  // it has passed: a transcript page waits as long as a read of a session can
+  // take to answer, not an ordinary question's ten seconds.
+  test("a question naming its own wait sends it and waits it out", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      socket.start();
+      dial(0).open();
+      let rejected = "";
+      const asked = socket.query("executor_session", {}, TRANSCRIPT_QUERY_TIMEOUT_MS);
+      asked.catch((err: unknown) => {
+        rejected = (err as Error).message;
+      });
+      const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+      const query = frames.find((frame) => frame.kind === "query");
+      expect(query?.wait_ms).toBe(TRANSCRIPT_QUERY_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS + 1);
+      expect(rejected).toBe("");
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_QUERY_TIMEOUT_MS);
+      expect(rejected).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A QUESTION GIVEN UP ON IS CANCELLED AT THE ENGINE AND SETTLED HERE AT ONCE:
+  // its signal aborting sends `query_cancel` naming it, so the engine stops
+  // reading for it, rejects it with the signal's reason, and its answer, if one
+  // comes, finds nothing waiting, nor is it asked again on the next socket. One
+  // given up on before its socket opened is never sent.
+  // Mutation: keep the in-flight entry, or send no cancel, and an abandoned
+  // transcript read holds the tab's slot and the node's for its whole wait.
+  test("a question whose signal aborts is cancelled at the engine and settled", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    const early = new AbortController();
+    let earlyReason: unknown = null;
+    socket.query("fleet", {}, undefined, early.signal).catch((err: unknown) => {
+      earlyReason = err;
+    });
+    early.abort();
+    await afterMicrotasks();
+    expect(earlyReason).toBe(early.signal.reason);
+    dial(0).open();
+    const stop = new AbortController();
+    let reason: unknown = null;
+    let answered = false;
+    socket.query("executor_session", {}, TRANSCRIPT_QUERY_TIMEOUT_MS, stop.signal).then(
+      () => {
+        answered = true;
+      },
+      (err: unknown) => {
+        reason = err;
+      },
+    );
+    const frames = () => dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(frames().filter((frame) => frame.kind === "query")).toHaveLength(1);
+    const id = frames().find((frame) => frame.kind === "query")?.id;
+    stop.abort();
+    await afterMicrotasks();
+    expect(reason).toBe(stop.signal.reason);
+    expect(frames().filter((frame) => frame.kind === "query_cancel")).toEqual([
+      { kind: "query_cancel", id },
+    ]);
+    // NOT ASKED AGAIN on the socket after it, as a question still in flight is.
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(1_000);
+    dial(1).open();
+    const again = dial(1).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(again.filter((frame) => frame.kind === "query")).toEqual([]);
+    dial(1).onmessage?.({ data: JSON.stringify({ kind: "result", id, data: {} }) } as MessageEvent);
+    await afterMicrotasks();
+    expect(answered).toBe(false);
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the

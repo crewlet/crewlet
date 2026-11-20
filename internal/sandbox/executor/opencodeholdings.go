@@ -367,6 +367,8 @@ func (*openCodeHoldingsWalk) asks() *exportAsks { return holdingsAsks }
 
 func (w *openCodeHoldingsWalk) digest() *textDigest { return w.text }
 
+func (*openCodeHoldingsWalk) sink(exportFrame, int, jsonscan.Kind) io.Writer { return nil }
+
 // open refuses a second `messages` list (the import keeps the last), and
 // starts what a frame's members are kept in.
 func (w *openCodeHoldingsWalk) open(f exportFrame) error {

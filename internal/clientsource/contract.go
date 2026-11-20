@@ -585,6 +585,8 @@ var contract = []Entry{
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
 	{"InboxChange", ReadInterface, "internal/api/stream.TestTheDashboardReadsAnInboxFrameAsTheEngineSendsIt"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
+	{"TRANSCRIPT_QUERY_TIMEOUT_MS", ReadScalar,
+		"internal/api/queries.TestTheDashboardWaitsPastAPersonsReadOfASession"},
 	{"MAX_IN_FLIGHT_QUERIES", ReadScalar, "internal/api/stream.TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
 	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},

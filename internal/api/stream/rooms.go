@@ -668,7 +668,7 @@ func (s *Service) decideRooms(ctx context.Context) {
 		for _, id := range s.takeDecisions() {
 			var undecided error
 			for _, m := range s.hub.Members(id) {
-				if err := s.decideMember(ctx, m.Client.Audience().Principal(), id, m); err != nil {
+				if err := s.redecide(ctx, m.Client.Audience().Principal(), id, m); err != nil {
 					undecided = err
 				}
 			}
@@ -704,11 +704,30 @@ func (s *Service) recheckRooms(ctx context.Context, client *Client) {
 		return
 	}
 	for id, m := range s.hub.Artifacts(client) {
-		if err := s.decideMember(ctx, principal, id, m); err != nil {
+		if err := s.redecide(ctx, principal, id, m); err != nil {
 			s.retryDecision(id, err)
 		}
 	}
 }
+
+// redecide is [Service.decideMember], A DECISION THAT PANICKED ([contained])
+// TAKEN AS ONE THE ESTATE COULD NOT ANSWER: the membership is held and its room
+// asked again after a backoff. Its panic ended the decider of every room on the
+// node, or the socket whose credential was being decided.
+func (s *Service) redecide(ctx context.Context, p iam.Principal, id artifacts.ID, m RoomMember) error {
+	var err error
+	if contained(ctx, "room_decide", func() { err = s.decideMember(ctx, p, id, m) }) {
+		return err
+	}
+	if !s.hub.Hold(m.Client, id, m.Join) {
+		return nil
+	}
+	return errDecisionPanicked
+}
+
+// errDecisionPanicked is why a room's membership is held after its decision
+// panicked.
+var errDecisionPanicked = errors.New("deciding the membership panicked; it is asked again")
 
 // decideMember decides one membership of id's room again: a refusal withdraws
 // it with an error frame naming the artifact, an admission resumes it at the
