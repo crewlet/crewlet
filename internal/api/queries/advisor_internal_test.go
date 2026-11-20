@@ -221,6 +221,9 @@ func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain
 func (noticeLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (noticeLog) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
 func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }

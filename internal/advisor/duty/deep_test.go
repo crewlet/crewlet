@@ -2,6 +2,9 @@ package duty_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,16 +21,20 @@ type fakeDeep struct {
 	mu       sync.Mutex
 	runs     int
 	canceled bool
+	// resumed is the checkpoint each run was handed, "" for a fresh one.
+	resumed []string
 }
 
 func (f *fakeDeep) Assigned() bool { return f.assigned }
 
 func (f *fakeDeep) Deep(ctx context.Context, now time.Time, _, _ []advisor.Stored,
-	progress func(time.Time, string)) (duty.ModelRun, error) {
+	io duty.DeepIO) (duty.ModelRun, error) {
 	f.mu.Lock()
 	f.runs++
+	f.resumed = append(f.resumed, string(io.Resume))
 	f.mu.Unlock()
-	progress(now, "reading capacity")
+	io.Progress(now, "reading capacity")
+	io.Checkpoint(now, json.RawMessage(fmt.Sprintf(`{"agenda":[{"id":"A1","verdict":"confirmed"}],"run":%d}`, f.runs)))
 	select {
 	case <-f.release:
 		return duty.ModelRun{Summary: map[string]any{"status": "done"}, Concluded: true}, nil
@@ -120,5 +127,40 @@ func TestADeepRunIsDueNightlyAndEarlyOnMonday(t *testing.T) {
 	step(t, off)
 	if len(logOff.runs) != 1 || logOff.runs[0].Status != duty.RunFailed || logOff.runs[0].Kind != advisordomain.RunKindDeep {
 		t.Errorf("a press with no model = %+v, want it recorded failed", logOff.runs)
+	}
+}
+
+// A TAKEOVER RESUMES FROM THE CHECKPOINT THE LOST HOLDER WROTE: a holder that
+// loses the lease mid-run leaves its checkpoint on the log, under the press,
+// and the next holder starts the press from it rather than from nothing.
+// Mutation: start the next holder's run fresh, and every answered item is
+// answered again on the company's budget.
+func TestATakeoverResumesFromTheCheckpointTheLostHolderWrote(t *testing.T) {
+	t.Parallel()
+	l, c := &fakeLog{}, &clock{now: start}
+	first := newDuty(l, &fakeReader{signature: "r1"}, nil, c)
+	deep := &fakeDeep{assigned: true, release: make(chan struct{})}
+	first.Deep = deep
+	l.requested = []duty.Request{{Run: "pressed", By: "owner", Kind: advisordomain.RunKindDeep}}
+	held := true
+	first.Claim = func(context.Context) (bool, error) { return held, nil }
+	step(t, first)
+	held = false
+	step(t, first)
+	first.WaitDeep()
+	if len(l.runs) != 0 || len(l.checkpoints["pressed"]) == 0 {
+		t.Fatalf("after the lease was lost: runs %+v, checkpoint %s; want nothing recorded and the checkpoint kept",
+			l.runs, l.checkpoints["pressed"])
+	}
+	second := newDuty(l, &fakeReader{signature: "r1"}, nil, c)
+	second.Deep = deep
+	close(deep.release)
+	step(t, second)
+	second.WaitDeep()
+	if len(deep.resumed) != 2 || deep.resumed[0] != "" || !strings.Contains(deep.resumed[1], `"run":1`) {
+		t.Errorf("the runs were handed %q, want the first fresh and the second the first's checkpoint", deep.resumed)
+	}
+	if len(l.runs) != 1 || l.runs[0].ID != "pressed" {
+		t.Errorf("runs = %+v, want the press recorded once", l.runs)
 	}
 }

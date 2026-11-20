@@ -20,21 +20,38 @@
  * as its own press, labelled with what it does (the row's button and its
  * menu), so the panel re-checks and sends exactly the option pressed and
  * asks for no second choice.
+ *
+ * WORK TO MOVE ([REASSIGN]) opens the same way: the re-check answers the
+ * items the busy seat still holds and nobody has started, each shown going to
+ * the seat the finding suggests, which the person may change, and Confirm
+ * moves each through the work item's own Reassign.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, ChangeList, Text, type ChangeListRow } from "@crewlethq/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Button,
+  ChangeList,
+  Select,
+  Text,
+  type ChangeListRow,
+  type SelectOption,
+} from "@crewlethq/ui";
 import { useClient } from "~/lib/store-hooks.ts";
+import { useOrgIndex } from "~/lib/seats.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
+import { MoveWorkConfirm, type MoveWork } from "~/components/writes.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtAt } from "~/lib/format.ts";
 import {
+  REASSIGN,
   applyFrom,
   failureWords,
   recheck,
   sendable,
   SentUntold,
   type ApplyState,
+  type MoveItem,
   type ReadFinding,
 } from "./apply.ts";
 import type {
@@ -109,6 +126,10 @@ export function ApplyPanel({
   const settled = useRef(false);
   const self = useRef<HTMLDivElement>(null);
   const now = useNow();
+  const moving = option === REASSIGN;
+  const index = useOrgIndex();
+  // THE SEAT THE WORK GOES TO: the finding's suggestion, until the person picks another.
+  const [chosen, setChosen] = useState("");
 
   // THE PANEL TAKES FOCUS AS IT OPENS, so a keyboard reader is where it
   // speaks, and is handed the change before the Confirm that sends it.
@@ -158,16 +179,44 @@ export function ApplyPanel({
     }
   }, [state, onSettled]);
 
-  const apply = (check: AdvisorRecheck) => {
+  const check = state.kind === "checked" || state.kind === "sending" ? state.check : null;
+  const moves = check?.moves ?? [];
+  const to = chosen || moves[0]?.to || "";
+
+  const apply = (check: AdvisorRecheck, move?: MoveWork) => {
     setState({ kind: "sending", check });
     const { signal } = live.current;
-    void run(signal, () => applyFrom(finding.id, option, check, Date.now, read, signal));
+    const moveItem: MoveItem | undefined = move ? (m, seat) => move(m, seat) : undefined;
+    void run(signal, () =>
+      applyFrom(
+        finding.id,
+        option,
+        check,
+        Date.now,
+        read,
+        signal,
+        moveItem ? { to, move: moveItem } : undefined,
+      ),
+    );
   };
 
-  const check = state.kind === "checked" || state.kind === "sending" ? state.check : null;
   const busy = state.kind === "checking" || state.kind === "sending";
   const offer = check !== null && sendable(check);
-  const sending = state.kind === "sending" ? "Sending the change" : undefined;
+  const sending =
+    state.kind === "sending" ? (moving ? "Moving the work" : "Sending the change") : undefined;
+  const seats = useMemo<SelectOption[]>(
+    () =>
+      index.seats
+        .filter((s) => s.kind !== "human" && moves.every((m) => m.from !== s.handle))
+        .map((s) => ({
+          value: s.handle,
+          label: s.name,
+          leading: <ChoiceFace seat={s} />,
+          text: `${s.name} ${s.handle}`,
+        })),
+    [index, moves],
+  );
+  const toName = index.byHandle.get(to)?.name ?? to;
 
   return (
     <div className="advisor-apply" ref={self} tabIndex={-1} aria-busy={busy}>
@@ -181,7 +230,35 @@ export function ApplyPanel({
           rows={movedRows(check.moved)}
         />
       ) : null}
-      {check && offer && check.preview ? (
+      {check && offer && moving ? (
+        <>
+          {/* ONE CHOICE CONFIRMED IN PLACE, as an option is: the seat the work
+              goes to, the finding's suggestion until the person picks another. */}
+          <div className="advisor-apply__to">
+            <Text as="span" variant="label">
+              Move to
+            </Text>
+            <Select
+              ariaLabel="Move to"
+              searchable
+              searchPlaceholder="Find a seat"
+              value={to}
+              options={seats}
+              onChange={(next) => setChosen(String(next))}
+            />
+          </div>
+          <ChangeList
+            layout="inline"
+            heading="The work it moves"
+            rows={(check.preview?.rows ?? []).map((row): ChangeListRow => ({
+              kind: "changed",
+              label: row.label,
+              from: row.before ?? "",
+              to: toName,
+            }))}
+          />
+        </>
+      ) : check && offer && check.preview ? (
         check.preview.rows.length > 0 ? (
           <ChangeList layout="inline" heading="The change" rows={previewRows(check.preview.rows)} />
         ) : (
@@ -190,6 +267,11 @@ export function ApplyPanel({
           </Text>
         )
       ) : null}
+      {check && !offer && moving && check.preview && check.preview.notes.length > 0 ? (
+        <Text as="p" tone="secondary">
+          {check.preview.notes.join(" ")}
+        </Text>
+      ) : null}
       {check && offer ? (
         <Text as="p" tone="secondary" className="advisor-apply__effect">
           {effect(finding)}
@@ -197,7 +279,13 @@ export function ApplyPanel({
         </Text>
       ) : null}
       <div className="advisor-apply__actions">
-        {offer ? (
+        {offer && moving ? (
+          <MoveWorkConfirm
+            label={check.outcome === "changed" ? "Confirm the updated move" : "Confirm"}
+            blocked={sending}
+            onConfirm={(move) => apply(check, move)}
+          />
+        ) : offer ? (
           <Button
             size="small"
             variant="primary"

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN APPLY RE-CHECKS FIRST (ADR-0164): `recheck` runs the finding's class
@@ -41,6 +43,13 @@ type AdvisorConfig interface {
 	CheckEntity(ctx context.Context, kind, id string, body []byte, create bool, by iam.Actor) (*config.Company, error)
 }
 
+// AdvisorWork is the work items a reassignment's re-check reads: each one's
+// holder, state and version.
+type AdvisorWork interface {
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
+}
+
 // AdvisorRecheck is a re-check's answer.
 type AdvisorRecheck struct {
 	Outcome advisor.RecheckOutcome `json:"outcome"`
@@ -54,6 +63,11 @@ type AdvisorRecheck struct {
 	// a finding about one cause on many seats changes each of them
 	// (ADR-0166). [] where nothing is sent.
 	Sends []RecheckSend `json:"sends"`
+	// Moves is every item a reassignment moves, asked with `{"action":
+	// "reassign"}`: each written by the person's session through the work
+	// item's own write (`update_work_item`, at `if_match` its version), the
+	// seat it goes to theirs to change. [] where nothing moves.
+	Moves []RecheckMove `json:"moves"`
 	// Digest binds the answer to the finding's revision and the option it sends.
 	Digest    string          `json:"digest"`
 	CheckedAt time.Time       `json:"checked_at"`
@@ -84,6 +98,17 @@ type RecheckSend struct {
 	DryRunPath *string           `json:"dry_run_path"`
 }
 
+// RecheckMove is one item a reassignment moves: by its key, from the seat
+// holding it now to the one the finding suggests, at the version read now,
+// with the line its new holder is woken with.
+type RecheckMove struct {
+	Item    string `json:"item"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Version uint64 `json:"version"`
+	Reason  string `json:"reason"`
+}
+
 // RecheckRefusal is why a change that still holds cannot be sent from here,
 // and who can make it: the finding stays open.
 type RecheckRefusal struct {
@@ -96,6 +121,7 @@ type rechecker struct {
 	log     AdvisorLog
 	read    duty.Reader
 	config  AdvisorConfig
+	work    AdvisorWork
 	finding func(ctx context.Context, id string) (queries.AdvisorFinding, error)
 	now     func() time.Time
 }
@@ -106,7 +132,7 @@ var errFindingMoved = errors.New("api: the finding changed while it was re-check
 
 // recheck runs the finding id's class again now and answers what it found,
 // recording what moved as by.
-func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.Actor) (AdvisorRecheck, error) {
+func (rc rechecker) recheck(ctx context.Context, id string, ask recheckAsk, by iam.Actor) (AdvisorRecheck, error) {
 	now := rc.now().UTC()
 	row, _, err := rc.log.Finding(ctx, id, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
@@ -120,7 +146,7 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	if s.State != advisor.StateOpen {
 		return AdvisorRecheck{}, notOpenOf(row)
 	}
-	out := AdvisorRecheck{Moved: []advisor.Moved{}, Sends: []RecheckSend{}, CheckedAt: now,
+	out := AdvisorRecheck{Moved: []advisor.Moved{}, Sends: []RecheckSend{}, Moves: []RecheckMove{}, CheckedAt: now,
 		ExpiresAt: now.Add(RecheckFor)}
 	outcome, step, f, err := rc.rederive(ctx, s, now)
 	if err != nil {
@@ -141,8 +167,14 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	if outcome == advisor.RecheckChanged {
 		revision++
 	}
-	if outcome == advisor.RecheckHolds || outcome == advisor.RecheckChanged {
-		if err = rc.build(ctx, &out, id, revision, f, option, by, s, now); err != nil {
+	switch {
+	case outcome != advisor.RecheckHolds && outcome != advisor.RecheckChanged:
+	case ask.reassign:
+		if err = rc.moves(ctx, &out, id, revision, f); err != nil {
+			return AdvisorRecheck{}, err
+		}
+	default:
+		if err = rc.build(ctx, &out, id, revision, f, ask.option, by, s, now); err != nil {
 			return AdvisorRecheck{}, err
 		}
 	}
@@ -150,6 +182,57 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 		return AdvisorRecheck{}, err
 	}
 	return out, nil
+}
+
+// recheckAsk is what a re-check is asked to build: a fix's option, or the
+// reassignment beside it.
+type recheckAsk struct {
+	option   int
+	reassign bool
+}
+
+// errNothingToMove is a reassignment asked of a finding that offers none.
+var errNothingToMove = fmt.Errorf("%w: the finding offers no work to move", advisordomain.ErrInvalid)
+
+// moves fills out's moves for f's reassignment: each item it names that the
+// seat it is about still holds and nobody has started, read now, with the
+// preview of each and the digest that binds them. An item moved or started
+// since is left where it is.
+func (rc rechecker) moves(ctx context.Context, out *AdvisorRecheck, id string, revision int, f advisor.Finding) error {
+	r := f.Fix.Reassign
+	if r == nil || len(r.Items) == 0 || r.To == "" || rc.work == nil {
+		return errNothingToMove
+	}
+	names := map[string]string{f.Subject.Seat: cmp.Or(f.Subject.Name, f.Subject.Seat)}
+	for _, seat := range f.Seats {
+		names[seat.Seat] = cmp.Or(seat.Name, seat.Seat)
+	}
+	from, to := f.Subject.Seat, r.To
+	reason := fmt.Sprintf("Moved here on the Advisor's finding that %s held several times the open work "+
+		"of a seat doing the same job.", cmp.Or(names[from], from))
+	out.Preview = &RecheckPreview{Rows: []PreviewRow{}, Notes: []string{}}
+	for _, key := range r.Items {
+		d, err := rc.work.Task(ctx, key, worklet.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
+		if errors.Is(err, worklet.ErrNoTask) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		t := d.Task
+		if t.Assignee != from || t.StatusGroup != worklet.GroupNotStarted {
+			continue
+		}
+		out.Moves = append(out.Moves, RecheckMove{Item: t.Key, From: from, To: to, Version: t.Version, Reason: reason})
+		before, after := cmp.Or(names[from], from), cmp.Or(names[to], to)
+		out.Preview.Rows = append(out.Preview.Rows, PreviewRow{Field: t.Key + ".assignee",
+			Label: t.Key + " " + t.Title, Before: &before, After: &after})
+	}
+	if len(out.Moves) == 0 {
+		out.Preview.Notes = append(out.Preview.Notes, "Every item it would move has moved or started since.")
+	}
+	out.Digest = advisor.ApplyDigest(id, revision, advisor.ReassignDigest(*r))
+	return nil
 }
 
 // rederive is what the class says of s now: its outcome, the step that records
@@ -330,6 +413,8 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	switch {
 	case s.State != advisor.StateOpen:
 		return notOpenOf(row)
+	case f.Fix.Reassign != nil && advisor.ApplyDigest(id, s.Revision, advisor.ReassignDigest(*f.Fix.Reassign)) == digest:
+		return rc.moved(ctx, row, s, by, now)
 	case f.Fix.Kind != advisor.FixConfigChange:
 		return errRecheckAgain
 	}
@@ -358,12 +443,39 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	return movedOr(err)
 }
 
+// moved marks a reassignment applied once the seat it was about holds none of
+// the items it named that nobody has started: each moved, or taken up.
+func (rc rechecker) moved(ctx context.Context, row advisordomain.FindingRow, s advisor.Stored, by iam.Actor,
+	now time.Time) error {
+	f := s.Observation.Finding
+	if rc.work == nil {
+		return errRecheckAgain
+	}
+	for _, key := range f.Fix.Reassign.Items {
+		d, err := rc.work.Task(ctx, key, worklet.DetailWants{}, statelog.Freshness{Level: statelog.ReadSession})
+		if errors.Is(err, worklet.ErrNoTask) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if d.Task.Assignee == f.Subject.Seat && d.Task.StatusGroup == worklet.GroupNotStarted {
+			return errRecheckAgain
+		}
+	}
+	_, err := rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor_applied")}, row.Key,
+		advisordomain.Move{Episode: s.ID, Event: advisordomain.EventApplied, State: advisordomain.StateApplied,
+			FixDigest: advisor.ReassignDigest(*f.Fix.Reassign), EffectDueAt: now.Add(advisor.EffectHorizon(f))},
+		row.KeyVersion)
+	return movedOr(err)
+}
+
 // maxAdvisorApplyBytes bounds a re-check's or a report's body.
 const maxAdvisorApplyBytes = 1 << 10
 
 func (a *App) rechecker() rechecker {
-	return rechecker{log: a.advisor, read: a.advisorDuty.Read, config: a.advisorConfig, finding: a.advisorFinding,
-		now: time.Now}
+	return rechecker{log: a.advisor, read: a.advisorDuty.Read, config: a.advisorConfig, work: a.advisorWork,
+		finding: a.advisorFinding, now: time.Now}
 }
 
 // noRecheck answers on a node that cannot re-check: no advisor log, or no
@@ -394,17 +506,19 @@ func (a *App) serveAdvisorRecheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Option int `json:"option"`
+		Option int    `json:"option"`
+		Action string `json:"action"`
 	}
 	if len(raw) > 0 {
-		if err = json.Unmarshal(raw, &body); err != nil {
+		if err = json.Unmarshal(raw, &body); err != nil || (body.Action != "" && body.Action != "reassign") {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-				"detail": "send {} or the option to re-check, {\"option\": 0}"})
+				"detail": "send {}, the option to re-check, {\"option\": 0}, or the work to move, " +
+					"{\"action\": \"reassign\"}"})
 			return
 		}
 	}
-	out, err := a.rechecker().recheck(r.Context(), strings.TrimSpace(r.PathValue("id")), body.Option,
-		iam.ActorFor(principal))
+	out, err := a.rechecker().recheck(r.Context(), strings.TrimSpace(r.PathValue("id")),
+		recheckAsk{option: body.Option, reassign: body.Action == "reassign"}, iam.ActorFor(principal))
 	if err != nil {
 		refuseApply(w, r, err)
 		return

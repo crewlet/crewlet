@@ -98,6 +98,9 @@ func (emptyAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]adv
 func (emptyAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (emptyAdvisor) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
 func (emptyAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }

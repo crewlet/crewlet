@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -615,5 +616,66 @@ func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
 	}
 	if _, _, found, err := n.reader().LiveProgress(t.Context(), stale); err != nil || found {
 		t.Errorf("after its record the run is still live (%v, %v)", found, err)
+	}
+}
+
+// A DEEP RUN'S NEWEST CHECKPOINT IS WHAT A TAKEOVER READS: a checkpoint alone
+// writes no progress line, the newest the run wrote stands, and a checkpoint
+// that is not one JSON object, or past its bound, is refused.
+// Mutation: keep the first checkpoint, and a holder taking the run over
+// answers again what was already answered.
+func TestADeepRunsNewestCheckpointIsWhatATakeoverReads(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "3c2d1e0f-9a8b-4c7d-8e6f-5a4b3c2d1e0f"
+	if _, found, err := n.reader().Checkpoint(t.Context(), run, stale); err != nil || found {
+		t.Fatalf("a run that wrote none has a checkpoint (%v, %v)", found, err)
+	}
+	for i, body := range []string{`{"agenda":[{"id":"A1","verdict":"confirmed"}]}`,
+		`{"agenda":[{"id":"A1","verdict":"confirmed"},{"id":"A2","verdict":"refuted"}]}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Checkpoint: json.RawMessage(body)}); err != nil {
+			t.Fatalf("checkpoint %d: %v", i, err)
+		}
+	}
+	body, found, err := n.reader().Checkpoint(t.Context(), run, stale)
+	if err != nil || !found || !strings.Contains(string(body), `"A2"`) {
+		t.Errorf("checkpoint = %s (%v, %v), want the newest", body, found, err)
+	}
+	if _, lines, live, err := n.reader().LiveProgress(t.Context(), stale); err != nil || (live && len(lines) != 0) {
+		t.Errorf("a checkpoint alone said lines %+v (%v, %v)", lines, live, err)
+	}
+	for _, bad := range []string{`[1,2]`, `{"agenda":`, `{"x":"` + strings.Repeat("a", advisordomain.MaxCheckpointBytes) + `"}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run, At: writerClock,
+			Checkpoint: json.RawMessage(bad)}); !errors.Is(err, advisordomain.ErrInvalid) {
+			t.Errorf("checkpoint %.20s... answered %v, want refused", bad, err)
+		}
+	}
+}
+
+// A RUN'S WHOLE TRAIL IS READ, PAST ITS RECORD: every line one run wrote,
+// oldest first, as many as a deep run writes, and no other run's.
+// Mutation: read the old 200 lines, and a long run's last verdicts are lost.
+func TestARunsWholeTrailIsRead(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run, other = "6d5c4b3a-2f1e-4d0c-9b8a-7f6e5d4c3b2a", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	const lines = 250
+	for i := range lines {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Second), Text: fmt.Sprintf("line %d", i)}); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: other,
+		At: writerClock, Text: "another run"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := n.reader().RunProgress(t.Context(), run, stale)
+	if err != nil || len(got) != lines || got[0].Text != "line 0" || got[lines-1].Text != "line 249" {
+		t.Fatalf("trail = %d lines (%v), want all %d, oldest first", len(got), err, lines)
+	}
+	if advisordomain.MaxProgressLines < 400 {
+		t.Errorf("a read answers %d lines, fewer than a deep run writes", advisordomain.MaxProgressLines)
 	}
 }

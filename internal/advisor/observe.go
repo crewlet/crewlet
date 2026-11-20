@@ -107,6 +107,10 @@ func FixDigest(fix Fix) string {
 		Page: fix.Page, Target: fix.Target, Act: fix.Act})
 }
 
+// ReassignDigest is the SHA-256 of a reassignment, in lowercase hex: what a
+// reassignment's Apply moves, and what it is marked applied by.
+func ReassignDigest(r Reassign) string { return digestOf(r) }
+
 // OptionDigest is the SHA-256 of one option's change, in lowercase hex: what an
 // Apply sends, and what an ineffective fix is never offered again by.
 func OptionDigest(o Option) string {

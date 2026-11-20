@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -112,6 +113,9 @@ type DeepRun struct {
 	Agenda []AgendaItem `json:"agenda,omitempty"`
 	// Tally is the agenda as a run's record keeps it, nil on the run itself.
 	Tally *AgendaTally `json:"tally,omitempty"`
+	// Resumed is how many agenda items came answered from a run taken over,
+	// 0 for a run that started fresh.
+	Resumed int `json:"resumed"`
 }
 
 // The deep run's own tools.
@@ -129,6 +133,14 @@ const (
 // RunDeep is one deep run over d within b, telling progress each line as it
 // is written.
 func RunDeep(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progress func(Progress)) DeepRun {
+	return RunDeepFrom(ctx, deps, d, b, progress, nil, nil)
+}
+
+// RunDeepFrom is [RunDeep] resuming from resume, a checkpoint a run taken
+// over wrote (nil starts fresh), telling checkpoint where it stands each time
+// that moves.
+func RunDeepFrom(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progress func(Progress),
+	resume *Checkpoint, checkpoint func(Checkpoint)) DeepRun {
 	now := time.Now
 	if deps.Now != nil {
 		now = deps.Now
@@ -140,12 +152,21 @@ func RunDeep(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progress 
 	out.Bounds.Tokens, out.Bounds.Minutes, out.Bounds.Rounds = b.Tokens, b.Minutes, b.Rounds
 	meter := &ceilingMeter{inner: deps.Budget, ceiling: b.Tokens}
 	surf := &deepSurface{data: d, served: advisor.NewServed(), meter: meter, bounds: b, start: start, now: now,
-		progress: progress, agenda: agendaOf(d), asked: map[string]string{}, failed: map[string]bool{}}
+		progress: progress, agenda: agendaOf(d), asked: map[string]string{}, failed: map[string]bool{},
+		checkpoint: checkpoint, kept: []KeptRead{}}
+	if resume != nil {
+		surf.agenda, out.Resumed = resumedAgenda(surf.agenda, resume.Agenda)
+		surf.reads = lastRead(resume.Reads)
+		surf.kept = slices.Clone(resume.Reads)
+		surf.line(fmt.Sprintf("resumed after a takeover: %d of %d agenda items already answered", out.Resumed,
+			len(surf.agenda)))
+	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(b.Minutes)*time.Minute)
 	defer cancel()
 	res, err := toolloop.Run(runCtx, toolloop.Config{
 		Provider: deps.Provider, ProviderKey: deps.ProviderKey, Surface: surf, Host: deps.Host,
-		ServerTitle: "advisor", Messages: deepOpening(b, surf.agenda), MaxRounds: b.Rounds, OwnPrompt: true,
+		ServerTitle: "advisor", Messages: deepOpening(b, surf.agenda, resumedSaid(resume, out.Resumed)),
+		MaxRounds: b.Rounds, OwnPrompt: true,
 		TerminateAfter: []string{SubmitTool}, Budget: meter, Now: deps.Now,
 		LastRoundNote: "This is your last round: call submit_findings now with what you have found.",
 		// NO SEAT TO FENCE: it reads only through Reads, as the Advisor, and
@@ -208,7 +229,7 @@ func RunDeep(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progress 
 			dropped[advisor.DropWords]++
 			continue
 		}
-		kept = append(kept, f)
+		kept = append(kept, advisor.SayNumbers(f))
 	}
 	out.Findings, out.Dropped, out.Listed = kept, dropped, len(kept)
 	return out
@@ -314,6 +335,11 @@ type deepSurface struct {
 	// failed is each read name that could not be read.
 	asked  map[string]string
 	failed map[string]bool
+	// kept is every read asked, the run's taken over first, for the
+	// checkpoint; checkpoint is told where the run stands, nil where nobody
+	// keeps it.
+	kept       []KeptRead
+	checkpoint func(Checkpoint)
 	// servedMu guards served, which calls side by side write and read.
 	servedMu sync.Mutex
 }
@@ -601,7 +627,9 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 	s.reads++
 	as := fmt.Sprintf("read_%d", s.reads)
 	s.asked[asking] = as
+	s.kept = append(s.kept, KeptRead{As: as, Name: name, Params: params})
 	s.mu.Unlock()
+	s.keep()
 	s.servedMu.Lock()
 	err = s.served.ServeRead(as, advisor.ReadSource{Read: name, Params: params}, answer, recordsIn(raw))
 	whole, _ := s.served.Part(as)
@@ -645,8 +673,9 @@ func (s *deepSurface) say(args map[string]any) toolloop.ToolResult {
 	return toolloop.ToolResult{Output: "shown"}
 }
 
-// maxRunLines bounds every progress line of a run, the engine's included.
-const maxRunLines = 400
+// maxRunLines bounds every progress line of a run, the engine's included: as
+// many as one read of its progress answers, so its whole trail is read.
+const maxRunLines = advisordomain.MaxProgressLines
 
 // line keeps one progress line and tells it, cut to one plain short line.
 func (s *deepSurface) line(text string) {
@@ -722,6 +751,7 @@ func (s *deepSurface) verdict(args map[string]any) toolloop.ToolResult {
 	s.agenda[at].Verdict, s.agenda[at].Note, s.agenda[at].Numbers, s.agenda[at].Read = Verdict(v), note, numbers, read
 	left := open(s.agenda)
 	s.mu.Unlock()
+	s.keep()
 	s.line(fmt.Sprintf("%s %s: %s", id, v, note))
 	return toolloop.ToolResult{Output: fmt.Sprintf("recorded; %d items still have no verdict", len(left))}
 }
@@ -744,8 +774,20 @@ func (s *deepSurface) add(args map[string]any) toolloop.ToolResult {
 	id := fmt.Sprintf("A%d", len(s.agenda)+1)
 	s.agenda = append(s.agenda, AgendaItem{ID: id, Source: AgendaModel, Question: question, Numbers: []AgendaNumber{}})
 	s.mu.Unlock()
+	s.keep()
 	s.line(fmt.Sprintf("added %s: %s", id, question))
 	return toolloop.ToolResult{Output: fmt.Sprintf("added as %s; it needs a verdict too", id)}
+}
+
+// keep tells the checkpoint where the run stands now.
+func (s *deepSurface) keep() {
+	if s.checkpoint == nil {
+		return
+	}
+	s.mu.Lock()
+	c := Checkpoint{Agenda: slices.Clone(s.agenda), Reads: slices.Clone(s.kept)}
+	s.mu.Unlock()
+	s.checkpoint(c)
 }
 
 // agendaNow is the agenda as it stands.
@@ -867,7 +909,9 @@ How to work:
   its outline: look into it with look rather than reading it again, and narrow a read with its parameters.
 - Before you blame a seat's tokens, read the split: tokens answers input_tokens (which includes the cache),
   cache_read_tokens and output_tokens. A jump in a seat's tokens is most often cache reads, which cost a tenth as
-  much; a finding about tokens cites cache_read_tokens beside the total, or it is dropped.
+  much; a finding about tokens cites cache_read_tokens beside the total, or it is dropped. Offer a budget or a
+  cap that cuts a seat's tokens only when fresh input (input_tokens less cache_read_tokens) or output drove them;
+  where cache reads did, say so, and the engine offers no budget.
 - Call progress with one short line whenever you start on something new, such as "testing: releases pile up behind
   one seat". Each read and each verdict is shown on its own.
 - When every item has a verdict, or when a read tells you your time is nearly spent, call submit_findings once.
@@ -889,11 +933,11 @@ How each finding is checked before anyone sees it:
 - Title at most 120 characters, why at most 600, plain sentences, no links or markup. Severity is costs or note.`
 
 // deepOpening is a deep run's first messages: its bounds and its agenda,
-// said once.
-func deepOpening(b DeepBounds, agenda []AgendaItem) []llm.Message {
+// said once, and where a run taken over stands.
+func deepOpening(b DeepBounds, agenda []AgendaItem, resumed string) []llm.Message {
 	return []llm.Message{
 		{Role: llm.RoleSystem, Content: deepSystem},
 		{Role: llm.RoleUser, Content: fmt.Sprintf("Investigate the company now. You have up to %d minutes, %d "+
-			"rounds and %d tokens.\n\n%s", b.Minutes, b.Rounds, b.Tokens, agendaSaid(agenda))},
+			"rounds and %d tokens.\n\n%s%s", b.Minutes, b.Rounds, b.Tokens, agendaSaid(agenda), resumed)},
 	}
 }

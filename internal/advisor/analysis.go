@@ -326,6 +326,7 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 	if !ok {
 		return Finding{}, DropFix
 	}
+	fix = costGate(g.Company, s, facts, fix)
 	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
 		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item, Headline: s.Headline,
 		Evidence: facts, Records: records, Fix: fix}

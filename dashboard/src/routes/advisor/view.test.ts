@@ -290,7 +290,8 @@ test("each press is routed by its kind, and one this page does not route is left
   });
   expect(
     actionView(action({ kind: "reassign", label: "Move 6 items", items: ["A-1"], to: "x" }), f),
-  ).toBeNull();
+  ).toEqual({ kind: "reassign", label: "Move 6 items", items: ["A-1"], to: "x" });
+  expect(actionView(action({ kind: "reassign", label: "Move nothing", to: "x" }), f)).toBeNull();
   expect(actionView(action({ label: "Open it", page: "nowhere", target: "x" }), f)).toBeNull();
 });
 
@@ -326,7 +327,7 @@ test("a row is the engine's headline, one line of why, three numbers and its pre
 test("a primary this page does not route leaves the first press it routes leading", () => {
   const f = finding({
     actions: {
-      primary: action({ kind: "reassign", label: "Move the work", items: ["ENG-1"], to: "dev-2" }),
+      primary: action({ label: "Open it", page: "nowhere", target: "x" }),
       secondary: [action({ label: "Open it", page: "seat", target: "dev" })],
     },
   });
@@ -337,12 +338,12 @@ test("a primary this page does not route leaves the first press it routes leadin
 });
 
 // ONE PRESS A ROW, ALWAYS ONE THIS PAGE CAN TAKE: a primary it does not route
-// (a reassignment, until the route that sends it is settled) gives its place
-// to the first secondary it does, never leaving the row without a press.
+// (a page this build does not know, a reassignment naming no item) gives its
+// place to the first secondary it does, never leaving the row without a press.
 test("a primary this page does not route gives its place to the first secondary it does", () => {
   const f = finding({
     actions: {
-      primary: action({ kind: "reassign", label: "Move the work", items: ["ENG-1"], to: "dev-2" }),
+      primary: action({ label: "Open it", page: "nowhere", target: "x" }),
       secondary: [
         action({ kind: "reassign", label: "Move one item" }),
         action({ label: "Open the seat", page: "seat", target: "dev" }),

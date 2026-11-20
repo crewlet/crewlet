@@ -1,6 +1,7 @@
 package advisordomain
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -354,9 +355,16 @@ func (w *Writer) Progress(ctx context.Context, c Call, p RunProgress) (statelog.
 		return statelog.Result{}, invalid("run is a uuid in its canonical lowercase form, and %q is not", p.Run)
 	case p.At.IsZero():
 		return statelog.Result{}, invalid("a progress line says when it was written (at)")
+	case len(p.Checkpoint) > MaxCheckpointBytes:
+		return statelog.Result{}, invalid("a checkpoint is at most %d bytes", MaxCheckpointBytes)
+	case len(p.Checkpoint) > 0 && (!json.Valid(p.Checkpoint) || !bytes.HasPrefix(bytes.TrimSpace(p.Checkpoint), []byte("{"))):
+		return statelog.Result{}, invalid("a checkpoint is one JSON object")
 	}
-	if err := printable("text", p.Text, MaxProgressBytes); err != nil {
-		return statelog.Result{}, err
+	// A CHECKPOINT ALONE SAYS NO LINE: its text is empty, or a line.
+	if len(p.Checkpoint) == 0 || p.Text != "" {
+		if err := printable("text", p.Text, MaxProgressBytes); err != nil {
+			return statelog.Result{}, err
+		}
 	}
 	return w.write(ctx, c, RunSubject(p.Run), ScopeSet{Subject: true}, statelog.PatternArbitrated,
 		OpProgress, p, func(*sql.Tx) (int64, error) { return 0, nil })

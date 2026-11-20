@@ -245,7 +245,12 @@ export type ViewAction =
   /** Ask Crewlet, with a question waiting in its box. */
   | { kind: "ask"; label: string; question: string }
   /** An atlas fix, sent with the atlas's own tools on the entries it names. */
-  | { kind: "review"; label: string };
+  | { kind: "review"; label: string }
+  /**
+   * Work to move to another seat: re-checked and moved in place, each item
+   * through the work item's own Reassign, the suggested seat prefilled.
+   */
+  | { kind: "reassign"; label: string; items: string[]; to: string };
 
 /** One finding, as its row draws it. */
 export interface ViewFinding {
@@ -269,9 +274,16 @@ export const PAGE_FIXES: Readonly<
 };
 
 /**
+ * The press that opens an Apply on the work a finding moves rather than on
+ * one of its fix's options: the re-check answers the items to move, and the
+ * panel moves them (`apply.ts`'s moveAll).
+ */
+export const REASSIGN = -1;
+
+/**
  * A press as the page routes it, or null for one this page does not route: a
- * reassignment (sent through the worklet route once the engine offers one),
- * and an `open` naming a page this build does not know.
+ * reassignment naming no item or no seat, and an `open` naming a page this
+ * build does not know.
  */
 export function actionView(a: AdvisorAction, f: AdvisorKeptFinding): ViewAction | null {
   switch (a.kind) {
@@ -298,6 +310,10 @@ export function actionView(a: AdvisorAction, f: AdvisorKeptFinding): ViewAction 
       return f.fix.kind === "atlas_act" && f.fix.act && f.entries !== null
         ? { kind: "review", label: a.label }
         : { kind: "open", label: "Open the atlas", href: href(["company", "atlas"]) };
+    case "reassign":
+      return a.items && a.items.length > 0 && a.to
+        ? { kind: "reassign", label: a.label, items: a.items, to: a.to }
+        : null;
   }
   return null;
 }

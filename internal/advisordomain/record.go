@@ -20,7 +20,9 @@ import (
 //     framework's eviction, generation, barrier and trimmed record.
 //   - 2: a run's kind (`run_kind`) on its request and its record, and a deep
 //     run's progress lines (op `progress`) (ADR-0166).
-const RecordVersion = 2
+//   - 3: a deep run's checkpoint on its progress record (`checkpoint`), which
+//     a holder taking the run over resumes from (ADR-0166).
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -39,6 +41,7 @@ const GateRecordVersion = 1
 var versionedFields = statelog.RecordFields{
 	{Name: "Run.RunKind", Since: 2, Path: []string{"mutation", "run_kind"}},
 	{Name: "Op progress", Since: 2, Path: []string{"op"}, Equals: string(OpProgress)},
+	{Name: "RunProgress.Checkpoint", Since: 3, Path: []string{"mutation", "checkpoint"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
