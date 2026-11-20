@@ -4157,18 +4157,24 @@ each its own verb and each recorded in the Audit log as a `model_acted` row,
 refused ones included, and a device sign-in's end (approved, failed, expired or
 cancelled) as one more, attributed to whoever started it.
 
-**Two lenses and a page per model.** *Models* lists every model with its
-condition, how it signs in and what it is used for, under the model alarms;
-*By job* is every seat as a row, with the model it runs for each kind of work
-and Ask Crewlet's model above it. A model's own page has its sign-in, its
+**One page, and a page per model.** Settings › Models lists every model with
+its condition, how it signs in and what it is used for, under the model
+alarms; under that list one card shows who runs on which model, Ask Crewlet
+and the Advisor then every seat, each a row with its model's picker: one
+picker where a seat runs on one model, or one per kind of work once split by
+job from the row's menu. Each model is named by its key and the model it runs
+("sub-4 · Claude Opus 5.5"). A
+model's own page has its sign-in, its
 sit-out, its last test, its usage over seven days and every place that runs on
 it. Every member opens the page; every change on it is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and every
 use it is given as one revision: the name and the harness (both fixed once
 the model exists), how it signs in, the model and its reasoning effort, where it runs a seat's executor
-(only for a harness with a runner), what it is used for, its limits, a test call, and a review
-of exactly what changes.
+(only for a harness with a runner), what it is used for, its limits, and a review
+of exactly what changes, where the test call is run. **Finish and save** is
+offered as soon as nothing the model needs is missing, so the optional steps
+left keep their defaults.
 
 **Every built-in harness can be added**, each with the sign-ins the engine runs
 for it: a key in the harness's own variable (`api-key`), or for OpenCode, Hermes
@@ -4201,7 +4207,7 @@ A seat's field is written as one model, never a chain: a fallback the field
 named before is dropped, and the review names every one it drops. Ask Crewlet
 is the exception, because its chain is the only failover every person's
 questions have: choosing its model replaces the one it answers with first and
-keeps every fallback behind it, in order, and both *By job* and the review say
+keeps every fallback behind it, in order, and both its row on Settings › Models and the review say
 which fallbacks stay. Taking a model off
 a job removes it from the field, and a field left empty is deleted, so the job
 resolves as an unset one does (the review shows where it lands). Routines

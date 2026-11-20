@@ -926,3 +926,72 @@ describe("the Atlas attention widget", () => {
     expect(asked).toEqual([]);
   });
 });
+
+// EVERY PERIOD ON HOME IS THE RANGE THE PICKER CHOSE. The completed chart drew
+// a fixed fortnight with a fixed week's figure, and the failed turns a fixed
+// day, whatever the picker said.
+describe("a widget over a period reads Home's range", () => {
+  /** Sixty company days, newest last: 1 a day over the last week, 2 a day
+   *  over the 23 days before it, 5 a day before those. */
+  const flow = () => {
+    const day = 86_400_000;
+    const today = Date.parse("2026-09-22T00:00:00Z");
+    return {
+      bucket: "day",
+      now: { not_started: 0, active: 3, blocked: 0, overdue: 0 },
+      blocked_history: false,
+      complete: true,
+      points: Array.from({ length: 60 }, (_, i) => {
+        const age = 59 - i;
+        const start = new Date(today - age * day).toISOString();
+        return {
+          window: start.slice(0, 10),
+          start,
+          end: new Date(today - age * day + day).toISOString(),
+          not_started: 0,
+          active: 3,
+          done: 0,
+          closed: 0,
+          completed: age < 7 ? 1 : age < 30 ? 2 : 5,
+        };
+      }),
+    };
+  };
+
+  test.each([
+    ["30d", "53 in 30 days", "Per day · last 30 days"],
+    ["7d", "7 in 7 days", "Per day · last 7 days"],
+    ["today", "1 today", "Today"],
+  ])("the tasks completed over %s are the window's", async (range, figure, span) => {
+    location.hash = `#/home?range=${range}`;
+    mount(<LeafView widget={leaf(WIDGETS.get("home.completed")!, {})} />, ADMIN, {
+      work_flow: flow(),
+    });
+    await settle();
+    const card = screen.getByRole("heading", { name: "Tasks completed" }).closest(".home-card")!;
+    expect(card.textContent).toContain(span);
+    expect(card.querySelector(".home-chart-figure")?.textContent).toBe(figure);
+  });
+
+  test.each([
+    ["30d", 30],
+    ["7d", 7],
+  ])("the failed turns over %s are asked from the window's first day", async (range, days) => {
+    location.hash = `#/home?range=${range}`;
+    const asked: Record<string, unknown>[] = [];
+    mount(<LeafView widget={leaf(WIDGETS.get("live.failed-turns")!, {})} />, ADMIN, {
+      turns: (params: Record<string, unknown>) => {
+        asked.push(params);
+        return { turns: [], complete: true };
+      },
+    });
+    await settle();
+    const since = Date.parse(String(asked.at(-1)?.since));
+    const until = Date.parse(String(asked.at(-1)?.until));
+    // FROM A COMPANY MIDNIGHT `days - 1` DAYS BEFORE TODAY'S: the window's
+    // first day and the hour it is asked in.
+    expect(Math.round((until - since) / 86_400_000)).toBeGreaterThanOrEqual(days - 1);
+    expect(Math.round((until - since) / 86_400_000)).toBeLessThanOrEqual(days);
+    expect(screen.getByText(`No turn failed in the last ${days} days.`)).toBeTruthy();
+  });
+});

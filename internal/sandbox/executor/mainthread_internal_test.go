@@ -1003,7 +1003,7 @@ func TestThePlanPastTheBaseHoldsTheSlotToTheTakesEnd(t *testing.T) {
 		{"a plan past the base", (scrubPieceBaseBytes+1)*8 - 2, true},
 	} {
 		large := testPass(t)
-		plan := &tarPlan{gate: large.gate(t.Context())}
+		plan := &tarPlan{gate: large.gate(t.Context()), bothFrom: 1}
 		for range tc.bits {
 			plan.lines.put(false)
 		}

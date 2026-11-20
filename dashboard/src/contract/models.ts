@@ -83,7 +83,7 @@ export const MODEL_KEY_PATTERN = "^[a-z0-9][a-z0-9._-]{0,62}$";
 
 /**
  * ONE reading of a model's condition, decided by the engine
- * (`queries.ModelHealth`) so the list, the model's page and the By job view
+ * (`queries.ModelHealth`) so the list, the model's page and the seats' grid
  * cannot each decide it differently. Held against `queries.ModelHealths` by
  * `internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms`.
  */

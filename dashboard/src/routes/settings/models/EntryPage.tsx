@@ -644,7 +644,7 @@ export function EntryPage({
 }) {
   const signInRef = useRef<HTMLElement | null>(null);
   const key = model.key;
-  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, By job, an alarm) arrives
+  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, a seat's job, an alarm) arrives
   // here as `?focus=host-login`: the sign-in card is where it is made, and
   // the parameter is spent once it has moved focus, so Back does not move it
   // again.
@@ -680,7 +680,17 @@ export function EntryPage({
   // 2); the limits are a card of their own. Where it runs and the web tools
   // are read off the document, which only an admin reads.
   const facts: Fact[] = [
-    { label: "Model", value: <span className="mono">{model.model}</span>, token: true },
+    // THE MODEL BY NAME where the engine's catalogue names it, its id on hover; else its id.
+    {
+      label: "Model",
+      value:
+        model.modelName === model.model ? (
+          <span className="mono">{model.model}</span>
+        ) : (
+          <span title={model.model}>{model.modelName}</span>
+        ),
+      token: true,
+    },
     { label: "Status", value: <HealthLine model={model} compact /> },
     ...(data.admin && model.executor
       ? [

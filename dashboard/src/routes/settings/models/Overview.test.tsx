@@ -278,7 +278,8 @@ test("with no model, the list says so and the page's one Add model adds one", ()
 // order, so the Model head says so; Status sorts worst first.
 test("the list says its order on the Model head, and Status sorts the worst condition first", () => {
   mount();
-  const grid = screen.getByRole("table");
+  // THE MODELS' TABLE, the first on the page; every seat's jobs is another under it.
+  const grid = screen.getAllByRole("table")[0]!;
   const head = within(grid).getByRole("columnheader", { name: /^Model/ });
   expect(head.getAttribute("aria-sort")).toBe("ascending");
   const keys = () =>

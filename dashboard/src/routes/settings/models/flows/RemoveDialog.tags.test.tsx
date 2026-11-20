@@ -10,7 +10,7 @@
  * requests decide which one it sends.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
@@ -116,8 +116,12 @@ test("every removal request states the entry's tag, and the removal goes through
       />
     </Router>,
   );
-  await screen.findByText("Ready to remove");
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
+  // EVERYTHING MOVES TO ANOTHER MODEL, so the button alone removes it once checked.
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Remove model" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
   });
@@ -165,8 +169,12 @@ test.each([403, 413])(
         />
       </Router>,
     );
-    await screen.findByText("Ready to remove");
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
+    // EVERYTHING MOVES TO ANOTHER MODEL, so the button alone removes it once checked.
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Remove model" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
     });

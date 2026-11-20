@@ -2,26 +2,24 @@
  * Everything the save makes, as one revision, in words first: the model, its
  * sign-in, where it runs, what it is used for, its limits and web tools, and
  * whether the test call ran. Then what the engine said of it, each problem
- * once with the step that fixes it, and every change in the revision behind a
- * disclosure, the one place an engine path is printed (design QA M8, M9).
+ * once with the step that fixes it. No engine path is printed (design QA M8,
+ * M9): the summary in words is what the save changes.
  *
  * WHAT THE WRITE DROPS IS SAID (decision D3). A field the page writes holds
  * one model; a fallback written there by hand is replaced, and each one is
  * named here before it goes.
  */
 
-import { useMemo, type ReactNode } from "react";
-import { Callout, DescriptionList, Disclosure, Link, NoticeList, Text } from "@crewlethq/ui";
+import type { ReactNode } from "react";
+import { Callout, DescriptionList, Link, NoticeList, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
-  SEAT_JOB_FIELDS,
 } from "~/contract/models.ts";
 import { href } from "~/app/router.tsx";
-import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { listed } from "~/lib/format.ts";
-import { SEAT_JOBS, agentRoles, type Dropped, type Uses } from "~/lib/modelUses.ts";
-import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
+import { SEAT_JOBS, type Dropped, type Uses } from "~/lib/modelUses.ts";
+import type { ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import type { ModelsData } from "../../data.ts";
 import { JOB_WORDS, seatName } from "../../places.ts";
@@ -30,7 +28,6 @@ import {
   CLOUD_FIELDS,
   STEP_LABELS,
   canExecute,
-  credentialValues,
   factsOf,
   fieldOf,
   messageOf,
@@ -44,6 +41,8 @@ import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
 import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
+import { useQuery } from "~/lib/useQuery.ts";
+import { catalogueOf, nameIn } from "../../modelNames.ts";
 
 /** The write of a save that is running: the credential's seal, then the document. */
 export type SaveStage = "credential" | "document";
@@ -57,94 +56,6 @@ export type ReviewCheck =
   | { kind: "problems" }
   /** The change cannot be made from here as it stands: a managed document, a conflict, no engine. */
   | { kind: "blocked"; message: string };
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
-const show = (value: unknown) =>
-  value === undefined
-    ? undefined
-    : typeof value === "object"
-      ? JSON.stringify(value)
-      : String(value);
-
-/**
- * One change of the revision as `DiffView` draws a setting
- * (`components/DiffView.tsx`, keyed by its path): a value that appeared is
- * its new value added, one that went its old value removed, and one that
- * changed is both, so the diff underlines what moved inside it. ONE HUNK A
- * CHANGE, skipping nothing, as the configuration's own diff draws them
- * (`routes/settings/Config.tsx`'s `configHunks`).
- */
-function row(path: string, from: string | undefined, to: string | undefined): DiffHunk | null {
-  if (from === to) return null;
-  const line = (kind: "add" | "remove", text: string) => ({
-    kind,
-    text,
-    before: null,
-    after: null,
-    path,
-  });
-  return {
-    skipped: 0,
-    lines: [
-      ...(from === undefined ? [] : [line("remove", from)]),
-      ...(to === undefined ? [] : [line("add", to)]),
-    ],
-  };
-}
-
-/** Every change the revision makes, with the paths the engine writes: shown only inside the disclosure. */
-export function changesOf(
-  before: CompanyDocument,
-  after: CompanyDocument,
-  key: string,
-  names: (handle: string) => string,
-  secrets: readonly string[],
-  editing: boolean,
-): DiffHunk[] {
-  const out: DiffHunk[] = [];
-  const llmOf = (doc: CompanyDocument) =>
-    isRecord(doc.providers) && isRecord(doc.providers.llm) ? doc.providers.llm : {};
-  const was = isRecord(llmOf(before)[key]) ? (llmOf(before)[key] as Record<string, unknown>) : {};
-  const now = isRecord(llmOf(after)[key]) ? (llmOf(after)[key] as Record<string, unknown>) : {};
-  for (const field of new Set([...Object.keys(was), ...Object.keys(now)])) {
-    const r = row(`providers.llm.${key}.${field}`, show(was[field]), show(now[field]));
-    if (r) out.push(r);
-  }
-  const order = (doc: CompanyDocument) =>
-    show(isRecord(doc.providers) ? doc.providers.llm_order : undefined);
-  const orderRow = row("providers.llm_order", order(before), order(after));
-  if (orderRow) out.push(orderRow);
-  const beforeRoles = agentRoles(before as unknown as Record<string, unknown>);
-  for (const [handle, role] of agentRoles(after as unknown as Record<string, unknown>)) {
-    const old = beforeRoles.get(handle) ?? {};
-    for (const field of new Set(["llm", ...SEAT_JOBS.map((j) => SEAT_JOB_FIELDS[j])])) {
-      const r = row(`${names(handle)}: ${field}`, show(old[field]), show(role[field]));
-      if (r) out.push(r);
-    }
-  }
-  const assistantModel = (doc: CompanyDocument) =>
-    show(isRecord(doc.assistant) ? doc.assistant.model : undefined);
-  const assistantRow = row("assistant.model", assistantModel(before), assistantModel(after));
-  if (assistantRow) out.push(assistantRow);
-  const advisorModel = (doc: CompanyDocument) =>
-    show(isRecord(doc.advisor) ? doc.advisor.model : undefined);
-  const advisorRow = row("advisor.model", advisorModel(before), advisorModel(after));
-  if (advisorRow) out.push(advisorRow);
-  // A SECRET'S VALUE IS NEVER DRAWN, before or after: a new one is added,
-  // and one replaced reads as changed by an old line that says so.
-  for (const name of secrets) {
-    out.push(
-      row(
-        `secret ${name}`,
-        editing ? "the stored one" : undefined,
-        "stored after its test passes",
-      )!,
-    );
-  }
-  return out;
-}
 
 /** "QA's reviewing also named sonnet as a fallback; this removes it." */
 export function droppedWords(dropped: Dropped, names: (handle: string) => string): string {
@@ -174,8 +85,6 @@ export function orphansOf(data: Pick<ModelsData, "models">, draft: Draft): strin
 export function Review({
   draft,
   data,
-  before,
-  after,
   dropped,
   editing,
   served,
@@ -188,9 +97,6 @@ export function Review({
 }: {
   draft: Draft;
   data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
-  /** The document the change is made on, and the one it makes; null before the document is read. */
-  before: CompanyDocument | null;
-  after: CompanyDocument | null;
   dropped: readonly Dropped[];
   editing: boolean;
   /** What the model is used for today: none for a model being added. */
@@ -205,14 +111,7 @@ export function Review({
   onGo: (step: WizardStep, problem: ConfigProblem) => void;
 }) {
   const names = (h: string) => seatName(data.seats, h);
-  const secrets = Object.keys(credentialValues(draft));
   const secretNoun = draft.method === "token" ? "token" : "key";
-  const rows = useMemo(
-    () => (before && after ? changesOf(before, after, draft.key, names, secrets, editing) : []),
-    // `names` and `secrets` follow the draft and the seats.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [before, after, draft, data.seats, editing],
-  );
   const orphans = orphansOf(data, draft);
   const changes = seatChangesOf(data, draft.key, served, draft.uses);
   const stored = (what: string) =>
@@ -236,6 +135,9 @@ export function Review({
     unchanged: "As Configuration sets it",
   }[draft.method];
   const id = modelId(draft);
+  const asked = catalogueOf(draft.harness, id);
+  const listing = useQuery("llm_models", asked ?? undefined, { enabled: !!asked });
+  const named = asked ? nameIn(listing.data, id) : null;
 
   return (
     <div className="models-stack">
@@ -259,14 +161,15 @@ export function Review({
           <Text as="span" variant="body" className="mono models-clamp" title={draft.key}>
             {draft.key || "New model"}
           </Text>
+          {/* THE MODEL BY NAME where the engine's catalogue names it, else its id, in mono. */}
           <Text
             as="span"
             variant="caption"
             tone="secondary"
-            className={id ? "mono models-clamp" : undefined}
+            className={id ? (named ? "models-clamp" : "mono models-clamp") : undefined}
             title={id || undefined}
           >
-            {id || "No model chosen yet"}
+            {named ?? (id || "No model chosen yet")}
           </Text>
         </span>
       </div>
@@ -384,18 +287,6 @@ export function Review({
           ))}
         </Text>
       ) : null}
-
-      <Disclosure title="Every change in the revision" count={rows.length}>
-        <DiffView
-          hunks={rows}
-          aria-label="Every change in the revision"
-          empty={
-            <Text as="p" variant="caption" tone="secondary">
-              Nothing changes yet.
-            </Text>
-          }
-        />
-      </Disclosure>
     </div>
   );
 }

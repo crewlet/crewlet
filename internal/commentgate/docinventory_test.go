@@ -5,5 +5,5 @@ package commentgate
 var docInventory = map[string]int{
 	"internal/coord/kv":         31396,
 	"internal/redact":           22946,
-	"internal/sandbox/executor": 82918,
+	"internal/sandbox/executor": 82841,
 }

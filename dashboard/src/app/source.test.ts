@@ -610,7 +610,7 @@ test("the element scanner reads a multi-line prop", () => {
  * are nothing to read, and the second cannot be told from nothing by its
  * spelling. A name is trusted to hold a word, so
  * the tables it reads hold that themselves (`CATEGORY_WORDS` refuses an empty
- * word at the typecheck, and By job's suite reads every head's name).
+ * word at the typecheck, and the seats' grid's suite reads every head's name).
  */
 function namesALabel(line: string): boolean {
   return /^\s*label:\s*((["'])(?!\2)\S|(?!(?:undefined|null)\b)[A-Za-z_$][\w$.[\]]*,?$)/.test(line);

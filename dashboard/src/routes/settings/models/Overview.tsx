@@ -1,7 +1,8 @@
 /**
- * Settings › Models, the list: how the company's models stand in four
- * figures, what is wrong with them (the engine's alarms), then every model
- * with its condition, its sign-in and who runs on it.
+ * Settings › Models, the one page: how the company's models stand in four
+ * figures, what is wrong with them (the engine's alarms), every model with
+ * its condition, its sign-in and who runs on it, then under it who runs on
+ * which model, Ask Crewlet and the Advisor then every seat (`SeatJobs.tsx`).
  *
  * A member reads the same list without the sign-in, the tokens or the actions
  * (`llm_entries`' member reading names no credential and no usage), so the one
@@ -39,6 +40,7 @@ import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
+import { WhoRuns } from "./SeatJobs.tsx";
 import { UsageLimitsCell } from "./UsageLimits.tsx";
 import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
 
@@ -224,8 +226,14 @@ function ModelCell({ model }: { model: ModelView }) {
       >
         <span className="models-pair">
           <span className="mono models-clamp">{model.key}</span>
-          <Text as="span" variant="caption" tone="secondary" className="mono models-clamp">
-            {model.model}
+          {/* THE MODEL BY NAME where the engine's catalogue names it, else its id, in mono. */}
+          <Text
+            as="span"
+            variant="caption"
+            tone="secondary"
+            className={model.modelName === model.model ? "mono models-clamp" : "models-clamp"}
+          >
+            {model.modelName}
           </Text>
         </span>
       </RowReveal>
@@ -448,6 +456,9 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
           />
         )}
       </Card>
+
+      {/* UNDER THE MODELS: who runs on which, the helpers then the seats, on one card. */}
+      {models.length > 0 ? <WhoRuns data={data} onFlow={onFlow} /> : null}
     </div>
   );
 }

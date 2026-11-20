@@ -49,6 +49,7 @@ function view(patch: Partial<ModelView> & { raw: Record<string, unknown> }): Mod
     key: "sonnet",
     harness: "claude-code",
     model: "sonnet",
+    modelName: "sonnet",
     executor: true,
     entry: {
       key: "sonnet",
