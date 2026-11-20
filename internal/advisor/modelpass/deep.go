@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -672,8 +673,9 @@ func (s *deepSurface) say(args map[string]any) toolloop.ToolResult {
 	return toolloop.ToolResult{Output: "shown"}
 }
 
-// maxRunLines bounds every progress line of a run, the engine's included.
-const maxRunLines = 400
+// maxRunLines bounds every progress line of a run, the engine's included: as
+// many as one read of its progress answers, so its whole trail is read.
+const maxRunLines = advisordomain.MaxProgressLines
 
 // line keeps one progress line and tells it, cut to one plain short line.
 func (s *deepSurface) line(text string) {
