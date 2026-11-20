@@ -237,6 +237,10 @@ type ScopeRecord struct {
 	Opened   int                       `json:"opened"`
 	Revised  int                       `json:"revised"`
 	Resolved int                       `json:"resolved"`
+	// Outcome and Reason are a class's line rather than a scope's: what the
+	// run concluded about it, and why where it could not judge.
+	Outcome advisor.Outcome `json:"outcome,omitempty"`
+	Reason  string          `json:"reason,omitempty"`
 }
 
 // RecordRun publishes how r ended.
@@ -249,6 +253,16 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 		}
 		scopes = append(scopes, ScopeRecord{Class: s.Scope, Status: status, Opened: s.Steps[advisor.StepOpen],
 			Revised: s.Steps[advisor.StepRevise], Resolved: s.Steps[advisor.StepClose]})
+	}
+	// EACH CLASS'S OUTCOME rides beside the scopes, told apart by its
+	// outcome: a class that could not judge says so (ADR-0166).
+	for _, c := range r.Classes {
+		status := advisordomain.ClassDone
+		if c.Outcome == advisor.OutcomeUnread {
+			status = advisordomain.ClassUnread
+		}
+		scopes = append(scopes, ScopeRecord{Class: string(c.Class), Status: status, Outcome: c.Outcome,
+			Reason: c.Reason})
 	}
 	classes, err := json.Marshal(scopes)
 	if err != nil {

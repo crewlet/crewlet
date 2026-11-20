@@ -62,10 +62,6 @@ var LIVE_CALL_DETAIL = {
 * far beyond the slowest query's normal latency and still short enough that a
 * screen shows an error rather than an eternal skeleton.
 *
-* THE QUERY FRAME CARRIES IT (`wait_ms`), and the engine stops answering a
-* question once it has passed, so a read this tab gave up on frees the slots it
-* holds rather than running on for nobody.
-*
 * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
 * (`engine.BrokerReadWait`), held there by `internal/api`'s
 * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
@@ -2829,50 +2825,22 @@ var LiveSocket = class {
 	*
 	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-	* query goes unanswered for `waitMs`, or `closed` if the client shuts down;
-	* and with `signal`'s reason once it aborts, the question then given up on
-	* here and at the engine (`query_cancel`), which stops reading for it.
+	* query goes unanswered, or `closed` if the client shuts down.
 	*/
-	query(what, params, waitMs = QUERY_TIMEOUT_MS, signal) {
+	query(what, params) {
 		const id = this.nextQueryId++;
 		return new Promise((resolve, reject) => {
-			if (signal?.aborted) {
-				reject(signal.reason);
-				return;
-			}
 			const entry = {
 				id,
 				what,
 				params: params ?? {},
-				waitMs,
 				resolve,
 				reject,
-				timer: 0,
-				sentOn: null
+				timer: 0
 			};
 			this.inflight.set(id, entry);
-			signal?.addEventListener("abort", () => this.cancel(entry, signal.reason), { once: true });
 			this.sendQuery(entry);
 		});
-	}
-	/**
-	* GIVE UP ON A QUESTION NOBODY WAITS FOR ANY MORE, here and at the engine: a
-	* screen left behind a transcript page's read held one of the socket's four
-	* slots and one of the node's two transcript reads for minutes, for nobody.
-	* An answer that comes anyway finds nothing in flight and is dropped.
-	*/
-	cancel(entry, reason) {
-		if (this.inflight.get(entry.id) !== entry) return;
-		this.inflight.delete(entry.id);
-		clearTimeout(entry.timer);
-		entry.reject(reason instanceof Error ? reason : new Error(String(reason)));
-		if (!this.connected || !this.sock || entry.sentOn !== this.sock) return;
-		try {
-			this.sock.send(JSON.stringify({
-				kind: "query_cancel",
-				id: entry.id
-			}));
-		} catch {}
 	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
@@ -2880,20 +2848,18 @@ var LiveSocket = class {
 			kind: "query",
 			id: entry.id,
 			what: entry.what,
-			params: entry.params,
-			wait_ms: entry.waitMs
+			params: entry.params
 		};
 		try {
 			this.sock.send(JSON.stringify(frame));
 		} catch {
 			return;
 		}
-		entry.sentOn = this.sock;
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);
 			entry.reject(new QueryError("timeout"));
-		}, entry.waitMs);
+		}, QUERY_TIMEOUT_MS);
 	}
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);

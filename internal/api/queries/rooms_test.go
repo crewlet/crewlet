@@ -527,6 +527,10 @@ var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE ADVISOR'S WEEKLY REPORTS, read by a script until the Advisor page's
 	// Reports tab reads them; that tab makes these lines red, and they go.
+	// THE ADVISOR'S STATS AND CHARTS, read by a script until the Advisor
+	// page's stat strip reads them; that strip makes this line red, and it goes.
+	"advisor_snapshot": "an admin's script: GET /advisor/snapshot, as docs/guides/advisor.md prints it",
+	"advisor_capacity": "the Advisor's deep run and an admin's script: GET /advisor/capacity (docs/guides/advisor.md)",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

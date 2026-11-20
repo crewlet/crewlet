@@ -103,6 +103,11 @@ type Evidence struct {
 	// StaffingWeek and StaffingFortnight are the staffing classes' exact
 	// reads over their windows of whole company days; nil where unread.
 	StaffingWeek, StaffingFortnight *Staffing
+	// Capacity is the hours each model entry was out on its usage limit over
+	// the week's company days (ADR-0166); nil where unread.
+	Capacity *Capacity
+	// CapacityUnread says the seats' park records could not be read.
+	CapacityUnread bool
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread      bool
@@ -137,6 +142,8 @@ const (
 	sourceSkips
 	// sourceStaffing is the seats' exact time, [Evidence.StaffingWeek].
 	sourceStaffing
+	// sourceCapacity is the seats' park records, [Evidence.Capacity].
+	sourceCapacity
 )
 
 // unread reports whether ev could not read src.
@@ -166,6 +173,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.SkipsUnread
 	case sourceStaffing:
 		return ev.StaffingUnread
+	case sourceCapacity:
+		return ev.CapacityUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -320,8 +329,14 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 		}
 	}
 	for _, d := range documented {
-		if !ev.unread(d.source) {
-			found = append(found, d.detect(c, ev)...)
+		if ev.unread(d.source) {
+			continue
+		}
+		found = append(found, d.detect(c, ev)...)
+		if d.silent != nil {
+			if reason := d.silent(c, ev); reason != "" {
+				answer.Silent = append(answer.Silent, Silence{Class: d.class, Reason: reason})
+			}
 		}
 	}
 	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
@@ -361,6 +376,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.StaffingUnread {
 		answer.Unread = append(answer.Unread, UnreadStaffing)
+	}
+	if ev.CapacityUnread {
+		answer.Unread = append(answer.Unread, UnreadCapacity)
 	}
 	return answer
 }
