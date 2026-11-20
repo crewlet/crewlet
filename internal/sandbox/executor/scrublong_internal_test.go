@@ -286,19 +286,18 @@ func (c *cutReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// A TORN LINE IS WRITTEN AS ITS TEXT, AS IT WAS, AND THE FIRST READING COUNTS
-// IT BOTH WAYS: a line that is no one JSON value (cut short past the rewrite's
-// buffer, so its JSON is read a long way before its grammar fails, a line of
-// two values, a line of blanks) is written exactly as the whole-text scrub of
-// its text writes it, never its JSON prefix respelled; the plan keeps a bit
-// for each line of two bytes or more, set for one written as text, and none
-// for a shorter one; and what the first reading counts is what the second
-// writes ([keptLines]).
+// A TORN LINE IS WRITTEN AS ITS TEXT, AS IT WAS: a line that is no one JSON
+// value (cut short past the rewrite's buffer, so its JSON is read a long way
+// before its grammar fails, a line of two values, a line of blanks) is
+// written exactly as the whole-text scrub of its text writes it, never its
+// JSON prefix respelled; the plan keeps a bit for each line of two bytes or
+// more, set for one written as text, and none for a shorter one; and what the
+// first reading counts is what the second writes ([keptLines]).
 //
-// Mutation: write a torn line's prefix as its rewrite did, count only the
-// JSON candidate, give a short line a bit, or read a line of blanks as an
-// empty JSON line, and a check goes red.
-func TestATornLineIsWrittenAsItsTextAndCountedBothWays(t *testing.T) {
+// Mutation: write a torn line's prefix as its rewrite did, count a line known
+// to be text as its JSON, give a short line a bit, or read a line of blanks
+// as an empty JSON line, and a check goes red.
+func TestATornLineIsWrittenAsItsText(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 6))
 	s := newScrubber([]string{longValue})
@@ -306,7 +305,7 @@ func TestATornLineIsWrittenAsItsTextAndCountedBothWays(t *testing.T) {
 	torn := `{"text":"respelled A ` + long
 	lines := []string{`{"a":"b"}`, torn, "", `{"x":1} {"y":2}`, "5", " \t ", `{"b":"c"}`}
 	text := strings.Join(lines, "\n") + "\n"
-	plan := &tarPlan{}
+	plan := &tarPlan{bothFrom: 1}
 	if _, err := measureLines(strings.NewReader(text), s, plan); err != nil {
 		t.Fatal(err)
 	}
@@ -985,4 +984,246 @@ func boxGzipOf(t *testing.T, text string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// A FIRST READING READS A JSON LINE, AND A `.json` FILE THAT IS JSON, AS JSON
+// ALONE: their text scrub, never written, opens no text on the reading's text
+// way; a line a reading reads both ways, from the first that is no JSON, opens
+// one.
+//
+// Mutation: read every line or `.json` file both ways, and the text way opens.
+func TestAFirstReadingReadsAJSONUnitAsJSONAlone(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{longValue})
+	long := `{"text":"` + randomBase64(3, 2*scrubPieceBaseBytes) + `"}`
+	for name, tc := range map[string]struct {
+		read func(scrubber, *tarPlan) error
+		text bool
+	}{
+		"a transcript's JSON lines": {read: func(s scrubber, plan *tarPlan) error {
+			_, err := measureLines(strings.NewReader(`{"a":"b"}`+"\n"+long+"\n"), s, plan)
+			return err
+		}},
+		"a `.json` file that is JSON": {read: func(s scrubber, plan *tarPlan) error {
+			_, _, err := measureFile("tasks/s/1.json", strings.NewReader(long), s, plan)
+			return err
+		}},
+		"a line read both ways": {text: true, read: func(s scrubber, plan *tarPlan) error {
+			plan.bothFrom = 1
+			_, err := measureLines(strings.NewReader(long[:len(long)-2]+"\n"), s, plan)
+			return err
+		}},
+	} {
+		pieces := newFirstPieces(nil)
+		plan := &tarPlan{}
+		if err := tc.read(s.firstReading(pieces, plan), plan); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if opened := pieces.ways[textWay].buf != nil; opened != tc.text {
+			t.Errorf("%s: the reading opened a text on its text way: %v, want %v", name, opened, tc.text)
+		}
+	}
+}
+
+// A UNIT THAT IS NO JSON ENDS THE FIRST READING, AND THE NEXT READS IT BOTH
+// WAYS: a session whose lines and `.json` files are all JSON is read once
+// before it is written; one holding a torn line, a `.json` file that is no
+// JSON, or both, once more, from the first such unit both ways. Each is kept
+// as the scrub of its text, every other as JSON.
+//
+// Mutation: plan a unit read as JSON alone as text without reading again, or
+// read again as JSON alone, and a case keeps other bytes or never ends.
+func TestAUnitThatIsNoJSONEndsTheFirstReadingAndTheNextReadsItBothWays(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{longValue})
+	torn := `{"text":"` + longValue + ` ` + randomBase64(4, textWholeBytes+512)
+	lines := func(middle string) string {
+		return `{"a":"b"}` + "\n" + middle + "\n" + `{"c":"` + longValue + `"}` + "\n"
+	}
+	for name, tc := range map[string]struct {
+		transcript, file string
+		readings         int
+	}{
+		"all JSON":                   {transcript: lines(`{"b":1}`), file: `{"k":"v"}`, readings: 1},
+		"a torn line":                {transcript: lines(torn), file: `{"k":"v"}`, readings: 2},
+		"a `.json` file not JSON":    {transcript: lines(`{"b":1}`), file: `{"k":` + longValue, readings: 2},
+		"a torn line and a bad file": {transcript: lines(torn), file: `{"k":` + longValue, readings: 2},
+		"a transcript of no JSON":    {transcript: "ab\ncd\n" + longValue + "\n", file: `{}`, readings: 2},
+	} {
+		archive := tarOf(t, map[string]string{"projects/p/s.jsonl": tc.transcript, "tasks/s/1.json": tc.file})
+		opened := 0
+		reopen := func() (io.ReadCloser, error) {
+			opened++
+			return io.NopCloser(bytes.NewReader(archive)), nil
+		}
+		var out bytes.Buffer
+		if err := scrubTar(bytes.NewReader(archive), reopen, &out, s, testBounds); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if opened != tc.readings {
+			t.Errorf("%s: the archive was opened again %d times, want %d", name, opened, tc.readings)
+		}
+		kept := untarOf(t, out.Bytes())
+		if file := kept["tasks/s/1.json"]; json.Valid([]byte(tc.file)) != json.Valid([]byte(file)) ||
+			!json.Valid([]byte(tc.file)) && file != keptText(s, tc.file) {
+			t.Errorf("%s: the `.json` file was kept as %.80q", name, file)
+		}
+		for i, line := range strings.Split(strings.TrimSuffix(tc.transcript, "\n"), "\n") {
+			got := strings.Split(kept["projects/p/s.jsonl"], "\n")[i]
+			switch isJSON := json.Valid([]byte(line)); {
+			case isJSON && (!json.Valid([]byte(got)) || strings.Contains(got, longValue)):
+				t.Errorf("%s: line %d was JSON and is kept as %.80q", name, i, got)
+			case !isJSON && got != keptText(s, line):
+				t.Errorf("%s: line %d was no JSON and is kept as %.80q, not its text", name, i, got)
+			}
+		}
+	}
+}
+
+// WHAT A READING READ PAST IS HELD TO THE ARCHIVE BY THE SECOND READING: the
+// reading that goes on from the first unit that is no JSON reads nothing
+// before it, so a box that changed a line or a `.json` file there between
+// the readings has the take refused where the second reading writes it; from
+// that unit on, the reading decides each itself.
+//
+// Mutation: plan the member's line bits from where the reading went on rather
+// than from the member's start, and a case is refused that was not.
+func TestWhatAReadingReadPastIsHeldToTheArchiveByTheSecondReading(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{longValue})
+	transcript := func(lines ...string) []byte {
+		return tarOf(t, map[string]string{"projects/p/s.jsonl": strings.Join(lines, "\n") + "\n"})
+	}
+	files := func(first, second string) []byte {
+		return tarOf(t, map[string]string{"tasks/s/1.json": first, "tasks/s/2.json": second})
+	}
+	named := `{"a":"` + longValue + `"}`
+	other := `{"a":"` + strings.Repeat("y", len(longValue)) + `"}`
+	for name, tc := range map[string]struct {
+		first, again []byte
+		refused      bool
+	}{
+		"a JSON line torn again":           {transcript(`{"a":1}`, `{"b":`), transcript(`{"a":`, `{"b":`), true},
+		"a JSON line kept otherwise again": {transcript(named, `{"b":`), transcript(other, `{"b":`), true},
+		"a `.json` file torn again":        {files(`{"k":1}`, `{"k":`), files(`{"k":`, `{"k":`), true},
+		"the torn line JSON again":         {transcript(`{"a":1}`, `{"b":`), transcript(`{"a":1}`, `{"b":2}`), false},
+	} {
+		err := scrubTar(bytes.NewReader(tc.first), reopenOf(tc.again), io.Discard, s, testBounds)
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: the take ended %v; want it refused: %v", name, err, tc.refused)
+		}
+	}
+}
+
+// A READING GOES ON FROM WHERE THE FIRST ENDED: a session torn at a line, as
+// a take landing mid-write finds it, or ended at a `.json` file that is no
+// JSON, has each text before that unit read once, the plan of the first
+// reading kept to it (a line after it, read both ways, is one text more: its
+// line as text), and is kept as each of its lines and files is kept on its
+// own, each of its texts after that unit too written as planned.
+//
+// Mutation: read the archive again from its start, or from its member's
+// start, keep the plan's bits past the mark, or count its units from the
+// start, and a case reads a text twice, plans one elsewhere or keeps other
+// bytes.
+func TestAReadingGoesOnFromWhereTheFirstEnded(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{longValue})
+	pdf := pdfLine(14, 300<<10)
+	torn := `{"text":"` + longValue + ` ` + randomBase64(15, 1<<10)
+	for name, tc := range map[string]struct {
+		files         map[string]string
+		read, planned int
+	}{
+		"a transcript torn at its last line": {map[string]string{
+			"projects/p/a.jsonl": pdf + "\n",
+			"projects/p/s.jsonl": `{"a":"` + longValue + `"}` + "\n" + pdf + "\n" + torn + "\n",
+			"projects/p/z.jsonl": pdf + "\n",
+		}, 7, 6},
+		"a `.json` file that is no JSON": {map[string]string{
+			"projects/p/s.jsonl": pdf + "\n",
+			"tasks/s/1.json":     `{"k":"` + longValue + `"`,
+		}, 2, 2},
+	} {
+		archive := tarOf(t, tc.files)
+		use := &memoUse{memo: newScrubMemo(), scope: "agent-a"}
+		kept, opened, err := scrubTake(archiveTar, archive, s, use)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if read := use.n.hits + use.n.misses; opened != 2 || read != tc.read || use.n.checked != tc.planned ||
+			use.n.diverged != 0 {
+			t.Errorf("%s: %+v, reopened %d times; want %d texts read, %d written as planned, one reading on",
+				name, use.n, opened, tc.read, tc.planned)
+		}
+		got := untarOf(t, kept)
+		for file, body := range tc.files {
+			var want []string
+			for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+				switch {
+				case !strings.HasSuffix(file, ".jsonl"):
+					want = append(want, keptText(s, line))
+				case json.Valid([]byte(line)):
+					want = append(want, rewriteLine(t, line, s))
+				default:
+					want = append(want, keptText(s, line))
+				}
+			}
+			if w := strings.Join(want, "\n") + map[bool]string{true: "\n"}[strings.HasSuffix(body, "\n")]; got[file] != w {
+				t.Errorf("%s: %s was kept as %.120q, want %.120q", name, file, got[file], w)
+			}
+		}
+	}
+}
+
+// A PLAN CUT BACK TO A MARK READS AS WRITTEN AFTER IT: bits cut back past a
+// block's end and written again read back as the kept ones and the new.
+//
+// Mutation: keep the blocks past the mark, or count none of the bits before
+// it, and the bits read back otherwise.
+func TestAPlanCutBackToAMarkReadsAsWrittenAfterIt(t *testing.T) {
+	t.Parallel()
+	const per = bitBlockWords * 64
+	var p planBits
+	var want []bool
+	for i := range 2*per + 100 {
+		p.put(i%3 == 0)
+		if i < per+7 {
+			want = append(want, i%3 == 0)
+		}
+	}
+	p.list.truncate(per + 7)
+	for i := range 50 {
+		p.put(i%2 == 0)
+		want = append(want, i%2 == 0)
+	}
+	if p.count() != len(want) || len(p.list.blocks) != 2 {
+		t.Fatalf("the plan holds %d bits in %d blocks, want %d in 2", p.count(), len(p.list.blocks), len(want))
+	}
+	for i, w := range want {
+		if v, ok := p.take(); !ok || v != w {
+			t.Fatalf("bit %d reads %v (%v), want %v", i, v, ok, w)
+		}
+	}
+}
+
+// A `.json` FILE ITS ARCHIVE FAILS IN IS THAT FAILURE, NEVER A FILE THAT IS NO
+// JSON: a file the archive's plaintext bound cuts short refuses the take at its
+// first reading, with the bound's own error, rather than read again both ways.
+//
+// Mutation: read a document the archive failed in as no JSON, and the take
+// opens the archive again before it is refused.
+func TestAJSONFileItsArchiveFailsInRefusesTheTakeAtOnce(t *testing.T) {
+	t.Parallel()
+	archive := tarOf(t, map[string]string{"tasks/s/1.json": `{"text":"` + strings.Repeat("a", 2<<20) + `"}`})
+	opened := 0
+	reopen := func() (io.ReadCloser, error) {
+		opened++
+		return io.NopCloser(bytes.NewReader(archive)), nil
+	}
+	err := scrubTar(bytes.NewReader(archive), reopen, io.Discard, newScrubber(nil), scrubBounds{plain: 1 << 20})
+	if !errors.Is(err, errScrubBound) || opened != 0 {
+		t.Errorf("the take ended %v having opened the archive again %d times; want errScrubBound at once", err,
+			opened)
+	}
 }
