@@ -278,6 +278,15 @@ func (d *Duty) Step(ctx context.Context) error {
 	if len(requests) == 0 && len(deep) > 0 {
 		return d.pressedDeep(ctx, now, deep)
 	}
+	// A PRESS THIS HOLDER ALREADY RAN is recorded again, never run again.
+	if pressed := len(requests); pressed > 0 {
+		if requests, err = d.recordAgain(ctx, requests); len(requests) == 0 {
+			return err
+		}
+		if err != nil {
+			log.WarnContext(ctx, "advisor_run_not_recorded", "error", err.Error())
+		}
+	}
 	if len(requests) > 0 {
 		// EVERY PRESS WAITING IS ANSWERED BY ONE RUN of everything, recorded
 		// under each press's own id, so a press during a run joins the next.
@@ -286,7 +295,7 @@ func (d *Duty) Step(ctx context.Context) error {
 		var errs []error
 		for _, r := range requests {
 			run.ID, run.By = r.Run, r.By
-			errs = append(errs, d.Log.RecordRun(ctx, run))
+			errs = append(errs, d.conclude(ctx, run))
 		}
 		return errors.Join(append(errs, d.Log.Expire(ctx, now))...)
 	}
@@ -316,7 +325,7 @@ func (d *Duty) Step(ctx context.Context) error {
 		d.signature = signature
 	}
 	run := d.run(ctx, now, rules, model, trigger, "", d.NewID())
-	return errors.Join(d.Log.RecordRun(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
+	return errors.Join(d.conclude(ctx, run), d.Log.Expire(ctx, now), d.report(ctx, now))
 }
 
 // report writes the last whole week's report once it is due: on the Monday

@@ -110,7 +110,7 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 	failed := func(reason string, err error) (duty.ModelRun, error) {
 		run := DeepRun{Pass: advisor.Pass{Status: advisor.PassFailed, Reason: reason + err.Error(),
 			Dropped: map[advisor.Drop]int{}, Unread: []string{}}, Progress: []Progress{}}
-		return duty.ModelRun{Summary: run}, fmt.Errorf("modelpass: %s%w", reason, err)
+		return duty.ModelRun{Summary: run.Kept()}, fmt.Errorf("modelpass: %s%w", reason, err)
 	}
 	d, err := s.Read(ctx, now)
 	if err != nil {
@@ -136,7 +136,8 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 			progress(p.At, p.Text)
 		}
 	})
-	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone,
+	// ITS RECORD KEEPS WHAT FITS: the lines and verdicts are on its progress.
+	out := duty.ModelRun{Summary: run.Kept(), Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone,
 		Partial: run.Status == advisor.PassCeiling && run.Listed > 0}
 	window := advisor.Span{From: now.Add(-advisor.Window), To: now}
 	for _, f := range run.Findings {

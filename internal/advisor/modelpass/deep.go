@@ -107,8 +107,11 @@ type DeepRun struct {
 		Minutes int `json:"minutes"`
 		Rounds  int `json:"rounds"`
 	} `json:"bounds"`
-	// Agenda is what the run had to answer and its verdict on each.
-	Agenda []AgendaItem `json:"agenda"`
+	// Agenda is what the run had to answer and its verdict on each, as the
+	// run answers it; its record keeps it as a tally ([DeepRun.Kept]).
+	Agenda []AgendaItem `json:"agenda,omitempty"`
+	// Tally is the agenda as a run's record keeps it, nil on the run itself.
+	Tally *AgendaTally `json:"tally,omitempty"`
 }
 
 // The deep run's own tools.
