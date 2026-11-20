@@ -345,6 +345,46 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 	}
 }
 
+// pastTheLag is a token's run longer than the claims' lag, on a line of its
+// own, and lines enough after it for every stage to step past it.
+func pastTheLag(r *rand.Rand) string {
+	return "sk-" + testRun(r, testB64url, lagBytes()+256<<10) + "\n" + strings.Repeat("ok\n", stageStep/3+1)
+}
+
+// refusingLayout is a text in a layout the package doc names as one a stream
+// refuses, or a neighbour of one that it does not, with a run past the lag.
+type refusingLayout struct {
+	name, text string
+	refuses    bool
+}
+
+// refusingLayouts is each layout a key's BEGIN or a gutter makes beside a
+// password's key, with a run past the lag after it, and neighbours that read
+// the run in time: the same lines less the password's key, or less its
+// BEGIN, or with the key's value on its own line, or the block closed.
+func refusingLayouts(r *rand.Rand) []refusingLayout {
+	run := pastTheLag(r)
+	begin, end := "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"
+	layouts := []refusingLayout{
+		{"a password's key across an escaped break after a BEGIN", begin + `\n` + "password: \n", true},
+		{"a password's key on the line after a BEGIN", begin + "\npassword: \n", true},
+		{"a password's key on the line after a BEGIN, the run three lines below", begin + "\npassword: \n\n\n\n", true},
+		{"a password's key across an escaped break before a BEGIN on its line", "password:\\n\t\"hunter2x9 " + begin + "\\n\t\"" + testKeyLine + "\\n\n", true},
+		{"a password's key, its value's line and an END under a gutter", "7\u2192pwd=\n7\u2192" + testKeyLine + "\n7\u2192" + end + "\n", true},
+		{"a password's key between a BEGIN, its key's line and the run", begin + "\n" + testKeyLine + "\n\npassword: \n", true},
+		{"a BEGIN, then the run", begin + "\n", false},
+		{"a BEGIN and its key's lines, then the run", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n", false},
+		{"a password's key, then a BEGIN", "password: \n" + begin + "\n", false},
+		{"a BEGIN, then a password's key and its value", begin + "\npassword: hunter2x9\n", false},
+		{"a closed armour, then a password's key", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n" + end + "\npassword: \n", false},
+		{"a password's key, its value and an END under no gutter", "password: hunter2x9\n" + end + "\n", false},
+	}
+	for i := range layouts {
+		layouts[i].text += run
+	}
+	return layouts
+}
+
 // A STREAM THAT DECIDES EARLY SAYS SO: Close answers nil, and the stream wrote
 // [Secrets] of the text; or Close answers [ErrDecidedEarly], naming the first
 // byte from which what it wrote may differ, with no earlier block of the keys'
@@ -352,7 +392,7 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 // shape of every hold at 256 KiB (exactly those named refuse), and at the
 // stream's own hold, where a key with a Google token whose dots run past the
 // hold still writes Secrets, and each layout the package doc names refuses
-// beside a neighbour that does not. Mutation: step no claims stage at a marker
+// beside neighbours that do not. Mutation: step no claims stage at a marker
 // ([ruleStage.markerToStepAt]); check an end set late ([keyStage.ended]); read
 // a late end in an early window as no change; or write a span moved before its
 // start ([keyStage.readArmours]).
@@ -396,27 +436,13 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 		checkReading(t, s.name+" at the stream's own hold", text, got)
 	}
 	// The layouts a key's BEGIN or a gutter makes, each with a run past
-	// the lag after it, and two neighbours that read the run in time.
-	run := "sk-" + testRun(r, testB64url, lagBytes()+256<<10) + "\n" + strings.Repeat("ok\n", stageStep/3+1)
-	begin, end := "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"
-	for _, c := range []struct {
-		name, head string
-		refuses    bool
-	}{
-		{"a password's key across an escaped break after a BEGIN", begin + `\n` + "password: \n", true},
-		{"a password's key on the line after a BEGIN", begin + "\npassword: \n", true},
-		{"a password's key on the line after a BEGIN, the run three lines below", begin + "\npassword: \n\n\n\n", true},
-		{"a password's key across an escaped break before a BEGIN on its line", "password:\\n\t\"hunter2x9 " + begin + "\\n\t\"" + testKeyLine + "\\n\n", true},
-		{"a password's key, its value's line and an END under a gutter", "7\u2192pwd=\n7\u2192" + testKeyLine + "\n7\u2192" + end + "\n", true},
-		{"a closed armour, then a password's key", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n" + end + "\npassword: \n", false},
-		{"a password's key, its value and an END under no gutter", "password: hunter2x9\n" + end + "\n", false},
-	} {
-		text := c.head + run
-		got := readHolding(text, holdBytes(), nil, 0)
+	// the lag after it, and their neighbours that read the run in time.
+	for _, c := range refusingLayouts(r) {
+		got := readHolding(c.text, holdBytes(), nil, 0)
 		if (got.err != nil) != c.refuses {
 			t.Errorf("%s, a run past the lag after it: Close answered %v, %d windows decided early", c.name, got.err, got.early)
 		}
-		checkReading(t, c.name, text, got)
+		checkReading(t, c.name, c.text, got)
 	}
 	t.Logf("%d of 3 random texts refused", refused)
 }
