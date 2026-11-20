@@ -199,7 +199,7 @@ export function dayCharts(report: Pick<AdvisorReport, "days">): AdvisorChart[] {
       series: [{ id: "tokens", label: "Tokens", values: days.map((d) => d.tokens) }],
       note:
         costliest.tokens > 0
-          ? `The most was spent on ${dayLabel(costliest.day)}: ${fmtCount(costliest.tokens)} tokens.`
+          ? `The most was spent on ${dayLabel(costliest.day)}: ${compact(costliest.tokens)} tokens.`
           : null,
     },
   ];
@@ -276,7 +276,7 @@ export function weekCards(rows: readonly AdvisorReportSummary[]): WeekCard[] {
           value: r.opened,
           unit: "count",
           was: adjacent ? before.opened : null,
-          better: "down",
+          better: null,
           detail: `${fmtCount(r.resolved)} resolved · ${fmtCount(r.applied)} applied · ${fmtCount(r.dismissed)} dismissed`,
         },
       ],

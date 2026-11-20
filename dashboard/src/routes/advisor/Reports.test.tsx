@@ -92,6 +92,9 @@ test("each week is a card, the newest first, its figures beside the week before"
   expect(figure("turns")).toMatch(/3,116.*turns.*\+56%/);
   expect(figure("tokens")).toMatch(/2\.54B.*tokens/);
   expect(figure("changed_nothing")).toMatch(/17%.*535 of 3,116 turns/);
+  // WHAT A CHANGE IS SET BESIDE is said once, over the list, never under every figure.
+  expect(screen.getByText("Each week against the week before it.")).toBeDefined();
+  expect(within(list).queryByText("vs the week before")).toBeNull();
   // THE FINDINGS IT OPENED beside the week before's, which the list holds.
   expect(figure("opened")).toMatch(/3.*\+50%.*1 resolved · 0 applied · 0 dismissed/);
 });

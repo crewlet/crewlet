@@ -222,7 +222,7 @@ test("a report links the weeks either side of it", async () => {
       .getAllByRole("link")
       .map((a) => [a.textContent, a.getAttribute("href")]),
   ).toEqual([
-    ["Week 46 of 2026", "#/advisor/reports/2026-W46"],
-    ["Week 48 of 2026", "#/advisor/reports/2026-W48"],
+    ["← Week 46 of 2026", "#/advisor/reports/2026-W46"],
+    ["Week 48 of 2026 →", "#/advisor/reports/2026-W48"],
   ]);
 });

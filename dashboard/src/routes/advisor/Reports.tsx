@@ -37,13 +37,22 @@ import { weekWords } from "./words.ts";
  * One figure of a week, with its change against the week before: its parts
  * where it has them ("535 of 3,116 turns"), else what it is set beside.
  */
-export function WeekTile({ stat, flush = false }: { stat: ViewStat; flush?: boolean }) {
+export function WeekTile({
+  stat,
+  flush = false,
+  compared = true,
+}: {
+  stat: ViewStat;
+  flush?: boolean;
+  /** Say what a change is set beside; false where the page says it once for every figure. */
+  compared?: boolean;
+}) {
   const shown = stat.value === null ? null : reportFigure(stat.value, stat.unit);
   const delta = deltaOf(stat);
   const sub =
     shown === null
       ? "Not read this week"
-      : (stat.detail ?? (delta ? "vs the week before" : undefined));
+      : (stat.detail ?? (delta && compared ? "vs the week before" : undefined));
   return (
     <StatCard
       label={stat.label}
@@ -78,42 +87,47 @@ export function Reports() {
           description="The Advisor writes a report every Monday morning: the week's numbers against the week before, and what it found."
         />
       ) : (
-        <ol className="advisor-weeks" aria-label="Weekly reports">
-          {weekCards(rows).map((c) => (
-            <li key={c.week}>
-              <Card
-                href={href(["advisor", "reports", c.week])}
-                padding="none"
-                aria-label={`${weekWords(c.week)}, ${c.days}`}
-              >
-                <div className="advisor-week__head">
-                  <Card.Title>{c.title}</Card.Title>
-                  <Text as="span" tone="secondary">
-                    {c.days}
-                  </Text>
-                  {c.first ? (
-                    <Tag size="sm" variant="neutral">
-                      First week measured
-                    </Tag>
-                  ) : null}
-                  <Text
-                    as="span"
-                    variant="caption"
-                    tone="secondary"
-                    className="advisor-week__written"
-                  >
-                    Written {ago(c.writtenAt, now)}
-                  </Text>
-                </div>
-                <StatGroup columns={4} flush>
-                  {c.figures.map((f) => (
-                    <WeekTile key={f.key} stat={f} />
-                  ))}
-                </StatGroup>
-              </Card>
-            </li>
-          ))}
-        </ol>
+        <>
+          <Text as="p" variant="caption" tone="secondary">
+            Each week against the week before it.
+          </Text>
+          <ol className="advisor-weeks" aria-label="Weekly reports">
+            {weekCards(rows).map((c) => (
+              <li key={c.week}>
+                <Card
+                  href={href(["advisor", "reports", c.week])}
+                  padding="none"
+                  aria-label={`${weekWords(c.week)}, ${c.days}`}
+                >
+                  <div className="advisor-week__head">
+                    <Card.Title>{c.title}</Card.Title>
+                    <Text as="span" tone="secondary">
+                      {c.days}
+                    </Text>
+                    {c.first ? (
+                      <Tag size="sm" variant="neutral">
+                        First week measured
+                      </Tag>
+                    ) : null}
+                    <Text
+                      as="span"
+                      variant="caption"
+                      tone="secondary"
+                      className="advisor-week__written"
+                    >
+                      Written {ago(c.writtenAt, now)}
+                    </Text>
+                  </div>
+                  <StatGroup columns={4} flush>
+                    {c.figures.map((f) => (
+                      <WeekTile key={f.key} stat={f} compared={false} />
+                    ))}
+                  </StatGroup>
+                </Card>
+              </li>
+            ))}
+          </ol>
+        </>
       )}
       {reports.data?.next_cursor ? (
         <Button

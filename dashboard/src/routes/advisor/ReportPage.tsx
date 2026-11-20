@@ -32,7 +32,8 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
-import { fmtCount, fmtDateTime } from "~/lib/format.ts";
+import { fmtCount, fmtDateCompact, fmtDateTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { unreadNames } from "~/lib/advisorUnread.ts";
 import type { AdvisorReport } from "~/protocol/advisorFindings.ts";
 import { marked } from "~/ui/Problems.tsx";
@@ -61,6 +62,7 @@ export function ReportPage({ week }: { week: string }) {
 }
 
 function Report({ report, title }: { report: AdvisorReport; title: string }) {
+  const now = useNow();
   const first = firstWeek(report.metrics);
   const charts = dayCharts(report).map(chartView);
   const others = otherRows(report.metrics);
@@ -76,7 +78,7 @@ function Report({ report, title }: { report: AdvisorReport; title: string }) {
           <Text as="p" tone="secondary">
             {weekSpan(report.week) ??
               `${fmtDateTime(report.period.from)} to ${fmtDateTime(report.period.to)}`}
-            . Written {fmtDateTime(report.written_at)}.
+            . Written {fmtDateCompact(report.written_at, now)}.
           </Text>
           {first ? (
             <Text as="p" tone="secondary">
@@ -193,12 +195,12 @@ function Neighbours({ week }: { week: string }) {
     <nav className="advisor-report__weeks" aria-label="Other weeks">
       {older ? (
         <ButtonLink size="small" variant="ghost" href={href(["advisor", "reports", older.week])}>
-          {weekWords(older.week)}
+          ← {weekWords(older.week)}
         </ButtonLink>
       ) : null}
       {newer ? (
         <ButtonLink size="small" variant="ghost" href={href(["advisor", "reports", newer.week])}>
-          {weekWords(newer.week)}
+          {weekWords(newer.week)} →
         </ButtonLink>
       ) : null}
     </nav>
