@@ -257,8 +257,9 @@ const (
 // of the plaintext ([tarPlan]), with a 512th for the texts' digests: 32 bytes
 // a chunk, planned and pending on both ways of a line.
 //
-// TWO OF EACH, because the first reading reads a line, or a `.json` file,
-// both ways at once ([measureLines], [measureFile]); the second reads one.
+// TWO OF EACH, because a first reading reads a line, or a `.json` file, from
+// the first that is no JSON both ways at once ([measureLines],
+// [measureFile]); the second reads one.
 func scrubHeldBytes(plain int64, longest int) int64 {
 	text := int64(streamHeldBytes + pieceHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
 	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + plain/512 + planBlockBytes
@@ -896,6 +897,9 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 			s.unitBegins()
 			from := plan.lines.count()
 			size, text, err := measureFile(h.Name, body, s, plan)
+			if errors.Is(err, errLinesChanged) {
+				return errMemberChanged(h.Name)
+			}
 			if err != nil {
 				return err
 			}
@@ -981,28 +985,32 @@ func errMemberChanged(name string) error {
 }
 
 // firstReadings runs read, a first reading of an archive, on first, planning
-// on a plan it answers, which holds the large slot until its letGo: again,
-// reopened, where the memo's answer for a text diverged ([errMemoDiverged]):
-// once with that text's first chunk looked up no more, so the take's other
-// texts keep their answers, and again with no lookups where that diverged
-// too, so at most three readings.
+// on a plan it answers, which holds the large slot until its letGo. It reads
+// again, reopened, from where a reading ended: at the first line or `.json`
+// file it read as JSON alone that is no JSON ([errReadBothWays]), once; and
+// where the memo's answer for a text diverged ([errMemoDiverged]), once with
+// that text's first chunk looked up no more, so the take's other texts keep
+// their answers, and again with no lookups where that diverged too.
 func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
 	read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
 
 	pieces := newFirstPieces(b.memo)
-	for src, again := first, 0; ; again++ {
-		if again == 2 {
-			pieces.lookups = false
-		}
-		plan := &tarPlan{gate: b.gate}
+	plan := &tarPlan{gate: b.gate}
+	for src, diverged := first, 0; ; {
 		err := read(src, s.firstReading(pieces, plan), plan)
-		if !errors.Is(err, errMemoDiverged) {
+		switch {
+		case errors.Is(err, errMemoDiverged):
+			if diverged++; diverged == 2 {
+				pieces.lookups = false
+			}
+		case !errors.Is(err, errReadBothWays):
 			return plan, err
 		}
 		plan.letGo()
+		plan = &tarPlan{gate: b.gate, bothFrom: plan.bothFrom}
 		next, openErr := reopen()
 		if openErr != nil {
-			return &tarPlan{}, fmt.Errorf("executor: opening the session's archive again to read it: %w", openErr)
+			return plan, fmt.Errorf("executor: opening the session's archive again to read it: %w", openErr)
 		}
 		src = next
 	}
@@ -1091,12 +1099,13 @@ func (c *counted) Write(p []byte) (int, error) {
 // whether it is kept as text because it is not JSON; a transcript's lines are
 // planned on plan ([measureLines]).
 //
-// A `.json` FILE IS READ BOTH WAYS AT ONCE, as a document and as text, ON ONE
-// GOROUTINE, THE SCRUB'S OWN: the rewrite hands every byte it reads to the
-// text's scrub ([teeRead]), so every byte is read where the take contains a
-// panic (scrubContained). Goroutines fed through pipes would put the file's
-// rewrite and redaction outside that containment (the package doc's "The scrub
-// holds no value whole").
+// A `.json` FILE IS READ AS A DOCUMENT ALONE, and both ways from the first
+// unit that is no JSON ([tarPlan.unitAhead]), at once ON ONE GOROUTINE, THE
+// SCRUB'S OWN: the rewrite hands every byte it reads to the text's scrub
+// ([teeRead]), so every byte is read where the take contains a panic
+// (scrubContained). Goroutines fed through pipes would put the file's rewrite
+// and redaction outside that containment (the package doc's "The scrub holds
+// no value whole").
 func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size int64, text bool, err error) {
 	switch path.Ext(name) {
 	case ".jsonl":
@@ -1110,10 +1119,14 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 		}
 		return n.n, false, err
 	}
+	both := plan.unitAhead()
 	// ONE PIECE, THE WHOLE FILE: its text is redacted as one, so the
 	// document's strings within it need no gate of their own.
 	body, done := plan.gate.pieces(body, false)
 	defer done()
+	if !both {
+		return measureDocument(body, s, plan)
+	}
 	asText := &counted{}
 	textual := s.way(textWay).text(asText)
 	tee := &teeRead{r: body, w: textual}
@@ -1148,6 +1161,25 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	}
 	s.keepWay(textWay)
 	return asText.n, true, nil
+}
+
+// measureDocument is a `.json` file read as a document alone ([measureFile]):
+// how many bytes it comes to, or, where it is none, [tarPlan.notJSON]. One the
+// rewrite stops reading for its archive's failure is that failure.
+func measureDocument(body io.Reader, s scrubber, plan *tarPlan) (int64, bool, error) {
+	read := &teeRead{r: body, w: io.Discard}
+	asDocument := &counted{}
+	err := rewriteDocument(asDocument, read, s.way(jsonWay), pieceGate{})
+	switch {
+	case read.readErr != nil:
+		return 0, false, read.readErr
+	case err == nil:
+		s.keepWay(jsonWay)
+		return asDocument.n, false, nil
+	case errors.Is(err, errMemoDiverged):
+		return 0, false, err
+	}
+	return 0, false, plan.notJSON()
 }
 
 // teeRead reads r and hands every byte it reads to w as well: a `.json`
@@ -1212,6 +1244,10 @@ func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Read
 // 2,048th (the package doc's "The scrub holds no value whole").
 type tarPlan struct {
 	members, lines, cuts, verbatim planBits
+	// units counts the lines of two bytes or more and the `.json` files the
+	// first reading has begun, from 1; bothFrom is the first it reads both
+	// ways, and every one after it ([tarPlan.unitAhead]), 0 for none.
+	units, bothFrom int
 	// verbatimUnit is the unit of the last text verbatim plans, which the
 	// next one's counts from.
 	verbatimUnit int64
@@ -1260,6 +1296,38 @@ func (p *tarPlan) addVerbatim(v verbatimText) {
 		}
 	}
 }
+
+// unitAhead begins the first reading's next unit, a transcript's line of two
+// bytes or more or a `.json` file, and reports whether it reads it both ways:
+// from the first an earlier reading found is no JSON on, and else as JSON
+// alone.
+//
+// A UNIT IS READ BOTH WAYS ONLY FROM THE FIRST THAT IS NO JSON: which it is is
+// known only at its end and none is held, and a JSON unit's text scrub, never
+// written, cost two fifths of the scrub of a password-dense string. So the
+// first that is not ends the reading at once ([tarPlan.notJSON]), and the
+// next reads it and every one after it both ways: a transcript of text costs
+// what it did, and one of JSON torn at its last line a reading of its JSON
+// more.
+func (p *tarPlan) unitAhead() bool {
+	p.units++
+	return p.bothFrom > 0 && p.units >= p.bothFrom
+}
+
+// notJSON is the failure of the unit [tarPlan.unitAhead] began, read as JSON
+// alone and found no JSON: errReadBothWays, the reading to end there; or, where
+// an earlier reading read it as JSON, an archive that changed.
+func (p *tarPlan) notJSON() error {
+	if p.bothFrom > 0 {
+		return errLinesChanged
+	}
+	p.bothFrom = p.units
+	return errReadBothWays
+}
+
+// errReadBothWays ends a first reading at the first unit it read as JSON alone
+// that is no JSON, to be read again from there both ways ([firstReadings]).
+var errReadBothWays = errors.New("executor: a line or a `.json` file is no JSON, read again both ways")
 
 // letGo drops the slot the plan holds, once the take is done with it.
 func (p *tarPlan) letGo() {
@@ -1430,12 +1498,11 @@ func (l *lineReader) rest() error {
 // measureLines is the first reading of a transcript: how many bytes it comes
 // to as kept, each of its lines planned on plan.
 //
-// EACH LINE IS READ BOTH WAYS AT ONCE, as JSON for as long as its grammar
-// holds, and as text: which it is is known only at its end, and a line is read
-// once in each reading and never held. So two scrubs of it run side by side,
-// each counting what it would write, and the plan keeps a bit for which the
-// line is: what the second reading writes, a line of each written exactly as
-// the scrub of that line whole writes it.
+// A LINE IS READ AS JSON ALONE, AND BOTH WAYS FROM THE FIRST THAT IS NO JSON
+// ([tarPlan.unitAhead]): as JSON for as long as its grammar holds, and as
+// text, two scrubs side by side, each counting what it would write. The plan
+// keeps a bit for which the line is: what the second reading writes, a line
+// of each written exactly as the scrub of that line whole writes it.
 func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 	src, done := plan.gate.pieces(src, true)
 	defer done()
@@ -1445,13 +1512,17 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 	var size int64
 	for {
 		s.unitBegins()
-		asText := &counted{}
-		text := s.way(textWay).text(asText)
-		short, more, err := l.next(text)
+		short, more, err := l.next(nil)
 		if err != nil || !more {
 			return size, err
 		}
-		var jsonErr error
+		asText := &counted{}
+		var text *textScrub
+		if short || plan.unitAhead() {
+			text = s.way(textWay).text(asText)
+			l.tee = text
+		}
+		var jsonErr, textErr error
 		if !short {
 			asJSON.reset(nil, true)
 			l.sc.Reset(l)
@@ -1461,12 +1532,17 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 		if err = l.rest(); err != nil {
 			return 0, err
 		}
-		keptAsText, err := lineKeptAs(short, jsonErr, text.Close())
+		if text != nil {
+			textErr = text.Close()
+		}
+		keptAsText, err := lineKeptAs(short, jsonErr, textErr)
 		switch {
 		case err != nil:
 			return 0, err
 		case short:
 			size += asText.n
+		case keptAsText && text == nil:
+			return 0, plan.notJSON()
 		case keptAsText:
 			plan.lines.put(true)
 			size += asText.n

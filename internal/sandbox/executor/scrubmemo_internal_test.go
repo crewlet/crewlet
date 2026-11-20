@@ -100,8 +100,8 @@ func userLine(text string) string {
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN: a session holding a
 // whole-PDF read, taken twice by one process, keeps the same bytes as a take
 // with no memo, and the second take's first reading has the memo answer for
-// all three of the read's texts (the line as text, and each copy of its
-// base64; the first take, for the second copy), while its second reading
+// both of the read's texts (each copy of its base64; the first take, for the
+// second copy), the line read as JSON alone, while its second reading
 // writes both copies a chunk at a time as planned, without the memo.
 //
 // Mutation: never look the memo up, or have the second reading look it up
@@ -112,7 +112,7 @@ func TestATextATakeFoundUnchangedIsNotRedactedAgain(t *testing.T) {
 	s := newScrubber([]string{longValue})
 	want, _ := memoTake(t, archiveTar, archive, s, nil)
 	memo := newScrubMemo()
-	for take, hits := range []int{1, 3} {
+	for take, hits := range []int{1, 2} {
 		use := &memoUse{memo: memo, scope: "agent-a"}
 		got, opened := memoTake(t, archiveTar, archive, s, use)
 		switch {
@@ -279,7 +279,7 @@ func TestAJSONFileWhoseAnswerDivergedIsReadAgainNeverKeptAsText(t *testing.T) {
 // A TEXT THAT DIVERGED COSTS NO OTHER TEXT ITS ANSWER: a session whose tool
 // output grows past its first chunk between takes, beside a whole-PDF read,
 // reads its first reading again with that output's chunk unanswered, and the
-// read's three texts still answered.
+// read's two texts still answered.
 //
 // Mutation: read again with no lookups at the first divergence, and the
 // read's texts are answered by nothing.
@@ -297,8 +297,8 @@ func TestATextThatDivergedCostsNoOtherTextItsAnswer(t *testing.T) {
 	memoTake(t, archiveTar, session(head), s, &memoUse{memo: memo, scope: "agent-a"})
 	use := &memoUse{memo: memo, scope: "agent-a"}
 	if _, opened := memoTake(t, archiveTar, session(head+" and more"), s, use); opened != 2 ||
-		use.n.diverged != 1 || use.n.hits != 3 {
-		t.Errorf("%+v, reopened %d times; want the output diverged, one reading again, the read's 3 answered",
+		use.n.diverged != 1 || use.n.hits != 2 {
+		t.Errorf("%+v, reopened %d times; want the output diverged, one reading again, the read's 2 answered",
 			use.n, opened)
 	}
 }
@@ -364,7 +364,7 @@ func TestATakeLearnsNothingOfAnotherScopesTexts(t *testing.T) {
 	s := newScrubber(nil)
 	memo := newScrubMemo()
 	memoTake(t, archiveTar, archive, s, &memoUse{memo: memo, scope: "agent-a"})
-	for scope, hits := range map[string]int{"agent-a": 3, "agent-b": 1} {
+	for scope, hits := range map[string]int{"agent-a": 2, "agent-b": 1} {
 		use := &memoUse{memo: memo, scope: scope}
 		memoTake(t, archiveTar, archive, s, use)
 		if use.n.hits != hits {
@@ -440,5 +440,33 @@ func TestTakesShareTheMemoSafely(t *testing.T) {
 		if errs[i] != nil || unpacked(t, archiveTar, kept[i]) != want {
 			t.Errorf("take %d (%v) kept other bytes than a take with no memo", i, errs[i])
 		}
+	}
+}
+
+// AN ANSWER THAT DIVERGES IN A READING THAT KNOWS ITS TEXT KEEPS WHAT IT
+// KNEW: a torn line whose text the memo knew by its start, changed past it,
+// is answered only by the reading that reads it both ways, which reads once
+// more knowing the line is text still, and redacts it.
+//
+// Mutation: drop the lines' bits at a divergence in a reading that knew them,
+// and the take reads the archive once more before it writes.
+func TestAnAnswerThatDivergesInAReadingThatKnowsItsTextKeepsWhatItKnew(t *testing.T) {
+	t.Parallel()
+	head := randomBase64(10, 300<<10)
+	session := func(tail string) []byte {
+		return tarOf(t, map[string]string{"projects/p/s.jsonl": `{"a":1}` + "\n" + `{"text":"` + head + tail + "\n"})
+	}
+	s := newScrubber(nil)
+	memo := newScrubMemo()
+	memoTake(t, archiveTar, session(" "+strings.Repeat("x", len(shapedKey))), s,
+		&memoUse{memo: memo, scope: "agent-a"})
+	use := &memoUse{memo: memo, scope: "agent-a"}
+	got, opened := memoTake(t, archiveTar, session(" "+shapedKey), s, use)
+	switch {
+	case strings.Contains(got, shapedKey):
+		t.Error("the take kept the key")
+	case use.n.diverged != 1 || opened != 3:
+		t.Errorf("%+v, reopened %d times; want the answer diverged once, in the second of three first "+
+			"readings", use.n, opened)
 	}
 }
