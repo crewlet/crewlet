@@ -12,7 +12,7 @@ import (
 var buildLog = strings.Repeat("ok\n", 4000)
 
 // runShape is a stream around one run that the whole redaction reads as one
-// unit, longer than [redactContext]: what is written before it, the run, and
+// unit, longer than [redact.LookBack]: what is written before it, the run, and
 // what follows, which ends on lines of a build's log.
 type runShape struct {
 	name, before, run, after string
@@ -107,7 +107,7 @@ func readLive(r *rand.Rand, text string, at int, byLines bool) string {
 func TestALiveReadingBegunInsideARunIsTheEndOfTheWholeRedaction(t *testing.T) {
 	t.Parallel()
 	filler := strings.Repeat("compiling a package of the build\n", 100)
-	for i, shape := range runsPastTheContext(redactContext + 36<<10) {
+	for i, shape := range runsPastTheContext(redact.LookBack + 36<<10) {
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
 			r := rand.New(rand.NewPCG(1170, uint64(i)))
@@ -120,8 +120,8 @@ func TestALiveReadingBegunInsideARunIsTheEndOfTheWholeRedaction(t *testing.T) {
 				at   int
 				want string // what is shown exactly, where the cut is in the log
 			}{
-				{runAt + redactContext + r.IntN(len(shape.run)-redactContext), ""},
-				{runAt + redactContext + r.IntN(len(shape.run)-redactContext), ""},
+				{runAt + redact.LookBack + r.IntN(len(shape.run)-redact.LookBack), ""},
+				{runAt + redact.LookBack + r.IntN(len(shape.run)-redact.LookBack), ""},
 				{afterAt + strings.IndexByte(shape.after, '\n') + 1, ""},
 				{lastLine - 3*99, text[lastLine-3*99:]},
 				{lastLine - 3*99 - 2, text[lastLine-3*99:]},
@@ -181,16 +181,16 @@ func TestALiveReadingBegunInsideAKeysBlockIsTheEndOfTheWholeRedaction(t *testing
 // opens is redacted with every byte the lead kept before the reading began and
 // the rest of that line, as the first line a stream's end shows is.
 //
-// Mutation: trim the context to its last redactContext bytes when that rest
+// Mutation: trim the context to its last redact.LookBack bytes when that rest
 // joins it, or keep the rest alone, and the context loses the lead's start.
 func TestALiveReadingBegunInsideALineKeepsAllItsLead(t *testing.T) {
 	t.Parallel()
-	given := strings.Repeat("compiling a package of the build\n", redactContext/32) + "linking the"
-	kept := given[len(given)-redactContext:]
+	given := strings.Repeat("compiling a package of the build\n", redact.LookBack/32) + "linking the"
+	kept := given[len(given)-redact.LookBack:]
 	var p pendingText
 	p.lead(given)
 	if p.ctx != kept {
-		t.Fatalf("the lead kept %d bytes; want its last %d", len(p.ctx), redactContext)
+		t.Fatalf("the lead kept %d bytes; want its last %d", len(p.ctx), redact.LookBack)
 	}
 	rest := strings.Repeat(" binary", 3000)
 	p.add(rest)

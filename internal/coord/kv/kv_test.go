@@ -122,7 +122,7 @@ func TestContract(t *testing.T) {
 func TestMintingContract(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {
+	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coordtest.BrowserControlStore {
 		s := openStore(t, nc, coordtest.LongTTL)
 		s.beforeMint = hold
 		return s
@@ -138,6 +138,28 @@ func TestSharedContract(t *testing.T) {
 	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
 		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 		out := make([]coord.Backend, 3)
+		for i := range out {
+			s, err := Open(t.Context(), jsOf(nc), Config{
+				TTL: coordtest.LongTTL, BucketPrefix: prefix, Reach: InProcess,
+			})
+			if err != nil {
+				t.Fatalf("Open handle %d: %v", i, err)
+			}
+			out[i] = s
+		}
+		return out
+	})
+}
+
+// TestBrowserControlContract runs the browser control suite over three handles
+// on one single-member broker; shared_cluster_test.go runs it on members of a
+// cluster that hold no copy of the duty bucket the class lives in.
+func TestBrowserControlContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunBrowserControls(t, func(t *testing.T) []coordtest.BrowserControlStore {
+		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+		out := make([]coordtest.BrowserControlStore, 3)
 		for i := range out {
 			s, err := Open(t.Context(), jsOf(nc), Config{
 				TTL: coordtest.LongTTL, BucketPrefix: prefix, Reach: InProcess,

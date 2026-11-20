@@ -752,8 +752,8 @@ func relationMembers(relations []Relation, kind RelationKind) []string {
 // [textcut.Within] rather than Ellipsis because [Notify.Validate] refuses an
 // excerpt above MaxExcerpt, which would fail every long comment's write.
 //
-// An answer that chose leads with the choice (`Chose “Ship Friday”: <body>`):
-// the choice is the answer, and a card leading with the body could cut it off.
+// An answer that chose leads with the choice because its body does
+// ([ChoiceWords]), so a card cut short still says what was chosen.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
 	if text == "" && w.Kind == ChangeCreated {
@@ -763,9 +763,6 @@ func (w Wake) excerpt() string {
 	}
 	if text == "" && w.Comment != nil {
 		text = w.Comment.Body
-		if option := w.chosen(); option != nil {
-			text = choiceExcerpt(option.Label, strings.TrimSpace(text))
-		}
 	}
 	return excerptOf(text)
 }
@@ -787,23 +784,34 @@ func (w Wake) chosen() *decision.Option {
 	return &option
 }
 
-// choiceExcerpt is the card line an answer that chose is summed up as.
-func choiceExcerpt(label, body string) string {
-	if body == "" {
-		return choicePrefix + label + "”"
+// ChoiceWords is the body of an answer that chose: the option's label in words,
+// then what its author added (`Chose “Ship Friday”: tell support first`). An
+// answer's comment is read by every surface (a work item read, the dashboard,
+// a notice, a woken turn's prompt), most of which hold no decision to look its
+// option up in, so it says what was chosen itself ([StatesChoice]).
+func ChoiceWords(label, note string) string {
+	if note = strings.TrimSpace(note); note == "" {
+		return choiceLine(label)
 	}
-	return choicePrefix + label + "”: " + body
+	return choiceLine(label) + ": " + note
 }
 
-// choicePrefix opens the line [choiceExcerpt] sums a choosing answer up as.
+// StatesChoice reports whether body is an answer's that chose the option
+// labelled label: it opens with [ChoiceWords]' line.
+func StatesChoice(body, label string) bool { return strings.HasPrefix(body, choiceLine(label)) }
+
+// choiceLine is the line [ChoiceWords] opens with.
+func choiceLine(label string) string { return choicePrefix + label + "”" }
+
+// choicePrefix opens the line [ChoiceWords] opens with.
 const choicePrefix = "Chose “"
 
-// ExcerptQuotesAChoice reports whether a change's excerpt is the line
-// [choiceExcerpt] wrote for an answer that chose, which quotes the ASKER's
-// option label, so the answerer is not its only writer. Read off the line
+// QuotesAChoice reports whether a comment or a change's excerpt opens with the
+// line [ChoiceWords] writes for an answer that chose, which quotes the ASKER's
+// option label, so the answerer is not its only writer. Read off the text
 // itself, because its readers (activity feed, history, inbox) hold no payload;
 // a remark opening the same way counts as quoting too, the safe direction.
-func ExcerptQuotesAChoice(excerpt string) bool { return strings.HasPrefix(excerpt, choicePrefix) }
+func QuotesAChoice(text string) bool { return strings.HasPrefix(text, choicePrefix) }
 
 // without is a minus b, order preserved.
 func without(all, muted []string) []string {

@@ -1,11 +1,8 @@
 # Google Cloud
 
-Google Cloud gives each agent its **own service account**, with the level you choose on the projects you choose, and **Google's managed MCP servers** to use it through. An agent reads VMs, networks, GKE, Cloud Run, Cloud SQL, Cloud DNS, buckets, metrics and logs as itself. Where you allow it, it restarts VMs and pods, scales workloads and runs jobs, or, at the opt-in top level, changes infrastructure.
+Google Cloud gives each agent its **own service account**, at the level you choose on the projects you choose, and **Google's managed MCP servers** to use it through. An agent reads VMs, networks, GKE, Cloud Run, Cloud SQL, Cloud DNS, buckets, metrics and logs as itself; where you allow it, restarts VMs and pods, scales workloads and runs jobs; at the opt-in top level, changes infrastructure.
 
-Crewlet creates, grants, disables and deletes those accounts itself, through one provisioner service account you create for it. **No service account key is ever made or downloaded:**
-
-- Crewlet signs in as the provisioner with Workload Identity Federation, using a key of its own whose public half you hand to Google.
-- It issues each agent's token for an hour at a time, and never stores it.
+Crewlet manages those accounts through one provisioner service account you create. **No service account key is ever made or downloaded:** Crewlet signs in as the provisioner with Workload Identity Federation, using a key of its own whose public half you hand to Google, and issues each agent's token for an hour at a time, never storing it.
 
 Nothing here receives events from Google Cloud yet; see [What is not supported yet](#what-is-not-supported-yet).
 
@@ -14,33 +11,31 @@ Nothing here receives events from Google Cloud yet; see [What is not supported y
 | An agent on | Can | Cannot |
 |---|---|---|
 | `viewer` (the default) | Read the project and its allow policy, VMs, disks, networks, firewall rules and load balancers, GKE objects except Secrets, Cloud Run services and jobs, Cloud SQL instances, Cloud DNS zones and records, bucket metadata, metrics and logs, and call Google's MCP tools | Change anything, or read an object in a bucket, a Secret, an API key or billing |
-| `operator` | Everything `viewer` can, plus start, stop, reset, suspend and resume VMs, resize managed instance groups, delete and evict pods, scale deployments, stateful sets and replica sets, restart Cloud SQL instances, run and cancel Cloud Run jobs as they are defined, edit alerting, dashboards and uptime checks, and read and write objects in buckets | Change a VM's metadata, a pod's spec, a database's users, passwords or certificates, or any allow policy |
-| `administer` (opt-in) | Everything `operator` can, plus create, change and delete VMs that run as no service account, disks, images, networks, routes, load balancers, firewall rules and certificates; manage GKE clusters and node pools; manage Cloud SQL fully; manage DNS zones and records; and manage buckets and their access | Act as another service account, grant anything on the project, read a Secret or an API key, or touch billing |
+| `operator` | `viewer`'s, plus start, stop, reset, suspend and resume VMs, resize managed instance groups, delete and evict pods, scale deployments, stateful sets and replica sets, restart Cloud SQL instances, run and cancel Cloud Run jobs as defined, edit alerting, dashboards and uptime checks, and read and write bucket objects | Change a VM's metadata, a pod's spec, a database's users, passwords or certificates, or any allow policy |
+| `administer` (opt-in) | `operator`'s, plus create, change and delete VMs that run as no service account, disks, images, networks, routes, load balancers, firewall rules and certificates; manage GKE clusters and node pools; manage Cloud SQL fully; manage DNS zones and records; manage buckets and their access | Act as another service account, grant anything on the project, read a Secret or an API key, or touch billing |
 
-**Administer can create access that outlives the agent's token.** It can add an SSH key or a startup script to a VM, create a database user or a client certificate, or grant another principal access to a bucket or a DNS zone. Each such grant stays after the agent is turned off. Give it only to an agent you trust with that, and review its Cloud Audit Logs.
+**Administer can create access that outlives the agent's token** (an SSH key or startup script on a VM, a database user or client certificate, another principal's access to a bucket or DNS zone), which stays after the agent is turned off. Give it only to an agent you trust with that, and review its Cloud Audit Logs.
 
 Raising an agent to `operator` or `administer` asks for a fresh sign-in (step-up). `administer` is never the default.
 
 ## Setting it up from the dashboard
 
-Open **Company › Integrations › Google Cloud**. Setting it up takes four steps.
+Open **Company › Integrations › Google Cloud**.
 
 ### Before you start: the identity project
 
-1. **Create an empty project** for Crewlet's accounts, on the console's [new project page](https://console.cloud.google.com/projectcreate). Put it in the same organization or folder as the projects agents will work on.
-2. **Leave it empty.** It holds the provisioner and one service account per agent, and nothing else.
-   - **Never enable Compute Engine or another product there.** The provisioner holds Service Account Admin in this project, so any other service account in it is one the provisioner could act as.
-   - The card warns about any account that is neither the provisioner nor Crewlet's.
+1. **Create an empty project** on the console's [new project page](https://console.cloud.google.com/projectcreate), in the same organization or folder as the projects agents will work on.
+2. **Leave it empty:** only the provisioner and one service account per agent.
+   - **Never enable Compute Engine or another product there.** The provisioner holds Service Account Admin here, so any other service account is one it could act as. The card warns about any account that is neither the provisioner nor Crewlet's.
 
 ### Connecting Crewlet
 
 1. **Enter the provisioner service account** as `crewlet-provisioner@<identity project>.iam.gserviceaccount.com`, and press **Save**.
-   - This makes Crewlet's federation key. It is an ES256 key, sealed as `GOOGLE_CLOUD_FEDERATION_KEY`, and its private half never leaves the secret store.
-   - Then the form shows a **Cloud Shell block**.
-2. **Open Cloud Shell** in the identity project (the terminal icon at the top of the console), paste the block whole, and run it. It:
+   - This makes Crewlet's ES256 federation key, sealed as `GOOGLE_CLOUD_FEDERATION_KEY`; its private half never leaves the secret store. The form then shows a **Cloud Shell block**.
+2. **Open Cloud Shell** in the identity project, paste the block whole, and run it. It:
    - enables the IAM, IAM Service Account Credentials, Security Token Service, Cloud Resource Manager and Service Usage APIs;
-   - creates the provisioner if it is missing, and grants it Service Account Admin and Service Usage Viewer on the identity project;
-   - creates the workload identity pool and provider holding Crewlet's public key, written inline so nothing is uploaded, or updates the provider's key if it exists;
+   - creates the provisioner if missing, and grants it Service Account Admin and Service Usage Viewer on the identity project;
+   - creates the workload identity pool and provider holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
    - lets Crewlet's subject act as the provisioner (Workload Identity User);
    - prints the provider's full name as its last line.
 3. **Paste that last line** into **Workload identity provider**, press **Save**, then **Test**.
@@ -122,17 +117,17 @@ fi
 ```
 
 **What this does:**
-- It creates `crewletOperator`, a custom role with exactly the 12 restart and scale permissions above. Google has no predefined Compute or GKE operator role that holds no credential-making permission; see [Roles no level grants](#roles-no-level-grants-and-why).
-- It gives the provisioner **Project IAM Admin three times**, each under a condition listing one level's roles. The provisioner can then grant or revoke those roles and nothing else. Google limits one such list to 10 roles, so each level has its own.
-- It adds **Service Usage Viewer** (to check the project's APIs) and **Role Viewer** (to check `crewletOperator` and the grants list's roles).
-- Where `GRANTS` names roles, it gives the provisioner Project IAM Admin a fourth time, under the **grants list**: the roles Crewlet may grant one agent on request ([granting one more role](#granting-one-more-role)). Leave `GRANTS` empty for none.
-- Where [See more in Atlas](#see-more-in-atlas-what-each-project-runs) made the `crewlet-atlas` account, it lets that account search this project's resources by name and type.
+- Creates `crewletOperator`, a custom role with exactly the 12 restart and scale permissions above (Google has no predefined Compute or GKE operator role without credential-making permissions; see [Roles no level grants](#roles-no-level-grants-and-why)).
+- Gives the provisioner **Project IAM Admin three times**, each under a condition listing one level's roles, so it can grant or revoke only those. Google limits such a list to 10 roles, hence one per level.
+- Adds **Service Usage Viewer** (to check the project's APIs) and **Role Viewer** (to check `crewletOperator` and the grants list's roles).
+- Where `GRANTS` names roles, gives Project IAM Admin a fourth time under the **grants list**: roles Crewlet may grant one agent on request ([granting one more role](#granting-one-more-role)). Empty for none.
+- Where [See more in Atlas](#see-more-in-atlas-what-each-project-runs) made the `crewlet-atlas` account, lets it search this project by name and type.
 
 **Afterwards:**
-- On the project's IAM page, the provisioner should show Project IAM Admin three times, each with its "Crewlet ... roles only" condition (four with the "Crewlet grants list"), plus Service Usage Viewer and Role Viewer, and nothing else.
-- Enable the APIs of the products your agents use on the project. Each product's MCP server is enabled with its API.
+- The project's IAM page should show the provisioner with Project IAM Admin three times, each under its "Crewlet ... roles only" condition (four with the "Crewlet grants list"), plus Service Usage Viewer and Role Viewer, and nothing else.
+- Enable the APIs of the products your agents use; each product's MCP server is enabled with its API.
 
-**Crewlet finds your prepared projects itself.** It offers a project once all three conditions are there exactly, `crewletOperator` holds exactly its 12 permissions, and every role a grants list names may be granted: none that can act as another identity, mint or read a credential or key, grant access, run as a workload's identity or reach billing. A project that is half prepared, or whose grants list names such a role, is named on the card with what to change.
+**Crewlet finds your prepared projects itself.** It offers a project once all three conditions are there exactly, `crewletOperator` holds exactly its 12 permissions, and every role a grants list names is grantable (none can act as another identity, mint or read a credential or key, grant access, run as a workload's identity or reach billing). A half-prepared project, or one whose grants list names such a role, is named on the card with what to change.
 
 ### Testing the connection
 
@@ -148,8 +143,8 @@ fi
 
 On the integration's **Agents** tab, turn an agent on, choose its level and its projects, and review.
 
-- **An agent that is on must have at least one project.** An empty list means no project, never every project. Otherwise adding a project to the company would silently widen every agent.
-- **The tab offers the projects you prepared,** by name with the project ID beside it.
+- **An agent that is on must have at least one project.** An empty list means no project, never every project, so a new company project never silently widens every agent.
+- **The tab offers the projects you prepared,** by name with project ID.
 
 ### Each agent's access is a level
 
@@ -162,7 +157,7 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 | `administer` | Operator's roles, plus Cloud SQL Admin, Compute Instance Admin (v1), Compute Network Admin, Compute Security Admin, Kubernetes Engine Cluster Admin, DNS Administrator and Storage Admin |
 
 **Caveats:**
-- **Cloud Run Viewer reads a service's configuration, environment variables included.** A secret written as a plain environment variable is readable; reference Secret Manager instead.
+- **Cloud Run Viewer reads a service's configuration, environment variables included.** Reference Secret Manager instead of a plain environment variable.
 - **Storage Object User and Storage Admin read every object in the project's buckets.** Keep Terraform state and exported keys out of the projects agents work on.
 - **Storage Bucket Viewer is a Beta role at Google.**
 
@@ -171,8 +166,8 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 | Change | At Google Cloud |
 |---|---|
 | Turn on | Creates the agent's service account in the identity project, lets the provisioner make tokens for that account alone, then grants the level's roles on each project |
-| Change the level | Adds or removes the roles between the two levels on each project. The account and its unique ID stay the same |
-| Change the projects | Grants the level's roles on an added project, and removes them from a dropped one |
+| Change the level | Adds or removes the roles between the two levels on each project. The account and its unique ID stay |
+| Change the projects | Grants the level's roles on an added project, removes them from a dropped one |
 | Grant or remove a role | Binds or unbinds that one role on the grant's projects, one write per role. A level change never removes a role a live grant holds |
 | Turn off | Disables the account first, so it stops everywhere at once, then removes its roles from every project. The account and its audit history stay |
 | Turn back on | Enables the account and grants its roles again. An account somebody else disabled at Google is never turned back on without being asked |
@@ -180,16 +175,16 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 
 ### Granting one more role
 
-A level is the safe default. When an agent needs a role no level holds, give it that role alone, beside its level, instead of a higher level:
+When an agent needs a role no level holds, give it that role alone, beside its level, instead of a higher level:
 
 - **On the Agents tab:** open the agent's row, choose **Add grant**, pick the role, choose its projects (none is the agent's own projects), and how long: 4 hours, 24 hours, 7 days, or permanent.
 - **From the agent's request:** when Google refuses a call with `PERMISSION_DENIED`, the agent asks with `request_access`, naming the role that holds the permission and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant shows the exact grant first, and **Grant** approves it: the engine saves it and only then tells the agent yes.
 
 What Crewlet does:
 
-- **The catalogue is your grants lists.** Google lets the provisioner change only the roles its conditions list, so a role can be granted on a project only where that project's grants list names it ([Prepare a project](#prepare-a-project-for-crewlet)). Crewlet reads each listed role from Google, with its title and permissions, and offers it where any prepared project lists it. A grant naming a project whose list lacks the role is refused, naming the role and the condition to add it to.
-- **A grant is a plain binding of the role** to the agent's account on its projects, written one role at a time, so exactly one of the provisioner's conditions allows each write.
-- **A grant never outlives its expiry.** A pass runs a minute before a grant lapses and removes the binding; the level stays.
+- **The catalogue is your grants lists.** A role can be granted on a project only where that project's grants list names it ([Prepare a project](#prepare-a-project-for-crewlet)), since the provisioner may change only roles its conditions list. Crewlet reads each listed role's title and permissions from Google and offers it where any prepared project lists it. A grant naming a project whose list lacks the role is refused, naming the role and the condition to add it to.
+- **A grant is a plain binding** of the role to the agent's account on its projects, one role per write, so exactly one condition allows each write.
+- **A grant never outlives its expiry:** a pass a minute before it lapses removes the binding; the level stays.
 - **A role holding any permission that is not a read needs a fresh sign-in**, as `operator` and `administer` do.
 
 ```yaml
@@ -212,17 +207,17 @@ roles:
 ### The account is the engine's, and named for the seat
 
 **The account's name:**
-- Its ID is `crewlet-` plus the agent's handle (cut to 17 characters) plus 4 characters that tell two handles apart. Google limits an ID to 30 characters.
+- Its ID is `crewlet-` plus the agent's handle (cut to 17 characters) plus 4 characters that tell two handles apart; Google limits an ID to 30 characters.
 - Its display name is `Crewlet <company> <handle>`.
 
-**The engine acts only on accounts it recorded when it made them,** by Google's unique ID, and adopts nothing by name. An account named like Crewlet's that it has no record of is reported, and never deleted.
+**The engine acts only on accounts it recorded when it made them,** by Google's unique ID, never adopting by name. An account named like Crewlet's but unrecorded is reported, never deleted.
 
 ### Tokens are issued for an hour, never stored
 
 - An agent's credential is `GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>`: a token Crewlet makes for the agent's account by impersonation when a tool needs it, good for one hour.
-- It is held in the engine's memory and renewed before it expires. Nothing is sealed, so there is nothing to rotate.
-- An agent that is off is issued nothing, and disabling its account stops a token already issued at once.
-- Until the agent's account is made and Google has applied Crewlet's grant on it, a tool that names the token waits, and tries again on its own. A refusal after that names what to fix, on the connection or the agent's row of the Agents tab.
+- It lives in the engine's memory and is renewed before expiry. Nothing is sealed, so nothing rotates.
+- An agent that is off is issued nothing, and disabling its account stops an issued token at once.
+- Until the account is made and Google has applied the grant, a tool that names the token waits and retries on its own. A refusal after that names what to fix, on the connection or the agent's row of the Agents tab.
 
 ### The agent's Google Cloud tools
 
@@ -239,14 +234,14 @@ roles:
 
 Each reads the agent's own token as a bearer `Authorization` header. The Agents tab shows the tool as live once one of them is declared for the agent.
 
-**The Google Cloud CLI works in the agent's box too.** Crewlet writes the token to `.config/crewlet/gcloud-token` under the home of every Google Cloud agent's box, keeps it current while the run lasts, and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its path in the box and `CLOUDSDK_CORE_PROJECT` to the agent's first project. A setting of the same name in the agent's own sandbox environment wins. The Agents tab lists these as provided by Crewlet. Install the Google Cloud CLI in your box image to use it: Crewlet never downloads binaries, and the tool reads live only for a Google Cloud MCP server, since Crewlet cannot see whether the CLI is installed. A token the run prints, `gcloud auth print-access-token` or the file's own, is kept in its session redacted, as every credential shape Crewlet knows is ([Code Sandbox](../concepts/code-sandbox.md#each-launchs-session-kept)). The run's live output shows the commands it runs and a failed call's first line, never a command's output, redacted by the same shapes ([Security model](../concepts/code-sandbox.md#security-model)).
+**The Google Cloud CLI works in the agent's box too.** Crewlet writes the token to `.config/crewlet/gcloud-token` under the home of every Google Cloud agent's box, keeps it current while the run lasts, and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its path in the box and `CLOUDSDK_CORE_PROJECT` to the agent's first project. A setting of the same name in the agent's own sandbox environment wins. The Agents tab lists these as provided by Crewlet. Install the CLI in your box image (Crewlet never downloads binaries); the tool reads live only for a Google Cloud MCP server, since Crewlet cannot see whether the CLI is installed. A token the run prints, `gcloud auth print-access-token` or the file's own, is kept in its session redacted, as every known credential shape is ([Code Sandbox](../concepts/code-sandbox.md#each-launchs-session-kept)). The run's live output shows the commands it runs and a failed call's first line, never a command's output, redacted by the same shapes ([Security model](../concepts/code-sandbox.md#security-model)).
 
 ### Agents in GKE clusters
 
-**No level lets an agent write Kubernetes objects inside a cluster beyond deleting pods and scaling.** This is a deliberate limit:
-- Kubernetes Engine Developer and Admin read every Secret.
-- They make Kubernetes service account tokens.
-- They let a workload run as any Kubernetes service account. Through Workload Identity, that means any Google service account bound to one: acting as another identity.
+**No level lets an agent write Kubernetes objects inside a cluster beyond deleting pods and scaling.** This is deliberate. Kubernetes Engine Developer and Admin:
+- read every Secret;
+- make Kubernetes service account tokens;
+- let a workload run as any Kubernetes service account, which through Workload Identity means any Google service account bound to one: acting as another identity.
 
 **Administer manages clusters and node pools** (Kubernetes Engine Cluster Admin), never the objects in them.
 
@@ -259,22 +254,17 @@ kubectl create rolebinding sre-agent-edit --role=deployer --namespace=app \
 
 ### Google applies changes within minutes
 
-**Google's IAM is eventually consistent:**
-- A new account can take a moment before a project accepts a grant to it.
-- A grant can take minutes before it applies.
-- A change can read back stale for a while.
+**Google's IAM is eventually consistent:** a new account can take a moment before a project accepts a grant to it, a grant can take minutes to apply, and a change can read back stale.
 
-**Crewlet waits these out, never reporting them as a failure.** The sync ends as done once Crewlet's writes are made, and the agent's tool on the Agents tab says what it waits on:
-- "Waiting: Google is still applying the grant", for up to 10 minutes after Crewlet grants the agent access (turning it on, raising its level, adding a project), since its first token can take a minute or two;
-- "Waiting: Google is still applying the change", for up to 3 minutes after any other change (lowering its level, dropping a project).
+**Crewlet waits these out, never reporting a failure.** The sync ends as done once its writes are made, and the agent's tool on the Agents tab says what it waits on:
+- "Waiting: Google is still applying the grant", up to 10 minutes after Crewlet grants access (turning on, raising the level, adding a project), since the first token can take a minute or two;
+- "Waiting: Google is still applying the change", up to 3 minutes after any other change (lowering the level, dropping a project).
 
-Each ends by itself. A sync that still cannot see its own write after 3 minutes says so, and the next pass tries again: for a new account, "Google is still creating the agent's account".
+Each ends by itself. A sync that cannot see its own write after 3 minutes says so and the next pass retries: for a new account, "Google is still creating the agent's account".
 
 ### Disconnecting
 
-**Disconnecting turns every agent off:** it disables each account this engine made and removes its roles. When you also choose to remove the accounts, it deletes them.
-
-The identity project, the provisioner, the pool and the provider are yours, so they stay until you delete them. Remove the provider's key if you will not reconnect.
+**Disconnecting turns every agent off:** it disables each account this engine made and removes its roles, and deletes the accounts if you also choose to remove them. The identity project, provisioner, pool and provider are yours and stay; remove the provider's key if you will not reconnect.
 
 ## Configuration
 
@@ -305,14 +295,14 @@ roles:
 | `provisioning.atlas_read` | no | Let the atlas search what each project runs, as the account `crewlet-atlas` ([see more in Atlas](#see-more-in-atlas-what-each-project-runs)). Off by default. |
 | `roles[].integrations.google_cloud.enabled` | yes | Whether the agent has its own account. Off disables it and removes its roles. |
 | `roles[].integrations.google_cloud.level` | no | `viewer` (the default), `operator` or `administer`. |
-| `roles[].integrations.google_cloud.projects` | when enabled | The project IDs the agent acts on, each one prepared for Crewlet. At least one. |
+| `roles[].integrations.google_cloud.projects` | when enabled | The project IDs the agent acts on, each prepared for Crewlet. At least one. |
 | `roles[].integrations.google_cloud.grants` | no | Roles its account holds beside its level ([granting one more role](#granting-one-more-role)). Written by the Agents tab and by approving the agent's request, never typed. |
 
 There is no company-wide project list: Crewlet reads the projects you prepared from the provisioner's own grants.
 
 ## Roles no level grants, and why
 
-No level ever grants a role that mints or reveals a credential outliving the agent's own access, acts as another identity, grants on the project, or reads billing:
+No level grants a role that mints or reveals a credential outliving the agent's own access, acts as another identity, grants on the project, or reads billing:
 
 | Role | Why not |
 |---|---|
@@ -321,7 +311,7 @@ No level ever grants a role that mints or reveals a credential outliving the age
 | Project IAM Admin, Security Admin | Grants anything on the project |
 | Service Account User, Service Account Token Creator, Service Account Key Admin | Acts as, or makes credentials for, other service accounts |
 | Secret Manager Secret Accessor | Reads secret payloads |
-| Kubernetes Engine Developer, Kubernetes Engine Admin | Reads Secrets, mints Kubernetes tokens, and runs workloads as other identities (see [Agents in GKE clusters](#agents-in-gke-clusters)) |
+| Kubernetes Engine Developer, Kubernetes Engine Admin | Reads Secrets, mints Kubernetes tokens, runs workloads as other identities (see [Agents in GKE clusters](#agents-in-gke-clusters)) |
 | Cloud Run Developer, Cloud Run Admin | Runs a job with overridden arguments as the job's own identity |
 | Cloud SQL Editor (below Administer) | Creates client certificates |
 | Storage HMAC Key Admin | Makes an HMAC key for any service account |
@@ -331,11 +321,11 @@ Each prepared project's conditions refuse these to the provisioner too, so it ca
 
 ## What the atlas reads
 
-The engine reads the company's projects for its [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads as the provisioner, through the same federation, and needs no role beyond the ones the two setup blocks grant. Every call it adds is a `GET`, and nothing at Google Cloud is changed.
+The engine reads the company's projects for its [atlas](../concepts/atlas.md#what-integrations-read) once an hour unless `atlas.refresh_interval_seconds` says otherwise, as the provisioner through the same federation, with no role beyond the setup blocks'. Every call is a `GET`; nothing at Google Cloud changes.
 
 | Part | Calls | Role | What the atlas gains |
 |---|---|---|---|
-| Projects | `GET /v3/projects:search`, 100 a page | whatever lets the provisioner see the project | each active project as an account, with its id and its display name. The identity project is the account the settings already name |
+| Projects | `GET /v3/projects:search`, 100 a page | whatever lets the provisioner see the project | each active project as an account, with its id and display name. The identity project is the account the settings already name |
 | Services | `GET /v1/projects/{id}/services` for the enabled ones, once per project | Service Usage Viewer on the project, which the [Prepare a project](#prepare-a-project-for-crewlet) block grants | what the project is used for |
 
 **What an enabled API says.** Each enabled API is read as one of the atlas's capabilities, and its own name is never recorded:
@@ -350,36 +340,36 @@ The engine reads the company's projects for its [atlas](../concepts/atlas.md#wha
 | `code_hosting` | Cloud Source Repositories, Secure Source Manager |
 | `identity` | Identity Platform, Identity-Aware Proxy |
 
-An API that is not in the table says nothing. That includes every API a new project has enabled before anybody uses it (Cloud Storage, BigQuery, Datastore, Cloud Logging and Cloud Monitoring): being enabled is no sign that the project uses them.
+An API not in the table says nothing, including every API a new project has enabled before anybody uses it (Cloud Storage, BigQuery, Datastore, Cloud Logging, Cloud Monitoring).
 
-**A project that is being deleted is not read.** Google keeps a deleted project for thirty days in a state other than active. The atlas leaves it out from the first read after the deletion and retires it a day later.
+**A project being deleted is not read.** Google keeps it thirty days in a non-active state. The atlas leaves it out from the first read after the deletion and retires it a day later.
 
-**A refusal is a finding, never a failed read.** Where Google refuses a project's services (the provisioner lacks Service Usage Viewer there, as on a project the Prepare a project block never ran on), the project is still read as an account, the source's standing on the atlas counts the projects and names the block, and what an earlier read said those projects are used for stays as it was. A provisioner Google refuses the listing of projects itself, or does not trust at federation or impersonation, fails the read as a rejected credential.
+**A refusal is a finding, never a failed read.** Where Google refuses a project's services (the provisioner lacks Service Usage Viewer there, as on a project the Prepare a project block never ran on), the project is still read as an account, the source's standing counts such projects and names the block, and what an earlier read said they are used for stays. If Google refuses the project listing itself, or does not trust the provisioner at federation or impersonation, the read fails as a rejected credential.
 
-**What is never read.** A project's labels and tags, its IAM policy, and its organization or folder. Without **See more in Atlas**, nothing inside a project is read either; with it, what each project runs is read by name and type alone, as the next section says.
+**What is never read.** A project's labels, tags, IAM policy, organization and folder. Nothing inside a project is read without **See more in Atlas**; with it, what each project runs is read by name and type alone.
 
-**Cost and limits.** A read costs one call per hundred projects and one per active project, beside the two that mint the provisioner's token once an hour. When Google answers a read with its rate limit, the call waits as long as Google asks (five seconds where it names no wait), up to three times and thirty seconds a wait; past that, or when any listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A provisioner that can read more than 1,000 projects is not read: the standing says so, and nothing is retired. A project that two complete reads at least a day apart both miss is retired from the atlas.
+**Cost and limits.** A read costs one call per hundred projects and one per active project, plus the two that mint the provisioner's token hourly. On Google's rate limit the call waits as long as Google asks (five seconds if no wait is named), up to three times and thirty seconds a wait. Past that, or when a listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A provisioner that can read more than 1,000 projects is not read: the standing says so, and nothing is retired. A project that two complete reads at least a day apart both miss is retired from the atlas.
 
 ### See more in Atlas: what each project runs
 
-**See more in Atlas** on the connect form (`integrations.google_cloud.provisioning.atlas_read`, off by default) lets the atlas list what each project the provisioner reads runs. It is optional, nothing waits on it, and it never changes what an agent can do.
+**See more in Atlas** on the connect form (`integrations.google_cloud.provisioning.atlas_read`, off by default) lets the atlas list what each project runs. It is optional and never changes what an agent can do.
 
-**The one step.** Turn **See more in Atlas** on and save, then run the Cloud Shell block on the connection again, as somebody who is an Owner of the projects. The block now also:
+**The one step.** Turn it on and save, then run the connection's Cloud Shell block again, as an Owner of the projects. The block now also:
 
 - enables the Cloud Asset API in the identity project, and lets the new account use it there (Service Usage Consumer);
-- creates the service account `crewlet-atlas` in the identity project, if it does not exist;
-- lets Crewlet's subject act as it (Workload Identity User), as it does the provisioner;
+- creates the service account `crewlet-atlas` in the identity project, if missing;
+- lets Crewlet's subject act as it (Workload Identity User), as for the provisioner;
 - on every active project where the provisioner holds a role, creates the custom role `crewletAtlasReader`, holding `cloudasset.assets.searchAllResources` and nothing else, and grants it to `crewlet-atlas`. A project the person running the block may not change is named and skipped.
 
-Nothing needs pasting back: the provider is unchanged. A project prepared later is covered by the atlas lines of [Prepare a project](#prepare-a-project-for-crewlet), or by running the identity block again.
+Nothing needs pasting back. A project prepared later is covered by the atlas lines of [Prepare a project](#prepare-a-project-for-crewlet), or by running the identity block again.
 
 **Who reads.** The engine exchanges its federation token at Google's Security Token Service and impersonates `crewlet-atlas` directly, never through the provisioner. Cloud Audit Logs show each search under `crewlet-atlas@<identity project>.iam.gserviceaccount.com`, never under the provisioner or an agent.
 
-**Why not Cloud Asset Viewer.** That predefined role also lists and exports assets whole, and a whole asset is a function's environment variables or an instance's startup script. `crewletAtlasReader` holds the one permission that searches. The search names the fields it wants, and never asks for a resource's configuration (`versionedResources`).
+**Why not Cloud Asset Viewer.** It also lists and exports assets whole, which include a function's environment variables or an instance's startup script. `crewletAtlasReader` holds only the search permission, and the search names its fields and never asks for a resource's configuration (`versionedResources`).
 
 | Asset type | Read as | What the atlas gains |
 |---|---|---|
-| Compute Engine instance | a server | its name, its internal and external addresses, and its Region |
+| Compute Engine instance | a server | its name, internal and external addresses, and Region |
 | Cloud SQL instance | a datastore | its name and Region. Its engine is in its configuration, which is not read |
 | Memorystore for Redis instance | a datastore | its name, Region and the engine `redis` |
 | AlloyDB cluster | a datastore | its name, Region and the engine `postgres` |
@@ -392,7 +382,7 @@ Each entry belongs to, or runs on, its project's account. A resource Google is d
 
 **What is never read.** No resource's configuration, labels, tags, description, network tags, keys, environment, metadata or data. Of an instance's attributes only its two address lists are decoded. Kubernetes Engine clusters, DNS zones and every type outside the table are not read.
 
-**A refusal is a finding, never a failed read.** A project whose search Google refuses (the role was never granted there) is listed on the atlas's Sources tab, what an earlier read recorded of it stands, and every other project is read. An account that cannot be reached, or a Cloud Asset API that is off in the identity project, is one finding naming the block. Any other failure stops the read, which changes nothing.
+**A refusal is a finding, never a failed read.** A project whose search Google refuses (the role was never granted there) is listed on the atlas's Sources tab, its earlier record stands, and other projects are read. An unreachable account, or a Cloud Asset API off in the identity project, is one finding naming the block. Any other failure stops the read, changing nothing.
 
 **To undo it.** Turn the switch off, which stops the searches at once, and delete the account in the identity project:
 
@@ -400,9 +390,9 @@ Each entry belongs to, or runs on, its project's account. A resource Google is d
 gcloud iam service-accounts delete crewlet-atlas@IDENTITY.iam.gserviceaccount.com --project=IDENTITY
 ```
 
-Its grants stop working with it. The custom role `crewletAtlasReader` left on each project grants nothing to anybody; delete it with `gcloud iam roles delete crewletAtlasReader --project=PROJECT` if you want it gone. What the atlas already recorded stays until a person retires it.
+Its grants stop working with it. The leftover custom role `crewletAtlasReader` grants nothing; delete it with `gcloud iam roles delete crewletAtlasReader --project=PROJECT` if wanted. What the atlas recorded stays until a person retires it.
 
-**Cost and limits.** A search costs one call per project per 500 resources, beside the two calls that mint the account's token once an hour. Cloud Asset Inventory allows 400 searches a minute per project the calls are billed to (the identity project); a read waits out Google's rate limit as every other Google Cloud read does.
+**Cost and limits.** A search costs one call per project per 500 resources, plus the two that mint the account's token hourly. Cloud Asset Inventory allows 400 searches a minute per billed project (the identity project); a read waits out the rate limit like any other.
 
 ## Google Cloud's limits worth knowing
 
@@ -415,7 +405,7 @@ These are Google's, not Crewlet's.
 | Roles in one grant condition | 10 | Why each level has its own condition |
 | Keys on a workload identity provider | 8 | Reconnecting updates the key in place |
 | Token lifetime | 1 hour | Crewlet renews before expiry |
-| Rate limits | A `429`, with `Retry-After` on some limits | A read waits as long as Google asks, or 5 seconds where it names no wait, up to 30 seconds and up to 3 times; a longer wait is left to the next pass. A write is never sent again: Google answers a spent quota with the same status |
+| Rate limits | A `429`, with `Retry-After` on some limits | A read waits as long as Google asks, or 5 seconds where it names no wait, up to 30 seconds and 3 times; a longer wait is left to the next pass. A write is never resent: Google answers a spent quota with the same status |
 
 ## What is not supported yet
 

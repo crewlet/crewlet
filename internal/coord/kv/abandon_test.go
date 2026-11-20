@@ -216,7 +216,7 @@ func TestAGiveBackLeavesASiblingsClaim(t *testing.T) {
 	}
 	mine := sibling
 	mine.Claim = "this-call"
-	s.abandon(t.Context(), s.leases, resource, mine, nil, errors.New("the epoch step failed"))
+	s.abandon(t.Context(), s.leases, resource, mine, nil, nil, errors.New("the epoch step failed"))
 
 	e, err := s.readOne(t.Context(), s.leases, resource)
 	if err != nil {

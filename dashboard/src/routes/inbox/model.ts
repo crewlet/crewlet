@@ -1343,10 +1343,9 @@ export function holdingLead(h: WorkHoldingAgents | undefined): string | null {
  * colleague may answer a question put to you.
  *
  * A CHOICE CAN CARRY WORDS of its own (a choice with a note), on a work
- * item's answer and a run's alike, and those words are the answer's `body`:
- * the record holds the option's label there only where nothing else was
- * written. Read as the label alone, they were dropped, and the person read
- * back an answer shorter than the one they gave.
+ * item's answer and a run's alike, and those words are in the answer's
+ * `body` ([noteBeside]). Read as the label alone, they were dropped, and the
+ * person read back an answer shorter than the one they gave.
  */
 export interface AnswerWords {
   who: string;
@@ -1362,6 +1361,20 @@ export interface AnswerWords {
   recommended: boolean;
   /** What now covers a withdrawn question, where its asker named it. */
   replaced?: WorkWithdrawn["replaced_by"];
+}
+
+/**
+ * What an answer that chose wrote beside its option. An ask's answer opens with
+ * the line stating its choice, which the engine writes on every such answer so
+ * every reader sees what was chosen (`worklet.ChoiceWords`: "Chose “Hold
+ * release”: tell support first"), and the note is what follows it; an
+ * executor's answer carries its words alone, or the label where it wrote none.
+ */
+export function noteBeside(body: string, label: string): string {
+  const words = body.trim();
+  const stated = `Chose \u201c${label}\u201d`;
+  const note = words.startsWith(stated) ? words.slice(stated.length).replace(/^:\s*/, "") : words;
+  return note === label.trim() ? "" : note;
 }
 
 export function answerWords(
@@ -1386,12 +1399,11 @@ export function answerWords(
   const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
   const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
   if (option) {
-    const body = a.body.trim();
     return {
       who,
       verb: "chose",
       said: option.label,
-      note: body === option.label.trim() ? "" : body,
+      note: noteBeside(a.body, option.label),
       kind: "choice",
       recommended: decision?.recommended === option.id,
     };

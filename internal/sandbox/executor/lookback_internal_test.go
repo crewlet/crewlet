@@ -22,7 +22,7 @@ type farBackShape struct {
 // after more text than the context, so a reading of the line at at begins
 // inside the stream.
 func readsFarBack() []farBackShape {
-	filler := strings.Repeat("compiling a package of the build\n", 2*redactContext/33+1)
+	filler := strings.Repeat("compiling a package of the build\n", 2*redact.LookBack/33+1)
 	log := strings.Repeat("ok\n", 2000)
 	var out []farBackShape
 	const begin = "-----BEGIN RSA PRIVATE KEY-----\n"
@@ -138,7 +138,7 @@ func TestAReadingHoldsTheRedactionsLookBackBeforeItsFirstLine(t *testing.T) {
 			for _, mode := range []string{"whole", "lines", "pieces"} {
 				check(t, s, whole, "the live view in "+mode, readLiveFrom(r, s.text, s.at, mode))
 			}
-			data := s.text[max(0, s.at-redactContext):]
+			data := s.text[max(0, s.at-redact.LookBack):]
 			end, _ := streamEnd(sandbox.FileTail{Data: []byte(data), Size: int64(len(s.text))}, len(s.text)-s.at)
 			check(t, s, whole, "the stream's end", end)
 

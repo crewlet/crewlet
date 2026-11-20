@@ -252,9 +252,11 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	})
 }
 
-// joined answers a call whose seat already holds an open request of the same
-// act and subject on another run (ADR-0125), so nothing new is held. A read
-// that fails refuses the call: holding it unread is how a second one is made.
+// joined answers a call whose seat already holds a request of the same act and
+// subject on another run that has not come to an end ([sandbox.PendingRun.HeldInFlight]):
+// still waiting on its answer, or answered and being carried out (ADR-0125), so
+// nothing new is held. A read that fails refuses the call: holding it unread is
+// how a second one is made.
 func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.HeldCall) (tools.Result, bool) {
 	if held.Subject == "" {
 		return tools.Result{}, false
@@ -266,12 +268,15 @@ func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.
 	}
 	for _, run := range runs {
 		open := run.HeldCall
-		if run.TurnID == runID || !run.HeldOpen() || open.Act != held.Act || open.Subject != held.Subject {
+		if run.TurnID == runID || !run.HeldInFlight() || open.Act != held.Act || open.Subject != held.Subject {
 			continue
 		}
-		who := "a person who may approve it"
-		if open.Delegated() {
-			who = "the company's delegate for it (" + words.And(open.Delegation.Delegates) + ")"
+		where := "still waits on a person who may approve it"
+		switch {
+		case run.Answer != nil || open.Calling():
+			where = "was answered, and the turn that asked it is acting on the answer now"
+		case open.Delegated():
+			where = "still waits on the company's delegate for it (" + words.And(open.Delegation.Delegates) + ")"
 		}
 		on := ""
 		if item := workItemOf(run); item != "" {
@@ -280,13 +285,13 @@ func (h *CallHold) joined(ctx context.Context, seat, runID string, held sandbox.
 		log.InfoContext(ctx, "held_call_joined", "seat", seat, "tool", held.Tool, "request", open.ID,
 			"run", runID, "asked_by_run", run.TurnID)
 		// A CONFLICT, not a fault: the surface records every call it did not
-		// make as refused, and this one for what already waits.
+		// make as refused, and this one for what is already under way.
 		return refused(tools.RefusalConflict, fmt.Sprintf("%s did not ask again: you already asked exactly "+
-			"this in another turn%s, and that request (%s, asked %s) still waits on %s. Nothing new was put "+
-			"to anybody, and this run is not parked. One answer decides it, and the turn that asked carries "+
-			"the work on when it comes: do not call %s for it again, and leave that step to that turn. "+
-			"Finish what else this turn has, or end it.", held.Tool, on, open.ID,
-			open.HeldAt.UTC().Format("15:04 UTC"), who, held.Tool)), true
+			"this in another turn%s, and that request (%s, asked %s) %s. Nothing new was put to anybody, "+
+			"and this run is not parked. One answer decides it, and the turn that asked carries the work on "+
+			"with it: do not call %s for it again, and leave that step to that turn. Finish what else this "+
+			"turn has, or end it.", held.Tool, on, open.ID, open.HeldAt.UTC().Format("15:04 UTC"), where,
+			held.Tool)), true
 	}
 	return tools.Result{}, false
 }
