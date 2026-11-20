@@ -21,7 +21,7 @@ import (
 // check: cited tasks and pages exist ([ValidateDecision]), an agent's decision
 // recommends an option and says why (ADR-0100), a decision rides only an asking
 // comment and an `inform` only an agent seat's ([checkCommentShape]), and a
-// choice names an option of the ask it answers (the writer's decide).
+// choice names an option of its ask and says so ([checkStatesChoice]).
 //
 // Immutable once asked, as answers name options by id, and no write is refused
 // for trying: a post naming an existing remark is answered from its row
@@ -273,6 +273,24 @@ func checkCommentShape(task string, c *Comment) error {
 			"needs `answers`", c.ID, task, c.Choice)
 	}
 	return nil
+}
+
+// checkStatesChoice checks that an answer that chose says so in its words
+// ([ChoiceWords]): most readers of a comment (a work item read, a notice, a
+// woken turn) hold no decision to look its option up in, so an answer that
+// named its option by id alone read to them as an empty comment. An option
+// the decision does not offer is [checkChoice]'s refusal, not this one's.
+func checkStatesChoice(task, ask string, d *decision.Decision, c *Comment) error {
+	if c.Choice == "" || d == nil {
+		return nil
+	}
+	option, ok := d.Option(c.Choice)
+	if !ok || StatesChoice(c.Body, option.Label) {
+		return nil
+	}
+	return invalid("comment %s on task %s chooses %q in answer to the ask %s and "+
+		"does not say so: an answer that chooses opens with %q, so every reader "+
+		"sees what was chosen", c.ID, task, option.ID, ask, choiceLine(option.Label))
 }
 
 // checkChoice checks that an answer's choice names an option of the decision

@@ -272,7 +272,7 @@ func TestANoticeCarriesItsCommentTurnAuthorAndAsk(t *testing.T) {
 	askID := "c-ask"
 	answer := worklet.Comment{
 		ID: "c-answer", Task: "decide", Author: "ana",
-		AuthorKind: worklet.AuthorHuman, Body: "hold it", Answers: &askID,
+		AuthorKind: worklet.AuthorHuman, Body: choseWords("hold", "hold it"), Answers: &askID,
 		Choice: "hold", CreatedAt: wednesday.Add(time.Hour),
 	}
 	if _, err := viaToken.UpdateTask(t.Context(), "op-answer", "decide", "ENG",

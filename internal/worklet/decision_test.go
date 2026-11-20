@@ -133,7 +133,7 @@ func TestAChoiceMustNameAnOptionOfTheAskItAnswers(t *testing.T) {
 		_, err := r.writer.UpdateTask(t.Context(), opID, "decide", "ENG",
 			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
 				ID: id, Task: "decide", Author: "ana", AuthorKind: worklet.AuthorHuman,
-				Body: "because", Answers: &answers, Choice: choice, CreatedAt: wednesday,
+				Body: choseWords(choice, "because"), Answers: &answers, Choice: choice, CreatedAt: wednesday,
 			}}, worklet.ChangeComment, nil)
 		return err
 	}
@@ -319,7 +319,7 @@ func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 		_, err := r.writer.UpdateTask(t.Context(), opID, "once", "ENG",
 			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
 				ID: id, Task: "once", Author: "ana", AuthorKind: worklet.AuthorHuman,
-				Body: "yes", Answers: &answers, Choice: "ship", CreatedAt: at,
+				Body: choseWords("ship", "yes"), Answers: &answers, Choice: "ship", CreatedAt: at,
 			}}, worklet.ChangeComment, nil)
 		r.drain()
 		return err
@@ -366,8 +366,9 @@ func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 	}
 }
 
-// THE ANSWER'S CARD LEADS WITH THE CHOICE, by its label: the id tells the asker
-// nothing, and a card led by the body could lose the choice at the cap.
+// THE ANSWER'S CARD LEADS WITH THE CHOICE, by its label, because its words do
+// ([worklet.ChoiceWords]): the id tells the asker nothing, and a card led by
+// the note could lose the choice at the cap.
 func TestTheAnswerExcerptNamesTheChoice(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
@@ -383,18 +384,90 @@ func TestTheAnswerExcerptNamesTheChoice(t *testing.T) {
 		}
 		return n.Excerpt
 	}
-	if got := wake("the audit can wait", "ship", decisionFixture()); got != "Chose “Ship Friday”: the audit can wait" {
+	if got := wake(choseWords("ship", "the audit can wait"), "ship", decisionFixture()); got != "Chose “Ship Friday”: the audit can wait" {
 		t.Errorf("the excerpt is %q", got)
 	}
-	if got := wake("", "hold", decisionFixture()); got != "Chose “Hold for the audit”" {
-		t.Errorf("a choice with no body reads %q", got)
+	if got := wake(choseWords("hold", ""), "hold", decisionFixture()); got != "Chose “Hold for the audit”" {
+		t.Errorf("a choice with no note reads %q", got)
 	}
-	if got := wake(strings.Repeat("because ", 200), "ship", decisionFixture()); !strings.HasPrefix(got, "Chose “Ship Friday”: because") ||
+	if got := wake(choseWords("ship", strings.Repeat("because ", 200)), "ship", decisionFixture()); !strings.HasPrefix(got, "Chose “Ship Friday”: because") ||
 		len(got) > worklet.MaxExcerpt {
 		t.Errorf("a long answer's excerpt is %d bytes and reads %.40q…", len(got), got)
 	}
 	if got := wake("eu-west-1", "", nil); got != "eu-west-1" {
 		t.Errorf("an answer without a choice reads %q", got)
+	}
+}
+
+// AN ANSWER THAT CHOSE SAYS WHAT IT CHOSE, in its own words, for every reader:
+// one naming its option by id alone read as an empty comment to the agents
+// reading the item, who then asked the question again. The writer holds it,
+// whoever posts: a choosing answer that does not open with its option's label
+// is refused, as is any new comment with no words, and an edit keeps the
+// choice it made.
+func TestAnAnswerThatChoseSaysWhatItChose(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "decide", "ana")
+	askOn(t, r, "op-ask", "decide", worklet.Comment{
+		ID: "c-ask", Task: "decide", Author: "dev", AuthorKind: worklet.AuthorAgent,
+		Body: "Friday?", Ask: "ana", Decision: decisionFixture(), CreatedAt: wednesday,
+	})
+	answer := func(opID, id, body, choice string) error {
+		answers := "c-ask"
+		_, err := r.writer.UpdateTask(t.Context(), opID, "decide", "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
+				ID: id, Task: "decide", Author: "ana", AuthorKind: worklet.AuthorHuman,
+				Body: body, Answers: &answers, Choice: choice, CreatedAt: wednesday,
+			}}, worklet.ChangeComment, nil)
+		return err
+	}
+	for name, body := range map[string]string{
+		"no words":          "",
+		"only the note":     "the audit can wait",
+		"another option":    choseWords("hold", ""),
+		"the label, unsaid": "Ship Friday",
+	} {
+		if err := answer("op-"+name, "c-"+name, body, "ship"); !errors.Is(err, worklet.ErrInvalid) {
+			t.Errorf("%s: an answer choosing ship that reads %q gave %v, want it refused", name, body, err)
+		}
+	}
+	if _, err := r.writer.UpdateTask(t.Context(), "op-empty", "decide", "ENG",
+		worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
+			ID: "c-empty", Task: "decide", Author: "ana", AuthorKind: worklet.AuthorHuman,
+			Body: "  ", CreatedAt: wednesday,
+		}}, worklet.ChangeComment, nil); !errors.Is(err, worklet.ErrInvalid) {
+		t.Errorf("a remark with no words gave %v, want it refused", err)
+	}
+	if err := answer("op-good", "c-good", choseWords("ship", "the audit can wait"), "ship"); err != nil {
+		t.Fatalf("an answer saying what it chose was refused: %v", err)
+	}
+	r.drain()
+	detail, err := r.reader.Task(t.Context(), "decide",
+		worklet.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read the task: %v", err)
+	}
+	var stored *worklet.Comment
+	for i := range detail.Comments {
+		if detail.Comments[i].ID == "c-good" {
+			stored = &detail.Comments[i]
+		}
+	}
+	if stored == nil || stored.Body != "Chose “Ship Friday”: the audit can wait" {
+		t.Fatalf("the answer reads %+v on the thread, want what it chose in words", stored)
+	}
+
+	// The round trip's writer is ana, the answer's author.
+	edit := func(opID, body string) error {
+		_, err := r.writer.EditComment(t.Context(), opID, "decide", "ENG", "c-good", body, nil)
+		return err
+	}
+	if err := edit("op-edit-drop", "the audit can wait a week"); !errors.Is(err, worklet.ErrInvalid) {
+		t.Errorf("an edit dropping the choice gave %v, want it refused", err)
+	}
+	if err := edit("op-edit-keep", choseWords("ship", "the audit can wait a week")); err != nil {
+		t.Errorf("an edit keeping the choice was refused: %v", err)
 	}
 }
 
@@ -422,6 +495,17 @@ func TestAnAskRowCarriesItsDecision(t *testing.T) {
 	if !strings.Contains(row.Answer, `choice: "ship"`) || !strings.Contains(row.Answer, `answers: "c-1"`) {
 		t.Errorf("the answering call %q does not carry the recommendation", row.Answer)
 	}
+}
+
+// choseWords is the body of an answer choosing the fixture's option id, a note
+// after it ([worklet.ChoiceWords]); an id the fixture does not offer stands for
+// its own label.
+func choseWords(id, note string) string {
+	label := id
+	if option, ok := decisionFixture().Option(id); ok {
+		label = option.Label
+	}
+	return worklet.ChoiceWords(label, note)
 }
 
 // decisionFixture is a fresh well-formed decision the caller may change.
@@ -519,7 +603,7 @@ func TestOnlyAnApproverChoosesAnActsApprovingOption(t *testing.T) {
 		_, err := r.writer.UpdateTask(ctx, opID, "decide", "ENG",
 			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
 				ID: id, Task: "decide", Author: "ana", AuthorKind: worklet.AuthorHuman,
-				Body: "ok", Answers: &answers, Choice: choice, CreatedAt: wednesday,
+				Body: choseWords(choice, "ok"), Answers: &answers, Choice: choice, CreatedAt: wednesday,
 			}}, worklet.ChangeComment, nil)
 		return err
 	}

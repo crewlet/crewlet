@@ -89,9 +89,10 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 			"choice": map[string]any{
 				"type": "string",
 				"description": "When the question you answer carries a " +
-					"decision: the id of the option you choose. `body` is " +
-					"then optional — say why in it. Leave it out to answer " +
-					"in prose when none of the options is right.",
+					"decision: the id of the option you choose. The comment " +
+					"then opens with the option's label (`Chose “…”`), and " +
+					"`body` is optional: why, which follows it. Leave it out " +
+					"to answer in prose when none of the options is right.",
 			},
 			"reply_to": map[string]any{
 				"type": "string",
@@ -266,6 +267,14 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"you. Name the question with `answers` (its comment id), or answer "+
 			"in `body` without a choice.", clip(comment.Choice),
 			before.Named())), caveat.NoQuestionForChoice()), nil
+	}
+	// AN ANSWER THAT CHOSE SAYS WHAT IT CHOSE, the `body` after it: read by id
+	// alone it was an empty comment to everybody but the dashboard. Mentions
+	// stay the caller's own words', since the label is the asker's.
+	if comment.Choice != "" && thread.AnswersDecision != nil {
+		if option, ok := thread.AnswersDecision.Option(comment.Choice); ok {
+			comment.Body = worklet.ChoiceWords(option.Label, body)
+		}
 	}
 	if refused := t.deps.grantChosen(ctx, comment.Choice, thread); refused != nil {
 		return *refused, nil

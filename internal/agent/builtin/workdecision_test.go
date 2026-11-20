@@ -138,10 +138,16 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 // A CHOICE WITH NO BODY IS AN ANSWER: the option is what the asker awaited,
 // and a reason is not owed. The choice rides the comment and the thread read,
 // so the reader checks it against the ask's options before anything is
-// published. A choice answering nothing is refused: no decision to be part of.
-func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
+// published. THE ANSWER SAYS WHAT IT CHOSE in its words, a note after it: a
+// comment naming its option by id alone read as empty to every agent reading
+// the item, which then asked again. A choice answering nothing is refused: no
+// decision to be part of.
+func TestAChoiceWithNoBodyIsAnAnswerThatSaysWhatItChose(t *testing.T) {
 	t.Parallel()
+	asked := &decision.Decision{Question: "Ship on Friday or hold for the audit?",
+		Options: []decision.Option{{ID: "ship", Label: "Ship Friday"}, {ID: "hold", Label: "Hold"}}}
 	trk := newFakeTracker()
+	trk.thread.AnswersDecision = asked
 	reg := decisionRegistry(t, trk, newFakeKB())
 	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
 		"item": "ENG-1", "answers": "c-ask", "choice": "ship",
@@ -155,8 +161,21 @@ func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
 	}
 	comment := trk.patched[0].Comment
 	if comment.Choice != "ship" || comment.Answers == nil || *comment.Answers != "c-ask" ||
-		comment.Body != "" {
-		t.Errorf("the answer is %+v, want the choice answering c-ask with no body", comment)
+		comment.Body != "Chose “Ship Friday”" {
+		t.Errorf("the answer is %+v, want the choice answering c-ask, saying it chose Ship Friday",
+			comment)
+	}
+
+	noted := newFakeTracker()
+	noted.thread.AnswersDecision = asked
+	got = callWork(t, decisionRegistry(t, noted, newFakeKB()), builtin.CommentOnWorkTool,
+		map[string]any{"asks": false, "item": "ENG-1", "answers": "c-ask", "choice": "hold",
+			"body": "  The audit **comes first**.  "})
+	if got.Failed {
+		t.Fatalf("a choice with a note was refused: %s", got.Output)
+	}
+	if body := noted.patched[0].Comment.Body; body != "Chose “Hold”: The audit **comes first**." {
+		t.Errorf("a choice with a note reads %q, want the choice and then the note", body)
 	}
 
 	loose := newFakeTracker()
