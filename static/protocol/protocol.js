@@ -2829,15 +2829,16 @@ var LiveSocket = class {
 	*
 	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-	* query goes unanswered, or `closed` if the client shuts down.
+	* query goes unanswered for `waitMs`, or `closed` if the client shuts down.
 	*/
-	query(what, params) {
+	query(what, params, waitMs = QUERY_TIMEOUT_MS) {
 		const id = this.nextQueryId++;
 		return new Promise((resolve, reject) => {
 			const entry = {
 				id,
 				what,
 				params: params ?? {},
+				waitMs,
 				resolve,
 				reject,
 				timer: 0
@@ -2853,7 +2854,7 @@ var LiveSocket = class {
 			id: entry.id,
 			what: entry.what,
 			params: entry.params,
-			wait_ms: QUERY_TIMEOUT_MS
+			wait_ms: entry.waitMs
 		};
 		try {
 			this.sock.send(JSON.stringify(frame));
@@ -2864,7 +2865,7 @@ var LiveSocket = class {
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);
 			entry.reject(new QueryError("timeout"));
-		}, QUERY_TIMEOUT_MS);
+		}, entry.waitMs);
 	}
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);

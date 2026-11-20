@@ -375,6 +375,21 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
+// TranscriptReadWorst is the longest one read takes at its bounds, measured on
+// two cores of the build machine, one case a process, three runs: one value of
+// `password:` lines, whose redaction lengthens text most, streamed to the read
+// budget for a seat's words, 75 s for 240 MiB, 81 s at the budget; a person's
+// read of it 65 s for 240 MiB, every credential shape 30 s, dense tokens 40 s.
+const TranscriptReadWorst = 81 * time.Second
+
+// TranscriptAnsweredWithin is how long a person's read of a transcript can
+// take to answer: the slowest read ([TranscriptReadWorst]) and before it one
+// slot's wait. A read queued behind [TranscriptReadsAtOnce] others holding
+// every slot waits for the first of them to end, at most one slowest read
+// whatever the slot count. A client that gives up sooner (the dashboard's
+// TRANSCRIPT_QUERY_TIMEOUT_MS, held to this) abandons a read it would be shown.
+const TranscriptAnsweredWithin = 2 * TranscriptReadWorst
+
 // transcriptReads holds a slot for each transcript this process is reading,
 // at most [TranscriptReadsAtOnce]: taken before a read opens the session's
 // object, and given back once the read has closed it ([readTranscript]).

@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
-import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
+import { QUERY_TIMEOUT_MS, TRANSCRIPT_QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { Store } from "./store.ts";
 
@@ -238,6 +238,33 @@ describe("a query frame", () => {
     void socket.query("fleet");
     const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
     expect(frames.find((frame) => frame.kind === "query")?.wait_ms).toBe(QUERY_TIMEOUT_MS);
+  });
+
+  // A QUESTION THAT NAMES ITS OWN WAIT is sent with it and given up on only once
+  // it has passed: a transcript page waits as long as a read of a session can
+  // take to answer, not an ordinary question's ten seconds.
+  test("a question naming its own wait sends it and waits it out", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new Store();
+      const socket = new LiveSocket(store);
+      socket.start();
+      dial(0).open();
+      let rejected = "";
+      const asked = socket.query("executor_session", {}, TRANSCRIPT_QUERY_TIMEOUT_MS);
+      asked.catch((err: unknown) => {
+        rejected = (err as Error).message;
+      });
+      const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+      const query = frames.find((frame) => frame.kind === "query");
+      expect(query?.wait_ms).toBe(TRANSCRIPT_QUERY_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS + 1);
+      expect(rejected).toBe("");
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_QUERY_TIMEOUT_MS);
+      expect(rejected).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the

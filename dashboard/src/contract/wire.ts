@@ -138,6 +138,19 @@ export const MAX_EVENTS = 400;
 export const QUERY_TIMEOUT_MS = 10_000;
 
 /**
+ * How long a transcript page's query (`executor_session`) waits for its answer
+ * once sent: the engine's `executor.TranscriptAnsweredWithin`, held there by
+ * `internal/api/queries`'s `TestTheDashboardWaitsPastAPersonsReadOfASession`.
+ *
+ * THE SLOWEST READ PLUS ONE SLOT'S WAIT: a read at its bounds takes up to the
+ * measured worst, and one queued behind every slot the engine reads with waits
+ * at most one such read more, for the first of them to end. A screen that gave
+ * up sooner showed a long session as failed while the engine went on reading
+ * it; the frame carries the wait, so a read this tab gives up on still stops.
+ */
+export const TRANSCRIPT_QUERY_TIMEOUT_MS = 162_000;
+
+/**
  * How many queries one socket runs at once.
  *
  * EXACTLY THE ENGINE'S OWN (`stream.MaxInFlightQueries`: four, the size of

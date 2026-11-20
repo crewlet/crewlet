@@ -308,6 +308,8 @@ interface Inflight {
   id: number;
   what: string;
   params: Record<string, unknown>;
+  /** How long the query waits for its answer once sent. */
+  waitMs: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout> | 0;
@@ -529,15 +531,20 @@ export class LiveSocket {
    *
    * Rejects with a [QueryError] carrying the server's machine-readable code
    * (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-   * query goes unanswered, or `closed` if the client shuts down.
+   * query goes unanswered for `waitMs`, or `closed` if the client shuts down.
    */
-  query<K extends QueryName>(what: K, params?: Record<string, unknown>): Promise<QueryMap[K]> {
+  query<K extends QueryName>(
+    what: K,
+    params?: Record<string, unknown>,
+    waitMs: number = QUERY_TIMEOUT_MS,
+  ): Promise<QueryMap[K]> {
     const id = this.nextQueryId++;
     return new Promise<QueryMap[K]>((resolve, reject) => {
       const entry: Inflight = {
         id,
         what,
         params: params ?? {},
+        waitMs,
         resolve: resolve as (value: unknown) => void,
         reject,
         timer: 0,
@@ -557,7 +564,7 @@ export class LiveSocket {
       id: entry.id,
       what: entry.what,
       params: entry.params,
-      wait_ms: QUERY_TIMEOUT_MS,
+      wait_ms: entry.waitMs,
     };
     try {
       this.sock.send(JSON.stringify(frame));
@@ -568,7 +575,7 @@ export class LiveSocket {
     entry.timer = setTimeout(() => {
       this.inflight.delete(entry.id);
       entry.reject(new QueryError("timeout"));
-    }, QUERY_TIMEOUT_MS);
+    }, entry.waitMs);
   }
 
   private flushQueries(): void {

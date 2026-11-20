@@ -87,6 +87,7 @@ import {
   type TranscriptEntryKind,
   type TranscriptState,
 } from "~/contract/sessions.ts";
+import { TRANSCRIPT_QUERY_TIMEOUT_MS } from "~/contract/wire.ts";
 
 /**
  * What each kind of entry is called on screen. Keyed by the engine's own set,
@@ -418,6 +419,7 @@ function Transcript({
     useQuery("executor_session", asked, {
       enabled: handle !== "" && turn !== "",
       refetchOnReconnect: false,
+      waitMs: TRANSCRIPT_QUERY_TIMEOUT_MS,
     }),
   );
   const pages = usePaged(
@@ -427,6 +429,7 @@ function Transcript({
       socket.query(
         "executor_session",
         withFloor("executor_session", JSON.stringify({ ...asked, cursor })),
+        TRANSCRIPT_QUERY_TIMEOUT_MS,
       ),
     pickEntries,
     entryId,

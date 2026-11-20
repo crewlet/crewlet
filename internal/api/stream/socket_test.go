@@ -1039,6 +1039,36 @@ func TestAQueryThatPanicsIsAnsweredAsFailedAndTheSocketGoesOn(t *testing.T) {
 	}
 }
 
+// A READ THAT TAKES ITS WAIT LEAVES THE SOCKET'S OTHER QUESTIONS ANSWERED: a
+// transcript page may take minutes in one of the socket's slots
+// ([stream.MaxInFlightQueries]), and every other question the tab asks
+// meanwhile is answered from the slots left.
+//
+// Mutation: hold every query to one slot, and the questions after the read
+// wait behind it.
+func TestAReadInFlightLeavesTheSocketsOtherQuestionsAnswered(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		if what == "executor_session" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return "answered", nil
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+	write(t, conn, map[string]any{"kind": "query", "id": 0, "what": "executor_session", "wait_ms": 600_000})
+	for i := 1; i <= 2*stream.MaxInFlightQueries; i++ {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "events"})
+		if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(i) {
+			t.Fatalf("question %d, asked while a read was in flight, was answered %v", i, got)
+		}
+	}
+}
+
 func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 	t.Parallel()
 	// The reason queries run off the read loop at all.

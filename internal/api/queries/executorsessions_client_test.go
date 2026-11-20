@@ -3,8 +3,10 @@ package queries_test
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -185,5 +187,29 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	if kept != executorread.LiveKept {
 		t.Errorf("the dashboard tells a reader a live session was kept since as %q; the engine says %q", kept,
 			executorread.LiveKept)
+	}
+}
+
+// THE DASHBOARD NEVER ABANDONS A READ THE ENGINE MAY STILL ANSWER: a transcript
+// page's query waits at least as long as a person's read of a session can take
+// to answer at its bounds ([executor.TranscriptAnsweredWithin]), the slowest
+// read behind one slot's wait. A screen that gave up first showed a long
+// session as failed, and its frame's wait ended the read the engine was making.
+//
+// Mutation: wait QUERY_TIMEOUT_MS for a transcript, or raise the engine's
+// figure past the dashboard's, and this goes red.
+func TestTheDashboardWaitsPastAPersonsReadOfASession(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Scalar(clientsource.Tree(t), "TRANSCRIPT_QUERY_TIMEOUT_MS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
+	if err != nil {
+		t.Fatalf("TRANSCRIPT_QUERY_TIMEOUT_MS = %q is not a number: %v", body, err)
+	}
+	if wait := time.Duration(ms) * time.Millisecond; wait < executor.TranscriptAnsweredWithin {
+		t.Errorf("the dashboard waits %s for a transcript page the engine may take %s to answer", wait,
+			executor.TranscriptAnsweredWithin)
 	}
 }
