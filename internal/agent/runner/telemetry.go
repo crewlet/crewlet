@@ -873,7 +873,7 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		// `Notes` is the judge's reason: what makes a rescue readable, and on
 		// failure the only thing naming what went wrong.
 		Decision: verdict,
-		Notes:    keptText(d.Reason, notesBytes),
+		Notes:    recordedText(d.Reason, notesBytes),
 		// ITS OWN DURATION: a slow judge is a stall its host phase's duration
 		// absorbs unnamed, and a nested phase publishes no
 		// agent_phase_started to subtract from.
@@ -901,11 +901,11 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	// as many rounds as its cap lets it.
 	rounds := keptRounds(recordRounds{
 		Rounds:    phaseRounds(res.RoundRecords),
-		Narration: roundNarration(res.Narration),
-		Calls:     toolExecutions(res.Executions),
+		Narration: recordedNarration(res.Narration),
+		Calls:     recordedExecutions(res.Executions),
 	})
 	calls := keptExecutions(rounds.Calls, rounds.Dropped)
-	system, user := keptPrompt(res.SystemPrompt), keptPrompt(res.UserPrompt)
+	system, user := recordedPrompt(res.SystemPrompt), recordedPrompt(res.UserPrompt)
 	available, availableElided := keptNames(res.ToolsAvailable)
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
@@ -938,7 +938,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		UserPrompt:     user.Text,
 		SystemSections: promptSections(ctx, phase.Subagent, system),
 		UserSections:   promptSections(ctx, phase.Subagent, user),
-		Response:       keptText(res.Text, responseBytes),
+		Response:       recordedText(res.Text, responseBytes),
 		ToolExecutions: calls.Rows,
 		CallsElided:    calls.Elided,
 		ElidedCalls:    calls.ByTool,
@@ -968,16 +968,16 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		ToolsAvailableElided: availableElided,
 		// The grant's refusals, Notes' documented content for this phase:
 		// the first thing to check when a child's answer is thin.
-		Notes: keptText(rejectedNote(res.Rejected), notesBytes),
+		Notes: recordedText(rejectedNote(res.Rejected), notesBytes),
 		// The task's status (ok / no_result / timed_out / skipped) is its
 		// structured verdict, so it rides Decision like the executor's outcome.
 		Decision:        string(res.Status),
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
 		// A child's failure text, sized by nothing the parent controls:
-		// clipped so the event stays publishable, since one over the queue's
+		// redacted, and clipped so the event stays publishable, since one over the queue's
 		// ceiling is refused and the whole record lost (events.MaxDiagnosticBytes).
-		Error:     events.ClipDiagnostic(res.Error),
+		Error:     recordedDiagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -1001,7 +1001,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	if !e.on() {
 		return
 	}
-	system, user := keptPrompt(rec.System), keptPrompt(rec.User)
+	system, user := recordedPrompt(rec.System), recordedPrompt(rec.User)
 	available, availableElided := keptNames(rec.Available)
 	catalogue, catalogueElided := keptNames(rec.Catalogue)
 	ev := types.AgentPhaseCompleted{
@@ -1018,7 +1018,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		UserPrompt:       user.Text,
 		SystemSections:   promptSections(ctx, rec.Phase, system),
 		UserSections:     promptSections(ctx, rec.Phase, user),
-		Response:         keptText(rec.Result.Text, responseBytes),
+		Response:         recordedText(rec.Result.Text, responseBytes),
 		ToolExecutions:   k.calls.Rows,
 		CallsElided:      k.calls.Elided,
 		ElidedCalls:      k.calls.ByTool,
@@ -1046,7 +1046,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		EmptyAnswerRounds:    rec.Result.EmptyAnswers,
 		Decision:             rec.Decision,
 		RescueFired:          rec.Rescued,
-		Notes:                keptText(rec.Notes, notesBytes),
+		Notes:                recordedText(rec.Notes, notesBytes),
 		ToolsAvailable:       available,
 		ToolsAvailableElided: availableElided,
 		ToolCatalogue:        catalogue,
@@ -1068,11 +1068,11 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
-		// Clipped as a DELIVERY GUARANTEE, not a content budget: an event over
+		// Redacted, and clipped as a DELIVERY GUARANTEE, not a content budget: an event over
 		// the queue's ceiling is refused and the error ABSENT; a tighter cut
 		// would cost the errors worth reading (a wrapped chain's cause is at
 		// its end). See events.MaxDiagnosticBytes.
-		ev.Error = events.ClipDiagnostic(rec.Err.Error())
+		ev.Error = recordedDiagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -1096,8 +1096,8 @@ func (rec phaseRecord) kept() keptPhase {
 		Rounds:      phaseRounds(rec.Result.Rounds),
 		Invocations: phaseInvocations(rec.Result.Invocations),
 		Steers:      append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
-		Narration:   roundNarration(rec.Result.Narration),
-		Calls:       toolExecutions(rec.Result.Executions),
+		Narration:   recordedNarration(rec.Result.Narration),
+		Calls:       recordedExecutions(rec.Result.Executions),
 	})
 	return keptPhase{rounds: rounds,
 		calls: keptExecutions(rounds.Calls, slices.Concat(runTally(rec.RunElided), rounds.Dropped))}
