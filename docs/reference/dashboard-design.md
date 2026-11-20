@@ -11872,7 +11872,11 @@ that model's wizard on *Use it for* with the seat's category added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also
-takes it off the model it runs on.
+takes it off the model it runs on. A new model preselects only the seats
+with no model today for any job it will do (the *Seats without a model*
+switch, hidden when every seat has one), so adding a model never moves a
+working seat; a seat that has a model is picked by hand, its chip's tip
+saying the model it is on and that picking it replaces that.
 
 A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
 by whom it was stored, its expiry, and on a harness login each node's state with the
@@ -11882,12 +11886,16 @@ over seven days, its limits and every place that runs on it, grouped by
 category with backups apart and Ask Crewlet and the Advisor named. **Test** runs the harness's
 own checks on the answering node and says each in words. A Codex model signs
 in with a device code: the page shows the address and the code and follows the
-session until it ends. **Remove** names every place that runs on the model in
-words (each seat a list item with its places, and Ask Crewlet and the Advisor
-each a place of its own), asks where each moves (Ask Crewlet may be turned
-off, the Advisor run with no model), checks each choice with a dry run that
-names only the warnings the removal brings, and removes the model and every
-repoint as one revision.
+session until it ends. **Remove** says in one line what uses the model ("Used
+by 9 seats, Ask Crewlet, and the Advisor.", or that nothing does) and asks one
+question, where all of it moves: a model that fits every place, or Leave
+unset. *Choose per seat* opens a row per place, its name and a picker, for the
+rare split. Each set of moves is checked with a dry run as it changes; a
+refusal is said in its own words under the choice. A removal that moves
+everything to another model needs only the button; one that turns Ask Crewlet
+off, runs the Advisor with no model, or leaves seats with no model at all
+(the last model) asks for one tick of a box that says so. The model and every
+move are removed as one revision, and no config path is printed.
 
 **Adding and editing a model is one wizard**, a page of its own in place of the
 list: the name and the harness (fixed once the model exists), how it signs
