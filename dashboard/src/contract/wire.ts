@@ -150,7 +150,7 @@ export const QUERY_TIMEOUT_MS = 10_000;
  * screen that stops waiting sooner (left, or another session chosen) cancels
  * the read (`query_cancel`), which stops it then.
  */
-export const TRANSCRIPT_QUERY_TIMEOUT_MS = 162_000;
+export const TRANSCRIPT_QUERY_TIMEOUT_MS = 334_000;
 
 /**
  * How many queries one socket runs at once.

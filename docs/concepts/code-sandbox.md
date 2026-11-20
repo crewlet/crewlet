@@ -2177,7 +2177,7 @@ read a page at a time and bounded — 200 entries and 1 MiB of text a page,
 read, and 256 MiB a read of the archive as it inflates and, apart, of what a
 tar's members hand out, so an archive a box packed to inflate without end, or
 with a sparse member that declares more than it holds, stops there; a line of
-any length is read, a value in it held to 8 MiB and past it streamed through
+any length is read, a value in it held to 2 MiB and past it streamed through
 the redaction into its entry, never held —
 and every entry's text is **redacted at this read before it is cut**, whatever
 the capture did, and is always an opening of what its whole text redacts to:
@@ -2212,22 +2212,25 @@ the row is read again once. What the read already handed out stands: every byte
 of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read holds no line and no
-message, only a value to 8 MiB, which a longer one streams past: at most 47 MiB
-measured, a value of credential lines held just within the bound (a streamed
-one, 24 to 35 MiB at any length). Its time is the redaction's: one value of
-credential lines streamed to the 256 MiB budget takes about 81 seconds on two
-cores, the slowest read, one of a kept session's text about 16. A node answers
-every dashboard tab open on it and every REST caller, each with a read of its
-own, so each node decodes at most two transcripts at once
-(`TranscriptReadsAtOnce`), 94 MiB live at their worst, whichever socket or route
+message, only a value to 2 MiB, which a longer one streams past: at most 29 MiB
+measured, a value streamed at any length or one held just within the bound,
+where holding costs no more than streaming (held, a value is redacted whole,
+which holds about thirteen times a value of `pwd=x` lines, whose redaction
+lengthens most). Its time is the redaction's: one value of `pwd=x` lines joined
+by escaped breaks, a password's value every seven bytes, streamed to the 256 MiB
+budget takes about 167 seconds on two cores for a seat's words, the slowest
+read, and about 126 for a person; one of a kept session's text about 16. A node
+answers every dashboard tab open on it and every REST caller, each with a read
+of its own, so each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), 58 MiB live at their worst, whichever socket or route
 asks; the engine sets no `GOMEMLIMIT` and runs at Go's default `GOGC`, at which
-two peak at about 176 MiB. A seat's read of its own session queued behind such
-a read can run past the two minutes a seat's read has, and is answered
-unavailable, never as a session that holds nothing. A relaunch's reading of a
+two peak at about 116 MiB. A seat's read of its own session has two minutes, so
+its read of such a session, alone or queued behind another, runs past them and
+is answered unavailable, never as a session that holds nothing. A relaunch's reading of a
 kept session for the calls it holds is none of them: one runs at a time, in a
 slot of its own (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode
 session's at most 2 MiB, however long one of its messages runs), so the two
-reads and a reading hold at most 137 MiB. A read past them waits for a slot before the session's
+reads and a reading hold at most 101 MiB. A read past them waits for a slot before the session's
 object is opened — an opened object would hold its store's connection while it
 waited — for as long as its caller waits, holding no decoder meanwhile, and a
 slot frees within one bounded read; a caller that leaves first is answered

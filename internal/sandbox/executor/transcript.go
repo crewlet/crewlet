@@ -272,12 +272,13 @@ const (
 	// from its first byte through a redaction into its entry, never held
 	// ([streamedEntry]): its whole redaction's opening and size, as held.
 	//
-	// EIGHT MiB, measured (BenchmarkAPersonsReadAtItsBounds): a value of
-	// credential lines held just within it costs a read 40 to 47 MiB live, a
-	// streamed one 24 to 35 at any length, so holding costs no more than half
-	// again what streaming does, while every text the engine writes is held. A
-	// value of 8 to 32 MiB, held before, streams at 3.5 to 17 MB/s (2 to 9 s).
-	TranscriptValueMaxBytes = 8 << 20
+	// TWO MiB, where holding costs a read no more than streaming, measured
+	// (BenchmarkAPersonsReadAtItsBounds): a held value is redacted whole, 13 to
+	// 14 times the value live where its redaction lengthens most (`pwd=x` lines),
+	// 27 to 29 MiB just within 2 MiB, 54 to 58 within 4, 107 to 115 within 8;
+	// streamed, 16 to 29 at any length. Past it the engine writes only a brief
+	// of over half a million tokens, read as one entry, never split into notes.
+	TranscriptValueMaxBytes = 2 << 20
 )
 
 // TranscriptReadBounds are the bounds every read the engine makes is held to.
@@ -387,7 +388,7 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
 // TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
-// [TranscriptReadHeldBytes] live, so two hold 94 MiB (176 MiB at the default
+// [TranscriptReadHeldBytes] live, so two hold 58 MiB (116 MiB at the default
 // GOGC the engine runs at, which sets no GOMEMLIMIT), each one core's work for
 // up to [TranscriptReadWorst]; one slot would queue every reader behind the
 // longest archive, and more would take more of a node's cores than a page is
@@ -397,18 +398,19 @@ const TranscriptReadsAtOnce = 2
 
 // TranscriptReadHeldBytes is the most one read holds at its bounds, measured
 // (BenchmarkAPersonsReadAtItsBounds, one case a process on two cores of the
-// build machine, three runs): 47 MiB live at GOGC=10, an OpenCode value of
-// credential lines held just within [TranscriptValueMaxBytes] (Claude Code's
-// 40), its heap peaking at 88 MiB at the default GOGC; a value streamed past
-// it holds 24 to 35 MiB at any length, peaking at 71.
-const TranscriptReadHeldBytes = 47 << 20
+// build machine, three runs): 29 MiB live at GOGC=10, an OpenCode value of
+// every credential shape streamed, a value of `pwd=x` lines held just within
+// [TranscriptValueMaxBytes], or a result's texts held beside the buffers the
+// results before it grew (Claude Code's at most 28); its heap peaking at 58 MiB
+// at the default GOGC, every credential shape streamed to the read budget.
+const TranscriptReadHeldBytes = 29 << 20
 
 // TranscriptReadWorst is the longest one read takes at its bounds, measured
-// likewise: one value of `password:` lines, whose redaction lengthens text
-// most, streamed to the read budget for a seat's words, 75 s for 240 MiB, 81 s
-// at the budget; a person's read of it 65 s for 240 MiB, every credential
-// shape 30 s, dense tokens 40 s, a kept session's text 15 s.
-const TranscriptReadWorst = 81 * time.Second
+// likewise: one value of `pwd=x` lines joined by escaped breaks (a password's
+// value every seven bytes, as a JSON string holds them) streamed to the read
+// budget for a seat's words, 150 to 156 s for 240 MiB, 167 s at the budget; a
+// person's read of it 118 s, of `pwd=x` lines 90 s, of `password:` lines 42 s.
+const TranscriptReadWorst = 167 * time.Second
 
 // TranscriptAnsweredWithin is how long a person's read of a transcript can
 // take to answer: the slowest read ([TranscriptReadWorst]) and before it one

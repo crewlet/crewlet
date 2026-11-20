@@ -247,8 +247,8 @@
 // in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
 // (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
 // most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
-// `0` items, 10.0 to 10.2 s; beside a person's read of the 64 MiB export the
-// two hold 24 to 26 MiB, the read's own.
+// `0` items, 10.7 to 11.0 s; beside a person's read of the 64 MiB export the
+// two hold 18 to 19 MiB, the read's.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
@@ -378,11 +378,11 @@
 // (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
 // bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to 81 s each and spends internal/sandbox's
-// MainThreadReadWait (27 s), so a person paging a transcript would decide how a
-// turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 47 + 43 + 43 = 180 MiB
-// beside the base tier, a reading's 43 in its slot ([HoldingsReadsAtOnce]).
+// transcript reads of up to 167 s each and spends internal/sandbox's
+// MainThreadReadWait (27 s), so a person paging a transcript would decide how
+// a relaunch is told; apart, never. One slot, not two: the process's thread
+// readers hold at most 2 x 29 + 43 + 43 = 144 MiB (the reads peak at 2 x 58)
+// beside the base tier, a reading's 43 apart ([HoldingsReadsAtOnce]).
 // One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
 // the count and the next request's estimate, 5.7 s loaded) is through in
 // 11.4 s, within the 27 s.

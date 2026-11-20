@@ -93,8 +93,9 @@ type SessionRows interface {
 // no call should wait out, and two is far inside the ten a harness waits on a
 // call. Past it the call is answered unavailable, naming the session's size,
 // never as a session that holds nothing. A decode at its bounds takes up to
-// [executor.TranscriptReadWorst] (81 s), so a read queued behind such a read can
-// miss it, and fails closed so.
+// [executor.TranscriptReadWorst] (167 s), longer than this: a seat's read of
+// such a session misses it, as does one queued behind such a read, and fails
+// closed so.
 const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
