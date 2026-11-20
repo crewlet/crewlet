@@ -257,7 +257,7 @@ function transcriptPage(over: Record<string, unknown> = {}) {
       entries: 200,
       bytes: 1 << 20,
       entry_bytes: 16 << 10,
-      line_bytes: 32 << 20,
+      read_lines: 1 << 20,
       read_bytes: 256 << 20,
     },
     read_level: "stale",

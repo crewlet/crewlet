@@ -515,7 +515,7 @@ var threadDecoding = jsonv2.JoinOptions(
 // wireDecode decodes raw, one JSON value, into v under [threadDecoding]: every
 // small value the layer keeps as written and every value the package's other
 // readers of a harness's record read ([claudeEventWire], [claudeResultWire],
-// [claudeRecord], [openCodeMeasuredWire]).
+// [openCodeMeasuredWire]).
 func wireDecode(raw []byte, v any) error {
 	return jsonv2.Unmarshal(raw, v, threadDecoding)
 }

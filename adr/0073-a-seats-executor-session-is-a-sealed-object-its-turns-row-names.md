@@ -4758,11 +4758,11 @@ openings a cut class keeps), and decides each item and message at its end, so a
 step whose type follows its content reads as one written type first. No message
 is past a bound but the plaintext's. Measured on two dedicated cores
 (`BenchmarkAnOpenCodeReadingAtItsBounds`, three runs): every case holds at most
-2 MiB live; one answer of 64 MiB reads in 139 to 153 ms; 255 MiB of ordinary
-steps in 3.0 to 3.4 s, of `{"type":"idle"}` messages in 4.8 to 4.9 s and of one
-step's `0` items, the slowest, in 8.5 to 9.0 s, inside the 30 s wait; beside a
-person's read of a 64 MiB export, which holds 97 MiB, the two hold 97 to
-98 MiB.
+2 MiB live; one answer of 64 MiB reads in 138 to 142 ms; 255 MiB of ordinary
+steps in 4.5 to 4.7 s, of `{"type":"idle"}` messages in 6.0 to 6.1 s and of one
+step's `0` items, the slowest, in 10.0 to 10.2 s, inside the 30 s wait; beside a
+person's read of a 64 MiB export, which holds 24 to 25 MiB on the same walk,
+the two hold 24 to 26 MiB.
 
 **The releases.** A session is read only where OpenCode 2.0.32, 2.1.4, 2.2.7
 or 2.3.0 wrote it (`openCodeHoldingsReleases`, a set and never a range,

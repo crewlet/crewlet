@@ -78,7 +78,7 @@ func TestAValueOfAnyLengthIsShownAsTheOpeningOfItsWholeRedaction(t *testing.T) {
 }
 
 // A READ ENDS AT ITS LINES BOUND: an export framing one record or element past
-// [transcriptLinesMax] (a step of that many items) ends there, cut, its last
+// [TranscriptReadLines] (a step of that many items) ends there, cut, its last
 // entry saying so and nothing of the step read, while one framing exactly the
 // bound reads whole; and the meter reads the export past the bound on.
 //
@@ -93,7 +93,7 @@ func TestAReadEndsAtItsLinesBound(t *testing.T) {
 	for _, tc := range []struct {
 		items int
 		cut   bool
-	}{{transcriptLinesMax - 2, false}, {transcriptLinesMax - 1, true}} {
+	}{{TranscriptReadLines - 2, false}, {TranscriptReadLines - 1, true}} {
 		// The brief and the step are two records; the step's items the rest.
 		doc := `{"messages":[` + brief + `,` + step(tc.items) + `]}`
 		page, err := readPerson(t, doc, maxLineBytes, TranscriptFilter{}, nil)
@@ -106,7 +106,7 @@ func TestAReadEndsAtItsLinesBound(t *testing.T) {
 			t.Errorf("%d items framed within the bound: %d entries, cut %q; want the brief and the step's words",
 				tc.items, len(page.Entries), page.Cut)
 		case tc.cut && (page.Cut != CutRead || len(page.Entries) != 2 || last.Kind != EntryUnread ||
-			!strings.Contains(last.Text, fmt.Sprint(transcriptLinesMax))):
+			!strings.Contains(last.Text, fmt.Sprint(TranscriptReadLines))):
 			t.Errorf("%d items framed past the bound: %d entries, cut %q, last %q; want the brief and the read "+
 				"cut where the step began", tc.items, len(page.Entries), page.Cut, last.Text)
 		}

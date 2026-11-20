@@ -688,7 +688,7 @@ func openCodeNext(ctx context.Context, dec *jsontext.Decoder, v openCodeVisitor)
 // openCodePerson is a person's transcript as the decode walk's visitor: it
 // reads each message by its kind, says an element that is no message, and
 // passes every other key, as the import does; and it ends the read past the
-// messages, items and parts one read frames ([transcriptLinesMax]), framed
+// messages, items and parts one read frames ([TranscriptReadLines]), framed
 // counting how many it has, nothing of the message it ends inside read.
 type openCodePerson struct {
 	b      *transcriptBuilder
@@ -700,15 +700,15 @@ func (*openCodePerson) topKey(string, json.RawMessage) error { return nil }
 func (*openCodePerson) messageList() error { return nil }
 
 func (p *openCodePerson) message(ctx context.Context, w openCodeMessageWire) error {
-	if p.framed += framedIn(w.raw); p.framed > transcriptLinesMax {
-		return p.b.linesPast()
+	if p.framed += framedIn(w.raw); p.framed > p.b.bounds.ReadLines {
+		return p.b.linesPast("export", "messages, items and parts")
 	}
 	return p.b.openCodeMessage(ctx, w.message())
 }
 
 func (p *openCodePerson) notMessage() error {
-	if p.framed++; p.framed > transcriptLinesMax {
-		return p.b.linesPast()
+	if p.framed++; p.framed > p.b.bounds.ReadLines {
+		return p.b.linesPast("export", "messages, items and parts")
 	}
 	return p.b.unread("a message of the export is not a message, and was not read")
 }
@@ -807,7 +807,7 @@ func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
 		return err
 	}
 	if unreadErr := b.unread(fmt.Sprintf("a part of the export past %s was not read, and "+
-		"nothing after it could be", humanSize(int64(b.bounds.LineBytes)))); unreadErr != nil {
+		"nothing after it could be", humanSize(int64(held.max)))); unreadErr != nil {
 		return unreadErr
 	}
 	b.cut = CutRead

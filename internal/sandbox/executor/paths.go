@@ -35,7 +35,7 @@
 //
 // # A Claude Code thread is read a line at a time, holding what its readers read
 //
-// A person's transcript (transcript.go) shows a session as well as it can,
+// A person's transcript (claudetranscript.go) shows a session as it can,
 // and a line it cannot read is an entry saying so. A reader that DECIDES
 // something from what a session recorded (that a hook's note reached the
 // model, that a call's result is held) cannot: one record it misreads is a
@@ -247,8 +247,8 @@
 // in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
 // (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
 // most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
-// `0` items, 8.5 to 9.0 s; beside a person's read of the 64 MiB export the two
-// hold 97 to 98 MiB, against 161 to 193 MiB on the decode walk.
+// `0` items, 10.0 to 10.2 s; beside a person's read of the 64 MiB export the
+// two hold 24 to 26 MiB, the read's own.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
@@ -378,10 +378,10 @@
 // (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
 // bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to about 22 s each and spends internal/sandbox's
+// transcript reads of up to 81 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
 // turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 227 + 43 + 43 = 540 MiB
+// process's thread readers then hold at worst 2 x 47 + 43 + 43 = 180 MiB
 // beside the base tier, a reading's 43 in its slot ([HoldingsReadsAtOnce]).
 // One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
 // the count and the next request's estimate, 5.7 s loaded) is through in

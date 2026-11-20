@@ -142,6 +142,41 @@ func TestAnEntryStreamedPastTheValueBoundIsTheEntryHeld(t *testing.T) {
 	}
 }
 
+// A MATCH IS FOUND ANYWHERE IN A VALUE OF ANY LENGTH, and only in its own
+// words: a hit the finder took inside a `[REDACTED:` run is taken back when the
+// run closes as a marker, the window's hit with it (its state snapshotted at the
+// finder's Mark), so the window opens around the first hit in the text's own
+// words wherever it falls, as [windowAround] of the whole redaction does: the
+// streamed entry is the held one, in pieces of every size.
+//
+// Mutation: keep a window's hit a marker's run took back, and the window opens
+// around the marker.
+func TestAMatchIsFoundAnywhereInAValueOfAnyLength(t *testing.T) {
+	t.Parallel()
+	filler := func(n int) string {
+		line := "compiling a package of the build, step by step\n"
+		return strings.Repeat(line, n/len(line)+1)[:n]
+	}
+	b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{Terms: []string{"github"}})
+	for _, at := range []int{0, 100, 5000, 30000} {
+		for _, name := range []string{"github-token", "github", "a-github-b"} {
+			text := filler(at) + "[REDACTED:" + name + "]" + filler(20000) + " github " + filler(20000)
+			want := b.held(TranscriptEntry{Kind: EntryModel}, text, 0)
+			if want.passed || want.entry.Text == "" {
+				t.Fatalf("the held entry of %q at %d holds no hit; the case moves nothing", name, at)
+			}
+			for _, piece := range []int{1, 17, windowSlice + 3, 64 << 10} {
+				s := b.streamed(TranscriptEntry{Kind: EntryModel})
+				streamIn(s, text, piece)
+				if got := s.end(0); !reflect.DeepEqual(got, want) {
+					t.Errorf("a hit inside [REDACTED:%s] at %d, in pieces of %d:\nstreamed %.200s\nheld     %.200s",
+						name, at, piece, fmt.Sprintf("%+v", got), fmt.Sprintf("%+v", want))
+				}
+			}
+		}
+	}
+}
+
 // refusesToStream reports whether a stream refuses text's redaction.
 func refusesToStream(text string) bool {
 	s := redact.NewStream(io.Discard)

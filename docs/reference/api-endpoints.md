@@ -11291,7 +11291,7 @@ head of its conversation the row's own read names; a later page leaves
   "cut": "entries",
   "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.2.200",
   "bounds": { "entries": 200, "bytes": 1048576, "entry_bytes": 16384,
-              "line_bytes": 33554432, "read_bytes": 268435456 },
+              "read_lines": 1048576, "read_bytes": 268435456 },
   "read_level": "stale",
   "position": { "stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 48207 },
   "complete": true
@@ -11313,7 +11313,7 @@ OpenCode 2 gives it (its `type`). Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, an export past the messages, items and parts one read reads — said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, a record past the lines and elements one read reads (`bounds.read_lines`) — said where it was, so a gap never reads as continuity |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
@@ -11347,7 +11347,10 @@ entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bytes` is always the size of what its whole text redacts to, the text it would
 show whole. **Never the size as recorded**, which beside a text shown whole
 says how long each value its redaction took out was. A line of the
-record is read to `bounds.line_bytes` (32 MiB), and one read takes at most
+record is read however long it runs: a value in it (a text, a name, a call's
+input) is held to 8 MiB and past it streamed through the redaction into its
+entry, never held. One read frames at most `bounds.read_lines` (2^20) lines of
+the record and the blocks and parts in them, and takes at most
 `bounds.read_bytes` (256 MiB) of the archive as it inflates — and, apart, at
 most as many bytes as a tar's members hand out, which a sparse member can make
 up without the archive holding them. `cut` is why the page ends before the
@@ -11357,7 +11360,7 @@ transcript does:
 |---|---|
 | absent | The transcript ends on this page; `next_cursor` is absent |
 | `entries`, `bytes` | The page holds all it may; `next_cursor` is the cursor the rest is read from |
-| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or an export held more messages, items and parts than one read reads. The entries shown are all that can be |
+| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or the record more lines and elements than `bounds.read_lines`. The entries shown are all that can be |
 
 Every page is read again from the archive's start, so a page costs what the
 archive does rather than what is behind it. **The cursor names the object it
@@ -11377,14 +11380,15 @@ session budget released the object, or the turn's end did, its newest capture
 not kept — each only of a turn that ended — and an ended turn is never captured
 again.
 
-**Two transcripts at a time on each node.** One read can hold a line at
-`bounds.line_bytes`, as much again while the buffer gathering it grows, the
-copy decoding it makes and the entry's whole redaction, 227 MiB measured at
-worst, so a node decodes at most two transcripts at once, about 454 MiB at their
-worst, whichever socket question or REST request asks for them. A request past them waits for a slot,
-its session's object not yet opened, for as long as its caller waits, and a
-slot frees within one bounded read; nothing in the answer says it waited, and a
-caller that gives up first is answered nothing.
+**Two transcripts at a time on each node.** One read holds at most 47 MiB
+measured, and takes up to about 81 seconds: one value of credential lines
+streamed through its redaction to `bounds.read_bytes`. So a node decodes at most
+two transcripts at once, whichever socket question or REST request asks for
+them. A request past them waits for a slot, its session's object not yet
+opened, for as long as its caller waits, and a slot frees within one bounded
+read, so an answer comes within about 162 seconds, which the dashboard waits;
+nothing in the answer says it waited, and a caller that gives up first is
+answered nothing.
 
 **An object that cannot be read is an answer, never a 500.** The row is still
 the turn's account of how it ended, so `state` says why no entries are shown

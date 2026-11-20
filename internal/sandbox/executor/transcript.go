@@ -1,8 +1,6 @@
 package executor
 
 import (
-	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -75,11 +73,11 @@ const (
 	EntrySummary EntryKind = "summary"
 
 	// EntryUnread is a part of the harness's record this read could not
-	// read — a line past the bound one may hold, one that is not a record, a
-	// record or a message of no shape this read knows, a transcript that is
-	// no plain file, a text whose redaction could not be read, a call's result
-	// written out of order past the value bound, an export past the records
-	// one read reads — said where it was.
+	// read — a line that is not a record, a record or a message of no shape
+	// this read knows, a transcript that is no plain file, a text whose
+	// redaction could not be read, a call's result written out of order past
+	// the value bound, a record past the lines and elements one read reads —
+	// said where it was.
 	EntryUnread EntryKind = "unread"
 )
 
@@ -98,13 +96,13 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. At 2 an
-// OpenCode export's messages are read as OpenCode 2's kinds; at 3 every key is
-// read exactly as written, as the harnesses' own JSON.parse reads it; at 4 a
-// late call the engine hands a running job is an entry of its own; at 5 an
-// OpenCode message of any length is read, a value past the bound as one entry,
-// and a read ends at its lines bound.
-const TranscriptVersion = 5
+// was not, one read as more entries or fewer, one no longer read. 2: OpenCode
+// 2's kinds; 3: every key exactly as written; 4: a late call an entry of its
+// own; 5: an OpenCode message of any length, a value past the bound one entry,
+// the lines bound; 6: a Claude Code line of any length, framed by JSON's blanks
+// alone, an escaped heading read, either harness's value past
+// [TranscriptValueMaxBytes] one entry.
+const TranscriptVersion = 6
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -154,8 +152,8 @@ const (
 
 	// CutRead is a read that stopped before the transcript's end where no
 	// later read can go further: the archive's bytes ran past the read
-	// budget, or an export held more records than one read reads. Its
-	// entries are all that can be shown.
+	// budget, or the record held more lines and elements than one read reads
+	// ([TranscriptBounds.ReadLines]). Its entries are all that can be shown.
 	CutRead TranscriptCut = "read"
 )
 
@@ -213,9 +211,10 @@ type TranscriptBounds struct {
 	// EntryBytes bounds one entry's text.
 	EntryBytes int `json:"entry_bytes"`
 
-	// LineBytes bounds one line of a harness's record read whole, and one
-	// value of an export held: a longer value is streamed.
-	LineBytes int `json:"line_bytes"`
+	// ReadLines bounds the lines and elements one read frames: every line of
+	// a Claude Code transcript and every block and result part in them, and
+	// every message, step item and answer part of an OpenCode export.
+	ReadLines int `json:"read_lines"`
 
 	// ReadBytes bounds the bytes one read takes as the archive inflates —
 	// and, apart, the bytes the members of a tar hand the reader.
@@ -257,19 +256,41 @@ const (
 	// the archive does not hold, and unmetered, a member of 1.5 KiB could hold the
 	// read for its declared size, up to an exbibyte.
 	TranscriptReadBytes = 256 << 20
+
+	// TranscriptReadLines is the most lines and elements one read frames.
+	//
+	// 2^20, the thread layer's bound on a member's lines ([threadLinesMax]):
+	// eight times the lines of a session at the plaintext bound, so a real
+	// session reads whole, and a record of empty elements to the read budget
+	// costs a read seconds, not minutes. Past it the read ends where it is, said.
+	// A person's read and a seat's take it; the take's meter and a holdings
+	// reading, which hold no entry, read on.
+	TranscriptReadLines = threadLinesMax
+
+	// TranscriptValueMaxBytes is the most of one value a read holds: a decoded
+	// string or name, or a call's input compacted. A longer one is streamed
+	// from its first byte through a redaction into its entry, never held
+	// ([streamedEntry]): its whole redaction's opening and size, as held.
+	//
+	// EIGHT MiB, measured (BenchmarkAPersonsReadAtItsBounds): a value of
+	// credential lines held just within it costs a read 40 to 47 MiB live, a
+	// streamed one 24 to 35 at any length, so holding costs no more than half
+	// again what streaming does, while every text the engine writes is held. A
+	// value of 8 to 32 MiB, held before, streams at 3.5 to 17 MB/s (2 to 9 s).
+	TranscriptValueMaxBytes = 8 << 20
 )
 
 // TranscriptReadBounds are the bounds every read the engine makes is held to.
 func TranscriptReadBounds() TranscriptBounds {
 	return TranscriptBounds{
 		Entries: TranscriptMaxEntries, Bytes: TranscriptMaxBytes,
-		EntryBytes: TranscriptEntryMaxBytes, LineBytes: maxLineBytes,
+		EntryBytes: TranscriptEntryMaxBytes, ReadLines: TranscriptReadLines,
 		ReadBytes: TranscriptReadBytes,
 	}
 }
 
 // The bounds a seat's read of its own sessions is held to
-// ([SeatTranscriptBounds]): a person's line and read bounds, the rest held to
+// ([SeatTranscriptBounds]): a person's lines and read bounds, the rest held to
 // a tool's answer of at most 64 KiB, which the seat's model pays for on every
 // later request (internal/agent/builtin's ToolAnswerBytes).
 const (
@@ -298,13 +319,13 @@ const (
 )
 
 // SeatTranscriptBounds are the bounds a seat's read of its own sessions is
-// held to: a person's line and read bounds, and a page and an entry held to
+// held to: a person's lines and read bounds, and a page and an entry held to
 // what a tool's answer carries. A person's read is unchanged by them
 // ([TranscriptReadBounds]).
 func SeatTranscriptBounds() TranscriptBounds {
 	return TranscriptBounds{
 		Entries: SeatTranscriptMaxEntries, Bytes: SeatTranscriptMaxBytes,
-		EntryBytes: SeatTranscriptEntryMaxBytes, LineBytes: maxLineBytes,
+		EntryBytes: SeatTranscriptEntryMaxBytes, ReadLines: TranscriptReadLines,
 		ReadBytes: TranscriptReadBytes,
 	}
 }
@@ -365,21 +386,28 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
-// TWO, BY WHAT ONE READ HOLDS at the 32 MiB line bound, measured: a Claude
-// Code line's decode 134 MiB live (an OpenCode message's 97) and its whole
-// redaction ([entryOpening]) up to 93 MiB more, so 227 MiB, 454 MiB for two;
-// at the default GOGC the engine runs at (it sets no GOMEMLIMIT) a dense read's
-// heap peaks near 400 MiB, two near 800. That is whole-entry redaction's cost,
-// which a streamed redaction of each entry replaces. One slot would queue every
-// reader behind the longest archive. A seat's read takes the seats' one slot
-// ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
+// TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
+// [TranscriptReadHeldBytes] live, so two hold 94 MiB (176 MiB at the default
+// GOGC the engine runs at, which sets no GOMEMLIMIT), each one core's work for
+// up to [TranscriptReadWorst]; one slot would queue every reader behind the
+// longest archive, and more would take more of a node's cores than a page is
+// worth. A seat's read takes the seats' one slot ([SeatTranscriptReadsAtOnce]);
+// a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
-// TranscriptReadWorst is the longest one read takes at its bounds, measured on
-// two cores of the build machine, one case a process, three runs: one value of
-// `password:` lines, whose redaction lengthens text most, streamed to the read
-// budget for a seat's words, 75 s for 240 MiB, 81 s at the budget; a person's
-// read of it 65 s for 240 MiB, every credential shape 30 s, dense tokens 40 s.
+// TranscriptReadHeldBytes is the most one read holds at its bounds, measured
+// (BenchmarkAPersonsReadAtItsBounds, one case a process on two cores of the
+// build machine, three runs): 47 MiB live at GOGC=10, an OpenCode value of
+// credential lines held just within [TranscriptValueMaxBytes] (Claude Code's
+// 40), its heap peaking at 88 MiB at the default GOGC; a value streamed past
+// it holds 24 to 35 MiB at any length, peaking at 71.
+const TranscriptReadHeldBytes = 47 << 20
+
+// TranscriptReadWorst is the longest one read takes at its bounds, measured
+// likewise: one value of `password:` lines, whose redaction lengthens text
+// most, streamed to the read budget for a seat's words, 75 s for 240 MiB, 81 s
+// at the budget; a person's read of it 65 s for 240 MiB, every credential
+// shape 30 s, dense tokens 40 s, a kept session's text 15 s.
 const TranscriptReadWorst = 81 * time.Second
 
 // TranscriptAnsweredWithin is how long a person's read of a transcript can
@@ -400,8 +428,9 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // one of these, and then one of the process's.
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
-// what reads hold at their worst: one slot is always a person's while a seat
-// reads.
+// what reads hold at their worst: a seat's read costs what a person's does (up
+// to [TranscriptReadHeldBytes] and [TranscriptReadWorst], a read for words the
+// slowest), and one slot is always a person's while a seat reads.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at
@@ -705,10 +734,10 @@ type transcriptBuilder struct {
 }
 
 // newTranscriptBuilder is a read's builder from the entry from on, held to
-// bounds, narrowed by filter, and holding a text to the line's bound.
+// bounds, narrowed by filter, and holding a value to [TranscriptValueMaxBytes].
 func newTranscriptBuilder(from int, bounds TranscriptBounds, filter TranscriptFilter) *transcriptBuilder {
-	return &transcriptBuilder{from: from, next: from, bounds: bounds, valueMax: bounds.LineBytes, filter: filter,
-		entries: []TranscriptEntry{}, places: []EntryPlace{},
+	return &transcriptBuilder{from: from, next: from, bounds: bounds, filter: filter,
+		valueMax: TranscriptValueMaxBytes, entries: []TranscriptEntry{}, places: []EntryPlace{},
 		calls: map[string]string{}, inflated: budgetReader{left: bounds.ReadBytes},
 		handed: budgetReader{left: bounds.ReadBytes}}
 }
@@ -742,7 +771,7 @@ func readingOf(kind EntryKind) textindex.Reading {
 // shape is an entry as it is handed out, its text already cut from its
 // redaction: the size it states ([TranscriptEntry.Bytes]), its names redacted
 // and bounded, and EACH STRING CLONED: an unchanged cut is a substring of a
-// decoded record of up to a line's 32 MiB, which a page would keep alive.
+// held value of up to [TranscriptValueMaxBytes], which a page would keep alive.
 func shape(e TranscriptEntry, size int) TranscriptEntry {
 	e.Bytes = size
 	e.Thread, _, _ = entryOpening(e.Thread, transcriptNameMaxBytes)
@@ -753,9 +782,9 @@ func shape(e TranscriptEntry, size int) TranscriptEntry {
 
 // entryOpening is text redacted WHOLE and then cut to at most bound bytes,
 // whether it was cut, and the size of the whole redaction: an opening of what
-// the whole text redacts to ([redact.Prefix]), read in bounded memory. An
-// entry's text is at most [maxLineBytes], and one read is bounded by
-// [TranscriptReadBytes] and [TranscriptReadsAtOnce].
+// the whole text redacts to ([redact.Prefix]), read in bounded memory. A text
+// held is at most [TranscriptValueMaxBytes]; a longer one is streamed
+// ([streamedEntry]).
 func entryOpening(text string, bound int) (string, bool, int) {
 	opening, whole := redact.Prefix(text, bound+1)
 	return textcut.Within(opening, bound), whole > bound, whole
@@ -794,36 +823,6 @@ func windowAround(shown string, at, bound int) (string, int, bool) {
 		return shown[start:], start, start > 0
 	}
 	return textcut.Opening(shown[start:end], bound), start, true
-}
-
-// prose adds one entry of words — a brief, the model's, a summary — unless it
-// holds none. A brief that is a note or a late call — its words open with
-// either's heading, inside nothing but what a harness wraps one in — is what
-// it carries, each by its kind ([opensWithHeading]).
-func (b *transcriptBuilder) prose(ctx context.Context, kind EntryKind, at time.Time, text string) error {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	if kind == EntryBrief && opensWithHeading(text) {
-		return b.headed(ctx, at, text)
-	}
-	return b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, text)
-}
-
-// headed adds an entry for every note and late call text carries
-// ([headedIn]), as it finds each: a page that holds all it hands out stops the
-// search there, and so does a caller that left — one text can carry a heading
-// on every line of the mebibytes a line may run to.
-func (b *transcriptBuilder) headed(ctx context.Context, at time.Time, text string) error {
-	for kind, words := range headedIn(text) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, words); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // unread adds the entry saying a part of the record was not read.
@@ -946,65 +945,6 @@ func (ClaudeCode) transcript(ctx context.Context, b *transcriptBuilder, archive 
 	return b.claudeArchive(ctx, archive)
 }
 
-// claudeRecord is the part of one line of Claude Code's transcript a read
-// takes, as its one decode leaves it ([wireDecode]), each key by its exact
-// name and raw, and read loosely by type ([transcriptBuilder.claudeLine]):
-// what kind of record it is, when it was written, whether it is one the
-// harness wrote for itself (`isMeta`) or a compaction summary, and its message
-// — an object whose content is a string or a list of blocks. A system
-// record's subtype and content are its own, read for the one line the run's
-// own hook prints as it hands the model notes or late calls ([claudeSteerSaid]).
-type claudeRecord struct {
-	Type             json.RawMessage `json:"type"`
-	Subtype          json.RawMessage `json:"subtype"`
-	Timestamp        json.RawMessage `json:"timestamp"`
-	IsMeta           json.RawMessage `json:"isMeta"`
-	IsCompactSummary json.RawMessage `json:"isCompactSummary"`
-	Message          json.RawMessage `json:"message"`
-	Content          json.RawMessage `json:"content"`
-}
-
-// claudeArchive reads the session's transcript and each subagent's, a member
-// at a time, passing every other member unread. What a member hands out is
-// metered apart from what the archive inflates to ([TranscriptReadBytes]), and
-// every member is read through ONE buffer, reset for each: an archive may hold
-// hundreds of thousands of empty members.
-func (b *transcriptBuilder) claudeArchive(ctx context.Context, archive io.Reader) error {
-	tr := tar.NewReader(archive)
-	b.handed.r = tr
-	lines := bufio.NewReaderSize(&b.handed, lineChunkBytes)
-	line := func(raw []byte) error { return b.claudeLine(ctx, raw) }
-	for {
-		h, err := tr.Next()
-		switch {
-		case errors.Is(err, io.EOF):
-			return nil
-		case err != nil:
-			return fmt.Errorf("%w: %w", errNotTar, err)
-		}
-		thread, ok := claudeThread(h.Name)
-		if !ok {
-			continue
-		}
-		b.thread = thread
-		clear(b.calls)
-		if h.Typeflag != tar.TypeReg {
-			// A TRANSCRIPT THAT IS NO PLAIN FILE (a link, a directory) is not read
-			// through: it names another member or a path outside the archive. Said where
-			// it was.
-			if unreadErr := b.unread("a transcript of the harness's record is not a plain " +
-				"file in the archive, and was not read"); unreadErr != nil {
-				return unreadErr
-			}
-			continue
-		}
-		lines.Reset(&b.handed)
-		if readErr := readLines(lines, b.bounds.LineBytes, line, b.claudeLinePastBound); readErr != nil {
-			return readErr
-		}
-	}
-}
-
 // claudeThread is whose transcript a member of the archive named name is: the
 // session's own, `projects/crewlet/<session>.jsonl` (the empty thread), or a
 // subagent's, `projects/crewlet/<session>/subagents/<name>.jsonl` (the thread
@@ -1027,67 +967,6 @@ func claudeThread(name string) (string, bool) {
 	return "", false
 }
 
-// claudeLinePastBound says where a line past the bound was.
-func (b *transcriptBuilder) claudeLinePastBound(n int64) error {
-	return b.unread(fmt.Sprintf("a line of %s of the harness's record was not read: it is "+
-		"past the %s one line may hold", humanSize(n), humanSize(int64(b.bounds.LineBytes))))
-}
-
-// claudeLine reads one record: a person's turn (the brief, a note, a
-// compaction summary, or the results of the model's calls) or the model's
-// own. Every other record is the harness's own, an entry only for the notes
-// and late calls it carries ([transcriptBuilder.claudeNotes]).
-//
-// A LINE THAT IS NO OBJECT IS NO RECORD, rather than decoding to nothing and
-// vanishing. A record is decoded loosely, as the stream is
-// ([decodeOpenCodeEvent]): a retyped field is skipped, not the record. It is
-// read by its keys exactly as written ([threadDecoding]), its message and
-// blocks alike, as the run's event stream reads the same record
-// ([claudeEventWire]).
-func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	line = bytes.TrimSpace(line)
-	if len(line) == 0 {
-		return nil
-	}
-	if !jsonObject(line) {
-		return b.notARecord(len(line))
-	}
-	var rec claudeRecord
-	if wireDecode(line, &rec) != nil {
-		return b.notARecord(len(line))
-	}
-	at := claudeTime(looseString(rec.Timestamp))
-	switch record := looseString(rec.Type); {
-	case record == "assistant":
-		return b.claudeMessage(ctx, rec.Message, EntryModel, at)
-	case record == "user" && !looseTrue(rec.IsMeta):
-		kind := EntryBrief
-		if looseTrue(rec.IsCompactSummary) {
-			kind = EntrySummary
-		}
-		return b.claudeMessage(ctx, rec.Message, kind, at)
-	case record == "system":
-		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note or a
-		// late call (the live `[steer]`) is an entry of its kind: a release that
-		// keeps no hook context leaves it their one trace. Its own line as
-		// recorded, never the live view's rendering, which is cut and counts
-		// lines in words the harness never wrote.
-		if said, ok := claudeSteerSaid(looseString(rec.Subtype), rec.Content); ok {
-			hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
-			if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
-				entry := TranscriptEntry{Kind: hookLineKind(hookLine), At: at, Thread: b.thread}
-				if err := b.add(entry, hookLine); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return b.claudeNotes(ctx, line, at)
-}
-
 // hookLineKind is the kind of entry the line the run's own hook printed is:
 // a late call where it names such calls alone ([hookCallOne], a count and
 // [hookCallsMany]), and a note otherwise, as every line naming a note opens
@@ -1105,101 +984,6 @@ func hookLineKind(line string) EntryKind {
 func (b *transcriptBuilder) notARecord(n int) error {
 	return b.unread(fmt.Sprintf("a line of %s of the harness's record is not a record, "+
 		"and was not read", humanSize(int64(n))))
-}
-
-// unshaped says a message of the harness's record of no shape this read knows.
-func (b *transcriptBuilder) unshaped() error {
-	return b.unread("a message of the harness's record has no shape this read knows, " +
-		"and was not read")
-}
-
-// claudeNotes adds an entry for every note and late call a record the harness
-// wrote for itself carries, wherever in it: which record and field keep a
-// hook's additional context moves between releases, while the headings are
-// the engine's. Read in the record's order, so every read counts them alike,
-// and a value at a time, checking ctx: a line can hold millions of values.
-func (b *transcriptBuilder) claudeNotes(ctx context.Context, line []byte, at time.Time) error {
-	if !bytes.Contains(line, []byte(noteHeadOpen)) && !bytes.Contains(line, []byte(lateCallHead)) {
-		return nil
-	}
-	dec := json.NewDecoder(bytes.NewReader(line))
-	// TO THE RECORD'S END: it read whole as a record already, so its end is
-	// the only place this stops.
-	for tok, err := dec.Token(); err == nil; tok, err = dec.Token() {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		text, ok := tok.(string)
-		if !ok {
-			continue
-		}
-		if notesErr := b.headed(ctx, at, text); notesErr != nil {
-			return notesErr
-		}
-	}
-	return nil
-}
-
-// claudeMessage reads a record's message — an object, its content a string or
-// a list of blocks — as kind, and says one of no shape this read knows rather
-// than reading it as a message that said nothing.
-func (b *transcriptBuilder) claudeMessage(ctx context.Context, raw json.RawMessage, kind EntryKind,
-	at time.Time) error {
-
-	if absent(raw) {
-		return nil
-	}
-	if !jsonObject(raw) {
-		return b.unshaped()
-	}
-	var message struct {
-		Content json.RawMessage `json:"content"`
-	}
-	if err := wireDecode(raw, &message); err != nil {
-		return b.unshaped()
-	}
-	return b.claudeContent(ctx, message.Content, kind, at)
-}
-
-// claudeContent reads a message's content: a string is one entry of kind, and
-// a list of blocks, read a block at a time ([eachClaudeBlock]), is an entry a
-// block: its text as kind, a tool call, a tool's result. A thinking block is
-// the model's working and no entry, and so is every block of a type this
-// build does not know; content that is neither a string nor a list is said.
-func (b *transcriptBuilder) claudeContent(ctx context.Context, raw json.RawMessage, kind EntryKind,
-	at time.Time) error {
-
-	raw = bytes.TrimSpace(raw)
-	switch {
-	case absent(raw):
-		return nil
-	case raw[0] == '"':
-		var text string
-		if err := wireDecode(raw, &text); err != nil {
-			return b.unshaped()
-		}
-		return b.prose(ctx, kind, at, text)
-	case raw[0] != '[':
-		return b.unshaped()
-	}
-	return eachClaudeBlock(raw, func(block claudeBlock) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		switch block.Type {
-		case "text":
-			return b.prose(ctx, kind, at, block.Text)
-		case "tool_use":
-			b.called(block.ID, block.Name)
-			return b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread,
-				Tool: block.Name}, compactJSON(block.Input))
-		case "tool_result":
-			return b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread,
-				Tool: b.answered(block.ToolUseID), Failed: block.IsError},
-				claudeResultText(block.Content))
-		}
-		return nil
-	})
 }
 
 // claudeTime is a record's `timestamp`, an RFC 3339 instant, or zero where it
@@ -1242,13 +1026,6 @@ var jsonNull = []byte("null")
 func absent(raw []byte) bool {
 	raw = bytes.TrimSpace(raw)
 	return len(raw) == 0 || bytes.Equal(raw, jsonNull)
-}
-
-// jsonObject reports whether raw is a JSON object — a record or a message, as
-// against a value of another kind, which would decode into one as nothing.
-func jsonObject(raw []byte) bool {
-	raw = bytes.TrimSpace(raw)
-	return len(raw) > 0 && raw[0] == '{'
 }
 
 // ---- OpenCode ------------------------------------------------------------ //

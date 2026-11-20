@@ -549,6 +549,12 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
+	return claudeSteerContent(content)
+}
+
+// claudeSteerContent is [claudeSteerSaid] of an informational record's content,
+// decoded.
+func claudeSteerContent(content string) (string, bool) {
 	loc := claudeSteerPrefix.FindStringIndex(content)
 	if loc == nil {
 		return "", false

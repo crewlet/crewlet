@@ -67,7 +67,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
-import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtBytes, fmtDateTime, fmtExact, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -494,9 +494,7 @@ function Transcript({
               </Callout>
             )}
             {last?.cut === "read" && (
-              <p className="t-caption">
-                {readCutWords(last.bounds.read_bytes, pages.items.length)}
-              </p>
+              <p className="t-caption">{readCutWords(last.bounds, pages.items.length)}</p>
             )}
             {(pages.more || pages.paging || pages.pageError) && (
               <footer className="panel-foot">
@@ -618,15 +616,19 @@ function noteSentence(note: string): string {
 
 /**
  * Why a page of a transcript ends where no later page can go further, in a
- * reader's words: the archive is past what one read takes (`read_bytes` of it),
- * or a part of it too large to read left the rest unreadable — said of the
- * whole session where nothing of it was read. A page that ends at its own
- * bound says nothing of the kind — its Load more is the way on.
+ * reader's words: the archive is past what one read takes (`read_bytes` of
+ * it), or its record past the lines, and the parts of them, one read reads
+ * (`read_lines`) — said of the whole session where nothing of it was read. A
+ * page that ends at its own bound says nothing of the kind — its Load more is
+ * the way on.
  */
-export function readCutWords(readBytes: number, shown: number): string {
+export function readCutWords(
+  bounds: Pick<ExecutorSessionAnswer["bounds"], "read_bytes" | "read_lines">,
+  shown: number,
+): string {
   const why =
-    `a read takes at most ${fmtBytes(readBytes)} of its archive, ` +
-    `or a part of it was too large to read.`;
+    `a read takes at most ${fmtBytes(bounds.read_bytes)} of its archive, ` +
+    `and ${fmtExact(bounds.read_lines)} of its lines and the parts of them.`;
   return shown === 0
     ? `None of this session can be shown: ${why}`
     : `The rest of this session cannot be shown: ${why}`;

@@ -28,16 +28,8 @@ import (
 // ([callResult]); R6, a text whose redaction the stream refuses is said in its
 // place ([streamedEntry]). (R4 is a Claude Code system record's.)
 
-// transcriptLinesMax is the most records, and elements of them, one person's
-// read frames: an export's messages, a step's items and an answer's parts in
-// sum. Past it the read ends where it is, said ([errReadLines]). The thread
-// layer's bound on a member's lines ([threadLinesMax]): eight times the lines
-// of a session at the plaintext bound, so a real session reads whole, and a
-// record of empty elements to the read budget no longer costs a read minutes.
-const transcriptLinesMax = threadLinesMax
-
-// errReadLines ends a person's read once it has framed more than
-// [transcriptLinesMax] records and elements.
+// errReadLines ends a read once it has framed more than its bounds' ReadLines
+// records and elements ([TranscriptReadLines]).
 var errReadLines = errors.New("executor: the read framed more records and elements than one read reads")
 
 // The names a step's and a part's `time` hold that a person reads, by their
@@ -73,7 +65,7 @@ func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reade
 	fault, scanned := errors.AsType[*jsonscan.Error](err)
 	switch {
 	case errors.Is(err, errReadLines):
-		return b.linesPast()
+		return b.linesPast("export", "messages, items and parts")
 	case !scanned:
 		return err
 	case fault.Fault == jsonscan.FaultCut, fault.Fault == jsonscan.FaultNoValue:
@@ -82,11 +74,11 @@ func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reade
 	return fmt.Errorf("%w: %w", errNotExport, err)
 }
 
-// linesPast says where a read past [transcriptLinesMax] ended, and ends it
-// there: nothing of the record it ended inside is read.
-func (b *transcriptBuilder) linesPast() error {
-	if err := b.unread(fmt.Sprintf("a part of the export past the %d messages, items and parts one read "+
-		"reads was not read, and nothing after it could be", transcriptLinesMax)); err != nil {
+// linesPast says where a read of record past its bounds' ReadLines of what it
+// frames ended, and ends it there: nothing of the record it ended inside is read.
+func (b *transcriptBuilder) linesPast(record, what string) error {
+	if err := b.unread(fmt.Sprintf("a part of the %s past the %d %s one read reads was not read, and "+
+		"nothing after it could be", record, b.bounds.ReadLines, what)); err != nil {
 		return err
 	}
 	b.cut = CutRead
@@ -121,11 +113,13 @@ type entryShape struct {
 }
 
 // shapeEntry is an entry of a shape and its own instant, zero to take the
-// record's; or, where count is above zero, that many entries only counted.
+// record's, and what it does to the calls waiting on their results as it
+// commits; or, where count is above zero, that many entries only counted.
 type shapeEntry struct {
 	p     pendingEntry
 	at    time.Time
 	count int
+	ev    claudeEvent
 }
 
 // reset starts a reading of a record whose first entry takes the ordinal base.
@@ -145,33 +139,80 @@ func (s *entryShape) shapes(b *transcriptBuilder, kind EntryKind) bool {
 // add puts p, the shape's next entry, dated at, in its place, as the page
 // would take it ([transcriptBuilder.commit]).
 func (s *entryShape) add(b *transcriptBuilder, p pendingEntry, at time.Time) {
+	s.addEvent(b, p, at, claudeEvent{})
+}
+
+// addAll adds each of ps, dated by the record.
+func (s *entryShape) addAll(b *transcriptBuilder, ps []pendingEntry) {
+	for _, p := range ps {
+		s.add(b, p, time.Time{})
+	}
+}
+
+// addEvent is [entryShape.add] of an entry that does ev as it commits.
+func (s *entryShape) addEvent(b *transcriptBuilder, p pendingEntry, at time.Time, ev claudeEvent) {
 	if s.full {
 		return
 	}
-	ordinal := s.next()
-	s.n++
-	if ordinal < b.from || p.passed {
-		if last := len(s.entries) - 1; last >= 0 && s.entries[last].count > 0 {
+	c := s.cursor()
+	ordinal, kept := c.next, c.take(b, p)
+	s.n, s.kept, s.keptBytes, s.full = c.next-s.base, c.kept, c.keptBytes, c.full
+	if !kept && (ordinal < b.from || p.passed) {
+		if last := len(s.entries) - 1; last >= 0 && s.entries[last].count > 0 && ev.kind == eventNone {
 			s.entries[last].count++
 			return
 		}
-		s.entries = append(s.entries, shapeEntry{count: 1})
+		s.entries = append(s.entries, shapeEntry{count: 1, ev: ev})
 		return
 	}
-	if len(b.entries)+s.kept == b.bounds.Entries ||
-		len(b.entries)+s.kept > 0 && b.bytes+s.keptBytes+len(p.entry.Text) > b.bounds.Bytes {
-		s.full = true
-	} else {
-		s.kept++
-		s.keptBytes += len(p.entry.Text)
+	s.entries = append(s.entries, shapeEntry{p: p, at: at, ev: ev})
+}
+
+// cursor is where the shape's next entry goes.
+func (s *entryShape) cursor() shapeCursor {
+	return shapeCursor{next: s.next(), kept: s.kept, keptBytes: s.keptBytes, full: s.full}
+}
+
+// shapeCursor is a place in a shape, moved past each entry as the shape would
+// take it ([entryShape.add]), without adding one: what a reader shapes a text
+// at before it knows whether the record keeps it.
+type shapeCursor struct {
+	next, kept, keptBytes int
+	full                  bool
+}
+
+// shapes reports whether the entry at the cursor, of kind, is shaped.
+func (c *shapeCursor) shapes(b *transcriptBuilder, kind EntryKind) bool {
+	return !c.full && b.shapes(kind, c.next)
+}
+
+// take moves the cursor past p, and reports whether the page would keep p:
+// one before the page or passed over is only counted, and the first that
+// would not fit fills the shape.
+func (c *shapeCursor) take(b *transcriptBuilder, p pendingEntry) bool {
+	if c.full {
+		return false
 	}
-	s.entries = append(s.entries, shapeEntry{p: p, at: at})
+	ordinal := c.next
+	c.next++
+	if ordinal < b.from || p.passed {
+		return false
+	}
+	if len(b.entries)+c.kept == b.bounds.Entries ||
+		len(b.entries)+c.kept > 0 && b.bytes+c.keptBytes+len(p.entry.Text) > b.bounds.Bytes {
+		c.full = true
+		return true
+	}
+	c.kept++
+	c.keptBytes += len(p.entry.Text)
+	return true
 }
 
 // commitShape commits s's entries in order ([transcriptBuilder.commit]), each
 // but an [EntryUnread] dated at where it has no instant of its own.
 func (b *transcriptBuilder) commitShape(s *entryShape, at time.Time) error {
 	for _, e := range s.entries {
+		tool := b.happen(e.ev)
 		if e.count > 0 {
 			b.seen += e.count
 			if b.seen > b.from {
@@ -182,6 +223,10 @@ func (b *transcriptBuilder) commitShape(s *entryShape, at time.Time) error {
 		p := e.p
 		if p.entry.Kind != EntryUnread {
 			p.entry.At = firstInstant(e.at, at)
+		}
+		if e.ev.kind == eventResult && p.entry.Kind == EntryToolResult {
+			p.entry.Tool, _, _ = entryOpening(tool, transcriptNameMaxBytes)
+			p.entry.Tool = strings.Clone(p.entry.Tool)
 		}
 		if err := b.commit(p); err != nil {
 			return err
@@ -330,9 +375,9 @@ func (*openCodeReading) asks() *exportAsks { return personAsks }
 func (*openCodeReading) digest() *textDigest { return nil }
 
 // frame counts one record or element the read frames, ending the read past
-// [transcriptLinesMax].
+// [TranscriptReadLines].
 func (r *openCodeReading) frame() error {
-	if r.framed++; r.framed > transcriptLinesMax {
+	if r.framed++; r.framed > r.b.bounds.ReadLines {
 		return errReadLines
 	}
 	return nil
