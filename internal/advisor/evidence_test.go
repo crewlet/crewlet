@@ -124,10 +124,8 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 		ledger []usage.TurnLedgerRow
 		want   []advisor.Class
 	}{
-		// WAKE.REASON_WASTE says a seat's turns that did nothing, by what
-		// woke them: no class counts them by seat alone any more.
 		"5 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 5),
-			started("app", "chat:message", "moved", 15)}, nil},
+			started("app", "chat:message", "moved", 15)}, []advisor.Class{advisor.ClassNoopShare}},
 		"4 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 4),
 			started("app", "chat:message", "moved", 16)}, nil},
 		"19 turns, all nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 19), held}, nil},
@@ -585,5 +583,24 @@ func TestAnIdleReviewNamesWhoItWaitsOn(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Errorf("raised findings about %d parties, want 3", len(got))
+	}
+}
+
+// A CLASS THE LIST NO LONGER STATES IS STILL READ FOR THE INSIGHTS IT SHARES: agents whose turns
+// mostly changed nothing are wake.reason_waste's to list, and wake.noop_share is kept apart for
+// the usage insights' published catalogue, never listed. Mutation: list it again, and one cause
+// reads twice.
+func TestANoopShareIsSharedNeverListed(t *testing.T) {
+	t.Parallel()
+	answer := richAnswer(t)
+	for _, f := range answer.Findings {
+		if f.Class == advisor.ClassNoopShare {
+			t.Errorf("listed %+v", f)
+		}
+	}
+	if len(answer.Shared) == 0 || !slices.ContainsFunc(answer.Shared, func(f advisor.Finding) bool {
+		return f.Class == advisor.ClassNoopShare
+	}) {
+		t.Errorf("shared %+v, want the agents whose turns changed nothing", answer.Shared)
 	}
 }

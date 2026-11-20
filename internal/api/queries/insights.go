@@ -95,7 +95,8 @@ func (s Sources) insightFindings(ctx context.Context) ([]advisor.Finding, error)
 	if err != nil {
 		return nil, err
 	}
-	return answer.Findings, nil
+	// THE PUBLISHED CATALOGUE STILL SHARES CLASSES THE LIST NO LONGER STATES.
+	return append(answer.Findings, answer.Shared...), nil
 }
 
 // InsightSharer is the sharer over this node's sources: the advisor's findings,

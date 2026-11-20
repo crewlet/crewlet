@@ -285,6 +285,10 @@ type Answer struct {
 	// Silent is each class that read its sources and still could not judge
 	// all of the company, with why (ADR-0166).
 	Silent []Silence `json:"silent,omitempty"`
+	// Shared are the findings of classes the Advisor no longer lists that
+	// the usage insights still share by their published class ([Shared]);
+	// never listed, never kept.
+	Shared []Finding `json:"-"`
 }
 
 // SeatShare is one seat a finding is about, and its share of the number.

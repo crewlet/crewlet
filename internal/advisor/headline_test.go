@@ -46,7 +46,7 @@ func TestEveryClassLeadsWithItsNumber(t *testing.T) {
 	}
 	classes := append(append(advisor.EvidenceClasses(), advisor.AtlasClasses()...), advisor.ClassHealthUnheld)
 	for _, class := range classes {
-		if slices.Contains(writesItsOwn, class) || (slices.Contains(advisor.AtlasClasses(), class) &&
+		if slices.Contains(writesItsOwn, class) || advisor.Shared(class) || (slices.Contains(advisor.AtlasClasses(), class) &&
 			class != advisor.ClassAtlasSourceStale) {
 			continue // its own headline, or a title that counts its entries
 		}
