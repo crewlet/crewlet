@@ -490,13 +490,20 @@ type CoordinatorOptions struct {
 	// nothing.
 	SteersEnded func(ctx context.Context, run PendingRun) error
 
-	// SteersConfirmed publishes, as delivered, every note a hook's serve to the
-	// run's job is recorded as having handed over ([readByServeOf]). Called on
-	// every Claude Code box read, asked or not ([Coordinator.settleHookReceipts]),
-	// so a verdict whose answer was lost is published by the next read. Ids
-	// derive from the turn and each note, so a repeat is the same records; nil
-	// publishes nothing.
+	// SteersConfirmed publishes, as delivered, every note and wake item a hook's
+	// serve to the run's job is recorded as having handed over ([readByServeOf]),
+	// the engine claiming each wake. Called on every Claude Code box read, asked
+	// or not ([Coordinator.settleHookReceipts]), so a verdict whose answer was
+	// lost is published by the next read. Ids derive from the turn and each note,
+	// so a repeat is the same records; nil publishes nothing.
 	SteersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
+
+	// WakesEnded reports the wake items of a job a relaunch replaced that no
+	// step read, which its write removed ([PriorBox.Wakes]): each unconfirmed
+	// or unread, its delivery left to a turn of its own. Called once the write
+	// landed, never on the launch's path to fail it: the engine publishes off it,
+	// under an id from the turn and the wake. Nil reports nothing.
+	WakesEnded func(ctx context.Context, run PendingRun, wakes []RunNote)
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes awaits its resume ([SeatHold]). Nil holds nothing (a test's
@@ -701,10 +708,12 @@ type Coordinator struct {
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
 	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
-	// steersEnded is [CoordinatorOptions.SteersEnded], and steersConfirmed
-	// [CoordinatorOptions.SteersConfirmed].
+	// steersEnded is [CoordinatorOptions.SteersEnded], steersConfirmed
+	// [CoordinatorOptions.SteersConfirmed] and wakesEnded
+	// [CoordinatorOptions.WakesEnded].
 	steersEnded     func(ctx context.Context, run PendingRun) error
 	steersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
+	wakesEnded      func(ctx context.Context, run PendingRun, wakes []RunNote)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -982,6 +991,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		turnLost:           opts.TurnLost,
 		steersEnded:        opts.SteersEnded,
 		steersConfirmed:    opts.SteersConfirmed,
+		wakesEnded:         opts.WakesEnded,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
@@ -2064,8 +2074,8 @@ const hookVerdictWait = 10 * time.Second
 const hookVerdictRetry = time.Second
 
 // settleHookReceipts settles run's job's hooks' serves by what the job's session
-// showed of them ([PendingStore.SettleHook]) and publishes every note a serve
-// handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
+// showed of them ([PendingStore.SettleHook]) and publishes every note and wake a
+// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
 // A verdict the store does not answer within its room is [ErrStoreSilent],
 // returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
 func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
@@ -2099,7 +2109,7 @@ func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, re
 	}
 	var confirmed []RunNote
 	for _, n := range notes {
-		if n.For == "" && readByServeOf(n, run.LaunchID) {
+		if (n.For == "" || n.IsWake()) && readByServeOf(n, run.LaunchID) {
 			confirmed = append(confirmed, n)
 		}
 	}

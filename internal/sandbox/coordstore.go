@@ -227,6 +227,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			// that wrote it ([PriorBox.Restart], [PriorBox.Writer]).
 			Context: existing.Launch.Context,
 			Restart: restartOf(existing.Launch.ResumedCount), Writer: existing.Launch.CountRelease,
+			// And the wakes that job was handed and never read, which this
+			// write removes ([openNotes]) for the launch to report.
+			Wakes: unreadWakes(existing.Steer.Notes),
 		}
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset: the turn may still
 		// depend on what an earlier job named, and once parked this row is
@@ -351,7 +354,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// asked for them ([RunSteer.Pulled]). The brief's notes are read BY THIS
 		// JOB in the write that names it, so its harness never takes them again,
 		// then the box's are filed. An item for the job before alone
-		// ([RunNote.For]) goes: [openNotes] removes every one first.
+		// ([RunNote.For]) goes, but a wake item read, which is the turn's:
+		// [openNotes] removes every other one first.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
