@@ -1155,16 +1155,25 @@ func (s *ruleStage) scan(text []byte, lo, at, limit int, eof bool) int {
 // same whether the reach holds five values or the nine thousand of `pwd=x`
 // lines: TestAStageDenseInPasswordValuesCostsWhatItsValuesCost holds it.
 func priorWith(prior [][2]int, v [2]int) [][2]int {
+	prior, _ = priorVisits(prior, v)
+	return prior
+}
+
+// priorVisits is [priorWith], and the values it visited to make it: the middle
+// one it read, and on a copy, those it passed over and those it moved down. The
+// count is what the test of a value's cost judges, not the time a run of them
+// takes, which moved with how busy the runner was.
+func priorVisits(prior [][2]int, v [2]int) ([][2]int, int) {
 	prior = append(prior, v)
 	floor := v[0] - stageReach
 	if prior[len(prior)/2][1] >= floor {
-		return prior
+		return prior, 1
 	}
 	k := 0
 	for prior[k][1] < floor {
 		k++
 	}
-	return append(prior[:0], prior[k:]...)
+	return append(prior[:0], prior[k:]...), 1 + len(prior)
 }
 
 // commit writes the window's input from at to c as it stands, and is c.
