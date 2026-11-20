@@ -205,7 +205,7 @@ func RunDeep(ctx context.Context, deps Deps, d DeepData, b DeepBounds, progress 
 			dropped[advisor.DropWords]++
 			continue
 		}
-		kept = append(kept, f)
+		kept = append(kept, advisor.SayNumbers(f))
 	}
 	out.Findings, out.Dropped, out.Listed = kept, dropped, len(kept)
 	return out
@@ -864,7 +864,9 @@ How to work:
   its outline: look into it with look rather than reading it again, and narrow a read with its parameters.
 - Before you blame a seat's tokens, read the split: tokens answers input_tokens (which includes the cache),
   cache_read_tokens and output_tokens. A jump in a seat's tokens is most often cache reads, which cost a tenth as
-  much; a finding about tokens cites cache_read_tokens beside the total, or it is dropped.
+  much; a finding about tokens cites cache_read_tokens beside the total, or it is dropped. Offer a budget or a
+  cap that cuts a seat's tokens only when fresh input (input_tokens less cache_read_tokens) or output drove them;
+  where cache reads did, say so, and the engine offers no budget.
 - Call progress with one short line whenever you start on something new, such as "testing: releases pile up behind
   one seat". Each read and each verdict is shown on its own.
 - When every item has a verdict, or when a read tells you your time is nearly spent, call submit_findings once.
