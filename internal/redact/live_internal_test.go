@@ -5,9 +5,36 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// allocated is how many bytes f allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// SETTLED COPIES NO TEXT IT READS: over 4 MiB of a plain log, [Settled]
+// allocates within a quarter of the text of what its readers ([settle])
+// allocate reading it, so a caller holding the text pays for no copy of it.
+// Not parallel: a parallel test's allocations would count as its own.
+//
+// Mutation: hand the settling a copy of the text, and Settled allocates the
+// text's length more.
+func TestSettledCopiesNoTextItReads(t *testing.T) {
+	line := "2026-11-19T10:00:00Z INFO build step 12 of 40 passed in 0.412s\n"
+	text := strings.Repeat(line, 4<<20/len(line))
+	readers := allocated(func() { _, _ = settle(text) })
+	got := allocated(func() { _ = Settled(text) })
+	if got > readers+uint64(len(text)/4) {
+		t.Errorf("Settled over %d bytes allocated %d bytes, against %d its readers allocate", len(text), got, readers)
+	}
+}
 
 // NewStreamHolding is a Stream whose keys' stage decides a window once the
 // text has run h past it ([newStreamHolding]), a live one where asked.
@@ -22,7 +49,7 @@ func NewStreamHolding(w io.Writer, h int, liveStream bool) *Stream {
 // Settling is a [settling] for the package's external tests: Settle answers
 // how much more of the text written is settled; Held is what it holds, Kept
 // the buffer it keeps, and Asks how many times it asked Settled's readers.
-type Settling struct{ s settling }
+type Settling struct{ s growing }
 
 func (s *Settling) Write(p []byte) { s.s.write(p) }
 

@@ -149,7 +149,7 @@ type live struct {
 	// up to which Flush wrote head's redaction; raw is the text past it
 	// once the stages run.
 	settled int
-	raw     settling
+	raw     growing
 }
 
 // NewStream is a Stream that writes what it redacts to w.
@@ -257,7 +257,7 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 	case s.closed:
 		return s.written(), 0, nil
 	case s.p == nil && l != nil:
-		rest := settling{text: s.head[l.settled:]}
+		rest := settling[[]byte]{text: s.head[l.settled:]}
 		if n := rest.next(); n > 0 {
 			s.emit(Secrets(string(s.head[l.settled : l.settled+n])))
 			l.settled += n

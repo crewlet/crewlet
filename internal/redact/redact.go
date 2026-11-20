@@ -6051,7 +6051,7 @@ func inBase64(c byte) bool {
 // anything pending there and the text past it reads as one that starts
 // there: Settled is that point and Settled of the rest, and never falls.
 func Settled(text string) int {
-	s := settling{text: []byte(text)}
+	s := settling[string]{text: text}
 	return s.next()
 }
 
@@ -6060,22 +6060,19 @@ func Settled(text string) int {
 // many times it asked Settled's readers ([settle]). It asks only once a line
 // break has arrived since it last asked, since Settled reads nothing past
 // the last one, and only of the text from its point to there, which Settled
-// chains at. What it holds is the line being written and the lines Settled
-// holds back: a long line whole, until it ends and Settled settles it, which
-// the caller's bound on a line bounds.
-type settling struct {
-	text          []byte
+// chains at. It holds the line being written and the lines Settled holds
+// back, which a run of key lines can make any length. Over a string, as
+// Settled reads one, an ask copies nothing.
+type settling[T textual] struct {
+	text          T
 	scanned, asks int
 }
 
-// write takes p as the next of the text.
-func (s *settling) write(p []byte) { s.text = append(s.text, p...) }
-
 // next is how much more of the text is settled, the text left as it is.
-func (s *settling) next() int {
+func (s *settling[T]) next() int {
 	from := s.scanned
 	s.scanned = len(s.text)
-	i := bytes.LastIndexByte(s.text[from:], '\n')
+	i := tLastIndexByte(s.text[from:], '\n')
 	if i < 0 {
 		return 0
 	}
@@ -6084,17 +6081,24 @@ func (s *settling) next() int {
 	return n
 }
 
+// growing is a settling over bytes a stream holds: it takes the text as it
+// is written, and hands on what settles.
+type growing struct{ settling[[]byte] }
+
+// write takes p as the next of the text.
+func (s *growing) write(p []byte) { s.text = append(s.text, p...) }
+
 // settlingKeeps is the most buffer a settling keeps once what it holds fits
-// in it again: a text's line being written and the lines Settled holds back
-// for a block's and a value's reach ([MaxKeyBlockBytes], [MaxReach]), with
-// room for append to double. A buffer grown past it held a long line, or a
-// longer stretch Settled held back, which a stream would otherwise keep the
-// size of until it closed.
+// in it again: a line being written and the lines Settled holds back in an
+// ordinary text, for a block's and a value's reach ([MaxKeyBlockBytes],
+// [MaxReach]), with room for append to double. A buffer grown past it held a
+// long line, or a longer stretch Settled held back, which a stream would
+// otherwise keep the size of until it closed.
 const settlingKeeps = 4 * MaxReach
 
 // settle hands hand the text settled since it last answered, if any, and
 // keeps the rest.
-func (s *settling) settle(hand func([]byte)) {
+func (s *growing) settle(hand func([]byte)) {
 	n := s.next()
 	if n == 0 {
 		return
