@@ -1538,7 +1538,7 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 // since the box accepted each under them. See the package doc, "A turn's notes".
 func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 	steer.Notes = slices.DeleteFunc(steer.Notes, func(held RunNote) bool {
-		return held.For != "" && !(held.IsWake() && held.Read != nil)
+		return held.For != "" && (!held.IsWake() || held.Read == nil)
 	})
 	order := steer.Reads + 1
 	for _, note := range run.BriefNotes {

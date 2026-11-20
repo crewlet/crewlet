@@ -174,16 +174,17 @@ func (s *runSteers) wakeKeyUnknown(n sandbox.RunNote) bool {
 }
 
 // fileWake seals w for job, the job turnID's run works as, and files it on the
-// run's record ([sandbox.PendingStore.FileWake]), answering the item that
-// holds it: what the engine's router files a wake through. A refusal the store
-// names ([sandbox.ErrWakeClosed], [sandbox.ErrWakesSpent],
-// [sandbox.ErrWakeTooLarge]) leaves the wake to a turn of its own.
-func (s *runSteers) fileWake(ctx context.Context, turnID, job string, w steer.Wake) (sandbox.RunNote, error) {
+// run's record ([sandbox.PendingStore.FileWake]): what the engine's router
+// files a wake through. A refusal the store names ([sandbox.ErrWakeClosed],
+// [sandbox.ErrWakesSpent], [sandbox.ErrWakeTooLarge]) leaves the wake to a
+// turn of its own.
+func (s *runSteers) fileWake(ctx context.Context, turnID, job string, w steer.Wake) error {
 	sealed, err := s.sealWake(turnID, job, w)
 	if err != nil {
-		return sandbox.RunNote{}, err
+		return err
 	}
-	return s.store.FileWake(ctx, turnID, sandbox.WakeFiling{Launch: job, Wake: sealed})
+	_, err = s.store.FileWake(ctx, turnID, sandbox.WakeFiling{Launch: job, Wake: sealed})
+	return err
 }
 
 // maxWakeItemUnits is the most UTF-16 units one wake item's message may take

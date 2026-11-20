@@ -111,7 +111,7 @@ func TestAWakeItemIsHandedToItsJobAsAWakeAndNeverAsANote(t *testing.T) {
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	if _, err := runs.fileWake(ctx, "run-1", launch, wakeAbout("w-1", "the deploy target is staging")); err != nil {
+	if err := runs.fileWake(ctx, "run-1", launch, wakeAbout("w-1", "the deploy target is staging")); err != nil {
 		t.Fatal(err)
 	}
 	for i := range steer.MaxPendingNotes {
@@ -159,7 +159,7 @@ func TestAWakeItemIsServedToItsJobsHooksOnce(t *testing.T) {
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, _ := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	if _, err := runs.fileWake(ctx, "run-1", launch, wakeAbout("w-1", "the deploy target is staging")); err != nil {
+	if err := runs.fileWake(ctx, "run-1", launch, wakeAbout("w-1", "the deploy target is staging")); err != nil {
 		t.Fatal(err)
 	}
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "a note", By: "founder"})
@@ -200,7 +200,7 @@ func TestAWakeIsClaimedOnlyOnceReadAndEveryWakeIsReportedOnce(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	file := func(w steer.Wake) {
 		t.Helper()
-		if _, err := runs.fileWake(ctx, "run-1", launch, w); err != nil {
+		if err := runs.fileWake(ctx, "run-1", launch, w); err != nil {
 			t.Fatal(err)
 		}
 	}
