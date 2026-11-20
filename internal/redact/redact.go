@@ -345,6 +345,7 @@
 package redact
 
 import (
+	"bytes"
 	"cmp"
 	"io"
 	"iter"
@@ -5991,16 +5992,14 @@ func inBase64(c byte) bool {
 	return c == '+' || c == '/' || c == '='
 }
 
-// Settled is how much of text — a text still being written, one complete line
-// at a time — can be redacted and shown now: the length of its longest prefix,
-// ending on a line break, whose redaction nothing written after text can
-// change.
+// Settled is how much of text, a text still being written a complete line at
+// a time, can be redacted and shown now: the length of its longest prefix
+// ending on a line break whose redaction nothing written after it can change.
 //
 // THE PROMISE IS EXACT: for every boundary it returns, redacting the text in
 // pieces cut there is the same as redacting it whole, however the rest of it
-// arrives. So a reader shown each settled piece as it lands sees, in the end,
-// exactly what the whole text redacts to — and never a credential in clear
-// that a later line would have redacted. Five things hold a line back, and
+// arrives, so a reader shown each settled piece as it lands sees in the end
+// exactly what the whole text redacts to. Five things hold a line back, and
 // each is a match that can cross a line break:
 //
 //   - a private key's block still OPEN — its BEGIN line, and every line
@@ -6042,16 +6041,71 @@ func inBase64(c byte) bool {
 //     (`-----END RSA PRIVATE KEY-----|passwd:`): there the rule reads a
 //     marker, which can join the value's line to the END's or take the
 //     gutter the END's line opened with, so the claim keeps out of the block
-//     a value the rule does not take. Held for the rule's reading alone, the
-//     live view redacted a piece of a key's line that the whole text
-//     publishes.
+//     a value the rule does not take.
 //
-// Whatever is after the last line break is not a line yet, and is never
-// settled: a credential is matched by its whole shape, and half a token on
-// screen is a line that changes when its other half lands.
+// What follows the last line break is never settled: a credential is matched
+// by its whole shape, and half a token is a line its other half changes.
+//
+// READ IN ANY PIECES, IT ANSWERS WHAT IT ANSWERS WHOLE ([settling]): nothing
+// written after a settled point reads back across it, so no reader holds
+// anything pending there and the text past it reads as one that starts
+// there: Settled is that point and Settled of the rest, and never falls.
 func Settled(text string) int {
-	settled, _ := settle(text)
-	return settled
+	s := settling{text: []byte(text)}
+	return s.next()
+}
+
+// settling is [Settled] of a text as it arrives: the text past the point
+// settled so far, how much of it was looked at for a line break, and how
+// many times it asked Settled's readers ([settle]). It asks only once a line
+// break has arrived since it last asked, since Settled reads nothing past
+// the last one, and only of the text from its point to there, which Settled
+// chains at. What it holds is the line being written and the lines Settled
+// holds back: a long line whole, until it ends and Settled settles it, which
+// the caller's bound on a line bounds.
+type settling struct {
+	text          []byte
+	scanned, asks int
+}
+
+// write takes p as the next of the text.
+func (s *settling) write(p []byte) { s.text = append(s.text, p...) }
+
+// next is how much more of the text is settled, the text left as it is.
+func (s *settling) next() int {
+	from := s.scanned
+	s.scanned = len(s.text)
+	i := bytes.LastIndexByte(s.text[from:], '\n')
+	if i < 0 {
+		return 0
+	}
+	s.asks++
+	n, _ := settle(string(s.text[:from+i+1]))
+	return n
+}
+
+// settlingKeeps is the most buffer a settling keeps once what it holds fits
+// in it again: a text's line being written and the lines Settled holds back
+// for a block's and a value's reach ([MaxKeyBlockBytes], [MaxReach]), with
+// room for append to double. A buffer grown past it held a long line, or a
+// longer stretch Settled held back, which a stream would otherwise keep the
+// size of until it closed.
+const settlingKeeps = 4 * MaxReach
+
+// settle hands hand the text settled since it last answered, if any, and
+// keeps the rest.
+func (s *settling) settle(hand func([]byte)) {
+	n := s.next()
+	if n == 0 {
+		return
+	}
+	hand(s.text[:n])
+	if rest := s.text[n:]; cap(s.text) > settlingKeeps && len(rest) <= settlingKeeps {
+		s.text = bytes.Clone(rest)
+	} else {
+		s.text = s.text[:copy(s.text, rest)]
+	}
+	s.scanned -= n
 }
 
 // settle is [Settled], and the bytes it handed its readers to read: the keys'

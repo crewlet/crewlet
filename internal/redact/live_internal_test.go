@@ -19,6 +19,34 @@ func NewStreamHolding(w io.Writer, h int, liveStream bool) *Stream {
 	return s
 }
 
+// Settling is a [settling] for the package's external tests: Settle answers
+// how much more of the text written is settled; Held is what it holds, Kept
+// the buffer it keeps, and Asks how many times it asked Settled's readers.
+type Settling struct{ s settling }
+
+func (s *Settling) Write(p []byte) { s.s.write(p) }
+
+func (s *Settling) Settle() (n int) {
+	s.s.settle(func(b []byte) { n = len(b) })
+	return n
+}
+
+func (s *Settling) Held() int { return len(s.s.text) }
+
+func (s *Settling) Kept() int { return cap(s.s.text) }
+
+func (s *Settling) Asks() int { return s.s.asks }
+
+// SettledWhole is [Settled] read whole by its readers ([settle]), with no
+// settling: the oracle a settling is held to.
+func SettledWhole(text string) int {
+	n, _ := settle(text)
+	return n
+}
+
+// SettlingKeeps is [settlingKeeps].
+const SettlingKeeps = settlingKeeps
+
 // CountEarly counts in n each window s's keys' stage decides early.
 func CountEarly(s *Stream, n *int) {
 	s.observe = &keyObserver{decided: func(int, int) { *n++ }}
