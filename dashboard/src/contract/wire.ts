@@ -146,7 +146,9 @@ export const QUERY_TIMEOUT_MS = 10_000;
  * measured worst, and one queued behind every slot the engine reads with waits
  * at most one such read more, for the first of them to end. A screen that gave
  * up sooner showed a long session as failed while the engine went on reading
- * it; the frame carries the wait, so a read this tab gives up on still stops.
+ * it. The frame carries the wait, so a read stops once it has passed, and a
+ * screen that stops waiting sooner (left, or another session chosen) cancels
+ * the read (`query_cancel`), which stops it then.
  */
 export const TRANSCRIPT_QUERY_TIMEOUT_MS = 162_000;
 

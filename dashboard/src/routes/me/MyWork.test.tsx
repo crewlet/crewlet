@@ -321,7 +321,12 @@ test("an unbound reader's own day is the one kept under their login", async () =
   });
   mount();
   await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
-  expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
+  expect(query).toHaveBeenCalledWith(
+    "work_my_work",
+    { handle: "token:ops-7" },
+    undefined,
+    expect.any(AbortSignal),
+  );
   // AND WHAT BINDING WOULD ADD, with the command that binds it, rather than
   // reporting a fault, which is a person's (`Inbox.test.tsx`).
   // A TOKEN THE NODE'S CONFIG DECLARES cannot be bound, so it is told the two

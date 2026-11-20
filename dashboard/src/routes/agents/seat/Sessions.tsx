@@ -425,11 +425,12 @@ function Transcript({
   const pages = usePaged(
     capture.first,
     asked,
-    (cursor) =>
+    (cursor, _edges, signal) =>
       socket.query(
         "executor_session",
         withFloor("executor_session", JSON.stringify({ ...asked, cursor })),
         TRANSCRIPT_QUERY_TIMEOUT_MS,
+        signal,
       ),
     pickEntries,
     entryId,

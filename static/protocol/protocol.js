@@ -2829,11 +2829,17 @@ var LiveSocket = class {
 	*
 	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-	* query goes unanswered for `waitMs`, or `closed` if the client shuts down.
+	* query goes unanswered for `waitMs`, or `closed` if the client shuts down;
+	* and with `signal`'s reason once it aborts, the question then given up on
+	* here and at the engine (`query_cancel`), which stops reading for it.
 	*/
-	query(what, params, waitMs = QUERY_TIMEOUT_MS) {
+	query(what, params, waitMs = QUERY_TIMEOUT_MS, signal) {
 		const id = this.nextQueryId++;
 		return new Promise((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(signal.reason);
+				return;
+			}
 			const entry = {
 				id,
 				what,
@@ -2841,11 +2847,32 @@ var LiveSocket = class {
 				waitMs,
 				resolve,
 				reject,
-				timer: 0
+				timer: 0,
+				sentOn: null
 			};
 			this.inflight.set(id, entry);
+			signal?.addEventListener("abort", () => this.cancel(entry, signal.reason), { once: true });
 			this.sendQuery(entry);
 		});
+	}
+	/**
+	* GIVE UP ON A QUESTION NOBODY WAITS FOR ANY MORE, here and at the engine: a
+	* screen left behind a transcript page's read held one of the socket's four
+	* slots and one of the node's two transcript reads for minutes, for nobody.
+	* An answer that comes anyway finds nothing in flight and is dropped.
+	*/
+	cancel(entry, reason) {
+		if (this.inflight.get(entry.id) !== entry) return;
+		this.inflight.delete(entry.id);
+		clearTimeout(entry.timer);
+		entry.reject(reason instanceof Error ? reason : new Error(String(reason)));
+		if (!this.connected || !this.sock || entry.sentOn !== this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "query_cancel",
+				id: entry.id
+			}));
+		} catch {}
 	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
@@ -2861,6 +2888,7 @@ var LiveSocket = class {
 		} catch {
 			return;
 		}
+		entry.sentOn = this.sock;
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { QUERY_TIMEOUT_MS, TRANSCRIPT_QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
+import { afterMicrotasks } from "../test/settle.ts";
 import { Store } from "./store.ts";
 
 /** The engine's sentence for a read refused on a log at its ceiling
@@ -265,6 +266,51 @@ describe("a query frame", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A QUESTION GIVEN UP ON IS CANCELLED AT THE ENGINE AND SETTLED HERE AT ONCE:
+  // its signal aborting sends `query_cancel` naming it, so the engine stops
+  // reading for it, rejects it with the signal's reason, and its answer, if one
+  // comes, finds nothing waiting. One given up on before its socket opened is
+  // never sent.
+  // Mutation: keep the in-flight entry, or send no cancel, and an abandoned
+  // transcript read holds the tab's slot and the node's for its whole wait.
+  test("a question whose signal aborts is cancelled at the engine and settled", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    const early = new AbortController();
+    let earlyReason: unknown = null;
+    socket.query("fleet", {}, undefined, early.signal).catch((err: unknown) => {
+      earlyReason = err;
+    });
+    early.abort();
+    await afterMicrotasks();
+    expect(earlyReason).toBe(early.signal.reason);
+    dial(0).open();
+    const stop = new AbortController();
+    let reason: unknown = null;
+    let answered = false;
+    socket.query("executor_session", {}, TRANSCRIPT_QUERY_TIMEOUT_MS, stop.signal).then(
+      () => {
+        answered = true;
+      },
+      (err: unknown) => {
+        reason = err;
+      },
+    );
+    const frames = () => dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(frames().filter((frame) => frame.kind === "query")).toHaveLength(1);
+    const id = frames().find((frame) => frame.kind === "query")?.id;
+    stop.abort();
+    await afterMicrotasks();
+    expect(reason).toBe(stop.signal.reason);
+    expect(frames().filter((frame) => frame.kind === "query_cancel")).toEqual([
+      { kind: "query_cancel", id },
+    ]);
+    dial(0).onmessage?.({ data: JSON.stringify({ kind: "result", id, data: {} }) } as MessageEvent);
+    await afterMicrotasks();
+    expect(answered).toBe(false);
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the

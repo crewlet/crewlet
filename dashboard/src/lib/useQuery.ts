@@ -215,16 +215,17 @@ export function useQuery<K extends QueryName>(
     }
     const mine = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
+    // A QUESTION THIS EFFECT STOPS WAITING FOR IS GIVEN UP ON at the engine
+    // too, which stops reading for it: a screen left behind a transcript page
+    // held the socket's slot and the node's for minutes, for nobody.
+    const asking = new AbortController();
 
     const run = async (): Promise<void> => {
       let retryMs: number | null = null;
       try {
         // A WAIT OF ITS OWN ONLY WHERE THE SCREEN NAMED ONE: every other
-        // question asks as it always has, with the socket's.
-        const asking = withFloor(what, key);
-        const data = await (waitMs === undefined
-          ? socket.query(what, asking)
-          : socket.query(what, asking, waitMs));
+        // question waits the socket's (`waitMs` undefined).
+        const data = await socket.query(what, withFloor(what, key), waitMs, asking.signal);
         if (generation.current !== mine) return;
         setState({ data, loading: false, error: null, refusal: null, sent: true });
       } catch (err) {
@@ -270,6 +271,7 @@ export function useQuery<K extends QueryName>(
     return () => {
       generation.current++;
       clearTimeout(timer);
+      asking.abort();
     };
   }, [socket, what, key, enabled, pollMs, asked, reconnects, waitMs]);
 
