@@ -40,3 +40,12 @@ func (s Sources) AsRead(ctx context.Context, f advisor.Finding, now time.Time) (
 func (s Sources) WeekOf(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
 	return advisorObserver{s: s}.Week(ctx, from, to)
 }
+
+// AdvisorReadNames is every question the deep run may ask, by name.
+func AdvisorReadNames() []string {
+	out := make([]string, len(advisorReads))
+	for i, q := range advisorReads {
+		out[i] = q.Name
+	}
+	return out
+}

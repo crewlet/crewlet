@@ -122,12 +122,39 @@
     "Advisor": {
       "additionalProperties": false,
       "properties": {
+        "deep": {
+          "$ref": "#/$defs/AdvisorDeep",
+          "description": "What one investigation by the Advisor's model may spend. It runs nightly, early on Monday before the weekly report, and when an administrator asks."
+        },
         "model": {
           "description": "The providers.llm entry the Advisor's model runs on: it explains findings and adds what no rule names, each checked against the engine's records before it is listed. Absent: the Advisor's rules still run, and its model does not.",
           "type": [
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AdvisorDeep": {
+      "additionalProperties": false,
+      "properties": {
+        "minutes": {
+          "description": "The most minutes one investigation may run: 1 to 120. Absent: 20.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tokens": {
+          "description": "The most tokens one investigation may spend, charged to the company and no seat: 100000 to 20000000. Absent: 2000000.",
+          "type": [
+            "integer",
             "null"
           ]
         }
