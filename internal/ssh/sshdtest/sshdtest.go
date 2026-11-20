@@ -59,9 +59,16 @@ var runtimeName = sync.OnceValue(func() string {
 // first process keeps sshd running, and a systemctl stands in that restarts it
 // and returns once the new one answers, which the setup's own `systemctl
 // reload ssh` then calls as it would on a server.
+//
+// APT RETRIES EACH FETCH FIVE TIMES (aptRetries), set before its first fetch so
+// update and install both take it. apt waits 1 s before the first retry and
+// doubles the wait, so a fetch rides out about 31 s of a mirror resetting or
+// answering 5xx (issue #849), while a mirror that stays down still fails the
+// build, its own messages kept in the build's output ([build]).
 const dockerfile = `FROM %s
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      openssh-server openssh-client sudo procps passwd bsdutils >/dev/null && rm -rf /var/lib/apt/lists/* && \
+RUN printf 'Acquire::Retries "%d";\n' >/etc/apt/apt.conf.d/80crewlet-retries && \
+    apt-get -q update && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends \
+      openssh-server openssh-client sudo procps passwd bsdutils && rm -rf /var/lib/apt/lists/* && \
     rm -f /etc/ssh/ssh_host_* && mkdir -p /run/sshd && \
     printf '%%s\n' '#!/bin/sh' '[ "$1" = reload ] || exit 1' \
       'old=$(cat /run/sshd.pid)' 'kill "$old"' 'while kill -0 "$old" 2>/dev/null; do sleep 0.1; done' \
@@ -69,6 +76,10 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     chmod 0755 /usr/local/bin/systemctl
 CMD ["sh", "-c", "ssh-keygen -A >/dev/null && while :; do /usr/sbin/sshd -D -e; done"]
 `
+
+// aptRetries is how many times apt fetches a file again before it fails the
+// build ([dockerfile] says why five).
+const aptRetries = 5
 
 // images built in this process, by base.
 var (
@@ -87,13 +98,33 @@ func image(t *testing.T, base string) string {
 	tag := "crewlet-sshdtest:" + strings.NewReplacer(":", "-", "/", "-").Replace(base)
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runtimeName(), "build", "-q", "-t", tag, "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf(dockerfile, base))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sshdtest: build %s: %v\n%s", tag, err, out)
+	if err := build(ctx, runtimeName(), tag, fmt.Sprintf(dockerfile, base, aptRetries)); err != nil {
+		t.Fatal(err)
 	}
 	builtAt[base] = tag
 	return tag
+}
+
+// build builds the Dockerfile text as tag with runtime, and answers an error
+// that carries the build's whole output: a failed step's own messages, apt's
+// among them, so a mirror that could not be reached reads differently from a
+// package that is gone.
+//
+// NEVER QUIET: docker's -q leaves only "exit code: 100" of a failed step.
+// docker's BuildKit is asked for plain progress, which prints every step's
+// output whether or not a terminal is attached; podman prints it unasked, and
+// takes no such flag.
+func build(ctx context.Context, runtime, tag, text string) error {
+	args := []string{"build", "-t", tag}
+	if runtime == "docker" {
+		args = append(args, "--progress=plain")
+	}
+	cmd := exec.CommandContext(ctx, runtime, append(args, "-")...)
+	cmd.Stdin = strings.NewReader(text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("sshdtest: build %s: %w\n%s", tag, err, out)
+	}
+	return nil
 }
 
 // Server is one running sshd.
