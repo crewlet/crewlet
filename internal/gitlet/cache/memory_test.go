@@ -15,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	enginenode "github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -786,7 +788,6 @@ func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 // share or the maintenance share by the whole memory.
 func TestTheEnginesPoolsAreKeptBeforeGitletsShares(t *testing.T) {
 	t.Parallel()
-	const pools = int64(1216) << 20
 	for _, node := range []struct {
 		cores  int
 		memory int64
@@ -798,6 +799,7 @@ func TestTheEnginesPoolsAreKeptBeforeGitletsShares(t *testing.T) {
 			return c.BackgroundBudget(), cache.MaintenanceMemory(c), cache.MemoryReserved(c),
 				w.pool.Slots(gitproc.ClassTransfer)
 		}
+		pools := executorPools(true, node.memory)
 		budget, maintenance, reserved, transfers := sized(node.memory, pools)
 		leftBudget, leftMaintenance, leftReserved, leftTransfers := sized(node.memory-pools, 0)
 		if transfers != leftTransfers || maintenance != leftMaintenance || budget != leftBudget ||
@@ -911,7 +913,7 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 	}
 	transfer, serving, core := amount(t, gitproc.TransferMemory), amount(t, cache.ServingMemoryPerCore),
 		amount(t, gitproc.CoreMemory)
-	pools := spaced((executor.MemoryPools(memory)+1<<19)>>20) + " MiB"
+	alone, seats := mib(executorPools(false, memory)), mib(executorPools(true, memory))
 	for _, want := range []string{
 		fmt.Sprintf("%s for every transfer its git lane admits", transfer),
 		fmt.Sprintf("%s for each core its memory backs at %s a core", serving, core),
@@ -924,7 +926,8 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 			"keeps, in place or at a boot",
 		"A restart alone keeps the same lanes over the same memory, and clears it only where " +
 			"gitlet.max_transfers is unset and the memory was lowered after the node booted",
-		fmt.Sprintf("on a node running seats too, the executor's %s of pools first", pools),
+		fmt.Sprintf("first the executor's pools it runs (%s MiB of transcript reads, %s MiB on a node running "+
+			"seats), then of the memory they leave", alone, seats),
 	} {
 		if !strings.Contains(remedy, want) {
 			t.Errorf("the %s remedy does not say %q: %s", statelog.KindCodeMaintenanceRefused, want, remedy)
@@ -940,7 +943,8 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 			fmt.Sprintf("as little as %d%% of that, where the node has a core for every %s of memory or more: "+
 				"on %s and %s cores, %d transfers, of the %d that %s holds", percent, core, amount(t, memory),
 				word(t, cores), zeroing, holds, amount(t, memory)),
-			fmt.Sprintf("and on a node running seats too the executor's %s of pools before both", pools),
+			fmt.Sprintf("both of what the executor's pools leave (%s MiB, or %s MiB on a node running seats too)",
+				alone, seats),
 			"[`code_maintenance_refused`](../reference/alarms.md) says so until the figure is lowered or " +
 				"unset, or the node is given memory past what it keeps, in place or at a boot. A restart alone " +
 				"changes nothing.",
@@ -955,7 +959,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 				"each of which keeps %s of it.", transfer),
 		}},
 		{filepath.Join("docs", "guides", "deployment.md"), []string{
-			fmt.Sprintf("keeps the executor's %s of pools first and sizes Gitlet by what is left", pools),
+			fmt.Sprintf("keeps them first and sizes Gitlet by what is left "+
+				"([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), %s MiB for the transcript reads its "+
+				"API answers and %s MiB where it runs seats too", alone, seats),
 		}},
 	} {
 		path := filepath.Join(sourcetree.Root(t), page.path)
@@ -1096,8 +1102,8 @@ func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 			atMost(shape/bitmap), atMost((shape-cache.IndexBaseBytes)/index), amount(t, large), atMost(large/bitmap),
 			atMost((large-cache.IndexBaseBytes)/index)),
 		fmt.Sprintf("as many run at once as %s a core holds beside the largest", share),
-		fmt.Sprintf("%s a core and no more than one for each %s of its memory, less the executor's pools on a "+
-			"node running seats too, each kept %s",
+		fmt.Sprintf("%s a core and no more than one for each %s of the memory the executor's pools leave, "+
+			"each kept %s",
 			word(t, gitproc.TransfersPerProcess), amount(t, gitproc.TransferShare), amount(t, gitproc.TransferMemory)),
 		fmt.Sprintf("about %d bytes an object of the repository, past the %s",
 			gitproc.TransferBytesPerObject, amount(t, gitproc.TransferMemory)),
@@ -1136,38 +1142,60 @@ func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 	}
 }
 
-// seatsBesideGitlet is what the concept page says of a node running seats
-// beside Gitlet, from the executor's own pools (executor.MemoryPools) and the
-// cache's reserve: the pools, a row of its table for each shape with and
-// without them, and the memory that keeps Gitlet's full shares beside them.
+// seatsBesideGitlet is what the concept page says of the executor's pools
+// beside Gitlet, from the pools a node keeps (executorPools) and the cache's
+// reserve: each pool, what a turn adds, a row of its table for each shape
+// with and without seats, and what 2 GiB running seats keeps past its memory.
 func seatsBesideGitlet(t *testing.T) []string {
 	t.Helper()
-	mib := func(n int64) string { return spaced((n + 1<<19) >> 20) }
-	var want []string
+	turn := executor.NodeWork{Boxes: true, Turns: 1}.MemoryPools(0) - executor.NodeWork{Boxes: true}.MemoryPools(0)
+	want := []string{
+		fmt.Sprintf("%s MiB for the [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers, "+
+			"and on a node running seats too %s MiB at the default `node.max_concurrent`",
+			mib(executorPools(false, 0)), mib(executorPools(true, 0))),
+		fmt.Sprintf("reads of its boxes for its peers, %.1f MiB a turn,", float64(turn)/(1<<20)),
+	}
 	for _, cores := range []int{1, 2, 4, 8} {
 		memory := int64(cores) * gitproc.CoreMemory
-		pools := executor.MemoryPools(memory)
-		want = append(want, fmt.Sprintf("first keeps the executor's own pools at their worst, %s MiB", mib(pools)),
-			fmt.Sprintf("keeps Gitlet's full shares with %s MiB more than %s a core", mib(pools),
-				amount(t, gitproc.CoreMemory)))
-		for _, reserve := range []int64{0, pools} {
+		for _, seats := range []bool{false, true} {
+			reserve := executorPools(seats, memory)
 			left := max(0, memory-reserve)
 			transfers := int(min(int64(gitproc.TransfersPerProcess*cores), max(1, left/gitproc.TransferShare)))
 			kept := cache.MemoryReserve(transfers, cores, memory, reserve)
 			serving := kept - reserve - int64(transfers)*gitproc.TransferMemory
-			seats, plural := "no", "s"
-			if reserve > 0 {
-				seats = "yes"
+			yes, plural := "no", "s"
+			if seats {
+				yes = "yes"
 			}
 			if cores == 1 {
 				plural = ""
 			}
-			want = append(want, fmt.Sprintf("| %s, %s core%s | %s | %d | %s | %s |", amount(t, memory),
-				word(t, cores), plural, seats, transfers, mib(serving), mib(memory-kept)))
+			want = append(want, fmt.Sprintf("| %s, %s core%s | %s | %s | %d | %s | %s |", amount(t, memory),
+				word(t, cores), plural, yes, mib(reserve), transfers, mib(serving), mib(max(0, memory-kept))))
+			if seats && cores == 1 {
+				want = append(want, fmt.Sprintf("so %s running seats beside Gitlet keeps %s MiB more than its "+
+					"memory", amount(t, memory), mib(kept-memory)))
+			}
 		}
 	}
 	return want
 }
+
+// executorPools is what a Gitlet node of memory bytes keeps of the
+// executor's pools, as the engine passes them: the transcript reads its API
+// answers, as every Gitlet node serves ingress, and with seats its boxes'
+// pools at the default node.max_concurrent and the box host's reads for its
+// peers (queue.ConcurrentAnswers, the engine's boxReadsHeld).
+func executorPools(seats bool, memory int64) int64 {
+	w := executor.NodeWork{PersonReads: true}
+	if seats {
+		w.Boxes, w.Turns, w.PeerReads = true, enginenode.DefaultMaxConcurrent, queue.ConcurrentAnswers
+	}
+	return w.MemoryPools(memory)
+}
+
+// mib is n bytes in whole mebibytes, rounded, as the docs write them.
+func mib(n int64) string { return spaced((n + 1<<19) >> 20) }
 
 // windowBlobs is how many of the epoch's largest blob a compaction's build
 // is charged for its delta search (cache.CompactWindowBytes): the docs spell

@@ -268,6 +268,11 @@ const (
 	threadChainMaxSpread = 1 << 15
 )
 
+// threadChainHeldBytes is what the chain holds live at both bounds (HELD AT
+// MOST above): a collection's pass past its base, or a Claude Code reading of
+// a kept session ([HoldingsReadsAtOnce]), at its worst.
+const threadChainHeldBytes = 43 << 20
+
 // claudeResumeLargeFile is the most bytes of a thread Claude Code's load
 // reads with its small path (2.1.322's Jne @284268664 in oee @293824518,
 // 2.1.310's Use @238504623 in Cne @247199785). THE LARGE FILE: past it a

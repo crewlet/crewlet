@@ -64,7 +64,7 @@ const TransferBytesPerObject = 240
 // defaultTransfers is the TRANSFER lane's size when Options.MaxTransfers is 0
 // on a pool of cores read slots over memory bytes, the node's less what
 // Options.Reserve keeps: TransfersPerProcess a core, and no more than one for
-// every TransferShare of the memory — at least one, since a node with no
+// every TransferShare of the memory, and at least one, since a node with no
 // transfer serves no clone, so a node whose reserve takes its memory runs one.
 func defaultTransfers(cores, memory int64) int64 {
 	return min(TransfersPerProcess*cores, max(1, memory/TransferShare))

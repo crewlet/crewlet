@@ -391,16 +391,15 @@
 //
 // # The memory a node keeps for these pools
 //
-// [MemoryPools] adds up the base tier, the takes at their base and the large
-// tier, each at its worst, declared here beside the figures they are measured
-// by: a node running seats beside Gitlet keeps them before it sizes its git
-// lanes and background budget (internal/gitlet/gitproc's Options.Reserve),
-// which the engine passes, as it alone reads the node's roles. Gitlet
-// importing this package could not tell a node running seats from one that
-// does not, and a registry filled at run time would size the lanes by
-// whichever pools had started first.
-// A new pool is one more term of MemoryPools; one whose worst is a share of
-// the node's memory reads its argument.
+// [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
+// the constant beside its measurement, twice over for the heap's growth at the
+// default GOGC: where it hosts boxes, the base tier at its turns
+// (node.max_concurrent; a run collected at its deadline outside the node's
+// gate is past them) and its peers' reads, the takes and both large slots;
+// and the transcript reads its API or its seats make. A Gitlet node keeps them
+// before sizing its git lanes and background budget (gitproc's
+// Options.Reserve), from the engine, which alone reads the roles: a registry
+// filled at run time would size them by whichever pools had started first.
 //
 // # A hook's note, confirmed off its job's main thread
 //

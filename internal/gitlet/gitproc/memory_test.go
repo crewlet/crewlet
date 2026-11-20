@@ -2,6 +2,7 @@ package gitproc_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,12 +58,14 @@ func TestAMemoryThatCannotBeReadRefusesThePool(t *testing.T) {
 
 // A NODE KEEPS WHAT RUNS BESIDE GITLET BEFORE IT SIZES ITS TRANSFERS: the
 // default lane is the one a node of the memory Options.Reserve leaves would
-// run, the reserve is asked of the memory read, and a reserve that takes the
-// memory leaves the one transfer a node needs to serve a clone. An operator's
-// gitlet.max_transfers is kept as written, and a negative reserve refused.
+// run, the reserve is asked of the memory read (the machine's, where the
+// options give none) and logged on code_git_ready, and a reserve that takes
+// the memory leaves the one transfer a node needs to serve a clone. An
+// operator's gitlet.max_transfers is kept as written, and a negative reserve
+// refused.
 //
-// Mutation: size the default lane by the whole memory, and the co-located
-// rows run the lane of a node without seats.
+// Mutations, each red: size the default lane by the whole memory; ask the
+// reserve of the options' memory rather than the memory read; log no reserve.
 func TestANodeKeepsItsReserveBeforeSizingItsTransfers(t *testing.T) {
 	t.Parallel()
 	const pools = int64(1216) << 20
@@ -78,21 +81,27 @@ func TestANodeKeepsItsReserveBeforeSizingItsTransfers(t *testing.T) {
 		{"one core of two GiB beside the pools", 1, 2 << 30, pools, 0, 1},
 		{"a reserve past the memory", 2, 1 << 30, pools, 0, 1},
 		{"an operator's lane", 2, 2 << 30, pools, 7, 7},
+		{"the machine's memory beside the pools", 2, 0, pools, 0, -1},
 	} {
 		var asked int64
-		o := gitproc.Options{MaxProcesses: tc.cores, MaxTransfers: tc.maxTransfers, Memory: tc.memory}
+		var logs logBuffer
+		o := gitproc.Options{MaxProcesses: tc.cores, MaxTransfers: tc.maxTransfers, Memory: tc.memory,
+			Logger: logs.logger()}
 		if tc.reserve > 0 {
 			o.Reserve = func(memory int64) int64 { asked = memory; return tc.reserve }
 		}
 		p := fakePool(t, "exit 0", o)
-		if got := p.Slots(gitproc.ClassTransfer); got != tc.want {
+		if got := p.Slots(gitproc.ClassTransfer); tc.want >= 0 && got != tc.want {
 			t.Errorf("%s: %d transfers, want %d", tc.name, got, tc.want)
 		}
 		if p.Reserved() != tc.reserve {
 			t.Errorf("%s: the pool kept %d bytes beside Gitlet, want %d", tc.name, p.Reserved(), tc.reserve)
 		}
-		if tc.reserve > 0 && asked != tc.memory {
-			t.Errorf("%s: the reserve was asked of %d bytes, want the memory read, %d", tc.name, asked, tc.memory)
+		if read := p.Memory().Bytes; tc.reserve > 0 && (asked != read || read <= 0) {
+			t.Errorf("%s: the reserve was asked of %d bytes, want the memory read, %d", tc.name, asked, read)
+		}
+		if logs.lines("code_git_ready", fmt.Sprintf(" reserved=%d ", tc.reserve)) != 1 {
+			t.Errorf("%s: code_git_ready does not log reserved=%d: %s", tc.name, tc.reserve, logs.String())
 		}
 	}
 	o := gitproc.Options{Path: gittest.Fake(t, fakeVersion, "exit 0"), Home: filepath.Join(t.TempDir(), "home"),

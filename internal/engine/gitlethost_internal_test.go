@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -159,30 +160,66 @@ func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 	})
 }
 
-// A NODE RUNNING SEATS BESIDE GITLET KEEPS THE EXECUTOR'S POOLS FIRST: its
-// cache gives its background work what a node without seats gives on the
-// memory executor.MemoryPools leaves, and a node without seats keeps nothing
-// beside Gitlet. The transfer lane is pinned, so no budget moves with it.
+// THE EXECUTOR'S POOLS A NODE KEEPS BESIDE GITLET FOLLOW ITS ROLES: one
+// running seats hosts their boxes, collecting at its turns (node.max_concurrent)
+// and reading them for its peers at boxReadsHeld; one serving ingress answers
+// people's transcript reads, with seats or without.
 //
-// Mutations, each red: pass no reserve; pass it whatever the node's roles.
-func TestANodeRunningSeatsKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
+// Mutations, each red: hosting boxes whatever the roles, or on ingress rather
+// than seats; reading for people on seats rather than ingress; the default
+// turns whatever node.max_concurrent says.
+func TestTheExecutorsPoolsANodeKeepsFollowItsRoles(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		roles         []string
+		maxConcurrent int
+		want          executor.NodeWork
+	}{
+		{[]string{"seats", "gitlet"}, 0,
+			executor.NodeWork{Boxes: true, Turns: node.DefaultMaxConcurrent, PeerReads: boxReadsHeld}},
+		{[]string{"data", "ingress", "gitlet"}, 0, executor.NodeWork{PersonReads: true}},
+		{[]string{"data", "seats", "ingress", "gitlet"}, 7,
+			executor.NodeWork{Boxes: true, Turns: 7, PeerReads: boxReadsHeld, PersonReads: true}},
+		{[]string{"gitlet"}, 7, executor.NodeWork{}},
+	} {
+		boot := &config.Bootstrap{}
+		boot.Node.Roles, boot.Node.MaxConcurrent = tc.roles, tc.maxConcurrent
+		if got := gitWork(boot.Profile("node-a"), boot); got != tc.want {
+			t.Errorf("roles %v, node.max_concurrent %d: the node runs %+v of the executor's pools, want %+v",
+				tc.roles, tc.maxConcurrent, got, tc.want)
+		}
+	}
+}
+
+// A NODE KEEPS THE EXECUTOR'S POOLS IT RUNS BEFORE GITLET'S SHARES: a node
+// running seats gives its background work what one without them gives on the
+// same memory left once each has kept its own pools, and less than one without
+// seats of its memory. The transfer lane is pinned, so no budget moves with it.
+//
+// Mutation: pass no reserve, and the budget is the whole memory's.
+func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
 	t.Parallel()
 	const memory = int64(16) << 30
 	withoutSeats := []string{"data", "gitlet", "ingress", "workers"}
-	budget := func(roles []string, memory int64) int64 {
+	sized := func(roles []string, memory int64) (budget, pools int64) {
 		e := bootSizedCodeNode(t, roles, memory)
 		n := e.native.Load()
 		if n == nil || n.gitCache == nil {
 			t.Fatalf("the premise: a node with roles %v, for a company hosting code, built no git cache", roles)
 		}
-		return n.gitCache.BackgroundBudget()
+		boot := testBootstrap(t)
+		boot.Node.Roles = roles
+		return n.gitCache.BackgroundBudget(), gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory)
 	}
-	pools := executor.MemoryPools(memory)
-	seats, left, alone := budget(nil, memory), budget(withoutSeats, memory-pools), budget(withoutSeats, memory)
-	if seats != left || alone <= seats {
-		t.Errorf("a %d-byte node running seats gives its background work %d; want %d, what a node without "+
-			"seats gives on the %d bytes the executor's %d leave, and less than the %d it gives without seats",
-			memory, seats, left, memory-pools, pools, alone)
+	seats, seatsPools := sized(nil, memory)
+	alone, alonePools := sized(withoutSeats, memory)
+	// A node without seats of the memory a node running seats sizes Gitlet
+	// by once its own pools are kept: the same budget, had both kept theirs.
+	left, _ := sized(withoutSeats, memory-seatsPools+alonePools)
+	if seats != left || alone <= seats || alonePools == 0 || seatsPools <= alonePools {
+		t.Errorf("a %d-byte node running seats gives its background work %d, keeping %d; want %d, what a "+
+			"node without seats keeping %d gives on the same memory left, and less than its %d",
+			memory, seats, seatsPools, left, alonePools, alone)
 	}
 }
 

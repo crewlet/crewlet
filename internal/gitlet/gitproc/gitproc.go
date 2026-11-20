@@ -361,9 +361,9 @@ type Options struct {
 	Memory int64
 
 	// Reserve is what the node keeps of its memory, given the memory read,
-	// for holders beside Gitlet before the lanes are sized: the engine's
-	// pools on a node that runs seats too (internal/sandbox/executor's
-	// MemoryPools). nil keeps nothing; a negative answer is refused. The
+	// for holders beside Gitlet before the lanes are sized: the executor's
+	// pools the node runs (internal/sandbox/executor's NodeWork.MemoryPools).
+	// nil keeps nothing; a negative answer is refused. The
 	// TRANSFER lane's default and the cache's budget are sized by what it
 	// leaves ([Pool.Reserved]).
 	Reserve func(memory int64) int64

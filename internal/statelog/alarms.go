@@ -1831,11 +1831,12 @@ var table = []rule{
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
-			"keeps is fixed when it boots: on a node running seats too, the " +
-			"executor's 1 216 MiB of pools first; 224 MiB for every transfer its git " +
+			"keeps is fixed when it boots: first the executor's pools it runs " +
+			"(116 MiB of transcript reads, 1 980 MiB on a node running seats), " +
+			"then of the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
 			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
-			"to the memory, no more than one for every 512 MiB, and leaves the " +
+			"to that memory, no more than one for every 512 MiB, and leaves the " +
 			"background work 256 MiB for each backed core; a figure set by hand " +
 			"is kept as written, and leaves it nothing once its transfers' " +
 			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
