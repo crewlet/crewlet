@@ -466,7 +466,7 @@ func Joined(turn Turn, w Wake, job string, outcome types.JoinOutcome, at *Readin
 	ev := types.AgentTurnJoined{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role, TurnID: turn.TurnID,
 		WorkKey: turn.WorkKey, WakeID: w.ID, TriggerIDs: slices.Clone(w.Triggers), Outcome: outcome,
-		LaunchID: job, WrittenBy: w.By, WrittenByKind: string(w.ByKind), Source: string(w.Label.Source),
+		LaunchID: job, WrittenBy: w.By, WrittenByKind: string(w.ByKind), WrittenOn: string(w.Label.Source),
 		OwesAnswer: w.OwesAnswer, SentAt: w.At,
 	}
 	if !ev.SentAt.IsZero() {

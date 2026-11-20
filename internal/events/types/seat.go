@@ -382,19 +382,19 @@ type AgentTurnJoined struct {
 	Outcome    JoinOutcome `json:"outcome"`
 
 	// LaunchID is the job the wake was handed to, and Boundary and Iteration
-	// the step that read a delivered one or served an unconfirmed one: absent
-	// where no step is known.
+	// the step that read a delivered one or served an unconfirmed one: where
+	// no step is known Boundary is absent, which tells Iteration's 0 apart.
 	LaunchID  string        `json:"launch_id"`
 	Boundary  SteerBoundary `json:"boundary,omitempty"`
-	Iteration int           `json:"iteration,omitempty"`
+	Iteration int           `json:"iteration"`
 
-	// WrittenBy and WrittenByKind are who wrote the message, Source the surface
-	// it was written on, OwesAnswer whether it asked for an answer, and SentAt
-	// when it was written.
+	// WrittenBy and WrittenByKind are who wrote the message, WrittenOn the
+	// surface it was written on, OwesAnswer whether it asked for an answer,
+	// and SentAt when it was written.
 	WrittenBy     string    `json:"written_by"`
 	WrittenByKind string    `json:"written_by_kind,omitempty"`
-	Source        string    `json:"source,omitempty"`
-	OwesAnswer    bool      `json:"owes_answer,omitempty"`
+	WrittenOn     string    `json:"written_on,omitempty"`
+	OwesAnswer    bool      `json:"owes_answer"`
 	SentAt        time.Time `json:"sent_at"`
 }
 

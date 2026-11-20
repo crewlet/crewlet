@@ -587,7 +587,7 @@ agent_turn_joined          # what became of a wake the engine handed this
                            # confirmed it, or by the node that ended its job
                            # (a relaunch, or the turn's ending). Carries
                            # wake_id, trigger_ids, written_by,
-                           # written_by_kind, source, owes_answer and
+                           # written_by_kind, written_on, owes_answer and
                            # sent_at, never the message's words, which its
                            # conversation keeps
 agent_phase_started

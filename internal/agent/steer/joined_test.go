@@ -30,7 +30,7 @@ func TestAJoinedRecordNamesAStepOnlyWhereItsOutcomeCameToOne(t *testing.T) {
 		got := steer.Joined(turn, w, "job-1", outcome, at)
 		if got.Outcome != outcome || got.Boundary != types.SteerBoundaryToolBatch || got.Iteration != 3 ||
 			got.LaunchID != "job-1" || got.WakeID != "w-1" || !slices.Equal(got.TriggerIDs, []string{"ev-1"}) ||
-			got.WrittenBy != "bob" || got.WrittenByKind != "human" || got.Source != "chat_thread" ||
+			got.WrittenBy != "bob" || got.WrittenByKind != "human" || got.WrittenOn != "chat_thread" ||
 			!got.OwesAnswer || got.TurnID != "run-1" || got.SentAt.Location() != time.UTC ||
 			!got.SentAt.Equal(w.At) {
 			t.Errorf("a %s wake is recorded %+v", outcome, got)
