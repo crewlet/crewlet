@@ -152,7 +152,7 @@ export function RecordRef({
   );
 }
 
-/** A phrase's words, each record as itself. */
+/** A phrase's words, each record as itself: ONE inline run, so a flex parent (a receipt) never stacks its parts. */
 export function Phrase({
   phrase,
   open,
@@ -161,7 +161,7 @@ export function Phrase({
   open: (target: InAppTarget) => void;
 }) {
   return (
-    <>
+    <span>
       {phrase.map((part, i) =>
         part.ref ? (
           <RecordRef key={i} record={part.ref} open={open} />
@@ -169,7 +169,7 @@ export function Phrase({
           <Fragment key={i}>{part.text ?? ""}</Fragment>
         ),
       )}
-    </>
+    </span>
   );
 }
 
