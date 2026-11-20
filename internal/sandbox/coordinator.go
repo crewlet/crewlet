@@ -646,11 +646,10 @@ type CoordinatorOptions struct {
 	// coordination store. Nil takes no save.
 	Saves SaveLedgers
 
-	// SpoolDir is where this node spools sealed sessions: a capture's between its
-	// take and keep ([Coordinator.spool]), a relaunch's fetched session between
-	// fetch and run start ([Coordinator.fetchSession]), each in a directory of
-	// the process's own under it ([Coordinator.spoolHere]). Empty is
-	// os.TempDir; a test names its own directory so what is left is its own.
+	// SpoolDir is where this node spools a capture's sealed session between its
+	// take and keep ([Coordinator.spool]), in a directory of the process's own
+	// under it ([Coordinator.spoolHere]). Empty is os.TempDir; a test names its
+	// own directory so what is left is its own.
 	SpoolDir string
 
 	// Now is the clock, injectable for tests.

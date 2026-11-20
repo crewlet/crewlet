@@ -1378,8 +1378,8 @@ type continuedLaunch struct {
 	// capture states one above zero; nil otherwise ([LaunchRecord.Continued]).
 	// Written on the job's record ([BoxRef.Continued]).
 	point *ContinuedPoint
-	// release removes what the launch spooled to carry the session in, once
-	// the run has started (or failed to).
+	// release closes the session's stream into the box once the run has
+	// started (or failed to).
 	release func()
 }
 

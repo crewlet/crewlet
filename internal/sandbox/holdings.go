@@ -28,9 +28,8 @@ import (
 // restores what it reads ([ArchiveRestorer]), since whether the session is
 // continued at all is asked of the same runner first. It streams the archive
 // and never spools it ([SessionRestore.Open]), as a restore does
-// ([Coordinator.fetchSession]): the node's scratch disk holds the spool room
-// alone ([spoolRoomBytes]), which crewlet-operator sizes an engine pod's
-// scratch volume by.
+// ([Coordinator.fetchSession]), so the spool room ([spoolRoomBytes]) is all
+// the sessions a node holds on its scratch disk.
 type HoldingsReader interface {
 	ArchiveRestorer
 

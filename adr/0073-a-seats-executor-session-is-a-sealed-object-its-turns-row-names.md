@@ -2979,9 +2979,8 @@ write either over the file the resumed session reads.
 **What it costs, and its bounds.** A second object-store read and opening of the
 object the launch that continues the session fetches again: at most
 `executorkeep.SealedMaxBytes`, ordinarily a mebibyte or two, streamed and never
-spooled, since a spool of its own would sit on the node's scratch disk beside
-the launch's, which is not what crewlet-operator sizes an engine pod's scratch
-volume by, and one handed on to the launch would change the fetch it copies. The
+spooled, as the launch's own fetch is not: the node's scratch disk holds only
+the spool room's captures (`sandbox.spoolRoomBytes`). The
 archive's plaintext is held to `threadPlainMax` (256 MiB) by the scrub's meter,
 and what the members it reads hand out to the same budget, which a sparse
 member's holes cannot pass; the lines of the threads it reads to
