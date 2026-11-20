@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -751,6 +752,9 @@ type Coordinator struct {
 	// 0.04 to 0.46 s a Claude Code pack of 1 to 20 MiB (package doc, "A pack in a
 	// node's own memory, one at a time").
 	sharedPack chan struct{}
+	// spoolRoom is the room every spool of this process shares, in bytes
+	// ([spoolRoomBytes], spoolroom.go).
+	spoolRoom *semaphore.Weighted
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -994,6 +998,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
+		spoolRoom:    semaphore.NewWeighted(spoolRoomBytes),
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,

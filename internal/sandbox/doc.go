@@ -143,6 +143,14 @@
 // a directory whose lock it takes; made under a staging name and renamed once
 // locked, a live one is never found unlocked.
 //
+// # Every spool on a node in one room
+//
+// The disk holds what the spools hold, so one room bounds them all
+// (spoolroom.go): saves take room at the sealed bound before their pack slot
+// and never wait, leaving a final take its room; a take waits a minute after
+// its pack slot, never while holding it, then keeps nothing; a seal is refused
+// before it writes past its room.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // restore.go. A relaunch continues the job before's newest kept capture, the

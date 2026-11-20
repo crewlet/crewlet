@@ -1207,6 +1207,9 @@ type spooledCapture struct {
 	stamp SessionCapture
 	spool executorkeep.SealedSpool
 	file  string
+	// hold is the room the spool holds in its process's ([spoolHold]), given
+	// back with its file ([spooledCapture.remove]).
+	hold *spoolHold
 
 	// standby says the take holds no place of its own: it stands by for
 	// another read's capture at stamp's place ([Coordinator.standBy]), and its
@@ -1218,6 +1221,12 @@ type spooledCapture struct {
 	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
 	// for one its read placed.
 	places *savePlaces
+}
+
+// remove deletes the spool's file and gives back the room it held.
+func (s *spooledCapture) remove() {
+	_ = os.Remove(s.file)
+	s.hold.release()
 }
 
 // spoolPrefix names a session's spool in its process's own spool directory
@@ -1365,6 +1374,27 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
+	// ROOM FOR ITS SPOOL, once its archive's size is known and its pack slot
+	// given back, and never while holding it: a save takes room before the slot.
+	// None within the wait keeps nothing and stamps nothing ([spoolRoomWait]).
+	room, err := c.awaitSpoolRoom(ctx, countedFor(taken.Archive.Size))
+	if err != nil {
+		if standing {
+			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+				"capture_seq", current.Capture.CaptureSeq, "detail", "another read of the run holds the "+
+					"capture's place, and this one found no room to stand by for it: "+err.Error())
+			return nil, current.Capture.kept()
+		}
+		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
+			"detail", err.Error())
+		return nil, &SessionKept{NotKept: err.Error()}
+	}
+	spooledHold := false
+	defer func() {
+		if !spooledHold {
+			room.release()
+		}
+	}()
 	// AND THE TENURE THE STAMP NAMES, read again once the session is in hand,
 	// right before its place is reserved: the pack and the scrub can take
 	// minutes ([SessionTakeBudget]), and a lease that lapsed and was claimed
@@ -1405,8 +1435,13 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// longer spool, and leaves the outcome stamp none of the room it is kept
 	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
+	standBy := func(stamp SessionCapture) (*spooledCapture, *SessionKept) {
+		spooled, kept := c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places, room)
+		spooledHold = spooled != nil
+		return spooled, kept
+	}
 	if standing {
-		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places)
+		return standBy(stamp)
 	}
 	for {
 		took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
@@ -1423,10 +1458,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 				return nil, kept
 			}
 		case took:
-			spooled, err := c.spool(ctx, run, stamp, taken, places)
+			spooled, err := c.spool(ctx, run, stamp, taken, places, room)
 			if err != nil {
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 			}
+			spooledHold = true
 			c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 			return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
 		}
@@ -1437,7 +1473,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// the row already holds as taken ([PendingStore.StampCapture]).
 		placed, after := c.besideAnother(ctx, run, stamp)
 		if !after {
-			return c.standBy(ctx, by, reserveBy, run, placed, taken, at, places)
+			return standBy(placed)
 		}
 		stamp = placed
 	}
@@ -1565,7 +1601,7 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 // ONE THAT MAY STAND: the keep reads the row first ([Coordinator.awaitStood]);
 // not standing, it keeps nothing and withdraws.
 func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run PendingRun, stamp SessionCapture,
-	taken TakenSession, at capturePoint, places *savePlaces) (*spooledCapture, *SessionKept) {
+	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold) (*spooledCapture, *SessionKept) {
 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
@@ -1580,7 +1616,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 				"the capture's place, and the store never answered this one's standing by for it; it keeps "+
 				"the session it took spooled until its keep reads whether the run's record names it")
 	}
-	spooled, err := c.spool(ctx, run, stamp, taken, places)
+	spooled, err := c.spool(ctx, run, stamp, taken, places, hold)
 	if err != nil {
 		c.standDown(ctx, by, run, stamp, takeRefusal(ctx, err))
 		return nil, nil
@@ -1956,13 +1992,14 @@ func takeRefusal(ctx context.Context, err error) string {
 }
 
 // spool seals taken's body into a file of this node's own, as it streams, under
-// an object key minted now.
+// an object key minted now, never past the room hold holds, which it shrinks to
+// the sealed size; the caller gives hold back where it fails.
 //
 // THE CLOSE IS WHAT BOUNDS IT: a box's stream that stalls blocks a read for as
 // long as it stalls, which no check of ctx between reads can interrupt, so the
 // body is closed the moment ctx ends.
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
-	taken TakenSession, places *savePlaces) (*spooledCapture, error) {
+	taken TakenSession, places *savePlaces, hold *spoolHold) (*spooledCapture, error) {
 
 	// A TAKE WHOSE TIME HAS ENDED SPOOLS NOTHING: its close would race the
 	// first read, and a box's stream is cut at that end whichever wins. Its
@@ -1984,13 +2021,16 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = taken.Body.Close() })
-	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, taken.Body, file)
+	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, taken.Body,
+		&heldWriter{w: file, left: hold.bytes()})
 	stop()
 	if err = errors.Join(sealErr, file.Close()); err != nil {
 		_ = os.Remove(file.Name())
 		return nil, err
 	}
-	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), places: places}, nil
+	hold.shrinkTo(sealed.Size)
+	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), hold: hold,
+		places: places}, nil
 }
 
 // keepLater keeps a spooled capture off the frame that took it, on the
@@ -2031,7 +2071,7 @@ func (c *Coordinator) joinKeeps() bool {
 // instead ([Coordinator.standDown]), so no wait holds for it. The stamp is made
 // under a context of its own, keeping ctx's values ([detach]).
 func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, why string) {
-	defer func() { _ = os.Remove(spooled.file) }()
+	defer spooled.remove()
 	if spooled.standby {
 		c.standDown(ctx, time.Time{}, spooled.run, spooled.stamp, why)
 		return
@@ -2052,7 +2092,7 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, wh
 // that pace whole ([takeLife]); a mint past it refuses the capture, a listing
 // past it decides nothing ([Coordinator.overBudget]).
 func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) *SessionKept {
-	defer func() { _ = os.Remove(spooled.file) }()
+	defer spooled.remove()
 	if spooled.standby && !c.takeOver(ctx, spooled) {
 		return nil
 	}
