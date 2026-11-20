@@ -59,6 +59,10 @@ type Fix struct {
 	Prompt string `json:"prompt,omitempty"`
 	// Act is the atlas tool call an atlas_act fix sends, once per entry.
 	Act *AtlasAct `json:"act,omitempty"`
+	// Reassign, where set, is the items a person may move to another seat
+	// with one press, beside the fix's own kind, which a reader that knows no
+	// reassign still shows.
+	Reassign *Reassign `json:"reassign,omitempty"`
 }
 
 // Page is a dashboard page an open_page fix is taken on, by the name the

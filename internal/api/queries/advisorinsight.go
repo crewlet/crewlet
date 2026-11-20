@@ -1,6 +1,7 @@
 package queries
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
@@ -129,6 +130,14 @@ func actionsOf(fix advisor.Fix) AdvisorActions {
 	case advisor.FixNone:
 	default:
 		out.Primary = &AdvisorAction{Kind: ActionFix, Label: "See the fix"}
+	}
+	// A FIX THAT MOVES WORK leads with the move, the kind's own step beside it.
+	if r := fix.Reassign; r != nil && len(r.Items) > 0 && r.To != "" {
+		if out.Primary != nil {
+			out.Secondary = append([]AdvisorAction{*out.Primary}, out.Secondary...)
+		}
+		to := r.To
+		out.Primary = &AdvisorAction{Kind: ActionReassign, Label: "Move the work", Items: slices.Clone(r.Items), To: &to}
 	}
 	return out
 }

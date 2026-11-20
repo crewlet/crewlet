@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -55,6 +56,13 @@ func TestAFindingLeadsWithItsHeadlineNumbersAndOnePrimaryAction(t *testing.T) {
 	}
 	if a := actionsOf(advisor.Fix{Kind: advisor.FixNone}); a.Primary != nil {
 		t.Errorf("a fix that is nobody's offers %+v", a.Primary)
+	}
+	moved := actionsOf(advisor.Fix{Kind: advisor.FixOpenPage, Page: advisor.PageSeat, Target: "dev",
+		Reassign: &advisor.Reassign{Items: []string{"ENG-1", "ENG-2"}, To: "dev-2"}})
+	if p := moved.Primary; p == nil || p.Kind != ActionReassign || p.To == nil || *p.To != "dev-2" ||
+		!slices.Equal(p.Items, []string{"ENG-1", "ENG-2"}) || len(moved.Secondary) != 1 ||
+		moved.Secondary[0].Kind != ActionOpen {
+		t.Errorf("a fix that moves work offers %+v, want the move first and the seat's page beside it", moved)
 	}
 	raw, err := json.Marshal(AdvisorAction{Kind: ActionAsk, Label: "x"})
 	if err != nil || string(raw) != `{"kind":"ask","label":"x","option":null,"items":null,"to":null,"page":null,`+

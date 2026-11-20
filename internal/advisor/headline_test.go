@@ -18,7 +18,8 @@ func TestEveryClassLeadsWithItsNumber(t *testing.T) {
 	digit := regexp.MustCompile(`[0-9]`)
 	writesItsOwn := []advisor.Class{advisor.ClassWakeReasonWaste, advisor.ClassTurnCostOutlier,
 		advisor.ClassScheduleLoad, advisor.ClassApprovalRubberStamp, advisor.ClassAuxiliaryModel,
-		advisor.ClassScheduleFrequent, advisor.ClassScheduleOverdue, advisor.ClassModelLimit}
+		advisor.ClassScheduleFrequent, advisor.ClassScheduleOverdue, advisor.ClassModelLimit,
+		advisor.ClassWorkImbalance, advisor.ClassBlockedNoCause}
 	answer := richAnswer(t)
 	raised := map[advisor.Class]bool{}
 	for _, f := range answer.Findings {
