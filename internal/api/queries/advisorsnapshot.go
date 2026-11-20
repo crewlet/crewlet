@@ -83,6 +83,13 @@ func (s Sources) AdvisorSnapshot(ctx context.Context, now time.Time, days int) a
 			in.FlowUnread = true
 		}
 	}
+	if in.Capacity, err = s.advisorCapacityOf(ctx, company, now, days); err == nil {
+		in.CapacityBefore, err = s.advisorCapacityOf(ctx, company, from.Add(-time.Nanosecond), days)
+	}
+	if err != nil {
+		log.WarnContext(ctx, "advisor_snapshot_capacity_unreadable", "error", err.Error())
+		in.Capacity, in.CapacityBefore, in.CapacityUnread = nil, nil, true
+	}
 	if in.Open, err = s.openHolders(ctx, company, now); err != nil {
 		log.WarnContext(ctx, "advisor_snapshot_work_unreadable", "error", err.Error())
 		in.WorkUnread = true

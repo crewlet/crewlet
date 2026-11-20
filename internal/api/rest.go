@@ -98,6 +98,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/advisor/reports", what: "advisor_reports"},
 	{method: "GET", pattern: "/advisor/reports/{week}", what: "advisor_report", path: map[string]string{"week": "week"}},
 	{method: "GET", pattern: "/advisor/snapshot", what: "advisor_snapshot"},
+	{method: "GET", pattern: "/advisor/capacity", what: "advisor_capacity"},
 	{method: "GET", pattern: "/advisor/notices", what: "advisor_notices"},
 	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
 	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
