@@ -633,11 +633,11 @@ func (h *ChatHub) fanLoop(ctx context.Context, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case batch := <-h.applied:
-			h.fan(ctx, batch)
+			contained(ctx, "chat_fan", func() { h.fan(ctx, batch) })
 		case <-h.rereadWake:
 		}
 		if h.rereadOwed.Swap(false) {
-			h.reread(ctx)
+			contained(ctx, "chat_reread", func() { h.reread(ctx) })
 		}
 	}
 }
@@ -937,7 +937,13 @@ func (h *ChatHub) readsLoop(ctx context.Context, stop <-chan struct{}) {
 		}
 	}()
 	for attempt := 0; ; attempt++ {
-		if h.watchReads(watchCtx) {
+		// EACH WATCH UNDER ITS OWN CONTEXT, ended with it: one its pass's panic
+		// left open would hold the store's end of it until the hub stopped.
+		one, end := context.WithCancel(watchCtx)
+		reached := false
+		contained(watchCtx, "chat_reads", func() { reached = h.watchReads(one) })
+		end()
+		if reached {
 			attempt = 0
 		}
 		if watchCtx.Err() != nil {

@@ -1085,12 +1085,13 @@ func decodeRequest(raw []byte, req *request) error {
 	return json.Unmarshal(raw, req)
 }
 
-// containPanic, deferred on a goroutine a socket's client is served on, contains
-// a panic there as net/http contains a request handler's: [panics] hears it in
-// [panics.ScopeAPI], the log has its stack, and failed answers whoever waited
-// (a query as failed, the socket closed where nothing else can). Uncontained,
-// one question's panic ended the engine's process, every socket and seat on it.
-// Deferred itself, since recover answers only the function a defer calls.
+// containPanic, deferred on a goroutine a socket's client is served on or a
+// loop serving every socket runs on, contains a panic there as net/http
+// contains a request handler's: [panics] hears it in [panics.ScopeAPI], the log
+// has its stack, and failed answers whoever waited (a query as failed, the
+// socket closed where nothing else can). Uncontained, one question's panic
+// ended the engine's process, every socket and seat on it. Deferred itself,
+// since recover answers only the function a defer calls.
 func containPanic(ctx context.Context, what string, failed func()) {
 	v := recover()
 	if v == nil {
@@ -1099,6 +1100,17 @@ func containPanic(ctx context.Context, what string, failed func()) {
 	p := panics.Recovered(panics.ScopeAPI, v)
 	log.ErrorContext(ctx, "stream_panicked", "what", what, "panic", fmt.Sprint(v), "stack", p.Stack)
 	failed()
+}
+
+// contained runs one pass of a loop that serves every socket on this node (a
+// health tick, a chat batch, a read-state watch, a room's decision), its panic
+// contained ([containPanic]), and reports whether the pass ran to its end. A
+// PASS, NOT THE LOOP: a loop ended by one pass's panic would serve no later
+// one, every socket on the node going without its pushes until a restart.
+func contained(ctx context.Context, what string, pass func()) (ended bool) {
+	defer containPanic(ctx, what, func() {})
+	pass()
+	return true
 }
 
 // maxWaitMS is the longest wait a frame names that a [time.Duration] holds;
