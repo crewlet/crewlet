@@ -97,7 +97,10 @@
 // executor's harness does, and the record is what a person reads later. A
 // call's arguments are redacted as values, each beside its key, never as the
 // JSON text, which a redaction can leave no JSON. The size a cut states is
-// the redaction's, as an executor's record states it.
+// the redaction's, as an executor's record states it. An executor run's call
+// whose log kept only an opening of its answer, raw, is recorded as the
+// redaction of that opening's settled lines (redact.Settled), the rest said
+// by the bytes the log measured past them.
 package runner
 
 import (

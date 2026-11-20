@@ -530,6 +530,16 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	return call
 }
 
+// OutputOpening is the opening the log kept of a call's output it cut, read
+// back off output, the text it keeps ([BridgeCall.Output]), and outputBytes,
+// the whole's size beside it ([BridgeCall.OutputBytes]); false where output is
+// no such cut. RAW, as the call's harness was handed it, which a holdings
+// reading compares with its session's copy ([TextKeyOf]): a reader that
+// redacts it reads only as far as its redaction settles.
+func OutputOpening(output string, outputBytes int) (opening string, ok bool) {
+	return rowRecord.Opening(output, outputBytes)
+}
+
 // ValidCallID reports whether id is one the log keeps as the id a call's
 // harness gave it ([BridgeCall.CallID]): letters, digits, `-` and `_`, at
 // most [MaxBridgeCallIDBytes] of them — the shape a session's id is held to

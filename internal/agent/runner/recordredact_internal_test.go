@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -346,5 +348,50 @@ func TestACallsArgumentsOnARecordHoldNoSecretAndStayOneObject(t *testing.T) {
 	}
 	if args["password"] != password {
 		t.Error("the call's own arguments were changed: the model's copy must stay as it came")
+	}
+}
+
+// AN EXECUTOR RUN'S RECORD HOLDS NO SECRET ITS LOG'S CUT RAN ACROSS. A call's
+// answer its run's log kept only the opening of, raw, the log's cut falling at
+// every offset of a credential, reaches the record as the redaction of the
+// opening's settled lines: no piece of the credential, the lines before it
+// kept, and a cut that says the rest is left out.
+//
+// Mutation: redact the log's text as it stands (no recordedCut), and the head
+// of the credential the log's cut ran across is kept.
+func TestAnExecutorRunsRecordHoldsNoSecretItsLogsCutRanAcross(t *testing.T) {
+	t.Parallel()
+	const runLog kept.Record = "the run's record"
+	for _, p := range planted(t) {
+		lead := "fetched the page\n"
+		// THE LOG'S CUT, for an answer of this size of no byte it escapes.
+		size := 3 * sandbox.MaxBridgeOutputBytes
+		probe, _ := runLog.Text(lead+strings.Repeat("a", size-len(lead)), sandbox.MaxBridgeOutputBytes)
+		opening, ok := sandbox.OutputOpening(probe, size)
+		if !ok {
+			t.Fatal("the run's log no longer reads back the cut this test writes as its own")
+		}
+		for at := 1; at < len(p.text); at++ {
+			before := len(opening) - at - len(lead)
+			raw := lead + strings.Repeat("b", before) + p.text + "\n"
+			raw += strings.Repeat("c", size-len(raw))
+			logged, _ := runLog.Text(raw, sandbox.MaxBridgeOutputBytes)
+			if cut, _ := sandbox.OutputOpening(logged, size); len(cut) != len(opening) {
+				t.Fatalf("%s: the log kept %d bytes, not the %d the cases place it by", p.name, len(cut), len(opening))
+			}
+			res := agentRunResult("", []BridgedCall{{Call: ledger.Call{Name: "fetch", Result: logged},
+				OutputBytes: size}}, nil, RunRecord{}, time.Time{}, time.Time{})
+			pub := &collector{}
+			var mu sync.Mutex
+			quietEmitter(pub, &mu).completed(context.Background(), phaseRecord{Phase: phase.Execute,
+				Result: res.Result})
+			_, rec := encoded(t, pub)
+			got := rec.ToolExecutions[0]["result"].(string)
+			holdsNone(t, p.name+" cut "+strconv.Itoa(at)+" bytes in", got, p)
+			if !strings.HasPrefix(got, lead) || !strings.Contains(got, "not kept on") {
+				t.Errorf("%s cut %d bytes in: kept %q, want the lines before it and the cut said", p.name, at,
+					got[:min(len(got), 120)])
+			}
+		}
 	}
 }

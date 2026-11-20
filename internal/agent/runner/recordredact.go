@@ -110,7 +110,7 @@ func recordedNarration(narr []toolloop.Narration) []types.RoundNarration {
 func recordedExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	redacted := slices.Clone(execs)
 	for i := range redacted {
-		redacted[i].Output = recordedOutput(redacted[i].Output)
+		redacted[i].Output = recordedOutput(redacted[i].Output, redacted[i].OutputBytes)
 		redacted[i].Args = recordedArgs(redacted[i].Args)
 	}
 	return toolExecutions(redacted)
@@ -119,13 +119,34 @@ func recordedExecutions(execs []toolloop.Execution) []types.ToolExecution {
 // recordedOutput is a call's answer redacted whole, as a list within its share
 // keeps it ([keptExecutions]). An answer past the whole list's share can be
 // kept only as a row's opening ([keptRow]), so it is that opening, read off
-// the redaction's ([keptOpening]) rather than redacted whole.
-func recordedOutput(out string) string {
+// the redaction's ([keptOpening]) rather than redacted whole. One its run's
+// log cut, outBytes long, is [recordedCut].
+func recordedOutput(out string, outBytes int) string {
+	if outBytes > 0 {
+		return recordedCut(out, outBytes)
+	}
 	shown, whole := redact.Prefix(out, toolListBytes+redact.LongestMarker())
 	if whole > len(shown) {
 		return keptOpening(shown, whole, sandbox.MaxBridgeOutputBytes)
 	}
 	return shown
+}
+
+// recordedCut is the answer of an executor run's call whose log kept only its
+// opening, raw ([sandbox.OutputOpening]), of whole bytes: the redaction of the
+// opening's SETTLED lines alone ([redact.Settled]), which is the opening of
+// the whole's redaction, since a credential the log's cut ran across left a
+// head no rule knows. The cut it states leaves out the bytes the log measured
+// past those lines, unread and so unredacted. A text the log's marker does
+// not read back off is settled as it stands.
+func recordedCut(out string, whole int) string {
+	opening, ok := sandbox.OutputOpening(out, whole)
+	if !ok {
+		opening = out
+	}
+	settled := opening[:redact.Settled(opening)]
+	shown := redact.Secrets(settled)
+	return keptOpening(shown, len(shown)+max(whole-len(settled), 1), sandbox.MaxBridgeOutputBytes)
 }
 
 // credentialValue is what a string or number under a password's key becomes
