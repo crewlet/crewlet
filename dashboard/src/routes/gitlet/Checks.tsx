@@ -146,7 +146,7 @@ export function Checks() {
   const paged = usePaged(
     first,
     { ...params, window: shown },
-    (cursor) => codeRest.query("code_checks", { ...params, ...span.edges, cursor }),
+    (cursor, edges) => codeRest.query("code_checks", { ...params, cursor }, undefined, edges),
     checksOf,
     runKey,
     checksAfter,

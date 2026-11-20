@@ -1324,6 +1324,103 @@ test("the formatter reading sees every way to build one, and nothing that builds
 });
 
 /**
+ * A CLOCK READING BECOMES A WINDOW'S EDGE ONLY WHERE IT IS BRANDED.
+ *
+ * A code question keyed on an instant the clock moves is a new question every
+ * time it moves, and a new question shows nothing until it answers: the list
+ * blinked to its placeholder on the hour or at the reader's midnight. So such
+ * an instant is a `ClockEdge` (`lib/range.ts`), which a code question's
+ * parameters refuse by type and only its window takes. The brand is minted
+ * where an instant is formatted, [EDGE_PRODUCERS] (`routes/gitlet/when.ts`
+ * through `edgeAt`); an instant a screen formats itself carries none, and
+ * passes the type. So a module that asks a code question formats no instant to
+ * a string. Mutation: `since` minted inline in Checks with `toISOString()` is
+ * named here.
+ */
+const EDGE_PRODUCERS: readonly string[] = ["lib/range.ts", "routes/gitlet/activity.tsx"];
+
+/** The calls that make a code question: its first page, a later page, a pager over them. */
+const asksACodeQuestion = (node: Node): boolean => {
+  if (node.type !== "CallExpression") return false;
+  const callee = node.callee as Node;
+  if (callee.type === "Identifier")
+    return callee.name === "useCodeQuery" || callee.name === "usePaged";
+  const object = callee.object as Node | undefined;
+  return (
+    callee.type === "MemberExpression" &&
+    object?.type === "Identifier" &&
+    object.name === "codeRest"
+  );
+};
+
+/** An instant written as a string: the ways a `Date` is formatted to one. */
+const formatsAnInstant = (node: Node): boolean => {
+  if (node.type !== "CallExpression") return false;
+  const name = memberName(node.callee as Node);
+  return name === "toISOString" || name === "toJSON" || name === "toUTCString";
+};
+
+function instantsFormattedBesideACodeQuestion(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  let asks = false;
+  const formats: string[] = [];
+  walk(parse(text, lang), (node) => {
+    if (asksACodeQuestion(node)) asks = true;
+    if (formatsAnInstant(node)) formats.push(`${path}:${line(node.start)}`);
+  });
+  return asks ? formats : [];
+}
+
+test("no module that asks a code question formats an instant itself", () => {
+  const offenders = modules()
+    .filter(({ path }) => !EDGE_PRODUCERS.includes(path))
+    .flatMap(({ path, text, lang }) => instantsFormattedBesideACodeQuestion(path, text, lang));
+  expect(
+    offenders,
+    "an instant a code question is asked at is a ClockEdge (lib/range.ts's edgeAt, routes/gitlet/when.ts, routes/gitlet/activity.tsx), handed to its window",
+  ).toEqual([]);
+});
+
+test("the edge reading sees each way to ask and to format, and reads the tree", () => {
+  const asked = [
+    'useCodeQuery("code_log", params);',
+    "const a = new Date(0).toISOString();",
+    'codeRest.query("code_log", p);',
+    "const b = at.toUTCString();",
+    "usePaged(first, params, page, pick, id, after);",
+    "const c = at.toJSON();",
+  ].join("\n");
+  expect(instantsFormattedBesideACodeQuestion("x.ts", asked, "ts")).toEqual([
+    "x.ts:2",
+    "x.ts:4",
+    "x.ts:6",
+  ]);
+  expect(instantsFormattedBesideACodeQuestion("y.ts", "const a = at.toISOString();", "ts")).toEqual(
+    [],
+  );
+  // THE PRODUCERS FORMAT, AND SCREENS ASK: the rule has something to read on both sides.
+  const byPath = new Map(modules().map((m) => [m.path, m]));
+  for (const path of EDGE_PRODUCERS) {
+    const m = byPath.get(path);
+    expect(m, path).toBeDefined();
+    let formats = false;
+    walk(parse(m!.text, m!.lang), (node) => {
+      if (formatsAnInstant(node)) formats = true;
+    });
+    expect(formats, `${path} mints an edge`).toBe(true);
+  }
+  expect(
+    modules().filter(({ text, lang }) => {
+      let asks = false;
+      walk(parse(text, lang), (node) => {
+        if (asksACodeQuestion(node)) asks = true;
+      });
+      return asks;
+    }).length,
+  ).toBeGreaterThan(10);
+});
+
+/**
  * EVERY DIALOG OPENS THROUGH THE DASHBOARD'S `Modal` (`components/Modal.tsx`).
  *
  * A dialog's head and foot are rows of controls, and the dashboard's `Modal`

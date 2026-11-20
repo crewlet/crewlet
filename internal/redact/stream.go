@@ -1298,6 +1298,11 @@ func (s *ruleStage) hand(e edit) {
 type event struct {
 	key, v [2]int
 	seams  [3]int
+	// ran says a password's value is its run read in the whole text
+	// ([aValue]), which [ruleStage.trusted] decides by: read with the
+	// decision, never again, since a read of a value that ends at an
+	// escaped break reads the key on the next line too.
+	ran bool
 }
 
 // seamsAt is ev's value's seams in the text as written, each or 0
@@ -1318,8 +1323,8 @@ func (s *ruleStage) decide(text []byte, at int, prior [][2]int) (event, bool) {
 		start, end, found := findIn(s.r, text, at)
 		return event{key: [2]int{start, end}, v: [2]int{end, end}}, found
 	}
-	key, v, seams, found := decideReadIn(s.r, text, at, prior)
-	return event{key: key, v: v, seams: seams}, found
+	key, v, seams, ran, found := decideReadIn(s.r, text, at, prior)
+	return event{key: key, v: v, seams: seams, ran: ran}, found
 }
 
 // scan decides the window from at, limit being where the decisions it can
@@ -1363,7 +1368,7 @@ func (s *ruleStage) scan(text []byte, lo, at, limit int, eof bool) int {
 			return s.commit(text, lo, done, limit)
 		}
 		switch {
-		case eof || s.trusted(text, ev, prior):
+		case eof || s.trusted(text, ev):
 			done, from = s.apply(text, lo, done, ev, &prior)
 		case ev.key[0]+stageReach <= limit && (ev.v[1] <= ev.v[0] || ev.v[0]+stageReach <= limit):
 			if next, ok := s.open(text, lo, done, ev, limit); ok {
@@ -1380,16 +1385,22 @@ func (s *ruleStage) scan(text []byte, lo, at, limit int, eof bool) int {
 // values a later read can still ask of, those ending within [stageReach] of
 // v's start ([pastMarkup], [keyPrefix]), copied down once the rest outnumber
 // them, so the values a window holds are those its reach does.
+//
+// THE MIDDLE ONE SAYS WHEN: the values end in order, so the rest outnumber
+// them exactly where the middle one is past the reach, and a value costs the
+// same whether the reach holds five values or the nine thousand of `pwd=x`
+// lines: TestAStageDenseInPasswordValuesCostsWhatItsValuesCost holds it.
 func priorWith(prior [][2]int, v [2]int) [][2]int {
 	prior = append(prior, v)
+	floor := v[0] - stageReach
+	if prior[len(prior)/2][1] >= floor {
+		return prior
+	}
 	k := 0
-	for k < len(prior) && prior[k][1] < v[0]-stageReach {
+	for prior[k][1] < floor {
 		k++
 	}
-	if k > len(prior)/2 {
-		prior = append(prior[:0], prior[k:]...)
-	}
-	return prior
+	return append(prior[:0], prior[k:]...)
 }
 
 // commit writes the window's input from at to c as it stands, and is c.
@@ -1410,9 +1421,8 @@ func (s *ruleStage) commit(text []byte, lo, at, c int) int {
 	return c
 }
 
-// trusted reports whether the window holds every read that decided ev, prior
-// being the values the rule replaced before it, placed in the window.
-func (s *ruleStage) trusted(text []byte, ev event, prior [][2]int) bool {
+// trusted reports whether the window holds every read that decided ev.
+func (s *ruleStage) trusted(text []byte, ev event) bool {
 	switch {
 	case s.mode == finds:
 		// Its pattern's match ends at what is no space, read in the
@@ -1430,7 +1440,7 @@ func (s *ruleStage) trusted(text []byte, ev event, prior [][2]int) bool {
 		// A password's value [valueEnd] ends is decided where it stops
 		// it, past the backslashes before an escaped break, which it
 		// reads back over; one a wrapping's suffix cuts, by its key.
-		if decided < len(text) && text[decided] == '\\' && readValue(text, ev.key[0], ev.key[1], prior).ran {
+		if decided < len(text) && text[decided] == '\\' && ev.ran {
 			for decided < len(text) && text[decided] == '\\' {
 				decided++
 			}

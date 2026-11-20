@@ -396,13 +396,13 @@ func TestAStreamAnswersItsWritersErrorAndRefusesAWriteOnceClosed(t *testing.T) {
 // in 64 KiB writes, the most the take's scrub reads of an archive at once: the
 // plaintext bound of one reading (internal/sandbox/executor's scrubExpansion
 // times the archive's), which SessionScrubWait reads twice within its two
-// minutes. Two texts: a kept session (JSON lines, credentials, base64 images),
-// and a key's armour then 200-byte tokens, collapsed into markers the later
-// claims stages step at. Recorded on two cores of the build machine,
-// 2026-11-19, two runs: the kept session at 17.6 MB/s, 15.3 s a reading, about
-// a quarter of the minute each of the scrub's two readings has, allocating its
-// 18 MB of buffers; the dense tokens at 6.9 to 7.0 MB/s, 38 to 39 s, under two
-// thirds of it. Secrets, which reads a text whole, ran 4.3 times as fast.
+// minutes. Three texts: a kept session (JSON lines, credentials, base64
+// images); a key's armour then 200-byte tokens, which the later claims stages
+// step at as markers; a password's value every seven bytes. Two runs on two
+// cores of the build machine: the kept session at 17.6 MB/s, 15.3 s a reading,
+// a quarter of each reading's minute, allocating its 18 MB of buffers; the
+// dense tokens at 6.9 to 7.0 MB/s, 38 to 39 s; the dense passwords at 1.9 MB/s,
+// 142 s, past it. Secrets, which reads a text whole, ran 4.3 times as fast.
 func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	for _, c := range []struct {
 		name string
@@ -410,6 +410,7 @@ func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	}{
 		{"kept session", keptSession},
 		{"dense tokens", denseTokens},
+		{"dense passwords", densePasswords},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			text := c.text(256 << 20)
@@ -441,6 +442,12 @@ func denseTokens(n int) []byte {
 		b = append(b, ' ')
 	}
 	return b[:n]
+}
+
+// densePasswords is n bytes of a file's `pwd=x` lines as a JSON string holds
+// them, joined by escaped breaks: a password's value every seven bytes.
+func densePasswords(n int) []byte {
+	return []byte(strings.Repeat(`pwd=x\n`, n/7+1)[:n])
 }
 
 // keptSession is n bytes of what a kept session holds: JSON lines of prose and
