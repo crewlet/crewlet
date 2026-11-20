@@ -378,7 +378,7 @@
 // (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
 // bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to 56 s each and spends internal/sandbox's
+// transcript reads of up to 58 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how
 // a relaunch is told; apart, never. One slot, not two: the process's thread
 // readers hold at most 2 x 29 + 43 + 43 = 144 MiB (the reads peak at 2 x 58)

@@ -93,7 +93,7 @@ type SessionRows interface {
 // no call should wait out, and two is far inside the ten a harness waits on a
 // call. Past it the call is answered unavailable, naming the session's size,
 // never as a session that holds nothing. A decode at its bounds of what a
-// harness writes takes up to 56 s, within it; one queued behind other such
+// harness writes takes up to 58 s, within it; one queued behind other such
 // reads, or of a value none writes (`pwd=x` lines), can miss it, and fails
 // closed so ([executor.PersonTranscriptReadWorst]).
 const SessionReadWithin = 2 * time.Minute

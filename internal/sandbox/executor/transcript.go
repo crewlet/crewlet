@@ -390,7 +390,7 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
 // [TranscriptReadHeldBytes] live, so two hold 58 MiB (116 MiB at the default
 // GOGC the engine runs at, which sets no GOMEMLIMIT), each one core's work for
-// up to [PersonTranscriptReadWorst] (a seat's for words 56 s); one slot would
+// up to [PersonTranscriptReadWorst] (a seat's for words 58 s); one slot would
 // queue every reader behind the longest archive, and more would take more of a
 // node's cores than a page is worth. A seat's read takes the seats' one slot
 // ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
@@ -407,23 +407,26 @@ const TranscriptReadHeldBytes = 29 << 20
 
 // PersonTranscriptReadWorst is the longest a person's read takes at its
 // bounds, of what harnesses and ordinary tools write, measured likewise: one
-// value of `password:` lines streamed to the read budget, 41.5 to 42.0 s for
-// 240 MiB, 45 s at the budget (every credential shape 33). Dense tokens and a
-// kept session's text, mostly random bytes, pack to 179 and 177 MiB of 240
-// ([keptGzipLevel]), so no archive within its 32 MiB bound holds the budget's
-// worth of them. A value of `pwd=x` lines, a password's value every six bytes
-// the budget long, which no harness or tool writes, takes 98 s (129 escaped in
-// a JSON string): it sets no wait, and a read of it fails closed
-// ([TranscriptAnsweredWithin]).
-const PersonTranscriptReadWorst = 45 * time.Second
+// value of `password:` lines streamed to the read budget, 41.2 to 46.1 s for
+// 240 MiB, slowest two at once on two cores (49.2 s at the budget), and a
+// tenth more for a node busier than that machine. Every credential shape
+// takes 33 s. Dense tokens and a kept session's text, mostly random bytes,
+// pack to 179 and 177 MiB of 240 ([keptGzipLevel]), so no archive within its
+// 32 MiB bound holds the budget's worth of them. A value of `pwd=x` lines, a
+// password's value every six bytes the budget long, which no harness or tool
+// writes, takes 98 s (129 escaped in a JSON string): it sets no wait, and a
+// read of it fails closed once it runs past [TranscriptAnsweredWithin].
+const PersonTranscriptReadWorst = 55 * time.Second
 
 // TranscriptAnsweredWithin is how long a person's read of a transcript can
 // take to answer: [PersonTranscriptReadWorst] and before it one slot's wait. A
 // read queued behind [TranscriptReadsAtOnce] others waits for the first of them
 // to end, a person's at most, since seats hold at most
-// [SeatTranscriptReadsAtOnce] of the slots. The dashboard waits this long
-// (TRANSCRIPT_QUERY_TIMEOUT_MS, held to it), and the socket ends the read there
-// (the frame's `wait_ms`): a read past it fails closed, answered nothing.
+// [SeatTranscriptReadsAtOnce] of the slots (measured likewise behind two such
+// reads: 83.1 to 87.8 s for 240 MiB, 93.6 s at the budget). The dashboard
+// waits this long (TRANSCRIPT_QUERY_TIMEOUT_MS, held to it), and the socket
+// ends the read there (the frame's `wait_ms`): a read past it fails closed,
+// answered nothing.
 const TranscriptAnsweredWithin = 2 * PersonTranscriptReadWorst
 
 // transcriptReads holds a slot for each transcript this process is reading,
@@ -437,9 +440,9 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: a seat's read holds what a person's does (up
-// to [TranscriptReadHeldBytes]), for words a little longer (56 s at the budget
-// against [PersonTranscriptReadWorst]), and one slot is always a person's
-// while a seat reads.
+// to [TranscriptReadHeldBytes]), for words a little longer (58 s at the budget
+// beside a person's read), and one slot is always a person's while a seat
+// reads.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

@@ -11383,17 +11383,20 @@ again.
 
 **Two transcripts at a time on each node.** One read holds at most 29 MiB
 measured (its heap peaking at about 58 MiB at Go's default `GOGC`), and of what
-harnesses and ordinary tools write takes up to about 45 seconds for a person (56
+harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
-redaction to `bounds.read_bytes`. So a node decodes at most two transcripts at
-once, 58 MiB live at their worst (about 116 MiB at their peak), whichever socket
+redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
+most two transcripts at once, 58 MiB live at their worst (about 116 MiB at their
+peak), whichever socket
 question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
-slot frees within one such read, so an answer comes within about 90 seconds,
-which the dashboard waits; nothing in the answer says it waited, and a caller
-that gives up first is answered nothing. A value none writes at that density, a
-password's value every few bytes the whole budget long, takes minutes and fails
-closed: a socket question's `wait_ms` ends its read, answered nothing, and the
+slot frees within one such read, so an answer comes within 110 seconds (that
+read with a tenth to spare, and one slot's wait), which the dashboard waits;
+nothing in the answer says it waited, and a caller that gives up first is
+answered nothing. A value none writes at that density, a password's value every
+few bytes the whole budget long, takes 98 seconds or more and fails closed once
+it runs past that wait: a socket question's `wait_ms` ends its read, answered
+nothing, and the
 dashboard says the transcript could not be read in time. A seat reading its own
 sessions waits two minutes, so its read of such a session, or one queued behind
 other reads at their bounds, is answered unavailable.

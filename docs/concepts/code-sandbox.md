@@ -2219,19 +2219,21 @@ which holds about thirteen times a value of `pwd=x` lines, whose redaction
 lengthens most). Its time is the redaction's, and what harnesses and ordinary
 tools write sets the waits: of that, one value of `password:` lines streamed to
 the 256 MiB budget is the slowest, about 45 seconds on two cores for a person
-and 56 for a seat's words; every credential shape 33. Dense tokens and a kept
+alone and 49 beside a second read, 58 for a seat's words beside a person's;
+every credential shape 33. Dense tokens and a kept
 session's text are mostly random bytes, which pack to three quarters of their
 size, so no archive within the 32 MiB bound holds the budget's worth of them. A
 value no harness or tool writes at that density, a
 password's value every six or seven bytes the whole budget long (`pwd=x`
 lines), takes 98 to 129 seconds for a person and about 163 for a seat's words,
-sets no wait, and fails closed. A node
+sets no wait, and fails closed once it runs past its reader's wait. A node
 answers every dashboard tab open on it and every REST caller, each with a read
 of its own, so each node decodes at most two transcripts at once
 (`TranscriptReadsAtOnce`), 58 MiB live at their worst, whichever socket or route
 asks; the engine sets no `GOMEMLIMIT` and runs at Go's default `GOGC`, at which
-two peak at about 116 MiB. A person's read is answered within 90 seconds
-(`TranscriptAnsweredWithin`: the slowest read and one slot's wait), which the
+two peak at about 116 MiB. A person's read is answered within 110 seconds
+(`TranscriptAnsweredWithin`: the slowest read with a tenth more for a busier
+node, 55 seconds, and one slot's wait), which the
 dashboard waits; past it the socket ends the read, and the dashboard shows
 nothing of the session and says it could not be read in time. A seat's read of
 its own session has two minutes (`SessionReadWithin`, set by the object store's
