@@ -718,6 +718,83 @@ export function generatedCompany(count: number): AtlasFixture {
   return counted({ nodes, edges });
 }
 
+/**
+ * A company of 81 entries in the lane counts of a real atlas, with names as
+ * long as hosts, addresses and monitors run: what the map is measured at.
+ */
+export function referenceCompany(): AtlasFixture {
+  const names: Readonly<Record<AtlasLane, readonly string[]>> = {
+    entry: [
+      "example.com",
+      "api.example.com",
+      "customer-portal-staging.eu-west.example.com",
+      "https://api.example.com/v2/orders",
+      "https://auth.example.com/oauth/token",
+      "cdn-assets.eu-central.example.com",
+      "status.example.org",
+      "sub-1",
+      "Wildcard certificate for *.example.org",
+    ],
+    services: [
+      "backend-api-production",
+      "order-fulfillment-worker",
+      "auth-service",
+      "search-indexer",
+    ],
+    data: ["orders-postgres-primary", "object store", "event stream"],
+    runtime: ["node-0", "k8s-worker-pool-a-3", "ip-10-0-12-34.eu-west-1.compute.internal"],
+    platforms: ["AWS production (eu-west-1)", "aws", "Datadog EU", "GitHub organization acme"],
+    code: [
+      "acme/infrastructure-terraform-modules",
+      "acme/mobile-app",
+      "Deploy frontend to production",
+    ],
+    observability: [
+      "API uptime (Synthetics)",
+      "Billing: invoice export latency p95",
+      "Search indexer lag",
+    ],
+    tools: ["postgres-readonly", "default", "planner", "github"],
+  };
+  const counts: Readonly<Record<AtlasLane, number>> = {
+    entry: 19,
+    services: 11,
+    data: 3,
+    runtime: 3,
+    platforms: 9,
+    code: 17,
+    observability: 11,
+    tools: 8,
+  };
+  const nodes: AtlasSummary[] = [];
+  for (const lane of LANES) {
+    for (let i = 0; i < counts[lane]; i++) {
+      const pool = names[lane];
+      const base = pool[i % pool.length]!;
+      nodes.push(
+        summary(
+          KINDS_BY_LANE[lane][i % KINDS_BY_LANE[lane].length]!,
+          i < pool.length ? base : `${base}-${i}`,
+          {
+            health: lane === "observability" && i % 3 === 0 ? "needs_look" : "quiet",
+          },
+        ),
+      );
+    }
+  }
+  const of = (lane: AtlasLane) => nodes.filter((node) => node.lane === lane);
+  const edges: AtlasMapEdge[] = [];
+  of("services").forEach((node, i) => {
+    edges.push(edge(node, "runs_on", of("runtime")[i % 3]!));
+    if (i % 3 === 0) edges.push(edge(node, "depends_on", of("data")[i % 3]!));
+    if (i > 0 && i % 4 === 0) edges.push(edge(node, "depends_on", of("services")[i - 1]!));
+  });
+  of("entry")
+    .slice(0, 6)
+    .forEach((node, i) => edges.push(edge(node, "depends_on", of("services")[i]!)));
+  return counted({ nodes, edges });
+}
+
 /** A review answer over `items`, counted by their kinds. */
 export function reviewAnswer(items: AtlasReviewItem[]): AtlasReviewAnswer {
   const counts: AtlasReviewAnswer["counts"] = {};

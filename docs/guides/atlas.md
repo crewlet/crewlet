@@ -100,10 +100,13 @@ entry's open signals, and activity is a count of recorded lines.
 The map reads the way a request travels. The first row is **Entry** (domains,
 host names, certificates), **Services** and **Data**; the second is what those
 stand on, **Runtime** and **Platforms**; the third is what stands around them,
-**Code and delivery**, **Observability**, and **Tools and models**. Inside
-Services, a service stands one column right of the service that calls it.
-Each entry is a card: its kind's glyph, its vendor's mark on the corner, and
-its name.
+**Code and delivery**, **Observability**, and **Tools and models**. Each
+cluster is as large as what it holds, and the clusters are packed to fill the
+map's space; where that fits it better, as on a phone, a row runs on over two
+or more lines, in the same order. Inside Services, a service stands one column
+right of the service that calls it. Each entry is a card: its kind's glyph, its
+vendor's mark on the corner, and its name, the card as wide as the name up to a
+limit past which the name takes a second line.
 
 - **A notch means something needs attention**: red with a badge for Alerting
   (a tool server that is down, a model whose last call failed, an integration
@@ -144,7 +147,8 @@ its name.
 
 **The map opens with all of it in view**, centred and zoomed to fit the space
 it has, so a large company opens zoomed out and a phone shows the whole map
-small. It fits again when a filter changes what it draws, and when its space
+small; the zoom bar's corner is kept clear. It fits again when a filter changes
+what it draws, and when its space
 changes size (a sheet opening beside the page, fullscreen) while you have not
 moved it. Once you zoom or pan, the map keeps your view as it refreshes. A
 link to one entry (**Show it on the map** from its page or its sheet, or an
@@ -153,10 +157,11 @@ middle, at a size its card reads.
 
 Drag to pan, scroll or use the zoom bar to zoom, press `0` to fit the whole
 map, and use the fullscreen button in the zoom bar to give the map the screen.
-The map keeps a signal you can read at every zoom. From half size down an
-entry is a tile: its kind's glyph filling the cell, its name at a size that
-still reads and cut to what fits, and the whole cell in its health colour when
-it is not quiet. Zoomed out further than a name fits, each entry is a filled
+The map keeps a signal you can read at every zoom. A name is never drawn
+smaller than a tile draws it. From half size down an entry is a tile: its
+kind's glyph filling the cell, its name at that size, on two lines where the
+tile is tall enough and cut to what fits, and the whole cell in its health
+colour when it is not quiet. Zoomed out further than a name fits, each entry is a filled
 mark in its health colour, and every cluster keeps its title, its count and
 its tally of entries that need a look at their own size, so the picture reads
 as how much of each cluster is quiet. An empty lane is its dashed outline until

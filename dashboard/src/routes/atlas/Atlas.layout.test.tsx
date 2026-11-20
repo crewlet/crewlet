@@ -23,6 +23,7 @@ import {
   generatedCompany,
   grownCompany,
   mapAnswer,
+  referenceCompany,
   sparseCompany,
   summary,
   type AtlasFixture,
@@ -88,11 +89,12 @@ async function mount(
   hash = "#/company/atlas",
   narrow: (params: Record<string, unknown>) => AtlasFixture = () => fixture,
   gutter = 0,
+  height = 900,
 ) {
   location.hash = hash;
-  await page.viewport(width, 900);
+  await page.viewport(width, height);
   host = document.createElement("div");
-  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
+  host.style.cssText = `width: ${width}px; height: ${height}px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
   document.body.append(host);
   root = createRoot(host);
   const ask = (what: string, params: Record<string, unknown>) =>
@@ -209,8 +211,8 @@ test.each([1440, 390])(
     expect(inside(box, canvas), "the whole map is in view").toBe(true);
     expect(Math.abs(box.left - canvas.left - (canvas.right - box.right))).toBeLessThan(1);
     const detail = (world as HTMLElement).dataset.detail;
-    expect(["tiles", "marks"]).toContain(detail);
-    if (detail === "tiles") {
+    expect(["cards", "tiles", "marks"]).toContain(detail);
+    if (detail !== "marks") {
       for (const name of drawn(".crewlet-graph-canvas__items .crewlet-graph-canvas__name")) {
         expect(name.textContent).not.toBe("");
       }
@@ -218,6 +220,57 @@ test.each([1440, 390])(
       expect(
         document.querySelector(".crewlet-graph-canvas__shapes [data-shape='card']"),
       ).not.toBeNull();
+    }
+    expect(sidewaysScrollers(host!)).toEqual([]);
+  },
+);
+
+/** The zoom the map is drawn at, from its world's transform. */
+function zoom(): number {
+  const transform = document.querySelector<HTMLElement>(".crewlet-canvas__world")!.style.transform;
+  return Number(/scale\(([-\d.e]+)\)/.exec(transform)![1]);
+}
+
+// THE MAP USES THE ROOM IT HAS: a company of 81 entries packed every lane in
+// a narrow block in the middle of a wide canvas, at 39% and every name cut.
+// Each lane is now a frame sized to what it holds, packed to the canvas, so
+// the fit lands at no less than these floors (measured, less a twentieth),
+// no two frames overlap and none runs off the canvas. Mutation: give every
+// lane one shared grid again (the kit before this change) and every window
+// falls under its floor.
+test.each([
+  [1920, 860, 0.533],
+  [1440, 900, 0.478],
+  [1024, 768, 0.403],
+  [390, 844, 0.294],
+])(
+  "the reference company fills a %ix%i window, no frame over another, at a fit of at least %f",
+  async (width, height, floor) => {
+    await mount(width, referenceCompany(), "#/company/atlas", undefined, 0, height);
+    const canvas = await shownMap();
+    const k = zoom();
+    expect(k).toBeGreaterThanOrEqual(floor);
+    const lanes = drawn(".crewlet-graph-canvas__lane").map((lane) => lane.getBoundingClientRect());
+    expect(lanes).toHaveLength(LANES.length);
+    for (const [i, lane] of lanes.entries()) {
+      expect(inside(lane, canvas), "a frame is in view").toBe(true);
+      for (const other of lanes.slice(i + 1)) {
+        const apart =
+          lane.right <= other.left + 0.5 ||
+          other.right <= lane.left + 0.5 ||
+          lane.bottom <= other.top + 0.5 ||
+          other.bottom <= lane.top + 0.5;
+        expect(apart, "two frames overlap").toBe(true);
+      }
+    }
+    // NO NAME IS DRAWN UNDER A TILE'S SIZE wherever names are drawn.
+    if (
+      document.querySelector<HTMLElement>(".crewlet-graph-canvas__world")!.dataset.detail !==
+      "marks"
+    ) {
+      for (const name of drawn(".crewlet-graph-canvas__items .crewlet-graph-canvas__name")) {
+        expect(Number.parseFloat(getComputedStyle(name).fontSize) * k).toBeGreaterThanOrEqual(9.9);
+      }
     }
     expect(sidewaysScrollers(host!)).toEqual([]);
   },
