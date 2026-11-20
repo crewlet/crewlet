@@ -84,10 +84,6 @@ export const KPI_LABELS: Record<KpiId, string> = {
   tokens: "Tokens",
 };
 
-/** How many days of the series the in-progress sparkline draws, and how far
- *  back its delta compares: a week. */
-const WEEK = 7;
-
 export function Kpis({
   figures = KPI_IDS,
   range,
@@ -118,7 +114,7 @@ export function Kpis({
       case "waiting":
         return <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />;
       case "progress":
-        return <InProgressTile flow={flow} locked={workletLocked(viewer)} />;
+        return <InProgressTile flow={flow} range={range} locked={workletLocked(viewer)} />;
       case "completed":
         return <CompletedTile flow={flow} range={range} locked={workletLocked(viewer)} />;
       case "tokens":
@@ -249,24 +245,41 @@ function workletLocked(viewer: ViewerState): boolean {
 }
 
 /** Open work somebody has started, its change over a week, and what is stuck. */
-function InProgressTile({ flow, locked }: { flow: QueryResult<WorkFlowAnswer>; locked: boolean }) {
+function InProgressTile({
+  flow,
+  range,
+  locked,
+}: {
+  flow: QueryResult<WorkFlowAnswer>;
+  range: HomeRange;
+  locked: boolean;
+}) {
   const data = flow.data;
   if (locked) return <LockedTile label="Tasks in progress" />;
   if (flow.error) return <RefusedTile label="Tasks in progress" />;
   if (!data?.now) return <StatCard label="Tasks in progress" value={EMPTY_VALUE} loading />;
   const points = data.points ?? [];
   const current = data.now.active;
-  const earlier = points.length > WEEK ? points[points.length - 1 - WEEK]!.active : null;
+  // AGAINST THE COUNT THE WINDOW'S LENGTH AGO: the range the page chose.
+  const earlier =
+    points.length > range.days ? points[points.length - 1 - range.days]!.active : null;
   const delta = deltaWords(current, earlier, false);
   const trouble = troubleParts(data.now);
   const partial = gapsOf([data]).length > 0;
+  const shown = Math.max(range.days, 14);
   return (
     <StatCard
       label="Tasks in progress"
       value={current.toLocaleString()}
-      trend={<Sparkline values={points.slice(-14).map((p) => p.active)} current />}
+      trend={<Sparkline values={points.slice(-shown).map((p) => p.active)} current />}
       delta={delta ? { value: delta, polarity: "neutral" } : undefined}
-      sub={partial ? PARTIAL_FIGURE : <Parts parts={inProgressParts(delta !== null, trouble)} />}
+      sub={
+        partial ? (
+          PARTIAL_FIGURE
+        ) : (
+          <Parts parts={inProgressParts(delta !== null ? range : null, trouble)} />
+        )
+      }
       subTone={partial ? "warning" : undefined}
     />
   );

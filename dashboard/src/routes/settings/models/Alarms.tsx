@@ -41,6 +41,7 @@ import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
+import { modelMark } from "./modelPicker.tsx";
 import {
   credentialAction,
   type Flow,
@@ -476,7 +477,8 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
           ? move.to.map((m) => ({
               key: m.key,
               label: m.key,
-              description: m.model,
+              icon: modelMark(m),
+              description: m.modelName,
               onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
             }))
           : // NOTHING TO MOVE TO is said, not an empty list: the way out left is adding one.

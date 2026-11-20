@@ -139,39 +139,166 @@
   align-self: stretch;
 }
 
-/* Ask Crewlet and the Advisor under the list: a compact row each, its name, picker and a few words. */
-.models-helpers {
+/*
+ * Who runs on which model, under the list (SeatJobs.tsx): one card, two quiet
+ * groups, one row anatomy: who on the left, the model in one column of one
+ * width, the row's menu at its end.
+ */
+.models-runs {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+}
+
+.models-runs__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.models-runs__group + .models-runs__group {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.models-runs__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.models-helpers__row {
+.models-run {
   display: grid;
-  grid-template-columns: 9rem minmax(10rem, 13rem) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--spacing-2) var(--spacing-4);
-}
-
-.models-helpers__picker {
-  min-width: 0;
-}
-
-.models-helpers__about {
-  display: flex;
-  flex-wrap: wrap;
+  grid-template-columns: minmax(0, 1fr) var(--models-run-model, 22rem) 2rem;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-3);
+  min-block-size: 2.25rem;
+}
+
+.models-run__who,
+.models-run__model {
   min-width: 0;
+}
+
+.models-run__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-run__menu {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* A helper's picker and what its last change came to fill the model's column. */
+.models-run__model > .helper-model {
+  display: flex;
+  inline-size: 100%;
+}
+
+/* A split seat's category: its short word under the seat's name, its picker in the model's column. */
+.models-run__line {
+  display: contents;
+}
+
+.models-run__label {
+  grid-column: 1;
+  padding-inline-start: var(--spacing-8);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.models-run__line > .models-run__model {
+  grid-column: 2;
+}
+
+.models-run__value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A model's key and, quieter, the model it runs by name, on one line cut at its end. */
+.models-option-label {
+  display: inline-flex;
+  min-width: 0;
+  max-inline-size: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.models-option-key {
+  flex: none;
+}
+
+.models-option-sep {
+  flex: none;
+  color: var(--color-text-tertiary);
+  white-space: pre;
+}
+
+.models-option-name {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+}
+
+@media (width < 640px) {
+  /* On a phone: who and the menu on one line, the model's column under them, full width. */
+  .models-run {
+    grid-template-columns: minmax(0, 1fr) 2rem;
+  }
+
+  .models-run__who {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .models-run__menu {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .models-run > .models-run__model,
+  .models-run__label,
+  .models-run__line > .models-run__model {
+    grid-column: 1 / -1;
+  }
+
+  .models-run > .models-run__model:empty {
+    display: none;
+  }
+
+  .models-run__label {
+    padding-inline-start: 0;
+  }
+}
+
+/* A model's harness mark before its key, in a picker, an option or a menu item. */
+.models-option-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* An option's condition in a word, and a fast model's mark beside it. */
+.models-option-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-option-fast {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
 }
 
 @media (width < 640px) {
   .models-doctor__line,
   .models-repoint__row,
-  .models-helpers__row,
   .models-choices {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -252,15 +379,6 @@
   padding: var(--spacing-3);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-}
-
-/* The seats' grid's seat cell: the seat, and under it "Everything" where one model runs every job. */
-.models-seat-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-1);
-  min-width: 0;
 }
 
 /* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
@@ -377,45 +495,6 @@
 .models-uses:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
-}
-
-/* A seat's job cell: the picker the column's width, its notes under it. */
-.models-jobs__cell {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  inline-size: 100%;
-  min-width: 0;
-}
-
-/*
- * THE PICKER FILLS ITS CELL AND ITS LIST DOES NOT (QA M1). An auto-width
- * picker's list is at least as wide as the trigger and otherwise as wide as
- * its options, up to the kit's reading measure for a described list, so a
- * model's name, condition and id are never cut to the column; the bounds are
- * the kit's own properties for an auto picker.
- */
-.models-jobs__picker .models-jobs__select {
-  --crewlet-select-auto-min-width: 100%;
-  --crewlet-select-auto-max-width: 100%;
-}
-
-.models-jobs__notes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-}
-
-/* A cell whose model will not answer says so in the warning ink (QA M19). */
-/* A slow model under a timed job: a quiet mark, its words on hover. */
-.models-jobs__slow {
-  display: inline-flex;
-  color: var(--color-text-tertiary);
-}
-
-.models-jobs__cell--alarm .models-jobs__health {
-  color: var(--color-feedback-warning-ink);
 }
 
 /*

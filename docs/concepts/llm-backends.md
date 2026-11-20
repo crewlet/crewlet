@@ -4159,8 +4159,11 @@ cancelled) as one more, attributed to whoever started it.
 
 **One page, and a page per model.** Settings › Models lists every model with
 its condition, how it signs in and what it is used for, under the model
-alarms; under that list come Ask Crewlet's and the Advisor's models, a row
-each, and every seat as a row with the model it runs for each kind of work. A
+alarms; under that list one card shows who runs on which model, Ask Crewlet
+and the Advisor then every seat, each a row with its model's picker: one
+picker where a seat runs on one model, or one per kind of work once split by
+job from the row's menu. Each model is named by its key and the model it runs
+("sub-4 · Claude Opus 5.5"). A
 model's own page has its sign-in, its
 sit-out, its last test, its usage over seven days and every place that runs on
 it. Every member opens the page; every change on it is an admin's.

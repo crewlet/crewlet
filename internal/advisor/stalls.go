@@ -75,18 +75,29 @@ type documentedDetector struct {
 	class  Class
 	source source
 	detect func(c *config.Company, ev Evidence) []Finding
+	// silent, where set, says in words what of the company the class could
+	// not judge from ev and why, "" where it judged all of it (ADR-0166).
+	silent func(c *config.Company, ev Evidence) string
 }
 
 // documented is every class whose fix the document decides.
 var documented = []documentedDetector{
-	{ClassRoundCap, sourceRuns, roundCap},
-	{ClassBudgetStopped, sourceStops, budgetStopped},
-	{ClassWorkConcentrated, sourceWork, workConcentrated},
-	{ClassAlarmNoop, sourceLedger, alarmNoop},
-	{ClassModelHeld, sourceFlow, modelHeld},
-	{ClassScheduleOverdue, sourceSkips, scheduleOverdue},
-	{ClassAddSeat, sourceStaffing, addSeat},
-	{ClassRemoveSeat, sourceStaffing, removeSeat},
+	{ClassRoundCap, sourceRuns, roundCap, nil},
+	{ClassBudgetStopped, sourceStops, budgetStopped, nil},
+	{ClassWorkConcentrated, sourceWork, workConcentrated, nil},
+	{ClassAlarmNoop, sourceLedger, alarmNoop, nil},
+	{ClassModelHeld, sourceFlow, modelHeld, nil},
+	{ClassModelLimit, sourceCapacity, modelLimit, nil},
+	{ClassWakeReasonWaste, sourceLedger, wakeReasonWaste, nil},
+	{ClassTurnCostOutlier, sourceLedger, turnCostOutlier, nil},
+	{ClassScheduleLoad, sourceFires, scheduleLoad, nil},
+	{ClassScheduleOverdue, sourceSkips, scheduleOverdue, nil},
+	{ClassAddSeat, sourceStaffing, addSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingWeek.unjudged(c, 1)
+	}},
+	{ClassRemoveSeat, sourceStaffing, removeSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingFortnight.unjudged(c, 2)
+	}},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -113,6 +124,18 @@ var stallWords = map[Class]said{
 	ClassAddSeat: {"Work waited for a group of seats that was busy all week.",
 		"Day after day work wanted these seats and did not get them, while every one of them was busy most " +
 			"of the time it could take a turn, so the work waits on how many seats there are."},
+	ClassWakeReasonWaste: {"A kind of wake mostly changed nothing.",
+		"Every wake starts a turn on the seat's model, so a kind of wake whose turns change nothing is spend " +
+			"with nothing to show for it, across every seat it reaches."},
+	ClassTurnCostOutlier: {"Some seats' turns cost several times the others'.",
+		"A turn many times the company's typical cost is usually a long context, a large answer read again, or " +
+			"a run that loops, and it is paid on every turn the seat takes."},
+	ClassScheduleLoad: {"A seat's schedules keep it busy while its work waits.",
+		"Every scheduled run is a turn the seat spends on the check rather than on the work it holds, so its " +
+			"own items wait to start."},
+	ClassModelLimit: {"A model entry's usage limit kept its seats from working.",
+		"While an entry's usage limit stands, every seat on it waits, whatever it holds, so the hours it is " +
+			"out are hours those seats cannot work."},
 	ClassModelHeld: {"An agent's work waited on its model's limit.",
 		"While the model an agent runs on is at its limit, the agent takes no turn, so the work it " +
 			"holds stands still until the limit resets, however pressing it is."},

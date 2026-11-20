@@ -127,6 +127,7 @@ type AdvisorFinding struct {
 	Impact          *AdvisorImpact       `json:"impact"`
 	Evidence        AdvisorEvidence      `json:"evidence"`
 	Fix             advisor.Fix          `json:"fix"`
+	AdvisorFindingInsight
 }
 
 // findingView is how one read shows findings: at now, against when each scope
@@ -194,6 +195,7 @@ func (v findingView) finding(row advisordomain.FindingRow) (AdvisorFinding, erro
 	for _, r := range f.Records {
 		out.Evidence.Records = append(out.Evidence.Records, AdvisorRecordRef{Kind: r.Kind, ID: r.ID})
 	}
+	out.AdvisorFindingInsight = insightOf(f, out.Evidence.Facts)
 	if row.Explanation != "" && row.ExplainedDigest == row.VerdictDigest {
 		out.Explanation = &row.Explanation
 	}

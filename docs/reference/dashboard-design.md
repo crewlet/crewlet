@@ -1090,7 +1090,7 @@ word or two to a line. The width a list is read at is the package's to set:
 `@crewlethq/ui` sets a list whose options carry a description at a reading
 width (a floor of 22rem and a measure of 28rem, never wider than the window)
 and never over the field it was opened from, so the Agents tab and Settings ›
-Models' seat grid keep no width rule of their own.
+Models' seats keep no width rule of their own.
 
 ### An object's own facts
 
@@ -1471,44 +1471,160 @@ A tab that was read by somebody (`lib/reader.ts`) and lands here with no session
 
 **So the first fold is the company, then what needs the reader, then what the company did.** That is Home until its reader arranges it (see [Home is the reader's board](#home-is-the-readers-board)). Top to bottom:
 
-- **The greeting.** The reader's morning, by the first word of their OWN name as `GET /auth/session` answers it from their directory row (`ownName`), never their seat's (the chart's name for a place, often a role: "Good afternoon, Founder"); no name, no name in the greeting. Then one engine sentence: "Nimbus is running on 3 nodes. **3 decisions** are waiting on you, 1 condition needs a look, and 4 agents are working right now."
-  - The decisions figure is weighted; an engine condition (a refused session, lost connection, no configuration, a node that shed its seats) takes the sentence over rather than sitting beside it.
-  - **Prose never prints a zero as a digit or a wrong plural**: "nothing needs your decision", "no agents are working right now", "1 condition needs", "2 conditions need"; a fleet the presence read counted as none is "Nimbus is running.", never "on 0 nodes".
-  - "N conditions need a look" links to the Inbox's "Needs you" group (opened on the one when there is one).
-  - A reader nobody bound is told nothing about decisions; before the first state, nothing about who is working.
-  - The **Today · 7 days · 30 days** control (`range=`) sets the window of the figures below; Today is one company day, cut at the company's midnight by the engine. The choice is kept for its reader (see [`window=`](#window--one-vocabulary-for-every-time-range)).
-- **Five figures** (kit `StatCard`s):
-  - *Agents working now*: `working / total` from the engine's `activity`, with the state bar (working, waiting, stopped, idle) and a sub-line naming only states somebody is in; loading until the first state, never "0 / 0".
-  - *Waiting on your decision*: the engine's `decisions` count plus the seats stopped on their budget that THIS reader can act on, by raising the ceiling (a `/config` write an admin may make and so may the lead of the seat's unit; on a [managed](../concepts/configuration.md#managed-configuration) document only where the reader's credential is one of its writers, `mayChangeConfig`) or handing the item on with `update_work_item`. The oldest wait is in the warning ink; **Review** opens the Inbox's decisions view. A stopped seat the reader can do neither about is one of the conditions that "need a look". A reader who is nobody gets an em dash and "Not bound to a person".
-  - *Tasks in progress*: `work_flow.now.active`, its change over the week, what is blocked or overdue, the fortnight's sparkline.
-  - *Completed* over the window, against the window before it.
-  - *Tokens* over the window, with the **week's** budget meter captioned as the week's ("63% of this week's budget · resets Mon") in the engine's own state, or "No weekly budget": a link to Company › Budgets for a reader who may change the configuration (`mayChangeConfig`: Admin, on a document that admits the credential), plain text for anybody else. It draws no delta: its second line is the budget's, and a bare change before it read as a claim about the budget.
-  - A second line is whole FACTS, so a narrow tile breaks between them ("+17 vs last week" / "· 2 blocked"), never inside one. Each figure waits for its own answer and says so; one not yet answered is never a `0`.
-- **Needs your decision**, the first three, newest first, each answerable IN PLACE (`DecisionList`).
-  - Asks are GROUPED BY WHO IS ASKING: one quiet head band names the asker (the seat they asked as, never a credential) with small face and badge, and what all their asks share (item, role the reader is asked in, how long ago). What differs is said on the ask, as is the channel an ask promised to post its answer to ("answer posted to #releases").
-  - Each question is ONE ROW: the question (two lines at most on Home), under it its key and "Recommended: Hold release", with **Accept**, which sends that option, and an outlined **Change** at the row's end, centred on the words.
-  - **Change** opens every option as a choice with its detail line and the recommended one tagged (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's `Composer`, up to 2,000 characters, Enter to send, Shift+Enter for a new line) sends a reply instead; **Submit** sends what is chosen. While options are open the recommendation line is hidden, and only one ask's options are open at a time.
-  - An ask with no recommendation offers **Answer** in place of Accept and Change.
-  - A choice is `comment_on_work_item{answers, choice}`, a reply `{answers, body}`; the engine wakes the asker with either. An answered ask stays as one line ("Answered Hold release (Recommended)", "Answered Ship anyway", "Answered “the reply”") until the card is redrawn; there is no undo, since the asker is woken as the answer lands.
-  - An executor parked on a question is answered by its turn (`answer_executor`), with how long its box is still held. Its row shows the question's one sentence, never the context under it; its **Answer** dialog draws the ask as the Inbox does, options as buttons.
-  - A seat the engine stopped on a spent budget offers **Raise budget**, a dialog of that scope's three ceilings, opened on the seat's own when its own window refuses and on the company's when the company's does, with the refusing window focused (see [Company › Budgets](#company--budgets-raised-in-place)), and **Reassign** of the item it was on.
-  - An ask with no options is answered in words in place: it says "Asks for a written answer" (never "Answered in words", which read as though it had been), and **Answer** opens the field ("Answer CTO") under the question and sends `comment_on_work_item{answers, body}`.
-  - Every control is drawn for every reader, disabled with its reason where this browser cannot act.
-  - A parked run and a stopped seat sit under the same head as an ask: the seat's name said there, not again in the row's title, with the item and how long ago beside it.
-  - EVERY ROW DRAWS ITS ANSWERS ONE WAY: the first filled (**Accept**, **Answer**, **Allow once**, **Raise budget**), the others outlined, all small, at the row's end. What a row is read from (an escalation, a held call's arguments) is a row of its own under the words and answers, across the full width.
-  - The card's foot, **Show 4 more in Inbox** (**Open inbox** where it lists them all), and **Review** both land on `#/inbox`, whose list opens with every one under Needs you.
-- **Live now**: how many seats the engine says are working and, for the longest-running four whose turn has an id (the rows of the sidebar's Running group, in its order), what each is on (the item the turn is charged to, never a work key), how long, what waits behind it as one quiet count, where it is in context → execute → review, and its round and last call ("in its box", "round 3 of 24 · sandbox.run go test ./..."), each a way into its turn. Every row is one size whatever its turn is doing, the elapsed time has its own slot, and the card keeps its room as turns finish, so nothing under it moves. **Open live view** lists the rest, including a working seat whose turn has no id yet (counted here, listed there).
-- **Code waiting on a person**, where the company hosts code: the changes an agent cannot move, for a reader holding Gitlet. For anybody else the card, header and **Open Gitlet** stay, and "Seeing Gitlet's changes needs Gitlet access. An admin can give it to you." replaces both halves; neither listing is asked, as Tasks completed does for Worklet. Until the viewer has answered, both halves load, never "none". Each of two halves keeps the first three changes of an engine listing:
-  - *Asking your review*: `code_changes?needs=review`, which names no reviewer and so asks the reader's own seat; a reader bound to no seat is told a review is asked of a seat, and asked nothing.
-  - *Waiting on a person*: `needs=person`, a change whose first unmet precondition only a person can settle (a person's approval, a blocker a person raised).
-  - Each row: reference, title, state pill and the sentence its readiness leads with, opening the change in the peek. Three rows, as Needs your decision. **Open Gitlet** is Gitlet › Changes narrowed to what waits on a person.
-  - A listing is a page the engine read, never a total, so the card counts nothing. A page is the rows read, not kept (a change of a repository the reader may not read, an ended one, or one whose readiness no longer waits on a person is dropped after the read), so an empty page can still carry `next`. Each half follows `next` until it holds three or the listing ends, at most four pages a poll (`CHANGES_FILL_PAGES`), and says it found none only of a listing that ended. A half stopped by the bound draws what it found, or with nothing found says none was among the newest read and links to the rest in Gitlet.
-  - A half that found none says so on one line; when both were asked and both ended empty, the card says it once ("Nothing waits on a person") in place of the halves.
-- **Tasks completed** per company day over the last fourteen (today in the accent); **Tokens by team** over the window (tokens, never money), each team's bar split by the seats that spent in it and keyed under the bar (the engine's `parts`; a team of more than four seats names its three biggest and draws the rest as one part in the residual hue); and **Projects**: each project's done, active and to-do work as one bar, its lead and target date.
-- **Recent activity** (`company_feed`): work delivered ("approved on first review", "1 turn · 38.2k tokens"), filed ("from Slack", off the create's own origin), handed on ("hand-off 1 of 8"), pages published, schedules run; filtered Everything, Completed, Hand-offs or Schedules (`feed=`), with Load older and the full event log a link away.
-  - A schedule's rows are its RUNS; the engine folds consecutive runs into one ("Schedule backlog-sweep ran 12 times for PM", "since 02:40"), so a skipped tick is never a row saying "ran" and a frequent schedule never buries the work.
-  - Each row's sentence comes from ONE table (`FEED_PHRASES` in `routes/home/model.ts`) keyed on the feed's own kinds.
-  - On a phone a row is a three-column grid (time, mark, sentence); the sentence wraps in its column with the aside under it, so wrapped and unwrapped rows align.
+- **The greeting.** The reader's morning, by the first word of their OWN
+  name as `GET /auth/session` answers it from their directory row (`ownName`)
+  — never their seat's, which is the chart's name for a place and often a
+  role, so a person with no name was greeted "Good afternoon, Founder"; a
+  reader whose row holds no name is greeted without one — and one sentence
+  of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
+  you, 1 condition needs a look, and 4 agents are working right now." The
+  decisions figure is weighted; an engine condition — a refused session, a lost
+  connection, no configuration, a node that shed its seats — takes the sentence
+  over rather than sitting beside it. **Prose never prints a zero as a digit or
+  a wrong plural**: "nothing needs your decision", "no agents are working right
+  now", "1 condition needs", "2 conditions need" — and a fleet the presence
+  read counted as none is "Nimbus is running.", never "on 0 nodes". "N
+  conditions need a look" is a link to where they are listed, the Inbox's
+  "Needs you" group (opened on the one when there is one). A reader
+  nobody bound is told nothing about decisions at all, and before the first
+  state arrives nothing about who is working. The **Today · 7 days · 30 days** control
+  (`range=`) sets the window every period on Home reads over, the figures,
+  Tasks completed, Tokens by team and a section widget's own (Failed turns);
+  Today is one company day, cut at the company's midnight by the engine, and
+  a longer window opens on the company's midnight that many days back. The choice is kept for
+  its reader, so Home opens on it however they come back (see
+  [`window=`](#window--one-vocabulary-for-every-time-range)).
+- **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
+  from the engine's `activity`, with the state bar of working, waiting,
+  stopped and idle, and a sub-line naming only the states somebody is in;
+  loading until the first state arrives, never "0 / 0");
+  *Waiting on your decision* (the engine's `decisions` count plus the seats
+  stopped on their budget that THIS reader can act on — raise the ceiling, a
+  `/config` write an admin may make and so may the lead of the
+  seat's unit — on a [managed](../concepts/configuration.md#managed-configuration)
+  document, only where the reader's credential is one of its writers
+  (`mayChangeConfig`) — or hand the item on with
+  `update_work_item` — the oldest wait in the warning ink, and **Review**
+  into the Inbox's decisions view; a stopped seat the reader can do neither
+  about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
+  nobody); *Tasks in progress* (`work_flow.now.active`, its change over the
+  window's length and what is blocked or overdue, with the window's sparkline,
+  a fortnight at least);
+  *Completed* over the window, against the window before it; and *Tokens* over
+  the window, with the **week's** budget meter captioned as the week's ("63% of
+  this week's budget · resets Mon") in the engine's own state — or "No weekly
+  budget", which links to Company › Budgets for a reader who may change the
+  configuration (`mayChangeConfig`: Admin, on a document
+  that admits the reader's credential) — who can set one there — and is plain
+  text for anybody else. The Tokens tile draws no delta:
+  its second line is the budget's, and a bare change in front of it read as a
+  claim about the budget. A second line is whole FACTS, so a narrow tile breaks
+  between them ("+17 vs 7 days ago" / "· 2 blocked"), never inside one. Each
+  figure waits for its own answer and says so; one whose answer has not
+  arrived is never a `0`.
+- **Needs your decision**, the first three, newest first, each answerable IN
+  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head, a quiet
+  band, names the asker (the seat they asked as, never a credential) with
+  their small face and badge, and what every one of their asks shares (the
+  item, the role the reader is asked in, how long ago); what differs between
+  two asks is said on the ask, and so is the channel an ask promised to post
+  its answer to ("answer posted to #releases"). Each question is ONE ROW: the
+  question (two lines at most on Home), and under it its key and "Recommended:
+  Hold release", with **Accept**, which sends that option, and an outlined
+  **Change** at the row's end, centred on the words. **Change** opens every
+  option as a choice with its detail line and the recommended one tagged
+  (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
+  `Composer`, up to 2,000 characters, Enter to send and Shift+Enter for a new line) sends a reply
+  instead of a choice; **Submit** sends what is chosen. While the options are
+  open the recommendation line is hidden, and only one ask's options are open
+  at a time. An ask with no recommendation offers **Answer** in place of
+  Accept and Change. A choice is `comment_on_work_item{answers, choice}` and a
+  reply `{answers, body}`; the engine wakes the asker with either. An answered
+  ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
+  anyway" or "Answered “the reply”", until the card is drawn afresh; there is
+  no undo, because the asker is woken the moment the answer lands. An executor parked on a question is answered
+  by its turn (`answer_executor`), with how long its box is still held: its row shows
+  the question's one sentence, never the context under it, and its **Answer**
+  dialog draws the executor's ask as the Inbox does, its options as buttons. A seat the
+  engine stopped on a spent budget offers **Raise budget** — a dialog of that
+  scope's three ceilings, opened on the seat's own when its own window is the
+  one refusing and on the company's when the company's is, with the refusing
+  window focused (see [Company › Budgets](#company--budgets-raised-in-place)),
+  and **Reassign** of the item it was on. An ask with no options is
+  answered in words in place: it says "Asks for a written answer" (what it
+  asks for, never "Answered in words", which under an open question read as
+  though it had been), and **Answer** opens the field ("Answer CTO") under the
+  question and sends `comment_on_work_item{answers, body}`. Every
+  control is drawn for every reader and disabled with its reason where this
+  browser cannot act. A parked run and a stopped seat sit under the same head
+  as an ask, the seat's name said there and not again in the row's title, with
+  the item it is on and how long ago beside the name, as an asker's questions
+  say theirs. EVERY ROW DRAWS ITS ANSWERS ONE WAY: the first filled
+  (**Accept**, **Answer**, **Allow once**, **Raise budget**), the others
+  outlined, all at the small size at the row's end. What a row is read from
+  (an escalation, a held call's arguments) is a row of its own under the words
+  and the answers, across the row's whole width. The
+  card's foot, **Show 4 more in Inbox** (**Open inbox** where it lists them
+  all), and **Review** both land on `#/inbox`, whose list opens with every one
+  of them under Needs you.
+- **Live now**: how many seats the engine says are working, and for the
+  longest-running four whose turn has an id — the very rows the sidebar's
+  Running group names, in its order — what each is on (the item the turn is
+  charged to, never a work key), how long, what waits behind it as one quiet
+  count, where it is in context → execute → review, and its round and the last
+  call it made ("in its box", "round 3 of 24 · sandbox.run go test ./..."), each
+  a way into its turn. Every row is one size whatever its turn is doing, the
+  elapsed time has a slot of its own, and the card keeps its room for the visit
+  as turns finish, so nothing under it moves. **Open live view** for the rest, including a working seat
+  whose turn has no id yet: it is counted here and listed there.
+- **Code waiting on a person**, where the company hosts code: the changes an
+  agent cannot move, for a reader holding Gitlet. For anybody else the card,
+  its header and **Open Gitlet** stay, "Seeing Gitlet's changes needs Gitlet
+  access. An admin can give it to you." stands in place of both halves, and
+  neither listing is asked, as Tasks completed does for Worklet; until the
+  viewer has answered, both halves draw as loading and never say "none". Two halves, the first three changes each of two of the
+  engine's own listings keeps: *Asking your review* (`code_changes?needs=review`, which names no
+  reviewer and so asks the reader's own seat; a reader bound to no seat is
+  told a review is asked of a seat, and asked nothing) and *Waiting on a
+  person* (`needs=person`: a change whose first unmet precondition only a
+  person can settle — a person's approval, a blocker a person raised), each
+  row its reference, title, state pill and the sentence its readiness leads
+  with, opening the change in the peek. Three rows, as Needs your decision
+  draws, and **Open Gitlet** is Gitlet › Changes narrowed to what waits on a
+  person. A
+  listing is a page the engine read, never a total, so the card counts
+  nothing; and a page is the rows it read, not the rows it kept (a change of
+  a repository the reader may not read, one that has ended, one whose
+  readiness no longer waits on a person is dropped after the read), so an
+  empty page can still carry `next`. Each half follows `next` until it holds
+  its three or the listing ends, for at most four pages a poll
+  (`CHANGES_FILL_PAGES`), and says it found none only of a listing that
+  ended: a half that stops at that bound first draws what it found, or, with
+  nothing found, says none was among the newest read and links to the rest
+  in Gitlet. A half that found none says so on one line; when both halves
+  were asked and both ended with nothing, the card says it once, one empty
+  state ("Nothing waits on a person") in place of the two halves, rather than
+  a line under one half beside a full empty state under the other.
+- **Tasks completed** per company day over the window, with the window's total
+  (today in the accent), **Tokens by team** over the window (tokens, never money), each
+  team's bar split by the seats that spent in it and keyed under the bar (the
+  engine's `parts`; a team of more than four seats names its three biggest and
+  draws the rest as one part in the residual hue), and
+  **Projects**: each project's done, active and to-do work as one bar, its
+  lead and its target date.
+- **Recent activity** (`company_feed`): work delivered ("approved on first
+  review", "1 turn · 38.2k tokens"), filed ("from Slack", off the create's own
+  origin), handed on ("hand-off 1 of 8"), pages published and schedules run —
+  Everything, Completed, Hand-offs or Schedules (`feed=`) — with Load older,
+  and the full event log a link away. A schedule's rows are its RUNS, and the
+  engine folds a schedule's consecutive runs into one ("Schedule backlog-sweep
+  ran 12 times for PM", "since 02:40"): a tick it skipped is never a row that
+  says "ran", and a frequent schedule never buries the work under a page of
+  itself. Each row's sentence comes from ONE table (`FEED_PHRASES` in
+  `routes/home/model.ts`) keyed on the feed's own kinds. On a phone a row is a
+  three-column grid — time, mark, sentence — whose sentence wraps inside its
+  own column with the aside under it, so a row that wraps and one that does not
+  keep the same alignment.
 
 **Home leaves out what cannot arrive.** Where the company does not run Worklet (see [the sidebar](#the-sidebar)), the *Tasks in progress* and *Completed* figures, **Tasks completed** and **Projects** are neither drawn nor offered in the tray, and New task leaves the page bar: a zero tile would claim a tracker that answered nothing. Where it hosts no code, **Code waiting on a person** is neither drawn nor offered. Decisions, conditions, Live now and tokens arrive under every backend and stay.
 
@@ -5060,17 +5176,28 @@ written. The address only preselects: a seat the company no longer has, or
 coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
-menu. The page has no lenses: under that table come Ask Crewlet and the
-Advisor, a compact row each (its mark and name, its model's picker, and what it
-does in a few words), whose picker writes the helper's one key in a step (the
-dry run, then the write under the revision it read), lists a model no helper
-can run on disabled beside the engine's reason, shows the choice at once while
-it is saved and then says where the helper runs now; then **Every seat, every
-job**, every agent seat as a row with the model it runs for each category of
-work (*Coding*, *Reviewing and delegations*, *Routines and evaluations*), a
-cell's model's condition in the cell, a split category said job by job, and a
-quiet note where a model under a fixed deadline is not a fast one; a seat's
-pick opens that model's wizard on *Use it for* with the seat's category added. *Use it
+menu. The page has no lenses: under that table one card says who runs on
+which model, in two quiet groups, *Helpers* (Ask Crewlet and the Advisor)
+then *Seats*, with no header row. Every row has one anatomy: who on the left
+(a helper's product mark and name, a seat's avatar and name linking to the
+seat) and the model's picker on the right, in one column of one width. Every
+model is named in full on a picker's trigger and each option: its harness's
+mark, its key and, quieter, the model it runs by name ("sub-4 · Claude Opus
+5.5"), read from the entry's model id through the engine's `llm_models`
+answer (the harness's aliases with the version each follows, and the public
+catalogue's names); an id nothing names is said as itself. The list's model
+line, a model's page and the wizard's Review name the model the same way. A
+helper's picker writes its one key in a step (the dry run, then the write
+under the revision it read), lists a model no helper can run on disabled
+beside the engine's reason, shows the choice at once while it is saved and
+then says where the helper runs now. A seat on one model shows one picker that
+sets all three categories; *Split by job* in the row's menu shows a picker per
+category under the seat's name (*Coding*, *Reviews*, *Routines*), and *Use
+one model* folds them back; a seat whose jobs differ shows its three, a
+category split by hand reading *Split*. Each option says its model's
+condition in a word, and a fast model is marked inside the Routines picker;
+nothing is said per row or in a callout. A pick opens that model's wizard on
+*Use it for* with the seat's categories added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also

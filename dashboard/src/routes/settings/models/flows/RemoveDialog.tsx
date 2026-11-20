@@ -38,6 +38,7 @@ import type { ModelReference } from "~/protocol/models.ts";
 import { removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { JOB_WORDS, seatName } from "../places.ts";
+import { modelLabel, modelMark } from "../modelPicker.tsx";
 import { HEALTH } from "../words.ts";
 
 /** What one place becomes: another model, or none (Ask Crewlet turned off, or the Advisor run with no model). */
@@ -100,7 +101,9 @@ const LEAVE_UNSET: SelectOption = { value: UNSET, label: "Leave unset" };
 function modelOptions(models: readonly ModelView[]): SelectOption[] {
   return models.map((m) => ({
     value: m.key,
-    label: m.key,
+    label: modelLabel(m),
+    text: m.key,
+    leading: modelMark(m),
     ...(m.entry.health !== "ready" ? { hint: HEALTH[m.entry.health].label } : {}),
   }));
 }
