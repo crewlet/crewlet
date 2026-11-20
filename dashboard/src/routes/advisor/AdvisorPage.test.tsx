@@ -368,7 +368,24 @@ test("the head says when the checks last ran, and Run now starts them", async ()
   await waitFor(() =>
     expect(sent.some((r) => r.method === "POST" && r.path === "/advisor/runs")).toBe(true),
   );
+  expect(sent.find((r) => r.path === "/advisor/runs")?.body).toEqual({ kind: "rules" });
   expect(runWords(runView(null), NOW)).toBe("The checks have not run yet.");
+});
+
+// A DEEP RUN IS ASKED FOR BY NAME, beside the checks: it investigates with the
+// Advisor's model and can take many minutes, so it is its own press.
+test("Run deep asks the engine for a deep run", async () => {
+  const { sent, answer } = engine([], null);
+  mount(answer);
+  const press = await screen.findByRole("button", { name: "Run deep" });
+  await act(async () => {
+    fireEvent.click(press);
+  });
+  await waitFor(() =>
+    expect(sent.find((r) => r.method === "POST" && r.path === "/advisor/runs")?.body).toEqual({
+      kind: "deep",
+    }),
+  );
 });
 
 // R5: AN ATLAS FIX IS OFFERED ON THE ENTRIES THE ENGINE NAMES, only to a reader
