@@ -376,3 +376,43 @@ func TestAFlushThatStopsSettlingDecidesNothingUnsettled(t *testing.T) {
 		t.Errorf("Close answered %v, and the stream wrote another text than Secrets %s", err, parted(out.String(), Secrets(text)))
 	}
 }
+
+// A FLUSH MAY REFUSE A PASSWORD'S KEY ON THE LINE AFTER A KEY'S BEGIN, the
+// run of about the lag as its value's line: a layout the package doc names.
+// A flush decides every stage at the settled point, which moves the keys'
+// stage's later windows, so here a stream flushed once refuses where an
+// unflushed one answers nil. Either way it writes no text but Secrets.
+func TestAFlushMayRefuseAPasswordsKeyOnTheLineAfterAKeysBegin(t *testing.T) {
+	t.Parallel()
+	h := holdBytes()
+	r := rand.New(rand.NewPCG(5, 5))
+	prefix := strings.Repeat("ok\n", 204800)
+	text := prefix + "-----BEGIN PRIVATE KEY-----\npassword: \nsk-" + testRun(r, testB64url, 5431296) + "\n" +
+		strings.Repeat("ok\n", stageStep/3+1)
+	want := Secrets(text)
+	read := func(flushAt int) (string, error) {
+		var out bytes.Buffer
+		s := NewStreamHolding(&out, h, flushAt > 0)
+		for at := 0; at < len(text); {
+			n := min(len(text)-at, 64<<10)
+			if flushAt > at && flushAt < at+n {
+				n = flushAt - at
+			}
+			_, _ = s.Write([]byte(text[at : at+n]))
+			if at += n; at == flushAt {
+				final, _, err := s.Flush()
+				if f := int(final); err == nil && (f > out.Len() || f > len(want) || out.String()[:f] != want[:f]) {
+					t.Errorf("the flush answered %d final, not a prefix of Secrets", final)
+				}
+			}
+		}
+		err := s.Close()
+		return out.String(), err
+	}
+	if got, err := read(0); err != nil || got != want {
+		t.Fatalf("unflushed, the stream answered %v and wrote Secrets: %v; want nil and Secrets", err, got == want)
+	}
+	if got, err := read(len(prefix) - stageAdvance + 600); !errors.Is(err, ErrDecidedEarly) {
+		t.Errorf("flushed once before the BEGIN, the stream answered %v and wrote Secrets: %v; want it refused", err, got == want)
+	}
+}
