@@ -372,6 +372,16 @@
 // since it is the log's account (ADR-0067, ADR-0073). A call outliving its
 // round's collection is a late call of the round after, with no place.
 //
+// # A wake joins a running run
+//
+// The engine may file somebody's message about a job's work as that job's wake
+// item ([PendingStore.FileWake]), sealed in a domain of its own. Nothing in
+// this build files one: every node reads wakes before any files them, so no
+// node mid-upgrade meets one it would take for a note. Wakes between two steps
+// join one unserved item; a hook serves an item once. A read item is the
+// turn's and outlives its job; an unread one goes with it, its delivery left
+// to a turn of its own.
+//
 // # Stopping a seat's running work
 //
 // A pause with `stop_running` must stop work in flight, which a run's turn

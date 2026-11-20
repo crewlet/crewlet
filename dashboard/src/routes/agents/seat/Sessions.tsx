@@ -100,6 +100,7 @@ export const KIND_LABELS: Record<TranscriptEntryKind, string> = {
   brief: "Brief",
   note: "Note",
   late_call: "Late call",
+  wake: "Message",
   model: "Model",
   tool_call: "Tool call",
   tool_result: "Result",

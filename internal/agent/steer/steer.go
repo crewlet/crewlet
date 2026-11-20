@@ -120,6 +120,14 @@
 // later take read, a correction of it among them. A note of the brief's it
 // places none of is read at the launch's own place, after every read; a
 // source that keeps no record places nothing.
+//
+// # A wake handed to a running run is no note
+//
+// The engine may hand a running run somebody's message about its work, a
+// [Wake], as an item of the run's job (internal/sandbox's RunNote.Wake): read
+// between its steps as a note is, in its writer's fence and never as a
+// person's correction, and reported as [types.AgentTurnJoined] ([Joined]).
+// The review reads none, and nothing here holds one.
 package steer
 
 import (
@@ -133,6 +141,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -399,6 +408,72 @@ func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 		ev.Phase, ev.Iteration, ev.Round = end.at.Phase, end.at.Iteration, end.at.Round
 		ev.Boundary, ev.LaunchID = end.at.Boundary, end.at.Launch
 		ev.Retold = end.retold
+	}
+	return ev
+}
+
+// MaxWakeRunes bounds the words a [Wake] carries. ONE THOUSAND: a wake is
+// rendered whole beside a person's widest note in one Claude Code hook answer,
+// in its writer's fence, and its conversation keeps whatever is past it, which
+// the rendering names ([Wake.Cut]).
+const MaxWakeRunes = 1000
+
+// Wake is somebody's message about a running turn's work, handed to the turn's
+// run as an item of its job and opened from the engine's seal: who wrote it,
+// where and for whom, whether it asks for an answer, its words, and the
+// completion-ledger keys that mark its delivery on the seat's inbox worked once
+// a step of the run reads it ([Joined]).
+type Wake struct {
+	// ID is the wake's identity as it was filed, and Triggers the ids of the
+	// deliveries on the seat's inbox it stands for.
+	ID       string
+	Triggers []string
+
+	// Keys are the completion-ledger keys that mark the deliveries worked: each
+	// one's own, and a chat message's identity on its backend where it has one.
+	Keys []string
+
+	// By and ByKind are who wrote it, by seat handle or else login, and what
+	// sort of writer that is; WorkingFor is whom it was written for, as its
+	// delivery names that one (notify.WorkingForKey), "" for nobody.
+	By         string
+	ByKind     iam.ActorKind
+	WorkingFor string
+
+	// Conversation and Partition are where it was written: its conversation's
+	// identity and the inbox partition its delivery arrived in.
+	Conversation, Partition string
+
+	// Label is the fence its words are handed over in, decided as the turn's
+	// own wake would decide it: the surface, the trust and the writers.
+	Label provenance.Label
+
+	// OwesAnswer says it asks for an answer, and At is when it was written.
+	OwesAnswer bool
+	At         time.Time
+
+	// Text is its words, at most [MaxWakeRunes] of them, and Cut how many
+	// characters past those its message holds, which its conversation keeps.
+	Text string `untrusted:"fence"`
+	Cut  int
+}
+
+// Joined is the agent_turn_joined record of what became of w, handed to job:
+// outcome, at the step at names, nil where no step is known. THE ONE
+// CONSTRUCTOR of the record, which every publisher calls, so the send time is
+// always UTC and no record names a step its outcome came to none at.
+func Joined(turn Turn, w Wake, job string, outcome types.JoinOutcome, at *Reading) types.AgentTurnJoined {
+	ev := types.AgentTurnJoined{
+		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role, TurnID: turn.TurnID,
+		WorkKey: turn.WorkKey, WakeID: w.ID, TriggerIDs: slices.Clone(w.Triggers), Outcome: outcome,
+		LaunchID: job, WrittenBy: w.By, WrittenByKind: string(w.ByKind), Source: string(w.Label.Source),
+		OwesAnswer: w.OwesAnswer, SentAt: w.At,
+	}
+	if !ev.SentAt.IsZero() {
+		ev.SentAt = ev.SentAt.UTC()
+	}
+	if at != nil && outcome != types.JoinUnread {
+		ev.Boundary, ev.Iteration = at.Boundary, at.Iteration
 	}
 	return ev
 }

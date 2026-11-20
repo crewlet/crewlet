@@ -218,9 +218,10 @@ func validClaudeAgent(agent string) bool {
 const maxAskedTakes = 64
 
 // The most takes a job's row asks ([sandbox.MainThreadAsk.Takes]): every
-// serve of each note and item it holds. A bound raised past the masks fails
-// this build, never a job's read.
-var _ [maxAskedTakes - (steer.MaxTurnNotes+sandbox.MaxJobItems)*sandbox.MaxNoteServes]struct{}
+// serve of each note, late call's item and wake item it holds. A bound raised
+// past the masks fails this build, never a job's read.
+var _ [maxAskedTakes - (steer.MaxTurnNotes+sandbox.MaxJobItems)*sandbox.MaxNoteServes -
+	sandbox.MaxJobWakes*sandbox.MaxWakeServes]struct{}
 
 // errAskedPastMasks is an ask of more take tokens than a hook record's masks
 // hold ([threadReader.Asking]).

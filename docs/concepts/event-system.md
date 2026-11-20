@@ -462,7 +462,9 @@ turn_trigger_skipped       # a redelivery the completion ledger had already
                            # a completed turn already read past carries the
                            # disposition `absorbed`, and one a held
                            # conversation settled unrun `breaker_held`, each
-                           # with its wake, which the turn ledger counts
+                           # with its wake, which the turn ledger counts; one a
+                           # running turn's run read as a wake says it joined
+                           # that turn (`agent_turn_joined` names it)
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
@@ -571,6 +573,23 @@ agent_turn_steered         # what became of a person's note to this running
                            # sent_at: a note crosses an ephemeral scatter or
                            # waits on a run's record that is deleted with the
                            # run, so this row is its only durable record
+agent_turn_joined          # what became of a wake the engine handed this
+                           # turn's running executor as a message about its
+                           # work: `delivered` where a step of the run read
+                           # it (its delivery is then recorded worked and
+                           # starts no turn of its own), `unconfirmed` where
+                           # its harness was handed it and never confirmed
+                           # it, `unread` where nothing handed it over before
+                           # its job ended; each but `unread` at its step
+                           # (`boundary`, `iteration`) and job (`launch_id`).
+                           # One record a wake, under an id from the turn and
+                           # the wake: published by the node whose read
+                           # confirmed it, or by the node that ended its job
+                           # (a relaunch, or the turn's ending). Carries
+                           # wake_id, trigger_ids, written_by,
+                           # written_by_kind, source, owes_answer and
+                           # sent_at, never the message's words, which its
+                           # conversation keeps
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
