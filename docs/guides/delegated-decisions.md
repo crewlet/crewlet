@@ -1,20 +1,16 @@
 # Delegated Decisions
 
 Agents ask people to approve what they cannot do alone: a command on a
-server, a merge, a deploy. When a person
-accepts the agent's recommendation almost every time, the Inbox fills with
-requests that only need a look. **Delegated decisions** let an agent seat you
-choose, a *delegate*, decide those requests in a person's place, within
-rules Crewlet enforces itself, and put in front of people only what it cannot
-decide or judges risky.
-
-It is off unless you turn it on, and one setting turns it off again.
+server, a merge, a deploy. **Delegated decisions** let an agent seat you
+choose, a *delegate*, decide those requests in a person's place, within rules
+Crewlet enforces itself, and put to people only what it cannot decide or
+judges risky. Off unless you turn it on; one setting turns it off again.
 
 ## What a request is for
 
-Every request that waits on a person carries its **act**: what approving it
-does. Crewlet sets it from the structured data that made the request, never
-from an agent's words.
+Every request waiting on a person carries its **act**: what approving it does.
+Crewlet sets it from the structured data behind the request, never from an
+agent's words.
 
 | Act | What it is |
 |---|---|
@@ -48,16 +44,16 @@ delegated_decisions:
 
 | Field | Meaning |
 |---|---|
-| `enabled` | Turns delegation on. Off puts every request to people at once and keeps the rules. |
-| `rules[].kinds` | The acts the rule delegates. A kind is in at most one rule; `other` is never delegated. |
-| `rules[].delegates` | One agent seat, or two for a **panel**: both must allow, and any disagreement goes to people. A panel's two seats must run on different first `llm` entries, so one model's blind spot is not both. |
-| `rules[].escalate_to` | The people an escalation is put to, beside administrators. At least one. They read the digest and spot-checks, and may approve the rule's requests as approvers do. |
-| `rules[].sample_one_in` | One decision in this many is shown to `escalate_to` after the fact, for a spot-check. |
-| `rules[].always_escalate_paths` | Repository path globs (`docs/**`, `services/*/billing/**`) beside the [built-in list](#paths-no-delegate-allows): a merge or deploy touching one goes to people. Only for a rule of `pr_merge` or `deploy`; at most 64. |
-| `rules[].required_checks` | The checks a GitHub repository's branch requires before a delegate's merge or deploy stands, beside any its branch protection or rulesets require: each entry a `repo` (`owner/name`), a `branch` and its `checks` (one to 32 names, as GitHub shows their check runs). See [Checks a rule requires](#checks-a-rule-requires). Only for a rule of `pr_merge` or `deploy`; at most 64 entries, one per repository and branch. |
-| `deadline_seconds` | How long a request waits on its delegates before it goes to people: 300 to 1800 seconds, 900 (15 minutes) when unset. |
-| `allows_per_hour` | How many requests of one kind one delegate may allow in one clock hour (UTC), counted across the fleet; past it, requests go to people. 1 to 60, 30 when unset. |
-| `server_allows_per_hour` | How many commands delegates may allow on one server in one clock hour (UTC), counted across the fleet; past it, commands go to people. 1 to 60, 10 when unset. |
+| `enabled` | Turns delegation on. Off sends every request to people and keeps the rules. |
+| `rules[].kinds` | Acts the rule delegates. A kind is in at most one rule. |
+| `rules[].delegates` | One agent seat, or two for a **panel**: both must allow, any disagreement goes to people. A panel's seats must run on different first `llm` entries. |
+| `rules[].escalate_to` | People an escalation goes to, beside administrators. At least one. They read the digest and spot-checks and may approve the rule's requests as approvers do. |
+| `rules[].sample_one_in` | One decision in this many is shown to `escalate_to` afterwards, as a spot-check. |
+| `rules[].always_escalate_paths` | Path globs (`docs/**`, `services/*/billing/**`) beside the [built-in list](#paths-no-delegate-allows): a merge or deploy touching one goes to people. `pr_merge`/`deploy` rules only; at most 64. |
+| `rules[].required_checks` | Checks a GitHub branch requires before a delegate's merge or deploy stands, beside any its protection or rulesets require: each entry a `repo` (`owner/name`), a `branch` and its `checks` (1 to 32 names, as GitHub shows their check runs). See [Checks a rule requires](#checks-a-rule-requires). `pr_merge`/`deploy` rules only; at most 64 entries, one per repository and branch. |
+| `deadline_seconds` | How long a request waits on its delegates before going to people: 300 to 1800 seconds, default 900. |
+| `allows_per_hour` | Requests of one kind one delegate may allow per clock hour (UTC), counted across the fleet; past it, requests go to people. 1 to 60, default 30. |
+| `server_allows_per_hour` | Commands delegates may allow on one server per clock hour (UTC), counted across the fleet; past it, commands go to people. 1 to 60, default 10. |
 
 A delegate is an agent seat, never a person. A delegate for `ssh_operate`
 holds no SSH access of its own; any agent may ask for a merge or a deploy, so
@@ -65,48 +61,40 @@ a request a delegate made itself goes to people the moment it is held. The
 document is refused otherwise, and refused with a rule that names nobody to
 escalate to.
 
-An administrator can change all of it from **Settings › Delegated
-decisions** as well. Each rule reads as one line there, for example "Merges and
-deploys → Release Manager decides · Escalates to Ops Lead · Reviews 1 in 10". The
-switch turns delegation on or off, **Add a rule** and each rule's pencil open
-the rule's sheet filled from the company document, and each rule's bin removes
-it after asking (the rules after it move up one, and an escalation names a rule
-by its number). The sheet groups the fields:
+An administrator can change all of it in **Settings › Delegated decisions**:
+one line per rule (for example "Merges and deploys → Release Manager decides ·
+Escalates to Ops Lead · Reviews 1 in 10"), a switch for delegation, **Add a
+rule** and each rule's pencil open its sheet, each rule's bin removes it after
+asking (later rules move up one; an escalation names a rule by its number).
 
 | Group | Fields | Document key |
 |---|---|---|
-| What it decides | **Server commands**, **Merges**, **Deploys**, each with what it means; a kind another rule decides is shown with that rule's number | `kinds` |
+| What it decides | **Server commands**, **Merges**, **Deploys**; a kind another rule decides shows that rule's number | `kinds` |
 | Who decides | **Agent**: one agent, or two for a panel | `delegates` |
-| Who hears about it | **Escalates to**: the people; **Spot-checks**: every decision, 1 in 5, 1 in 10, 1 in 50 or a custom number, with a line saying what the choice means | `escalate_to`, `sample_one_in` |
+| Who hears about it | **Escalates to**: the people; **Spot-checks**: every decision, 1 in 5, 1 in 10, 1 in 50 or a custom number | `escalate_to`, `sample_one_in` |
 | Conditions (merges and deploys) | **Required checks** and **Always send to people** | `required_checks`, `always_escalate_paths` |
 
-Every seat picker shows each seat's picture, name and handle. Each change is a
-`PATCH /config` of the `delegated_decisions` block, checked against the whole
-company before it is stored: a rule the engine refuses is refused with each
-problem under the field it names, in plain words, and nothing is saved. Turning
-delegation off removes `enabled`, and choosing the default spot-check rate
-leaves `sample_one_in` out, so the document says the default rather than
-today's value of it.
+Each change is a `PATCH /config` of the `delegated_decisions` block, checked
+against the whole company first: a refused rule shows each problem under its
+field and nothing is saved. Turning delegation off removes `enabled`; the
+default spot-check rate leaves `sample_one_in` out.
 
-The limits Crewlet holds every delegate to are on the same page, under **What
-Crewlet enforces**: the deadline and the two hourly caps, each with the
-engine's default beside the value in force. Each row's pencil changes its key
-in the same way, a value outside its range is said beside the field before
-anything is sent, and an empty field removes the key so the default applies.
-The ranges are hard: no limit can be switched off. A deadline under five
-minutes reaches people before a delegate's turn could answer, and one past half
-an hour (a paused box's default lifetime) after the box waiting on it was let
-go. A delegate decides one request a turn, so a cap over 60 an hour bounds
-nothing.
+The same page shows the deadline and the two hourly caps under **What Crewlet
+enforces**, with the default beside the value in force; a pencil changes a key,
+an out-of-range value is flagged before sending, and an empty field removes
+the key. The ranges are hard, no limit can be switched off: under five minutes
+reaches people before a delegate's turn could answer; past half an hour (a
+paused box's default lifetime) outlives the box waiting. A delegate decides one
+request a turn, so a cap over 60 an hour bounds nothing.
 
 ## What a delegate does
 
 A request of a delegated kind goes to its delegates first, as a turn of its
-own. The turn's brief shows the request whole (for a command: the server, the
-command exactly, the standard input in full with its size and SHA-256, the
-reason, the decision it carries out and the work item) with the requesting
-agent's words fenced as data. Nothing inside a request is an instruction to
-the delegate. Until it is escalated, the request is in nobody's Inbox.
+own. The brief shows the request whole (for a command: server, exact command,
+standard input in full with size and SHA-256, reason, the decision it carries
+out, the work item) with the requesting agent's words fenced as data; nothing
+inside is an instruction to the delegate. Until escalated, the request is in
+nobody's Inbox.
 
 The delegate answers with `review_delegated`:
 
@@ -116,33 +104,35 @@ The delegate answers with `review_delegated`:
  "findings": [], "digest": "<the request's digest from the brief>"}
 ```
 
-- **`allow`** carries out what a person's approval would. For a command, that
-  is the answer a person's Allow once gives: a five-minute certificate bound to
-  exactly that command, run once on the server as shown, and refused if the
-  server's address, port, operate user or keys changed meanwhile. For a merge,
-  the engine merges exactly the head asked about, as the requesting agent. For
-  a deploy, the agent is told it may deploy exactly that commit there.
-- **`escalate`** puts the request to people, with the delegate's verdict and
-  findings shown first on its card.
+- **`allow`** does what a person's approval would. Command: a five-minute
+  certificate bound to exactly that command, run once on the server as shown,
+  refused if the server's address, port, operate user or keys changed
+  meanwhile. Merge: the engine merges exactly the head asked about, as the
+  requesting agent. Deploy: the agent is told it may deploy exactly that
+  commit there.
+- **`escalate`** puts the request to people, the delegate's verdict and
+  findings first on its card.
 - **`deny`** refuses it and tells the requesting agent the reason.
 
-`digest` binds the verdict to the exact request the delegate was shown; a
-verdict naming another digest is refused.
+`digest` binds the verdict to the exact request shown; a verdict naming
+another digest is refused.
 
 ## What Crewlet enforces, whatever the delegate says
+
+Each case below goes to people.
 
 | Rule | What happens |
 |---|---|
 | Low confidence | Goes to people. |
-| A panel that disagrees | Goes to people. A panel allows only when both allow. |
-| The delegate's own request | A request the delegate made, asked for or handed on, or one from a seat it leads, goes to people. |
-| A sensitive item | A request on a work item labelled `security`, `privacy` or `legal` goes to people. |
-| Always-escalate rules | A request that touches access grants, budgets or spend, data deletion, secrets or the company's own document goes to people. For a command, that is the [always-escalate list](../integrations/ssh.md#what-a-delegate-never-allows); for a merge or a deploy, the [paths no delegate allows](#paths-no-delegate-allows). |
-| A merge's conditions | Read from the code host when the verdict is given. The head is the one asked about, the change is open and not a draft, every check its target requires and every one its rule [requires of that branch](#checks-a-rule-requires) passed on that head, reported by something other than one of the company's own agents (a target with neither goes to people), it merges cleanly, its target's own gate is otherwise met, and somebody other than its authors and the requesting agent approved that head. Otherwise it goes to people. |
-| A deploy's conditions | Every change it names has merged into one branch, the commit holds each and is on that branch, and every check the branch requires and every one its rule requires of that branch passed on the commit, a branch with neither going to people (on Gitlet: the commit is at or behind the branch's newest green commit). Otherwise it goes to people. |
-| Hourly caps | At most `allows_per_hour` allows per kind and delegate (30 unless the document sets it), and `server_allows_per_hour` commands per server (10 unless set), in one clock hour (UTC), counted across the fleet. Past either, requests go to people. A count Crewlet cannot take also goes to people. |
-| A fact it cannot read | A code host that does not answer, a change touching more paths than Crewlet reads, or a check it may not read: the request goes to people. GitHub refusing branch protection or rulesets because the repository's plan does not include them is not one: it is read as the branch requiring nothing of its own, and the rule's own checks decide. |
-| Time | A request no delegate answered within `deadline_seconds` (15 minutes unless the document sets it) goes to people. A new deadline applies at once to every request still waiting. |
+| A panel that disagrees | A panel allows only when both allow. |
+| The delegate's own request | One the delegate made, asked for or handed on, or from a seat it leads. |
+| A sensitive item | A request on a work item labelled `security`, `privacy` or `legal`. |
+| Always-escalate rules | A request touching access grants, budgets or spend, data deletion, secrets or the company's own document. Command: the [always-escalate list](../integrations/ssh.md#what-a-delegate-never-allows); merge or deploy: the [paths no delegate allows](#paths-no-delegate-allows). |
+| A merge's conditions | Read from the code host at verdict time; any unmet: the head is the one asked about; the change is open, not a draft, merges cleanly, and its target's own gate is otherwise met; every check its target requires and every one its rule [requires of that branch](#checks-a-rule-requires) passed on that head, reported by something other than the company's own agents (a target with neither checks goes to people); somebody other than its authors and the requesting agent approved that head. |
+| A deploy's conditions | Every change it names has merged into one branch, the commit holds each and is on that branch, and every check the branch requires and its rule requires of it passed on the commit (a branch with neither goes to people; on Gitlet the commit is at or behind the branch's newest green commit). |
+| Hourly caps | Past `allows_per_hour` per kind and delegate, or `server_allows_per_hour` per server, in a clock hour (UTC) across the fleet; also when Crewlet cannot take the count. |
+| A fact it cannot read | A code host that does not answer, a change touching more paths than Crewlet reads, or a check it may not read. Not one: GitHub refusing branch protection or rulesets because the plan lacks them; that reads as the branch requiring nothing of its own, and the rule's checks decide. |
+| Time | No delegate answered within `deadline_seconds`. A new deadline applies at once to every waiting request. |
 | Turning it off | `enabled: false`, removing a rule, or changing its delegates shows its waiting requests to people on the next read, and records why within a minute. |
 
 Every verdict, and every escalation Crewlet makes itself, is recorded in the
@@ -152,10 +142,10 @@ nothing out; the request reaches people at its deadline.
 ## What you still see
 
 - **Escalations**, in the Inbox and on Home, with each delegate's verdict, confidence, reason and findings above the request, and why Crewlet put it to you.
-- **Decided under delegation**: every answer a delegate gave is marked with its rule wherever the answer is shown: the run's page, the turn, the event and the live event log.
-- **The digest**: what delegates decided for you on the last whole company day, on Home.
-- **Today, so far**: **Settings › Delegated decisions** opens on the company day still running, with every decision made on it until now (asked again every minute), and says the day is still running. Its pager goes back to yesterday and earlier days, and forward no further than today.
-- **Spot-checks**: one decision in `sample_one_in`, shown after the fact, with nothing to answer unless it was wrong.
+- **Decided under delegation**: every delegate answer is marked with its rule wherever shown: the run's page, the turn, the event and the live event log.
+- **The digest**: on Home, what delegates decided for you on the last whole company day.
+- **Today, so far**: **Settings › Delegated decisions** opens on the company day still running, every decision so far (refreshed every minute). Its pager goes back to earlier days, forward no further than today.
+- **Spot-checks**: one decision in `sample_one_in`, shown after the fact; nothing to answer unless it was wrong.
 - **The audit**: `GET /setup/integrations/ssh/audit?kind=verdict` for every verdict on a command, and `GET /delegated-decisions` for the rules, the digest (`day=today` for the day still running) and the spot-checks.
 
 ## Asking to merge and to deploy
@@ -164,24 +154,22 @@ An agent asks with a tool that holds the call on its run, as a command on a
 server is held:
 
 - `ask_to_merge {change, head, method, reason}`: `change` is a Gitlet change
-  (`web!42`) or a GitHub pull request's address on the company's GitHub, and
-  `head` the commit the agent read. An approval, a delegate's or a person's,
-  merges exactly that head, once, as the agent: on Gitlet through the target's
-  own merge gate, which still decides it, and on GitHub through GitHub's merge
-  with that head's SHA, as the agent's own app (it needs Contents write). A
-  change pushed to since is not merged, and the agent asks again.
+  (`web!42`) or a GitHub pull request's address on the company's GitHub, `head`
+  the commit the agent read. An approval, a delegate's or a person's, merges
+  exactly that head, once, as the agent: on Gitlet through the target's own
+  merge gate, which still decides; on GitHub through GitHub's merge with that
+  head's SHA, as the agent's own app (needs Contents write). A change pushed
+  to since is not merged; the agent asks again.
 - `ask_to_deploy {repo, commit, changes, environment, rollback, reason}`: an
   approval tells the agent it may deploy exactly that commit to that
-  environment, once. Crewlet has no deploy path of its own: the agent deploys
-  with its own tools, and the approval names what it may deploy.
+  environment, once. Crewlet has no deploy path of its own; the agent deploys
+  with its own tools.
 
 ### One request per ask
 
-An agent can be woken about the same work more than once (a mention and an
-assignment a minute apart), and each turn may ask for the same thing while the
-first request still waits. Crewlet keeps that one request. A request is
-identified by the agent that asks, its kind and what it decides, never by its
-wording:
+An agent woken twice about the same work may ask for the same thing while the
+first request waits. Crewlet keeps one request, identified by the asking
+agent, its kind and what it decides, never by wording:
 
 | Kind | What makes two asks the same request |
 |---|---|
@@ -189,14 +177,12 @@ wording:
 | `deploy` | The repository, the commit, the environment and the set of changes. |
 | `ssh_operate` | The server as the approver is shown it, the command and its stdin. |
 
-The `reason`, and a deploy's `rollback`, are the agent's words and are not part
-of it. While a request waits on a delegate or on a person, the same agent's
-repeat of it holds nothing new: no second delegate turn, no second Inbox
-entry. The repeating turn is told the request already waits, under its id, and
-is not parked; the turn that asked first carries the work on when the answer
-comes. A new head, another method, environment or command, or the same ask by
-another agent, is a request of its own. So is the same ask once the first was
-answered, allowed or denied: nothing is open to join, and it is asked afresh.
+The `reason`, and a deploy's `rollback`, are not part of it. While a request
+waits, the same agent's repeat makes no second delegate turn or Inbox entry;
+the repeating turn is told the request already waits, under its id, and is not
+parked; the turn that asked first carries the work on when the answer comes.
+A new head, method, environment or command, another agent's ask, or the same
+ask after the first was answered (allowed or denied) is a request of its own.
 
 Without a rule for the kind, the request goes to people. A person who may
 approve one is an administrator, a lead of the agent, or a person the kind's
@@ -205,8 +191,8 @@ rule names in `escalate_to`, signed in again within the step-up window
 
 ### Paths no delegate allows
 
-A merge or a deploy whose change touches one of these goes to people, beside
-the rule's own `always_escalate_paths`:
+A merge or deploy touching one of these goes to people, beside the rule's own
+`always_escalate_paths`:
 
 | Class | Paths |
 |---|---|
@@ -218,78 +204,73 @@ the rule's own `always_escalate_paths`:
 | `migrations` | `**/migrations/**`, `**/migrate/**`, `**/*.sql` |
 | `crewlet_company` | `**/company.yaml`, `**/crewlet.yaml` |
 
-These are the conventional places only. A repository can keep a secret or a
-migration anywhere, which is what `always_escalate_paths` is for, and a
-delegate is told to escalate what it cannot judge.
+Conventional places only: a repository can keep a secret or migration anywhere,
+which `always_escalate_paths` is for, and a delegate is told to escalate what
+it cannot judge.
 
 ## Approve once at the decision
 
-An agent can ask before it calls: `ask_to_operate {item, ask, host, command,
-stdin, reason}` puts one exact command to a person as a decision on the work
-item. Crewlet composes it, quoting the server, the command and the standard
-input's SHA-256, and stamps the ask with its act. Choosing **Run it once** is
-an SSH approval: only an administrator or a person `integrations.ssh.approvers`
-or an `ssh_operate` rule's `escalate_to` names may choose it, signed in again
-within the step-up window. In the turn that answer starts, the agent's
-`ssh_operate` call that matches the act byte for byte runs without a second
-prompt, once; any difference is asked again, and the audit records the
-command as approved by that person through that decision.
+`ask_to_operate {item, ask, host, command, stdin, reason}` puts one exact
+command to a person as a decision on the work item, before the agent calls.
+Crewlet composes it, quoting the server, the command and the standard input's
+SHA-256, and stamps it with its act. **Run it once** is an SSH approval: only
+an administrator or a person `integrations.ssh.approvers` or an `ssh_operate`
+rule's `escalate_to` names may choose it, signed in again within the step-up
+window. In the turn that answer starts, the agent's `ssh_operate` call
+matching the act byte for byte runs once without a second prompt; any
+difference is asked again, and the audit records the command as approved by
+that person through that decision.
 
 ## Checks a rule requires
 
-A merge or a deploy is allowed under delegation only where something shows CI
-passed on the commit decided. On GitHub that is the checks the branch requires
-in its protection or rulesets. A private repository on a plan without branch
+Delegation allows a merge or deploy only where something shows CI passed on
+the commit decided. On GitHub that is the checks the branch requires in its
+protection or rulesets. A private repository on a plan without branch
 protection has neither (GitHub answers "Upgrade to GitHub Pro or make this
-repository public"), so without more every merge and deploy there goes to
-people. `required_checks` names the checks for such a branch, and Crewlet
-enforces them whatever the delegate says:
+repository public"), so every merge and deploy there goes to people.
+`required_checks` names the checks for such a branch, enforced whatever the
+delegate says:
 
-- **The union.** The checks a merge or deploy needs are what GitHub requires
-  of the branch, where it can, and what the rule names for that repository and
-  branch. A branch with neither still goes to people.
+- **The union.** GitHub's required checks for the branch, where readable, plus
+  what the rule names for that repository and branch. A branch with neither
+  goes to people.
 - **A check run that succeeded on exactly that commit.** A named check passes
-  only as a check run that completed with `success` on the head asked about
-  (for a deploy, the commit), the newest of each app that reported it, and
-  only from an app that is not one of the company's own agents. Missing,
-  pending, failed, cancelled, timed out, neutral, skipped, or a run on another
-  commit goes to people. A GitHub-required check still passes on neutral or
-  skipped, as GitHub counts it; a name both require must pass both ways.
-- **No commit status.** A named check is never met by a commit status, and no
-  status is read for it: agent apps are not offered GitHub's Commit statuses
-  permission, so in a private repository Crewlet cannot read one. Name the
-  check run your CI reports (a GitHub Actions job's name, such as
-  `test (ubuntu-latest)`).
+  only as a check run completed with `success` on the head asked about (for a
+  deploy, the commit), the newest of each app that reported it, from an app
+  that is not one of the company's own agents. Missing, pending, failed,
+  cancelled, timed out, neutral, skipped, or on another commit goes to people.
+  A GitHub-required check still passes on neutral or skipped, as GitHub counts
+  it; a name both require must pass both ways.
+- **No commit status.** A commit status never meets a named check and none is
+  read: agent apps are not offered GitHub's Commit statuses permission, so in a
+  private repository Crewlet cannot read one. Name the check run your CI
+  reports (a GitHub Actions job's name, such as `test (ubuntu-latest)`).
 - **Approval is unchanged.** Somebody other than the change's authors and the
-  requesting agent must have approved that head in a GitHub review, which
-  every plan has.
-- **Read as the agent's own app.** The agent needs Checks (Read-only) to read
-  the runs; without it the check reads as unread and the request goes to
-  people.
+  requesting agent must have approved that head in a GitHub review.
+- **Read as the agent's own app.** The agent needs Checks (Read-only); without
+  it the check reads as unread and the request goes to people.
 
-The repository is matched ignoring case and the branch and the check names
-exactly. An entry for a repository outside the company's GitHub (its
-organization, or a seat's `integrations.github.repos`) is never read, and
-`crewlet validate` says so as an advisory. Gitlet changes are held to their
-target's own merge gate, which names its checks itself, so `required_checks`
-applies to GitHub repositories. **Settings › Delegated decisions** lists each
-rule's required checks on its line.
+The repository matches ignoring case; branch and check names exactly. An entry
+for a repository outside the company's GitHub (its organization, or a seat's
+`integrations.github.repos`) is never read, and `crewlet validate` says so as
+an advisory. Gitlet changes are held to their target's own merge gate, so
+`required_checks` applies to GitHub repositories. **Settings › Delegated
+decisions** lists each rule's required checks on its line.
 
-When you add or change a rule there, the sheet's **Required checks** offers the company's GitHub
-repositories to pick from, then the chosen repository's branches, then the
-check names reported on that branch's newest commit, leaving out any an
-agent's own app reported. They are read when the form asks, through the
-agents' own apps (`GET /delegated-decisions/repositories`, `/branches` and
-`/checks`, an administrator's). A repository, branch or check the lists do not
-show can still be typed, and where nothing could be read the form says why: no
-agent's app installed on the repository, or none with Checks (Read-only).
+In a rule's sheet, **Required checks** offers the company's GitHub
+repositories, then the chosen one's branches, then the check names reported on
+that branch's newest commit (minus any an agent's own app reported), read when
+the form asks through the agents' own apps (`GET /delegated-decisions/repositories`, `/branches` and `/checks`, an
+administrator's). A repository, branch or check not listed can still be typed;
+where nothing could be read the form says why: no agent's app installed on the
+repository, or none with Checks (Read-only).
 
 ## What is not supported yet
 
 - Merges on GitLab: GitLab records no approval of one commit, so nothing could
-  bind an allow to the head shown. An agent asks for one with `ask_and_wait`,
-  and a person decides.
+  bind an allow to the head shown. An agent asks with `ask_and_wait`, and a
+  person decides.
 - A GitHub check that external CI reports only as a commit status, in a
-  private repository: agent apps are not offered GitHub's Commit statuses
-  permission, so a check the branch requires reads as unread, a check a rule
-  requires is never met by one, and the merge or deploy goes to people.
+  private repository: agent apps lack the Commit statuses permission, so a
+  check the branch requires reads as unread, a check a rule requires is never
+  met, and the merge or deploy goes to people.
