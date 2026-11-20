@@ -73,6 +73,9 @@ export function Reports() {
   const reports = useReports(cursor);
   const now = useNow();
   const rows = pagedOn(held, reports.data?.reports, (r) => r.week);
+  const cards = weekCards(rows);
+  // SAID ONCE, and only where a figure is set beside the week before.
+  const compared = cards.some((c) => c.figures.some((f) => f.was !== null));
   return (
     <QueryState
       error={reports.error}
@@ -88,11 +91,13 @@ export function Reports() {
         />
       ) : (
         <>
-          <Text as="p" variant="caption" tone="secondary">
-            Each week against the week before it.
-          </Text>
+          {compared ? (
+            <Text as="p" variant="caption" tone="secondary">
+              Each week against the week before it.
+            </Text>
+          ) : null}
           <ol className="advisor-weeks" aria-label="Weekly reports">
-            {weekCards(rows).map((c) => (
+            {cards.map((c) => (
               <li key={c.week}>
                 <Card
                   href={href(["advisor", "reports", c.week])}

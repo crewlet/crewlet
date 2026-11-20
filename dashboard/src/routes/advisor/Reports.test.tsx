@@ -105,6 +105,8 @@ test("the first week measured says so", async () => {
   const list = await screen.findByRole("list", { name: "Weekly reports" });
   expect(within(list).getByText("First week measured")).toBeDefined();
   expect(within(list).queryByText("vs the week before")).toBeNull();
+  // NOTHING IS COMPARED, so nothing says what it is compared with.
+  expect(screen.queryByText("Each week against the week before it.")).toBeNull();
 });
 
 // OLDER WEEKS ARE ASKED FOR by the cursor the engine answered, and the weeks
