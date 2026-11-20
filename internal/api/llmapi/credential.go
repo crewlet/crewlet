@@ -207,9 +207,14 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		s.fail(w, "test the credential", err)
 		return
 	}
-	if !s.passed(w, key, names, checked, wordsFor(draft, key, names)) {
+	words := wordsFor(draft, key, names)
+	words.current = active != nil
+	if !s.passed(w, key, names, checked, words) {
 		return
 	}
+	// THE TEST'S ANSWER IS THE MODEL'S until its own calls say more: added
+	// after it passed, a model read "Not tested".
+	s.engine.Verified(key, checked.At)
 	verified := fmt.Sprintf("Answered a one-turn %s run in %.1f s with only %s.",
 		agentName(draft), checked.Elapsed.Seconds(), plural(len(names), "this value", "these values"))
 	hints := checked.Hints

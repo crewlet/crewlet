@@ -273,6 +273,8 @@ func (m modelEngine) RunningRunsOn(ctx context.Context, keys []string) (int, err
 	return m.e.RunningRunsOn(ctx, keys)
 }
 
+func (m modelEngine) Verified(key string, at time.Time) { m.e.Verified(key, at) }
+
 // modelErr maps the engine's refusals that every model route shares.
 func modelErr(err error) error {
 	switch {

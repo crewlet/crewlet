@@ -8,7 +8,7 @@ import { Callout, NoticeList } from "@crewlethq/ui";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import type { WizardStep } from "../parts.tsx";
 import { Waiting } from "../Waiting.tsx";
-import { STEP_LABELS, fieldOf, messageOf, stepOf } from "./draft.ts";
+import { STEP_LABELS, fieldOf, messageOf, fixable, stepOf } from "./draft.ts";
 import type { ReviewCheck, SaveStage } from "./steps/Review.tsx";
 import type { TestState } from "./steps/testCall.ts";
 
@@ -50,20 +50,7 @@ export function FinishStatus({
     return <Waiting key={saving || test.kind}>{words}</Waiting>;
   }
   if (finish.kind !== "failed") return null;
-  if (test.kind === "failed")
-    return (
-      <Callout
-        variant="danger"
-        title="Not saved: the test call failed"
-        action={
-          <button type="button" className="t-link" onClick={() => onGo("review")}>
-            See it on Review
-          </button>
-        }
-      >
-        {test.message}
-      </Callout>
-    );
+  // THE REAL CAUSE FIRST: a test refused because the change is not valid names the change's problems.
   if (problems.length > 0)
     return (
       <Callout
@@ -77,14 +64,33 @@ export function FinishStatus({
               key: `${p.path}-${i}`,
               subject: fieldOf(p, modelKey),
               title: messageOf(p),
-              action: (
-                <button type="button" className="t-link" onClick={() => onGo(step)}>
-                  Fix in {STEP_LABELS[step]}
-                </button>
-              ),
+              // A PROBLEM NO STEP CAN FIX (a program missing on the host) offers no step.
+              ...(fixable(p)
+                ? {
+                    action: (
+                      <button type="button" className="t-link" onClick={() => onGo(step)}>
+                        Fix in {STEP_LABELS[step]}
+                      </button>
+                    ),
+                  }
+                : {}),
             };
           })}
         />
+      </Callout>
+    );
+  if (test.kind === "failed")
+    return (
+      <Callout
+        variant="danger"
+        title="Not saved: the test call failed"
+        action={
+          <button type="button" className="t-link" onClick={() => onGo("review")}>
+            See it on Review
+          </button>
+        }
+      >
+        {test.message}
       </Callout>
     );
   if (check.kind === "blocked")

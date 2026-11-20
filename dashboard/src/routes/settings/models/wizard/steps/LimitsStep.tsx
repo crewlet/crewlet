@@ -22,7 +22,7 @@ import { factsOf, type Draft } from "../draft.ts";
 
 /** The web tools switch's helper, which Review repeats in the same words. */
 export const WEB_TOOLS_HELP =
-  "Web tools are allowed unless you turn this on. Turn it on for jobs that read what people write. Ask Crewlet runs only on models with web tools denied.";
+  "Web tools are allowed unless you turn this on. Turn it on for jobs that read what people write.";
 
 /** The web tools as Review says them, in the switch's words. */
 export const webToolsWords = (denied: boolean) => (denied ? "Denied" : "Allowed");

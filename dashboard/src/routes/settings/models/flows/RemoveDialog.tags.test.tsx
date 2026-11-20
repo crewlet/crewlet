@@ -13,7 +13,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
-import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
+import {
+  apiKeyEntry,
+  modelsData,
+  modelsDoc,
+  runs,
+  seat,
+} from "~/routes/settings/models/fixtures.ts";
 import { RemoveDialog } from "./RemoveDialog.tsx";
 
 /** The two tags as the engine writes them: a revision id, and a kind and a digest. */
@@ -59,6 +65,9 @@ function engine(): Call[] {
       if (call.method === "GET" && call.path === "/config") {
         return json(modelsDoc({}), 200, { ETag: DOCUMENT_TAG });
       }
+      if (call.method === "GET" && call.path === "/config/llm-providers/sonnet/references") {
+        return json({ revision: "rev-1", references: REFERENCES }, 200);
+      }
       if (call.method === "GET" && call.path === "/config/llm-providers/sonnet") {
         return json({ harness: "claude-code", model: "sonnet" }, 200, { ETag: ENTRY_TAG });
       }
@@ -99,7 +108,15 @@ afterEach(() => {
 test("every removal request states the entry's tag, and the removal goes through", async () => {
   const calls = engine();
   const data = modelsData({
-    entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
+    entries: [
+      apiKeyEntry({ key: "sonnet" }),
+      apiKeyEntry({
+        key: "default",
+        // THE SEAT ALREADY REVIEWS ON IT, and it can code, so the removal moves
+        // its coding there unasked.
+        used_by: runs("backend-engineer", "review"),
+      }),
+    ],
     doc: modelsDoc({}),
     seats: [seat("backend-engineer", "Backend Engineer")],
     assistant: { key: null },
@@ -126,7 +143,11 @@ test("every removal request states the entry's tag, and the removal goes through
     fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
   });
   const removals = calls.filter((c) => c.method === "DELETE");
-  expect(removals.length).toBeGreaterThanOrEqual(3);
+  // THE CHECK AND THE REMOVAL: the list was read (GET .../references), never
+  // asked as a dry run with no moves.
+  expect(removals.length).toBeGreaterThanOrEqual(2);
+  expect(removals.every((c) => (c.body?.repoint ?? []).length > 0)).toBe(true);
+  expect(calls.some((c) => c.method === "GET" && c.path.endsWith("/references"))).toBe(true);
   for (const removal of removals) expect(removal.ifMatch).toBe(ENTRY_TAG);
   expect(onDone).toHaveBeenCalled();
 });
@@ -152,7 +173,15 @@ test.each([403, 413])(
       return real(url, init);
     });
     const data = modelsData({
-      entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
+      entries: [
+        apiKeyEntry({ key: "sonnet" }),
+        apiKeyEntry({
+          key: "default",
+          // THE SEAT ALREADY REVIEWS ON IT, and it can code, so the removal moves
+          // its coding there unasked.
+          used_by: runs("backend-engineer", "review"),
+        }),
+      ],
       doc: modelsDoc({}),
       seats: [seat("backend-engineer", "Backend Engineer")],
       assistant: { key: null },
