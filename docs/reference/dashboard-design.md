@@ -1544,7 +1544,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Files on a kind that runs a page of its own (its asset store: the pictures and data files its page shows by name, each with what it is and how large, Add files and Remove for an editor, held with why while its latest version does not declare `assets`; adding or removing one publishes no version, a name already there is left out and said so, and each refusal is the engine's own sentence) and Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|files\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/artifacts/{id}/standalone` | **Artifact on a page of its own**: the same page, runtime, room, panels and keys as `#/artifacts/{id}`, in a frame with no sidebar, so its bar and the artifact take the whole window of an ordinary browser tab (not the browser's fullscreen). Opened in a new tab, with no opener, by **Open in new tab**: the bar's control, the same row of its More, and a row of a listed artifact's More in the gallery. The bar is the one the artifact page draws, less the navigation toggle and Open in new tab, and its way back leads to the gallery. The tab is named by the artifact's title, and a recent kept from it is the artifact's own page | as `#/artifacts/{id}` |
 | `#/settings/general` | **Settings › General**, the column's landing and the Settings row's address, open to every member: the company-wide basics every team and seat runs on, today the **Company clock** (`timezone`, the engine's row of it beside its default, its key and its source). An administrator changes it in place, or resets it to the default; a move shifts every budget window and every schedule without a zone of its own, which the engine's check says before **Save anyway**. A reader who may not read the company document sees the zone the org projection carries, with the pencil held and its reason | |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). A saved edit closes the wizard onto the page it was opened from, as Cancel does (the list on the lens it was on, or the model's page), and a new model opens its own page; while a test or a save waits on the engine, the page names what is running and counts the seconds. `{id}` is the model's key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms, then on the same page Ask Crewlet's and the Advisor's models and every seat's model for each category of work (an old `?view=jobs` address opens this one page); one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). A saved edit closes the wizard onto the page it was opened from, as Cancel does (the list, or the model's page), and a new model opens its own page; while a test or a save waits on the engine, the page names what is running and counts the seconds. `{id}` is the model's key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP & tools**, the engine's runtime beside the models: every MCP server with its condition, its alarms, who it reaches and what last went wrong, a server's own page, and the engine's built-in tools by group *(every member's, in a reading that names no launch line, header, failure sentence or call; every action is an admin's)*. A saved edit of a server closes its wizard onto the page it was opened from, as Cancel does; a new server, or one a person signs in next, opens the server's own page. ONE tail segment is a tool, opened where the page shows it, and two are a server's page, discriminated on LENGTH, because a tool name is a third party's string | `view=` (`agents`, `builtin`) · `agent=` · `tab=` · `flow=` (`add`, `edit` with `step=`, `test`, `value` with `key=`, `restart`, `disable`, `remove`, `approve`, `drift`, with `server=` and `seat=`) · `q=` · `cap=` · `group=` · `peek=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it, and a pencil on every cap the document carries (the answer's `settable`) that changes it with a `PATCH /config` the engine checks first; an empty field is the default, which removes the key *(needs Admin access)* | |
@@ -2122,7 +2122,7 @@ word or two to a line. The width a list is read at is the package's to set:
 `@crewlethq/ui` sets a list whose options carry a description at a reading
 width (a floor of 22rem and a measure of 28rem, never wider than the window)
 and never over the field it was opened from, so the Agents tab and Settings ›
-Models › By job keep no width rule of their own.
+Models' seats keep no width rule of their own.
 
 ### An object's own facts
 
@@ -11860,15 +11860,20 @@ written. The address only preselects: a seat the company no longer has, or
 coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
-menu. **By job** is every agent seat as a row with the model it runs for each
-category of work (*Coding*, *Reviewing and delegations*, *Routines and
-evaluations*), Ask Crewlet's and the Advisor's models above the grid, each a
-line of its own whose picker writes the helper's one key in a step (the dry
-run, then the write under the revision it read), shows the choice at once
-while it is saved and then says where the helper runs now, a cell's model's
-condition in the cell, a split category said job by job, and a quiet note
-where a model under a fixed deadline is not a fast one; a seat's pick opens
-that model's wizard on *Use it for* with the seat's category added. *Use it
+menu. The page has no lenses: under that table come Ask Crewlet and the
+Advisor on one line, each its mark, its name and its model's picker, with no
+caption, whose picker writes the helper's one key in a step (the dry run, then
+the write under the revision it read), lists a model no helper can run on
+disabled beside the engine's reason, shows the choice at once while it is
+saved and then says where the helper runs now; then **Seats**, every agent
+seat as a row with its model. A seat on one model shows one picker that sets
+all three categories; *Split by job* shows a picker per category (*Coding*,
+*Reviews*, *Routines*), and a seat whose jobs differ shows its three, a
+category split by hand reading *Split*. Every model in a picker carries its
+harness's mark on the trigger and each option, with its condition in a word;
+a fast model is marked inside the Routines picker, and nothing is said per row
+or in a callout. A pick opens that model's wizard on *Use it for* with the
+seat's categories added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also
@@ -11902,7 +11907,12 @@ list: the name and the harness (fixed once the model exists), how it signs
 in, the model (the harness's aliases, each with the version it resolves to on the
 vendor's own service where the engine knows it, and the public catalogue's models,
 or any name as text), where it runs a seat's executor (for a harness with a runner), what it is used for,
-its limits, a test call and a review of exactly what changes. A pasted
+its limits, and a review of exactly what changes, where the test call is run
+with its button and said in one line. **Finish and save** stands beside
+Continue from the first step where nothing the model needs is missing, so the
+optional steps left keep their defaults; on Review it is the primary action.
+It runs the test call where it has not passed (a new device sign-in has
+nothing to test until it is saved), the engine's check, then the save. A pasted
 credential is tested before anything is stored and sealed before the document
 that names it is written; the document is checked with a dry run against the
 revision it edits and stored with `If-Match`, so a colleague's save in between
@@ -12142,7 +12152,7 @@ active revision, its entities (the kinds declared once, `ENTITY_KINDS`, and
 held against the engine's by `entities_client_test.go`, drawn as a list of
 handles read down its left edge beside the one it opened), the revision history
 and a diff. The lenses are the frame's **lens chips** beside the page's name
-(`PageLenses`, as Models' and MCP & tools' are), which on a phone take a row of
+(`PageLenses`, as MCP & tools' are), which on a phone take a row of
 their own under the bar and scroll sideways rather than wrapping a lens onto a
 second line. **The active document is the Active lens's whole content**, so it
 takes the whole view (`--record-view`), rather than a 460px box of its own

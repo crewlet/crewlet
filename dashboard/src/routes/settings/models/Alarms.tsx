@@ -41,6 +41,7 @@ import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
+import { modelMark } from "./modelPicker.tsx";
 import {
   credentialAction,
   type Flow,
@@ -209,7 +210,7 @@ function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[]
 /**
  * Moving the seats a limit holds: each seat's category on the limited models,
  * and the models that can take every one of them now. Not the assistant: it
- * is company-wide, and moving it is its own choice on By job.
+ * is company-wide, and moving it is its own choice on its row under the list.
  *
  * NEVER BACK ONTO THE LIMIT: neither a limited model nor, unless the window is
  * the one model's own, any model on the same plan, which a session or weekly
@@ -476,6 +477,7 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
           ? move.to.map((m) => ({
               key: m.key,
               label: m.key,
+              icon: modelMark(m),
               description: m.model,
               onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
             }))

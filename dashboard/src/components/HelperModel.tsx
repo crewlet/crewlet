@@ -1,7 +1,7 @@
 /**
  * The one setting each of Crewlet's two helpers has: the model it runs on
  * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), chosen
- * by an administrator in Settings › Models alone, on By job's helper lines;
+ * by an administrator in Settings › Models alone, on the helpers' line under its list;
  * neither helper's own page names it.
  *
  * WHICH MODELS CAN RUN A HELPER IS THE ENGINE'S ANSWER (`llm_entries`'
@@ -15,7 +15,7 @@
  * key, which turns Ask Crewlet off and the Advisor's model work with it.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Select, Text } from "@crewlethq/ui";
 import { documentLimit } from "~/lib/limits.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
@@ -47,6 +47,8 @@ export interface HelperChoice {
   model: string;
   /** Why it cannot run a helper, in the engine's words; null where it can. */
   problem: string | null;
+  /** Drawn before its key on the option and the trigger: its harness's mark. */
+  leading?: ReactNode;
 }
 
 /** The change that gives `helper` the model `key`, or takes its model away for null. */
@@ -116,6 +118,7 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
     ...choices.map((c) => ({
       value: c.key,
       label: c.key,
+      ...(c.leading ? { leading: c.leading } : {}),
       description: c.problem ?? c.model,
       disabled: c.problem !== null && c.key !== shown,
     })),

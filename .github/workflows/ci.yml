@@ -752,6 +752,23 @@ jobs:
         with:
           path: ${{ env.CREWLET_CHROMIUM_CACHE }}
           key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
+      # THE SSH SUITE'S SSHD IMAGES, kept between runs as a tar each in
+      # CREWLET_SSHDTEST_CACHE, which internal/ssh/sshdtest loads rather than
+      # building through apt. IMAGES, NOT APT'S ARCHIVES: a cached archive
+      # still needs `apt-get update` against the live mirror, the step whose
+      # failures #849 records, and a restored image needs no mirror at all.
+      # KEYED ON sshdtest.go, which holds the Dockerfile, with no restore-keys:
+      # each image's tag names a hash of its Dockerfile, so an image restored
+      # from another key would only be built beside. Every shard restores it,
+      # since the plan decides which one runs internal/ssh.
+      - name: name the sshd test images' cache directory
+        run: echo "CREWLET_SSHDTEST_CACHE=$HOME/.cache/crewlet/sshdtest" >> "$GITHUB_ENV"
+      - name: restore the sshd test images main built
+        id: sshdtest
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_SSHDTEST_CACHE }}
+          key: sshdtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/ssh/sshdtest/sshdtest.go') }}
       # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
@@ -814,6 +831,19 @@ jobs:
         with:
           path: ${{ env.CREWLET_CHROMIUM_CACHE }}
           key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
+      # The sshd test images, main only and a miss only, but from the shard that
+      # ran internal/ssh rather than the first: sshdtest marks the directory
+      # complete once it holds a tar of every image, and only that shard has.
+      - name: is the sshd test images' cache complete
+        id: sshdtest-complete
+        run: |
+          if [ -f "$CREWLET_SSHDTEST_CACHE/complete" ]; then echo "complete=true" >> "$GITHUB_OUTPUT"; fi
+      - name: save the sshd test images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sshdtest.outputs.cache-hit != 'true' && steps.sshdtest-complete.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_SSHDTEST_CACHE }}
+          key: sshdtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/ssh/sshdtest/sshdtest.go') }}
       # What this shard ran and how long each package took: the aggregate job
       # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.

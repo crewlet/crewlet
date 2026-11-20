@@ -214,49 +214,92 @@ afterEach(() => {
   location.hash = "";
 });
 
-/** Walks a new Claude Code model on an API key to Review, checking the footer on every step. */
-async function walkToTest(key = "sonnet-key") {
-  // READ AS EACH STEP STANDS: the wizard keeps one button in the slot and changes its words.
-  const primaries: { footer: boolean; text: string }[] = [];
-  const primary = () => {
-    const button = primaryButton();
-    return {
-      footer: !!button?.closest(".crewlet-setup-wizard__footer"),
-      text: button?.textContent ?? "",
-    };
-  };
+/**
+ * Walks a new Claude Code model on an API key to Review, reading the footer on
+ * every step: the primary's words, and whether Finish and save is offered.
+ */
+async function walkToReview(key = "sonnet-key", { accepted = true } = {}) {
+  const footers: { primary: string; finish: boolean }[] = [];
+  const footer = () => ({
+    primary: primaryButton()?.textContent ?? "",
+    finish: screen.queryAllByRole("button", { name: "Finish and save" }).length > 0,
+  });
   fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: key } });
-  primaries.push(primary());
+  footers.push(footer());
   press("Continue");
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-new" } });
-  primaries.push(primary());
+  footers.push(footer());
   press("Continue");
   fireEvent.click(screen.getByRole("radio", { name: /Sonnet/ }));
-  primaries.push(primary());
-  for (const step of ["Where it runs", "Use it for", "Limits", "Test call"]) {
+  footers.push(footer());
+  for (const step of ["Where it runs", "Use it for", "Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
-    primaries.push(primary());
+    footers.push(footer());
   }
-  return primaries;
+  if (accepted) await screen.findByText("The engine accepts this change");
+  return footers;
 }
 
-test("adding a model ends on Test call with Finish and save, and has no Review step", async () => {
+/**
+ * NO TEST CALL STEP: adding a model ends on Review, which runs the test call
+ * and says it in one line, with Finish and save as its one primary. Finish and
+ * save is offered beside Continue from the first step where nothing is missing.
+ */
+test("adding a model ends on Review with the test call on it, and Finish and save once nothing is missing", async () => {
   show();
-  const primaries = await walkToTest();
-  expect(primaries).toHaveLength(7);
-  expect(primaries.every((p) => p.footer)).toBe(true);
-  expect(primaries.map((p) => p.text)).toEqual([...Array(6).fill("Continue"), "Finish and save"]);
+  const footers = await walkToReview();
+  expect(footers.map((f) => f.primary)).toEqual([...Array(6).fill("Continue"), "Finish and save"]);
+  // NAME ALONE, then a key but no model: something is missing. From Model on, nothing is.
+  expect(footers.map((f) => f.finish)).toEqual([false, false, true, true, true, true, true]);
   const steps = screen.getByRole("list", { name: /^Steps to/ });
-  expect(within(steps).queryByRole("button", { name: /Review/ })).toBeNull();
+  expect(within(steps).queryByRole("button", { name: /Test call/ })).toBeNull();
+  expect(within(steps).getByRole("button", { name: /Review/ })).toBeTruthy();
+  // THE TEST CALL RAN ON REVIEW, its result one line.
+  expect(screen.getByText("Passed in 3.4 s")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Run test call" })).toBeNull();
+});
+
+/**
+ * FINISH AND SAVE FROM AN EARLY STEP: the steps left keep their defaults (no
+ * seat, the harness's limits, web tools as they are), and the save still tests
+ * the key, checks the change and stores it before the document.
+ */
+test("Finish and save from the Model step saves with the defaults of the steps left", async () => {
+  show();
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), {
+    target: { value: "sonnet-key" },
+  });
+  press("Continue");
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-new" } });
+  press("Continue");
+  fireEvent.click(screen.getByRole("radio", { name: /Sonnet/ }));
+  expect(heading()).toBe("Model");
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  expect(calls).toEqual([
+    "test",
+    "read",
+    "dry-run",
+    "dry-run",
+    "store",
+    "write:Add model sonnet-key",
+  ]);
+  const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as Record<string, any>;
+  const entry = written.providers.llm["sonnet-key"];
+  expect(entry.model).toBe("sonnet");
+  expect(entry.max_concurrent).toBeUndefined();
+  expect(entry.timeout_seconds).toBeUndefined();
+  expect(location.hash).toContain("settings/models/sonnet-key");
 });
 
 test("Finish and save tests the credential, then stores it with its draft before the document that names it", async () => {
   show();
-  await walkToTest();
+  await walkToReview();
+  // REVIEW TESTED THE KEY AND CHECKED THE CHANGE as it opened; the save stores it.
+  expect(calls).toEqual(["test", "read", "dry-run", "dry-run"]);
   press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
-  expect(calls.slice(0, 4)).toEqual(["test", "read", "dry-run", "dry-run"]);
   const tested = vi.mocked(api.testCredential).mock.calls[0]!;
   expect(tested[1]).toMatchObject({
     values: { ANTHROPIC_API_KEY_SONNET_KEY: "sk-ant-api03-new" },
@@ -279,23 +322,24 @@ test("Finish and save tests the credential, then stores it with its draft before
 
 /**
  * AN EDIT SAVED RETURNS TO WHERE IT WAS OPENED, as Cancel does. Renew token
- * or Replace API key from a row's menu on the list is opened over the list
- * (here on its By job lens), and the save hands the page back to it through
+ * or Replace API key from a row's menu on the list is opened over the list,
+ * and the save hands the page back to it through
  * the wizard's own close; it does not travel to the model's page, which took
  * a person working down the list away from it. Mutation: send every save to
  * the model's page, and both readings are red.
  */
 test("an edit saved returns to where it was opened, never to the model's page", async () => {
-  location.hash = "#/settings/models?view=jobs&flow=edit&entry=sonnet&step=signin&focus=credential";
+  location.hash =
+    "#/settings/models?sort=status&flow=edit&entry=sonnet&step=signin&focus=credential";
   const { onClose } = show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
   await screen.findByText("The engine accepts this change");
-  press("Save changes");
+  press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   expect(location.hash).not.toContain("settings/models/sonnet");
-  expect(location.hash).toContain("view=jobs");
+  expect(location.hash).toContain("sort=status");
 });
 
 /**
@@ -333,7 +377,7 @@ test("a save names the write it is waiting on while it runs", async () => {
     calls.push("write");
     return new Promise((resolve) => (written = resolve)) as never;
   });
-  press("Save changes");
+  press("Finish and save");
   const storing = await screen.findByRole("status");
   expect(storing.textContent).toMatch(/^Storing the key and re-activating the company/);
   expect(document.querySelector(".models-waiting__elapsed")?.textContent).toMatch(/^\d+ s$/);
@@ -371,7 +415,7 @@ test("a save names the write it is waiting on while it runs", async () => {
  */
 test("a save left between its two writes still makes both, and moves nothing on screen", async () => {
   show();
-  await walkToTest();
+  await walkToReview();
   let stored!: (value: unknown) => void;
   vi.mocked(api.storeCredential).mockImplementationOnce(() => {
     calls.push("store");
@@ -488,18 +532,17 @@ test.each([
     expect(heading()).toBe(step);
   }
   if (chooseCoding) fireEvent.click(screen.getByRole("radio", { name: /^Coding/ }));
-  for (const step of ["Limits", "Test call"]) {
+  for (const step of ["Limits", "Review"]) {
     press("Continue");
     expect(heading()).toBe(step);
   }
-  toReview();
   await screen.findByText("The engine accepts this change");
   // NO SEAT MOVES ONTO default: the PM and the designer stay where they are.
   const moves = screen.queryByRole("list", { name: "Seats that change model" });
   const listed = moves ? (moves.textContent ?? "") : "";
   expect(listed).not.toMatch(/Product Manager|Designer/);
   if (!chooseCoding) expect(screen.getByText("No seat changes model.")).toBeTruthy();
-  press("Save changes");
+  press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as unknown as {
     roles: { handle: string; llm: unknown }[];
@@ -582,7 +625,7 @@ describe.each([
     );
     await openReview();
     await screen.findByText("The engine accepts this change");
-    press("Save changes");
+    press("Finish and save");
     expect(await blocked()).toBe(
       `${said} The change may or may not have been stored. Reopen the model before trying again.`,
     );
@@ -618,9 +661,10 @@ test("a refused key is said at the key, and the Method step is where it is fixed
     },
   });
   show();
-  await walkToTest();
-  press("Finish and save");
-  await screen.findByText("Not saved: the test call below failed");
+  await walkToReview("sonnet-key", { accepted: false });
+  // REVIEW'S TEST CALL SAYS IT IN ONE LINE, and nothing is checked or written.
+  expect(await screen.findByText("Failed: invalid x-api-key. Nothing was stored.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Test again" })).toBeTruthy();
   expect(calls.some((c) => c === "dry-run" || c.startsWith("write:"))).toBe(false);
   expect(document.body.textContent).not.toMatch(/values\./);
   fireEvent.click(
@@ -641,7 +685,7 @@ test("a secret name already stored is said at Stored as, in words", async () => 
     body: { names: ["ANTHROPIC_API_KEY_SONNET_KEY"] },
   });
   show();
-  await walkToTest();
+  await walkToReview();
   press("Finish and save");
   await screen.findByText(/ANTHROPIC_API_KEY_SONNET_KEY is already stored/);
   expect(calls.some((c) => c.startsWith("write:"))).toBe(false);
@@ -708,7 +752,10 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
   expect(heading()).toBe("Use it for");
   press("Continue");
   press("Continue");
-  expect(heading()).toBe("Test call");
+  expect(heading()).toBe("Review");
+  await screen.findByText("The engine accepts this change");
+  // NOTHING TO TEST BEFORE THE SAVE: the row says when it is.
+  expect(screen.getByText("After it is saved")).toBeTruthy();
   press("Finish and save");
   await waitFor(() => expect(onDevice).toHaveBeenCalledWith("codex-review"));
   // A new device sign-in is made after the save, so nothing is tested before it.
@@ -950,11 +997,11 @@ test("a failed test call saves nothing, stays, and says what failed and how to f
   expect(calls.some((c) => c.startsWith("write:") || c === "dry-run")).toBe(false);
   expect(onClose).not.toHaveBeenCalled();
   expect(heading()).toBe("Limits");
-  press("See the test call");
-  expect(heading()).toBe("Test call");
-  // On the Test call step its own result says what failed, so the note does not repeat it.
-  expect(screen.getByText("Not saved: the test call below failed")).toBeTruthy();
-  expect(screen.queryByText("Not saved: the test call failed")).toBeNull();
+  press("See it on Review");
+  expect(heading()).toBe("Review");
+  // REVIEW'S TEST CALL ROW says what failed, in one line, with its button to run it again.
+  expect(screen.getByText(/^Failed: .*Replace the key on the Method step\.$/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Test again" })).toBeTruthy();
 });
 
 test("a save the engine refuses stays in the wizard and says nothing may be lost", async () => {

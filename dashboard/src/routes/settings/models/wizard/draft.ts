@@ -268,10 +268,9 @@ export const KEY_MAX = 40;
 /** The engine's grammar for a model's name (`config.ProviderKeyPattern`, held as `MODEL_KEY_PATTERN`). */
 const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
-/** The steps a draft walks; Where it runs only for a harness that runs coding. */
-/** The steps for the draft: Where it runs only for a harness that codes, Review only for an edit. */
-export function stepsFor(d: Pick<Draft, "harness">, editing: boolean): WizardStep[] {
-  return WIZARD_STEPS.filter((s) => (s !== "runs" || canExecute(d)) && (editing || s !== "review"));
+/** The steps a draft walks, ending on Review: Where it runs only for a harness that runs coding. */
+export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
+  return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
@@ -281,7 +280,6 @@ export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
   runs: "Where it runs",
   assign: "Use it for",
   limits: "Limits",
-  test: "Test call",
   review: "Review",
 };
 
@@ -693,7 +691,8 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
   if (s[0] === "key") return "harness";
-  if (s[0] === "test") return "test";
+  // THE TEST CALL IS RUN ON REVIEW, where its result is said.
+  if (s[0] === "test") return "review";
   if (s[0] === "values" || s[0] === "variable") return "signin";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     switch (s[3]) {

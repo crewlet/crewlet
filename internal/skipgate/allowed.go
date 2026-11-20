@@ -239,6 +239,13 @@ var allowed = []Allowance{
 	// matched to its entry by the test's exact name.
 	// -----------------------------------------------------------------
 	{
+		Package: "internal/ssh/sshdtest",
+		Test:    "TestABuildThatFailsSaysWhy",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to build an image whose step fails. Nothing else " +
+			"proves a failed test-image build hands its step's own error to the test.",
+	},
+	{
 		Package: "internal/ssh",
 		Test:    "TestTheRenderedSetupPassesSshdAndIsIdempotent",
 		When:    Environment,

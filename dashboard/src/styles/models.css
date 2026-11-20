@@ -139,18 +139,77 @@
   align-self: stretch;
 }
 
-/* The Assistant's one picker, as wide as a cell's on the grid under it. */
-.models-roles__picker {
-  inline-size: 14rem;
-  max-inline-size: 100%;
-}
-
-/* The Assistant on By job: its name, its one picker and what it is, on one line that wraps. */
-.models-roles__assistant {
+/* Ask Crewlet and the Advisor on one line under the list: each its mark, name and picker. */
+.models-helpers {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2) var(--spacing-4);
+  gap: var(--spacing-3) var(--spacing-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.models-helpers__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+
+/* A seat's model: one picker and its Split control, or a picker per category, on one line that wraps. */
+.models-seat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+
+.models-seat__job {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.models-seat__label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.models-seat__value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/*
+ * A SEAT'S PICKER IS AS WIDE AS ITS MODEL'S NAME, and its list is not cut to
+ * it (QA M1): an auto picker's list is at least as wide as the trigger and
+ * otherwise as wide as its options, up to the kit's reading measure.
+ */
+.models-seat__select {
+  --crewlet-select-auto-min-width: 8rem;
+}
+
+/* A model's harness mark before its key, in a picker, an option or a menu item. */
+.models-option-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* An option's condition in a word, and a fast model's mark beside it. */
+.models-option-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-option-fast {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
 }
 
 @media (width < 640px) {
@@ -238,15 +297,6 @@
   border-radius: var(--radius-md);
 }
 
-/* By job's seat cell: the seat, and under it "Everything" where one model runs every job. */
-.models-seat-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
 /* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
 .models-focus-target:focus {
   outline: 2px solid transparent;
@@ -260,7 +310,7 @@
   margin: 0;
 }
 
-/* ── The list, its alarms and By job (Overview.tsx, Alarms.tsx, ByJob.tsx) ── */
+/* ── The one page: the list, its alarms and every seat's jobs (Overview.tsx, Alarms.tsx, SeatJobs.tsx) ── */
 
 /* An alarm's one line, then its disclosure of who it stops and what the engine recorded. */
 .models-alarm,
@@ -361,45 +411,6 @@
 .models-uses:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
-}
-
-/* By job's cell: the picker the column's width, its notes under it. */
-.models-byjob__cell {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  inline-size: 100%;
-  min-width: 0;
-}
-
-/*
- * THE PICKER FILLS ITS CELL AND ITS LIST DOES NOT (QA M1). An auto-width
- * picker's list is at least as wide as the trigger and otherwise as wide as
- * its options, up to the kit's reading measure for a described list, so a
- * model's name, condition and id are never cut to the column; the bounds are
- * the kit's own properties for an auto picker.
- */
-.models-byjob__picker .models-byjob__select {
-  --crewlet-select-auto-min-width: 100%;
-  --crewlet-select-auto-max-width: 100%;
-}
-
-.models-byjob__notes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-}
-
-/* A cell whose model will not answer says so in the warning ink (QA M19). */
-/* A slow model under a timed job: a quiet mark, its words on hover. */
-.models-byjob__slow {
-  display: inline-flex;
-  color: var(--color-text-tertiary);
-}
-
-.models-byjob__cell--alarm .models-byjob__health {
-  color: var(--color-feedback-warning-ink);
 }
 
 /*

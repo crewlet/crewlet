@@ -19,8 +19,13 @@ package sshdtest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -59,9 +64,16 @@ var runtimeName = sync.OnceValue(func() string {
 // first process keeps sshd running, and a systemctl stands in that restarts it
 // and returns once the new one answers, which the setup's own `systemctl
 // reload ssh` then calls as it would on a server.
+//
+// APT RETRIES EACH FETCH FIVE TIMES (aptRetries), set before its first fetch so
+// update and install both take it. apt waits 1 s before the first retry and
+// doubles the wait, so a fetch rides out about 31 s of a mirror resetting or
+// answering 5xx (issue #849), while a mirror that stays down still fails the
+// build, its own messages kept in the build's output ([build]).
 const dockerfile = `FROM %s
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      openssh-server openssh-client sudo procps passwd bsdutils >/dev/null && rm -rf /var/lib/apt/lists/* && \
+RUN printf 'Acquire::Retries "%d";\n' >/etc/apt/apt.conf.d/80crewlet-retries && \
+    apt-get -q update && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends \
+      openssh-server openssh-client sudo procps passwd bsdutils && rm -rf /var/lib/apt/lists/* && \
     rm -f /etc/ssh/ssh_host_* && mkdir -p /run/sshd && \
     printf '%%s\n' '#!/bin/sh' '[ "$1" = reload ] || exit 1' \
       'old=$(cat /run/sshd.pid)' 'kill "$old"' 'while kill -0 "$old" 2>/dev/null; do sleep 0.1; done' \
@@ -70,13 +82,27 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
 CMD ["sh", "-c", "ssh-keygen -A >/dev/null && while :; do /usr/sbin/sshd -D -e; done"]
 `
 
-// images built in this process, by base.
+// aptRetries is how many times apt fetches a file again before it fails the
+// build ([dockerfile] says why five).
+const aptRetries = 5
+
+// CacheEnv names a directory that keeps the test images between runs, a tar
+// each: CI restores it before the suite and saves it after (ci.yml's `test`
+// job says why images rather than apt's archives). Unset, as on a workstation,
+// an image the runtime does not hold is built.
+const CacheEnv = "CREWLET_SSHDTEST_CACHE"
+
+// completeFile, in the cache directory, says it holds a tar of every image of
+// [Images] as this tree defines them: what ci.yml saves the directory on.
+const completeFile = "complete"
+
+// images provided in this process, by base.
 var (
 	built   sync.Mutex
 	builtAt = map[string]string{}
 )
 
-// image is base's test image, built once a process.
+// image is base's test image, provided once a process ([provide]).
 func image(t *testing.T, base string) string {
 	t.Helper()
 	built.Lock()
@@ -84,16 +110,131 @@ func image(t *testing.T, base string) string {
 	if tag, ok := builtAt[base]; ok {
 		return tag
 	}
-	tag := "crewlet-sshdtest:" + strings.NewReplacer(":", "-", "/", "-").Replace(base)
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runtimeName(), "build", "-q", "-t", tag, "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf(dockerfile, base))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sshdtest: build %s: %v\n%s", tag, err, out)
+	tag, err := provide(ctx, runtimeOf(runtimeName()), base, os.Getenv(CacheEnv), t.Logf)
+	if err != nil {
+		t.Fatal(err)
 	}
 	builtAt[base] = tag
 	return tag
+}
+
+// runtime is the container runtime by its name, and how one of its commands
+// runs: stdin from in where non-nil, answering the combined output.
+type runtime struct {
+	name string
+	run  func(ctx context.Context, in io.Reader, args ...string) ([]byte, error)
+}
+
+func runtimeOf(name string) runtime {
+	return runtime{name: name, run: func(ctx context.Context, in io.Reader, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		if in != nil {
+			cmd.Stdin = in
+		}
+		return cmd.CombinedOutput()
+	}}
+}
+
+// textOf is the Dockerfile that defines base's image.
+func textOf(base string) string { return fmt.Sprintf(dockerfile, base, aptRetries) }
+
+// tagOf is base's image tag, named by a hash of the text that defines it, so
+// an image the runtime or the cache holds under it was built from exactly that
+// text, and a changed Dockerfile builds afresh.
+func tagOf(base, text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return "crewlet-sshdtest:" + strings.NewReplacer(":", "-", "/", "-").Replace(base) + "-" +
+		hex.EncodeToString(sum[:6])
+}
+
+// tarOf is where the cache directory dir keeps tag.
+func tarOf(dir, tag string) string {
+	return filepath.Join(dir, strings.TrimPrefix(tag, "crewlet-sshdtest:")+".tar")
+}
+
+// provide answers base's image, cheapest first: the one the runtime holds
+// under its tag; else the one cacheDir keeps, loaded; else one built, then
+// saved to cacheDir. With no cacheDir an image is held or built, as before
+// there was a cache. The cache is only a shortcut: a tar that will not load is
+// built over, and a save that fails is said through logf, never a failure.
+func provide(ctx context.Context, rt runtime, base, cacheDir string,
+	logf func(string, ...any)) (string, error) {
+
+	text := textOf(base)
+	tag := tagOf(base, text)
+	if _, err := rt.run(ctx, nil, "image", "inspect", tag); err == nil {
+		return tag, nil
+	}
+	if cacheDir != "" {
+		if _, err := os.Stat(tarOf(cacheDir, tag)); err == nil {
+			out, err := rt.run(ctx, nil, "load", "-i", tarOf(cacheDir, tag))
+			if err == nil {
+				return tag, nil
+			}
+			logf("sshdtest: the cached %s did not load, so it is built: %v\n%s", tag, err, out)
+		}
+	}
+	if err := build(ctx, rt, tag, text); err != nil {
+		return "", err
+	}
+	if cacheDir != "" {
+		if err := save(ctx, rt, cacheDir, tag); err != nil {
+			logf("%v", err)
+		}
+	}
+	return tag, nil
+}
+
+// save writes tag to the cache directory dir, whole or not at all, and marks
+// the directory complete once it holds every image of [Images].
+func save(ctx context.Context, rt runtime, dir, tag string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("sshdtest: the image cache %s (%s): %w", dir, CacheEnv, err)
+	}
+	path := tarOf(dir, tag)
+	if out, err := rt.run(ctx, nil, "save", "-o", path+".next", tag); err != nil {
+		return fmt.Errorf("sshdtest: save %s to %s: %w\n%s", tag, dir, err, out)
+	}
+	if err := os.Rename(path+".next", path); err != nil {
+		return fmt.Errorf("sshdtest: save %s to %s: %w", tag, dir, err)
+	}
+	if !keepsEvery(dir) {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(dir, completeFile), nil, 0o644)
+}
+
+// keepsEvery reports whether the cache directory dir holds a tar of every
+// image of [Images] as this tree defines them.
+func keepsEvery(dir string) bool {
+	for _, base := range Images {
+		if _, err := os.Stat(tarOf(dir, tagOf(base, textOf(base)))); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// build builds the Dockerfile text as tag, and answers an error that carries
+// the build's whole output: a failed step's own messages, apt's among them,
+// so a mirror that could not be reached reads differently from a package that
+// is gone.
+//
+// NEVER QUIET: docker's -q leaves only "exit code: 100" of a failed step.
+// docker's BuildKit is asked for plain progress, which prints every step's
+// output whether or not a terminal is attached; podman prints it unasked, and
+// takes no such flag.
+func build(ctx context.Context, rt runtime, tag, text string) error {
+	args := []string{"build", "-t", tag}
+	if rt.name == "docker" {
+		args = append(args, "--progress=plain")
+	}
+	if out, err := rt.run(ctx, strings.NewReader(text), append(args, "-")...); err != nil {
+		return fmt.Errorf("sshdtest: build %s: %w\n%s", tag, err, out)
+	}
+	return nil
 }
 
 // Server is one running sshd.

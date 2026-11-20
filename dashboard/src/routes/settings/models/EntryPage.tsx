@@ -644,7 +644,7 @@ export function EntryPage({
 }) {
   const signInRef = useRef<HTMLElement | null>(null);
   const key = model.key;
-  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, By job, an alarm) arrives
+  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, a seat's job, an alarm) arrives
   // here as `?focus=host-login`: the sign-in card is where it is made, and
   // the parameter is spent once it has moved focus, so Back does not move it
   // again.

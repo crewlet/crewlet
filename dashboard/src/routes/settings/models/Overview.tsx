@@ -1,7 +1,8 @@
 /**
- * Settings › Models, the list: how the company's models stand in four
- * figures, what is wrong with them (the engine's alarms), then every model
- * with its condition, its sign-in and who runs on it.
+ * Settings › Models, the one page: how the company's models stand in four
+ * figures, what is wrong with them (the engine's alarms), every model with
+ * its condition, its sign-in and who runs on it, then under it Ask Crewlet
+ * and the Advisor, and every seat's jobs (`SeatJobs.tsx`).
  *
  * A member reads the same list without the sign-in, the tokens or the actions
  * (`llm_entries`' member reading names no credential and no usage), so the one
@@ -39,6 +40,7 @@ import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
+import { Helpers, SeatJobs } from "./SeatJobs.tsx";
 import { UsageLimitsCell } from "./UsageLimits.tsx";
 import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
 
@@ -448,6 +450,14 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
           />
         )}
       </Card>
+
+      {/* UNDER THE MODELS, in this order: the helpers' rows, then every seat's jobs. */}
+      {models.length > 0 ? (
+        <>
+          <Helpers data={data} />
+          <SeatJobs data={data} onFlow={onFlow} />
+        </>
+      ) : null}
     </div>
   );
 }

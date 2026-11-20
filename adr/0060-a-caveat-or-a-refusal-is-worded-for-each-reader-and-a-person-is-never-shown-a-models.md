@@ -134,7 +134,7 @@ kept, so every reader inherits it.
 **Per-site person phrasings for the remaining refusals** are a separate
 change (PR 2): every refusal site not listed above answers the floor until it
 gains a constructor in the refusal catalog. By area: the work tools' own
-argument refusals (`work.go`, `workperson.go`, `workplace.go`,
+argument refusals (`work.go` and its `work_*.go`, `workperson.go`, `workplace.go`,
 `workrelate.go`, `workmerge.go`, `workmove.go`, `worktrash.go`,
 `workfiles.go`, `workprojects.go`, `workviews.go`, `worksearch.go`,
 `workcatalogue.go`, and asking a decision in `workdecision.go`); Worklet's

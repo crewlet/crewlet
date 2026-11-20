@@ -776,8 +776,10 @@
 // at its end, and what a transcript's line loses of its loaded tool
 // definitions only once its last key is read; and a tar names each file's size
 // before its bytes. So a tar is read TWICE: the first reading reads each line
-// and each `.json` file both ways at once, counting what each would write, and
-// keeps a PLAN; the second writes what the first counted. Every rewrite here
+// and each `.json` file as JSON alone, counting what it would write, and keeps
+// a PLAN; the second writes what the first counted. The first that is no JSON
+// ends it, and the next reads it and every one after it both ways
+// ([tarPlan.unitAhead]). Every rewrite here
 // is a pure function of what it reads, so the second reading writes what the
 // first counted, and a member that comes out another length is a member that
 // changed between the two, which fails the take. Both ways run on the scrub's
@@ -808,7 +810,7 @@
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
 // scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
-// read, its text redacted three times, cost 10 s a take. So the first
+// read, its base64 twice, cost 4.3 s a take. So the first
 // reading plans each text of [scrubPieceBaseBytes] or more (a line read as
 // text, a name or string, a file) it finds the redaction leaves unchanged, by
 // its place and the SHA-256 digest of each chunk of that length
@@ -825,10 +827,9 @@
 // redaction of its own, a key's credential is judged on its raw name, and a
 // credential's value never reaches it. In memory alone: a restart, a deploy or
 // a seat's move to another node costs one take at most what it costs without.
-// On two cores of the build machine, three runs each
-// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 7.4 to 7.7 s
-// with no memo, 5.7 to 5.9 s as a process's first and 0.81 to 0.84 s as its
-// second, from 10.0 to 10.2 s.
+// On two cores of the build machine, two runs each
+// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 4.3 s with no
+// memo, 2.8 s as a process's first and 1.2 s as its second.
 //
 // # The scrub's bounds, and what it holds
 //
@@ -851,9 +852,9 @@
 // panics.ScopeSessionTake.
 //
 // AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
-// text scrubs at once (a line's or a `.json` file's two readings side by side,
-// each redacting one text), each its redaction's stages (redact.Stream's own
-// figure) beside its stage's chunk, a [valueStream] and a string's encoder;
+// text scrubs at once (a line or a `.json` file read both ways), each its
+// redaction's stages (redact.Stream's own figure) beside its stage's chunk, a
+// [valueStream] and a string's encoder;
 // two JSON rewrites, each its scanner, its read buffer and a frame a container
 // open; the readers and writers of the archive's gzip and tar; and the plan, a
 // sixteenth of the plaintext at most and a 512th for its texts' digests. About
@@ -863,17 +864,16 @@
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
 // On two cores of the build machine, two runs:
 //
-//	one string to the bound:   29.1 to 29.2 s a scrub, held 33.2 MiB (256 MiB from 28 MiB)
-//	a million short lines:     40.8 to 41.4 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          33.1 to 33.3 s a scrub, held 32.7 MiB (256 MiB from 0.5 MiB)
+//	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
+//	a million short lines:     33.9 s a scrub, held 1.5 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          29.8 to 30.8 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
 //
 // Against SessionScrubWait, two minutes for the whole take's scrub with the
 // archive's two readings out of a box at its floor pace of a mebibyte a second
 // among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
 // for the scrub's own work where the two do not overlap), each arm fits, the
-// short lines the closest; the string redacts each byte twice, in its first
-// reading (as JSON and as text, side by side), holding two streams' windows
-// whole, and its second copies it as checked.
+// short lines the closest; the string redacts each byte once, in its first
+// reading as JSON alone, and its second copies it as checked.
 //
 // # A definition the scrub renamed is cut out of its line
 //
