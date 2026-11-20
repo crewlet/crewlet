@@ -69,11 +69,16 @@ const FLOW_PARTS = [
 
 const round = (n: number) => Math.round(n * 10) / 10;
 
-/** A stat's number in a few characters, as a detail line says it. */
+/**
+ * A stat's number in a few characters, as a detail line says it: whole from
+ * ten up, so three parts fit one line beside a figure ("29 h waiting · 85 h
+ * held · 15 h blocked").
+ */
 function said(s: AdvisorStat): string {
-  if (s.unit === "hours") return `${fmtCount(round(s.value))} h`;
-  if (s.unit === "minutes") return `${fmtCount(round(s.value))} min`;
-  return fmtCount(round(s.value));
+  const n = Math.abs(s.value) >= 10 ? Math.round(s.value) : round(s.value);
+  if (s.unit === "hours") return `${fmtCount(n)} h`;
+  if (s.unit === "minutes") return `${fmtCount(n)} min`;
+  return fmtCount(n);
 }
 
 /** The strip's figures, from the snapshot's stats. */

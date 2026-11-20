@@ -109,7 +109,7 @@ test("the strip is four figures from the snapshot, flow hours summed with their 
   const strip = stripOf(
     snapshot([
       stat("open_items", 40, "items", 30),
-      stat("wait_hours", 20, "hours", 10),
+      stat("wait_hours", 29.2, "hours", 10),
       stat("held_hours", 4.25, "hours", 2),
       stat("blocked_hours", 2, "hours", 1),
       stat("pickup_wait_minutes", 12, "minutes"),
@@ -120,11 +120,11 @@ test("the strip is four figures from the snapshot, flow hours summed with their 
   );
   expect(strip.map((s) => [s.key, s.value, s.was])).toEqual([
     ["open_items", 40, 30],
-    ["flow_hours", 26.3, 13],
+    ["flow_hours", 35.5, 13],
     ["capacity_lost_hours", null, null],
     ["wasted_turns_percent", 62, 50],
   ]);
-  expect(strip[1]!.detail).toBe("20 h waiting · 4.3 h held · 2 h blocked · pickup 12 min");
+  expect(strip[1]!.detail).toBe("29 h waiting · 4.3 h held · 2 h blocked · pickup 12 min");
   expect(strip[3]!.detail).toBe("of 440 turns");
   expect(stripOf(null).map((s) => s.value)).toEqual([null, null, null, null]);
 });
