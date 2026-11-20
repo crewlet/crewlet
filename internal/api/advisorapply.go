@@ -342,13 +342,13 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	// APPLIED ONLY ONCE EVERY CHANGE HOLDS: one still to send is a send not
 	// finished.
 	for _, ch := range option.Changes() {
-		entity, _, err := rc.config.EntityAndTag(ctx, ch.Entity, ch.ID)
-		if err != nil {
-			return err
+		entity, _, readErr := rc.config.EntityAndTag(ctx, ch.Entity, ch.ID)
+		if readErr != nil {
+			return readErr
 		}
-		holds, err := advisor.Holds(entity, ch)
-		if err != nil || !holds {
-			return errors.Join(errRecheckAgain, err)
+		holds, holdsErr := advisor.Holds(entity, ch)
+		if holdsErr != nil || !holds {
+			return errors.Join(errRecheckAgain, holdsErr)
 		}
 	}
 	_, err = rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor_applied")}, row.Key,

@@ -250,10 +250,6 @@ const (
 	// them put to the person, make an Inbox a feed nobody reads.
 	minNotices       = 350
 	addressedPercent = 25
-	// minStartedTurns and noopPercent: 20 turns a week, a quarter of them
-	// committing nothing.
-	minStartedTurns = 20
-	noopPercent     = 25
 	// minAbsorbed and absorbedPercent: 10 wakes a week, a fifth of all that
 	// woke the seat, for changes a turn of it had already read.
 	minAbsorbed     = 10
