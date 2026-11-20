@@ -3823,6 +3823,97 @@ describe("what was answered", () => {
     expect(order[2]).toMatch(/^Answered/);
   });
 
+  /** An ask answered in words, by the reader. */
+  function answeredInWords(body: string) {
+    return answeredItem({
+      answer: {
+        by: "jane",
+        by_kind: "human",
+        at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        comment: "c-21",
+        body,
+      },
+    });
+  }
+
+  async function answeredRow() {
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    await settle();
+    return within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
+      name: /Answered$/,
+    });
+  }
+
+  /** The marks drawn in an answer's words: its bold, its list and its paragraphs. */
+  const marks = (root: Element) => ({
+    strong: [...root.querySelectorAll("strong")].map((s) => s.textContent),
+    items: [...root.querySelectorAll("ul > li")].map((li) => li.textContent),
+    paragraphs: [...root.querySelectorAll("p")]
+      .filter((p) => p.parentElement?.tagName !== "LI")
+      .map((p) => p.textContent),
+  });
+
+  // AN ANSWER IN WORDS IS MARKDOWN, a comment like any other, and the row and
+  // the pane draw it as the conversation does: its bold as bold, its list as
+  // a list, its paragraphs apart. They printed `**Pass**` and `- ` and ran
+  // the lines together. The row stops the words at the kit's three lines,
+  // where they are drawn; the pane quotes them whole under its outcome line.
+  //
+  // Mutation: print the words as text in the row or the pane, or drop the
+  // row's clamp, and this fails.
+  test("an answer in words is drawn as markdown, clamped in its row and whole in its pane", async () => {
+    const reply =
+      "**Pass**, with two notes:\n- Ship the Linux build\n- Hold the Windows build\n\nRevisit the rest on Friday.";
+    const drawn = {
+      strong: ["Pass"],
+      items: ["Ship the Linux build", "Hold the Windows build"],
+      paragraphs: ["Pass, with two notes:", "Revisit the rest on Friday."],
+    };
+    mount({
+      answers: { answered_decisions: { handle: "jane", items: [answeredInWords(reply)] } },
+    });
+    await settle();
+    const row = await answeredRow();
+    const line = row.querySelector(".crewlet-inbox-row__outcome")!;
+    expect(line.textContent).toMatch(/^You replied/);
+    expect(marks(line)).toEqual(drawn);
+    expect(line.textContent).not.toMatch(/\*\*|- /);
+    // THE WHOLE LINE IS CLAMPED, the list in it.
+    expect(line.querySelector(".crewlet-text--clamp-3 ul")).not.toBeNull();
+    fireEvent.click(row);
+    await settle();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
+      "You replied",
+    );
+    const quote = document.querySelector(".crewlet-reading-pane__quote")!;
+    expect(marks(quote)).toEqual(drawn);
+    expect(quote.textContent).not.toMatch(/\*\*|- /);
+  });
+
+  // ONE PARAGRAPH IS QUOTED IN ITS SENTENCE, its marks drawn, so the line
+  // reads as it did. Mutation: set every answer under its line, and this fails.
+  test("an answer of one paragraph is quoted in its line, with its marks", async () => {
+    mount({
+      answers: {
+        answered_decisions: {
+          handle: "jane",
+          items: [answeredInWords("Hold it **a week**, then ship.")],
+        },
+      },
+    });
+    await settle();
+    const row = await answeredRow();
+    const line = row.querySelector(".crewlet-inbox-row__outcome")!;
+    expect(line.textContent).toBe("You replied “Hold it a week, then ship.”");
+    expect(marks(line)).toEqual({ strong: ["a week"], items: [], paragraphs: [] });
+    fireEvent.click(row);
+    await settle();
+    const outcome = document.querySelector(".crewlet-reading-pane__outcome")!;
+    expect(outcome.textContent).toBe("You replied “Hold it a week, then ship.”");
+    expect(marks(outcome).strong).toEqual(["a week"]);
+    expect(document.querySelector(".crewlet-reading-pane__quote")).toBeNull();
+  });
+
   test("a link to an answered ask opens its group and its pane, with what happened next", async () => {
     location.hash = "#/inbox/ask/c-20";
     mount({
