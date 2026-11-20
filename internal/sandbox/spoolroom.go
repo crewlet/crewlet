@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -34,10 +35,93 @@ const spoolRoomWait = time.Minute
 // holds: a save's counted size ([countedFor]), or a take's.
 var errSpoolPastHold = errors.New("sandbox: the session sealed would pass the room its spool holds")
 
+// SpoolOutcome is how a final take's wait for spool room ended.
+type SpoolOutcome string
+
+const (
+	// SpoolTaken is a take that got its room, at once or after waiting.
+	SpoolTaken SpoolOutcome = "taken"
+	// SpoolRefused is a take the room stayed full for through its whole wait
+	// ([spoolRoomWait]), which keeps nothing.
+	SpoolRefused SpoolOutcome = "refused"
+	// SpoolEnded is a take whose own time ran out while it waited.
+	SpoolEnded SpoolOutcome = "ended"
+)
+
+// SpoolOutcomes is every outcome this build reports.
+var SpoolOutcomes = []SpoolOutcome{SpoolTaken, SpoolRefused, SpoolEnded}
+
+// Valid reports whether this build knows the outcome.
+func (o SpoolOutcome) Valid() bool { return slices.Contains(SpoolOutcomes, o) }
+
+// SpoolMeter is told what the spool room measures, so an operator sees final
+// takes refused for room and can tell whether the room or the wait is short:
+// each final take's wait by how it ended (saves never wait), and the bytes the
+// room holds whenever they move. The engine records both into the node's
+// metrics; this package links no state log, its instruments included.
+type SpoolMeter interface {
+	SpoolWaited(outcome SpoolOutcome, waited time.Duration)
+	SpoolHeld(bytes int64)
+}
+
+// spoolRoom is the room every spool of one process shares, with what its
+// holds hold counted here, each byte from its hold's handing out to its
+// giving back: a [semaphore.Weighted] says only whether n more fit, and a
+// refused take's line and the held measure need the bytes. A take that waited
+// is counted just after its Acquire returns (r.mu is never held across one),
+// so a reading in between is that take low, never high.
+type spoolRoom struct {
+	sem   *semaphore.Weighted
+	meter SpoolMeter
+
+	mu   sync.Mutex
+	held int64
+}
+
+// newSpoolRoom is an empty room told to meter (nil measures nothing).
+func newSpoolRoom(meter SpoolMeter) *spoolRoom {
+	r := &spoolRoom{sem: semaphore.NewWeighted(spoolRoomBytes), meter: meter}
+	if meter != nil {
+		meter.SpoolHeld(0)
+	}
+	return r
+}
+
+// countLocked moves the count by d bytes and tells the meter; r.mu is held,
+// so the meter hears every count in its order.
+func (r *spoolRoom) countLocked(d int64) {
+	r.held += d
+	if r.meter != nil {
+		r.meter.SpoolHeld(r.held)
+	}
+}
+
+// waited tells the meter how a take's wait for room ended.
+func (r *spoolRoom) waited(outcome SpoolOutcome, d time.Duration) {
+	if r.meter != nil {
+		r.meter.SpoolWaited(outcome, d)
+	}
+}
+
+// give releases n bytes and stops counting them, in one step.
+func (r *spoolRoom) give(n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sem.Release(n)
+	r.countLocked(-n)
+}
+
+// heldBytes is what the room's holds hold now.
+func (r *spoolRoom) heldBytes() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.held
+}
+
 // spoolHold is room one spool holds in its process's room, from before its
 // first byte until its file is removed.
 type spoolHold struct {
-	room *semaphore.Weighted
+	room *spoolRoom
 	mu   sync.Mutex
 	n    int64
 }
@@ -45,27 +129,64 @@ type spoolHold struct {
 // trySpoolRoom takes n bytes of the room without waiting, nil where they are
 // not free; never ahead of a take waiting for room ([semaphore.Weighted.TryAcquire]).
 func (c *Coordinator) trySpoolRoom(n int64) *spoolHold {
-	if !c.spoolRoom.TryAcquire(n) {
+	r := c.spoolRoom
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.sem.TryAcquire(n) {
 		return nil
 	}
-	return &spoolHold{room: c.spoolRoom, n: n}
+	r.countLocked(n)
+	return &spoolHold{room: r, n: n}
+}
+
+// spoolRoomRefusal is a take's wait for room that ended without it: the
+// minute ran out, or the take's own time ran out first (ended, its cause).
+type spoolRoomRefusal struct {
+	waited time.Duration
+	asked  int64
+	// others is what other spools held of the room as the wait ended.
+	others int64
+	ended  error
+}
+
+// reason is the refusal as the take's result and its line say it.
+func (r *spoolRoomRefusal) reason() string {
+	if r.ended != nil {
+		return fmt.Sprintf("the take's time ended while it waited for room to spool the session: %v", r.ended)
+	}
+	return fmt.Sprintf("this node's session spools held their whole room (%d bytes) for %s, so the session "+
+		"was not taken: the next launch continues the turn's newest kept capture", spoolRoomBytes, spoolRoomWait)
+}
+
+// logAttrs are the fields its `executor_session_not_kept` line carries.
+func (r *spoolRoomRefusal) logAttrs() []any {
+	return []any{"waited_seconds", r.waited.Seconds(), "bytes", r.asked, "room_bytes", spoolRoomBytes,
+		"others_held_bytes", r.others}
 }
 
 // awaitSpoolRoom takes n bytes of the room, waiting at most [spoolRoomWait]
-// within ctx.
-func (c *Coordinator) awaitSpoolRoom(ctx context.Context, n int64) (*spoolHold, error) {
+// within ctx, and tells the meter how the wait ended ([SpoolMeter]).
+func (c *Coordinator) awaitSpoolRoom(ctx context.Context, n int64) (*spoolHold, *spoolRoomRefusal) {
+	r := c.spoolRoom
+	began := time.Now()
 	wait, cancel := context.WithTimeout(ctx, spoolRoomWait)
 	defer cancel()
-	if err := c.spoolRoom.Acquire(wait, n); err != nil {
-		if ctx.Err() == nil {
-			return nil, fmt.Errorf("this node's session spools held their whole room (%d bytes) for %s, "+
-				"so the session was not taken: the next launch continues the turn's newest kept capture",
-				spoolRoomBytes, spoolRoomWait)
+	err := r.sem.Acquire(wait, n)
+	waited := time.Since(began)
+	if err != nil {
+		refused := &spoolRoomRefusal{waited: waited, asked: n, others: r.heldBytes(), ended: ctx.Err()}
+		outcome := SpoolRefused
+		if refused.ended != nil {
+			outcome = SpoolEnded
 		}
-		return nil, fmt.Errorf("the take's time ended while it waited for room to spool the session: %w",
-			ctx.Err())
+		r.waited(outcome, waited)
+		return nil, refused
 	}
-	return &spoolHold{room: c.spoolRoom, n: n}, nil
+	r.mu.Lock()
+	r.countLocked(n)
+	r.mu.Unlock()
+	r.waited(SpoolTaken, waited)
+	return &spoolHold{room: r, n: n}, nil
 }
 
 // bytes is the room h holds.
@@ -81,7 +202,7 @@ func (h *spoolHold) shrinkTo(n int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if n < h.n {
-		h.room.Release(h.n - n)
+		h.room.give(h.n - n)
 		h.n = n
 	}
 }

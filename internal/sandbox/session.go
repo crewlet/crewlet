@@ -1363,17 +1363,19 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// take waits for room holding what a save holding room waits for. Shrunk to
 	// the archive's counted size once its size is known. None within the wait
 	// keeps nothing and stamps nothing ([spoolRoomWait]).
-	room, err := c.awaitSpoolRoom(ctx, executorkeep.SealedMaxBytes)
-	if err != nil {
+	room, refused := c.awaitSpoolRoom(ctx, executorkeep.SealedMaxBytes)
+	if refused != nil {
+		why := refused.reason()
 		if standing {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-				"capture_seq", current.Capture.CaptureSeq, "detail", "another read of the run holds the "+
-					"capture's place, and this one found no room to stand by for it: "+err.Error())
+			log.InfoContext(ctx, "executor_session_not_kept", append([]any{"turn_id", run.TurnID,
+				"point", at.name, "capture_seq", current.Capture.CaptureSeq, "detail", "another read of the " +
+					"run holds the capture's place, and this one found no room to stand by for it: " + why},
+				refused.logAttrs()...)...)
 			return nil, current.Capture.kept()
 		}
-		log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
-			"detail", err.Error())
-		return nil, &SessionKept{NotKept: err.Error()}
+		log.WarnContext(ctx, "executor_session_not_kept", append([]any{"turn_id", run.TurnID,
+			"point", at.name, "detail", why}, refused.logAttrs()...)...)
+		return nil, &SessionKept{NotKept: why}
 	}
 	spooledHold := false
 	defer func() {

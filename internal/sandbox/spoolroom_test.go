@@ -3,7 +3,11 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -18,8 +22,8 @@ func roomInUse(c *Coordinator) int64 {
 	free, lo, hi := int64(0), int64(0), spoolRoomBytes
 	for lo <= hi {
 		mid := lo + (hi-lo)/2
-		if c.spoolRoom.TryAcquire(mid) {
-			c.spoolRoom.Release(mid)
+		if c.spoolRoom.sem.TryAcquire(mid) {
+			c.spoolRoom.sem.Release(mid)
 			free, lo = mid, mid+1
 		} else {
 			hi = mid - 1
@@ -342,5 +346,203 @@ func TestAFinalTakeWaitsForRoomBeforeItHoldsWhatASaveWaitsFor(t *testing.T) {
 		}
 		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()
+	})
+}
+
+// spoolMeterSpy is a coordinator's [SpoolMeter] that keeps what it is told.
+type spoolMeterSpy struct {
+	mu       sync.Mutex
+	waits    map[SpoolOutcome][]time.Duration
+	held     int64
+	heldTold bool
+}
+
+func (m *spoolMeterSpy) SpoolWaited(outcome SpoolOutcome, waited time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.waits == nil {
+		m.waits = map[SpoolOutcome][]time.Duration{}
+	}
+	m.waits[outcome] = append(m.waits[outcome], waited)
+}
+
+func (m *spoolMeterSpy) SpoolHeld(bytes int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.held, m.heldTold = bytes, true
+}
+
+// waited is the waits the spy was told ended with outcome.
+func (m *spoolMeterSpy) waited(outcome SpoolOutcome) []time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.waits[outcome])
+}
+
+// heldNow is the room held as the spy was last told it.
+func (m *spoolMeterSpy) heldNow(t *testing.T) int64 {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.heldTold {
+		t.Fatal("the meter was never told the room held")
+	}
+	return m.held
+}
+
+// A FINAL TAKE REFUSED FOR ROOM IS COUNTED AND SAYS HOW FULL THE ROOM WAS:
+// the meter is told its minute's wait as refused, and its line at warning names the
+// wait, the room it asked for, the room's size and what other spools held,
+// so a rising count says whether the room or the minute wants retuning.
+//
+// Mutation: tell the meter nothing of a refusal, or drop a field from its line.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestAFinalTakeRefusedForRoomIsCountedAndLogged(t *testing.T) {
+	logs := captureLogs(t)
+	meter := &spoolMeterSpy{}
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+		run := rig.launchKept(t, "t1")
+		full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
+		defer full.release()
+		if spooled, kept := finalTake(t, rig, run, rig.runner); spooled != nil || kept == nil || kept.NotKept == "" {
+			t.Fatalf("the take with the room full came to %+v, want it not kept", kept)
+		}
+		if waits := meter.waited(SpoolRefused); !slices.Equal(waits, []time.Duration{spoolRoomWait}) {
+			t.Errorf("the meter was told of refused waits %v, want one of the minute's %v", waits, spoolRoomWait)
+		}
+		if waits := meter.waited(SpoolTaken); len(waits) != 0 {
+			t.Errorf("the meter was told of taken waits %v for a take that found no room", waits)
+		}
+		var line string
+		for l := range strings.Lines(logs.String()) {
+			if strings.Contains(l, "executor_session_not_kept") && strings.Contains(l, "room_bytes=") {
+				line = l
+			}
+		}
+		for _, want := range []string{"level=WARN", "waited_seconds=60 ",
+			fmt.Sprintf(" bytes=%d ", executorkeep.SealedMaxBytes),
+			fmt.Sprintf(" room_bytes=%d ", spoolRoomBytes),
+			fmt.Sprintf(" others_held_bytes=%d", spoolRoomBytes)} {
+			if !strings.Contains(line, want) {
+				t.Errorf("the refused take's line %q lacks %q", line, want)
+			}
+		}
+	})
+}
+
+// EVERY FINAL TAKE'S WAIT FOR ROOM IS TIMED BY HOW IT ENDED: one that gets its
+// room is told the meter as taken with its wait, none at once and ten seconds
+// behind a full room for ten; one whose own time runs out first as ended.
+//
+// Mutation: tell the meter nothing when the room is taken, or time the wait from
+// anywhere but its start, and a case below goes red.
+func TestEveryWaitForSpoolRoomIsTimedByHowItEnded(t *testing.T) {
+	t.Parallel()
+	const behind = 10 * time.Second
+	t.Run("taken at once", func(t *testing.T) {
+		t.Parallel()
+		meter := &spoolMeterSpy{}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+			run := rig.launchKept(t, "t1")
+			spooled, kept := finalTake(t, rig, run, rig.runner)
+			if spooled == nil || kept == nil || kept.NotKept != "" {
+				t.Fatalf("the take came to %+v, want its session spooled", kept)
+			}
+			rig.coordinator.keepLater(t.Context(), spooled)
+			rig.awaitKeeps()
+			if waits := meter.waited(SpoolTaken); !slices.Equal(waits, []time.Duration{0}) {
+				t.Errorf("the meter was told of taken waits %v, want one of none", waits)
+			}
+		})
+	})
+	t.Run("taken behind a full room", func(t *testing.T) {
+		t.Parallel()
+		meter := &spoolMeterSpy{}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+			run := rig.launchKept(t, "t1")
+			full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
+			var spooled *spooledCapture
+			taken := make(chan *SessionKept, 1)
+			go func() {
+				var kept *SessionKept
+				spooled, kept = finalTake(t, rig, run, rig.runner)
+				taken <- kept
+			}()
+			synctest.Wait()
+			time.Sleep(behind)
+			full.release()
+			if kept := <-taken; kept == nil || kept.NotKept != "" {
+				t.Fatalf("the take came to %+v once the room was back, want its session spooled", kept)
+			}
+			rig.coordinator.keepLater(t.Context(), spooled)
+			rig.awaitKeeps()
+			if waits := meter.waited(SpoolTaken); !slices.Equal(waits, []time.Duration{behind}) {
+				t.Errorf("the meter was told of taken waits %v, want one of %v", waits, behind)
+			}
+		})
+	})
+	t.Run("ended by the take's own time", func(t *testing.T) {
+		t.Parallel()
+		meter := &spoolMeterSpy{}
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+			full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
+			defer full.release()
+			ctx, cancel := context.WithTimeout(t.Context(), behind)
+			defer cancel()
+			hold, refused := rig.coordinator.awaitSpoolRoom(ctx, executorkeep.SealedMaxBytes)
+			if hold != nil || refused == nil || !errors.Is(refused.ended, context.DeadlineExceeded) {
+				hold.release()
+				t.Fatalf("a take whose time ended while it waited came to %+v, %+v, want it refused, its "+
+					"time named", hold, refused)
+			}
+			if waits := meter.waited(SpoolEnded); !slices.Equal(waits, []time.Duration{behind}) {
+				t.Errorf("the meter was told of ended waits %v, want one of %v", waits, behind)
+			}
+			if waits := meter.waited(SpoolRefused); len(waits) != 0 {
+				t.Errorf("a take whose own time ended was also told refused: %v", waits)
+			}
+		})
+	})
+}
+
+// THE METER IS TOLD EXACTLY WHAT THE ROOM HOLDS, through a take without
+// waiting, a take that waits, a shrink to a spool's sealed size and every
+// release, and 0 once all are given back: read against the room itself.
+//
+// Mutation: skip the count in a hold's shrink, a take or a release, and a step
+// below goes red.
+func TestTheMeterIsToldWhatTheSpoolRoomHolds(t *testing.T) {
+	t.Parallel()
+	meter := &spoolMeterSpy{}
+	inBubble(t, func(t *testing.T) {
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+		c := rig.coordinator
+		step := func(when string, want int64) {
+			t.Helper()
+			if held, used := meter.heldNow(t), roomInUse(c); held != want || used != want {
+				t.Errorf("%s: the meter was told %d bytes held and the room holds %d, want both %d",
+					when, held, used, want)
+			}
+		}
+		step("before any spool", 0)
+		save := c.trySpoolRoom(executorkeep.SealedMaxBytes)
+		step("a save's room at the bound", executorkeep.SealedMaxBytes)
+		take, refused := c.awaitSpoolRoom(t.Context(), executorkeep.SealedMaxBytes)
+		if refused != nil {
+			t.Fatalf("a take beside one save found no room: %s", refused.reason())
+		}
+		step("and a take's", 2*executorkeep.SealedMaxBytes)
+		take.shrinkTo(1 << 20)
+		step("the take shrunk to its sealed size", executorkeep.SealedMaxBytes+1<<20)
+		save.release()
+		step("the save given back", 1<<20)
+		take.release()
+		take.release()
+		step("every spool given back", 0)
 	})
 }

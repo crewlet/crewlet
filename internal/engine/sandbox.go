@@ -2890,6 +2890,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// paused and no setup rewrites them (see
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
+		// A final take's wait for spool room, and the room held, recorded in
+		// the node's metrics. See spoolmeter.go.
+		Spools: spoolMeter{metrics: e.metrics},
 	}
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the

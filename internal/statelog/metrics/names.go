@@ -208,3 +208,11 @@ const (
 	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
 	AssistantCardsShownAsNotice = "crewlet.assistant.cards.shown_as_notice"
 )
+
+// THE CODE SANDBOX'S INSTRUMENTS: the room an engine process's
+// executor-session spools share, which internal/sandbox measures and
+// internal/engine records (the sandbox links no state log).
+const (
+	SandboxSpoolHeldBytes = "crewlet.sandbox.spool.held_bytes"
+	SandboxSpoolWait      = "crewlet.sandbox.spool.wait"
+)

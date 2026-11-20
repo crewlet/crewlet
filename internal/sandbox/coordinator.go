@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -652,6 +651,11 @@ type CoordinatorOptions struct {
 	// own directory so what is left is its own.
 	SpoolDir string
 
+	// Spools is told each final take's wait for spool room and the room held
+	// ([SpoolMeter]): the engine's meter records them in the node's metrics. Nil
+	// measures nothing.
+	Spools SpoolMeter
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -753,7 +757,7 @@ type Coordinator struct {
 	sharedPack chan struct{}
 	// spoolRoom is the room every spool of this process shares, in bytes
 	// ([spoolRoomBytes], spoolroom.go).
-	spoolRoom *semaphore.Weighted
+	spoolRoom *spoolRoom
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -997,7 +1001,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
-		spoolRoom:    semaphore.NewWeighted(spoolRoomBytes),
+		spoolRoom:    newSpoolRoom(opts.Spools),
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
