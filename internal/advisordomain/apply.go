@@ -375,9 +375,9 @@ func applyRun(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int
 	switch p := payload.(type) {
 	case RunRequest:
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO advisor_runs (run_id, trigger_kind, by_name, requested_at, position)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (run_id) DO NOTHING`, run, string(TriggerPerson), p.By, c.at(), c.packed)
+			INSERT INTO advisor_runs (run_id, trigger_kind, by_name, requested_at, kind, position)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT (run_id) DO NOTHING`, run, string(TriggerPerson), p.By, c.at(), string(p.RunKind), c.packed)
 		if err != nil {
 			return 0, fmt.Errorf("advisordomain: request run %s at %s: %w", run, c.position, err)
 		}
@@ -401,15 +401,16 @@ func applyRecord(ctx context.Context, tx *sql.Tx, c applyContext, run string, r 
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO advisor_runs (run_id, trigger_kind, by_name, started_at, ended_at, status, classes,
-			model, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			model, kind, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET trigger_kind = excluded.trigger_kind,
 			by_name = excluded.by_name, started_at = excluded.started_at, ended_at = excluded.ended_at,
 			status = excluded.status, classes = excluded.classes, model = excluded.model,
+			kind = CASE WHEN excluded.kind != '' THEN excluded.kind ELSE advisor_runs.kind END,
 			position = excluded.position
 		WHERE advisor_runs.status = ''`,
 		run, string(r.Trigger), r.By, store.EncodeTime(r.StartedAt), store.EncodeTime(r.EndedAt),
-		string(r.Status), string(r.Classes), model, c.packed)
+		string(r.Status), string(r.Classes), model, string(r.RunKind), c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("advisordomain: record run %s at %s: %w", run, c.position, err)
 	}

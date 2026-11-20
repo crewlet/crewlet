@@ -549,3 +549,43 @@ func TestTheFindingsPageNewestFirstByEveryFilter(t *testing.T) {
 		t.Errorf("a page past the bound: %v, want ErrInvalid", err)
 	}
 }
+
+// A RUN SAYS WHAT IT DOES: a request for a deep run is pending as one, and the
+// run's record keeps its kind; a run that names none is a run of the rules.
+// Mutation: drop the kind from the request's row, and a press of Run deep runs
+// the rules.
+func TestARunSaysWhatItDoes(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const deep, rules = "5d8e3fa2-4c6b-4a71-9f2e-0b3c8d7e6f5a", "6e9f4ab3-5d7c-4b82-8a3f-1c4d9e8f7a6b"
+	for _, r := range []advisordomain.RunRequest{{Run: deep, By: "ada", RunKind: advisordomain.RunKindDeep},
+		{Run: rules, By: "ada"}} {
+		if _, err := n.writer.RequestRun(t.Context(), personCall("ada"), r); err != nil {
+			t.Fatalf("request %s: %v", r.Run, err)
+		}
+	}
+	if _, err := n.writer.RequestRun(t.Context(), personCall("ada"), advisordomain.RunRequest{
+		Run: "7fa05bc4-6e8d-4c93-9b4a-2d5e0f9a8b7c", By: "ada", RunKind: "everything"}); err == nil {
+		t.Error("a request of a kind no build knows was taken")
+	}
+	pending, err := n.reader().PendingRequests(t.Context(), stale)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending = %+v (%v)", pending, err)
+	}
+	kinds := map[string]advisordomain.RunKind{}
+	for _, p := range pending {
+		kinds[p.ID] = p.Kind
+	}
+	if kinds[deep] != advisordomain.RunKindDeep || kinds[rules] != advisordomain.RunKindRules {
+		t.Errorf("kinds = %v, want the deep press deep and the other the rules", kinds)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: deep,
+		Trigger: advisordomain.TriggerPerson, By: "ada", StartedAt: writerClock, EndedAt: writerClock.Add(time.Minute),
+		Status: advisordomain.RunDone, Classes: json.RawMessage(`[]`)}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	latest, found, err := n.reader().LatestRun(t.Context(), stale)
+	if err != nil || !found || latest.ID != deep || latest.Kind != advisordomain.RunKindDeep {
+		t.Errorf("latest = %+v (%v, %v), want the deep run, its kind kept from its request", latest, found, err)
+	}
+}

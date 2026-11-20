@@ -770,6 +770,9 @@ func (r RunRequest) validate() error {
 	if !IsUUID(r.Run) {
 		return invalid("run is a uuid in its canonical lowercase form, and %q is not", r.Run)
 	}
+	if !r.RunKind.Valid() {
+		return invalid("run_kind %q is not one of %s", r.RunKind, words.Or(RunKinds))
+	}
 	return printable("by", r.By, MaxWordBytes)
 }
 
@@ -792,6 +795,8 @@ func (r RunRecord) validate() ([]classLine, error) {
 		return nil, invalid("a run names when it started and when it ended, no earlier (started_at, ended_at)")
 	case r.Trigger == TriggerPerson && r.By == "":
 		return nil, invalid("a run a person started names them (by)")
+	case !r.RunKind.Valid():
+		return nil, invalid("run_kind %q is not one of %s", r.RunKind, words.Or(RunKinds))
 	}
 	if r.By != "" {
 		if err := printable("by", r.By, MaxWordBytes); err != nil {

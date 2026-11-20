@@ -22,12 +22,15 @@ import (
 // reads [Sources.advisorRead] makes, with the atlas read as the engine reads it.
 
 // AdvisorDuty is the Advisor's duty over this node's sources, writing to log,
-// holding claim (nil on a node with no fleet).
-func (s Sources) AdvisorDuty(log duty.Log, claim func(context.Context) (bool, error)) *duty.Duty {
+// holding claim (nil on a node with no fleet); its deep run asks the
+// engine's questions through ask (ADR-0166).
+func (s Sources) AdvisorDuty(log duty.Log, claim func(context.Context) (bool, error), ask AskQuestion) *duty.Duty {
 	d := &duty.Duty{Log: log, Read: advisorObserver{s: s}, Claim: claim, NewID: uuid.NewString,
 		Now: s.clock, Zone: s.zone}
 	if s.AdvisorModel != nil {
 		d.Model = &modelpass.Service{Models: s.AdvisorModel, Read: s.advisorModelData}
+		d.Deep = &modelpass.DeepService{Models: s.AdvisorModel, Read: s.advisorDeepData(ask),
+			Bounds: advisorDeepBounds}
 	}
 	return d
 }

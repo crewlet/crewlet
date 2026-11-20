@@ -464,27 +464,29 @@ type RunRow struct {
 
 	Classes json.RawMessage
 	Model   json.RawMessage
+	// Kind is what the run does, [RunKindRules] for every run before kinds.
+	Kind RunKind
 }
 
 // runColumns are a [RunRow]'s columns, in [scanRun]'s order.
-const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model
-	FROM advisor_runs`
+const runColumns = `run_id, trigger_kind, by_name, requested_at, started_at, ended_at, status, classes, model,
+	kind FROM advisor_runs`
 
 // scanRun reads one row of [runColumns].
 func scanRun(rows interface{ Scan(...any) error }) (RunRow, error) {
 	var (
-		r                               RunRow
-		trigger, status, classes, model string
-		requested, started, ended       int64
+		r                                     RunRow
+		trigger, status, classes, model, kind string
+		requested, started, ended             int64
 	)
 	if err := rows.Scan(&r.ID, &trigger, &r.By, &requested, &started, &ended, &status, &classes,
-		&model); err != nil {
+		&model, &kind); err != nil {
 		return RunRow{}, err
 	}
 	r.Trigger, r.Status = Trigger(trigger), RunStatus(status)
 	r.RequestedAt, r.StartedAt, r.EndedAt = decodeOptional(requested), decodeOptional(started),
 		decodeOptional(ended)
-	r.Classes, r.Model = json.RawMessage(classes), json.RawMessage(model)
+	r.Classes, r.Model, r.Kind = json.RawMessage(classes), json.RawMessage(model), RunKind(kind).OrRules()
 	return r, nil
 }
 

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -138,6 +139,8 @@ type Log interface {
 type Request struct {
 	Run string
 	By  string
+	// Kind is what the person asked to run: the rules, or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Run is how one run ended, as the log keeps it.
@@ -156,6 +159,8 @@ type Run struct {
 	Classes []advisor.ClassOutcome
 	// Model is the model pass's summary, nil where none ran.
 	Model any
+	// Kind is what the run did: the rules (the empty kind), or a deep run.
+	Kind advisordomain.RunKind
 }
 
 // Count is how many findings of the run took step, every scope together.
@@ -198,6 +203,8 @@ type Duty struct {
 	Log   Log
 	Read  Reader
 	Model ModelPass
+	// Deep is the Advisor's investigation, nil where none runs (ADR-0166).
+	Deep DeepPass
 	// Claim claims or renews the lease, nil on a node with no fleet.
 	Claim func(ctx context.Context) (bool, error)
 	// NewID mints a run's id.
@@ -208,6 +215,8 @@ type Duty struct {
 	signature string
 	// reported is the week whose report this holder saw written.
 	reported string
+	// deep is the deep run in flight on this holder.
+	deep deepState
 }
 
 // Serve runs the duty until ctx ends.
@@ -235,15 +244,32 @@ func (d *Duty) Step(ctx context.Context) error {
 		}
 		if !held {
 			// A peer runs it, and this node's setup signature would be
-			// stale when it next takes over: forget it.
+			// stale when it next takes over: forget it. A deep run in
+			// flight here is the new holder's to run again.
 			d.signature = ""
+			d.cancelDeep()
 			return nil
 		}
 	}
+	if d.deepFlying() {
+		// THE LEASE IS RENEWED, and nothing else runs beside the deep run.
+		return nil
+	}
 	now := d.Now().UTC()
-	requests, err := d.Log.Requested(ctx)
+	all, err := d.Log.Requested(ctx)
 	if err != nil {
 		return fmt.Errorf("read the requested runs: %w", err)
+	}
+	var requests, deep []Request
+	for _, r := range all {
+		if r.Kind == advisordomain.RunKindDeep {
+			deep = append(deep, r)
+			continue
+		}
+		requests = append(requests, r)
+	}
+	if len(requests) == 0 && len(deep) > 0 {
+		return d.pressedDeep(ctx, now, deep)
 	}
 	if len(requests) > 0 {
 		// EVERY PRESS WAITING IS ANSWERED BY ONE RUN of everything, recorded
@@ -270,6 +296,10 @@ func (d *Duty) Step(ctx context.Context) error {
 		now.Sub(last[string(advisor.GroupSetup)]) >= RulePassEvery
 	if !rules && err == nil && signature != d.signature {
 		rules, trigger = true, TriggerEvent
+	}
+	if d.deepDue(now, last) {
+		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()})
+		return nil
 	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
 	if !rules && !model {

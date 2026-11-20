@@ -140,6 +140,10 @@ type RunRequest struct {
 
 	// By is the person's handle.
 	By string `json:"by"`
+
+	// RunKind is what the run does: [RunKindRules] (the empty kind, every
+	// record before version 2) or [RunKindDeep], an investigation.
+	RunKind RunKind `json:"run_kind,omitempty"`
 }
 
 // RunRecord is a run's end (op `record` on the run).
@@ -160,6 +164,9 @@ type RunRecord struct {
 
 	// Model is the model pass's summary as a JSON object, or null.
 	Model json.RawMessage `json:"model,omitempty"`
+
+	// RunKind is what the run did, as its request named it.
+	RunKind RunKind `json:"run_kind,omitempty"`
 }
 
 // Report writes one week's report, once (op `write`): the ISO week, the period

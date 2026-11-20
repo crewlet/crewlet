@@ -122,7 +122,7 @@ func (l advisorLog) Requested(ctx context.Context) ([]Request, error) {
 	}
 	out := make([]Request, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Request{Run: r.ID, By: r.By})
+		out = append(out, Request{Run: r.ID, By: r.By, Kind: r.Kind})
 	}
 	return out, nil
 }
@@ -280,7 +280,7 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 	}
 	_, err = l.writes.RecordRun(ctx, l.call("advisor_run"), advisordomain.RunRecord{
 		Run: r.ID, Trigger: advisordomain.Trigger(r.Trigger), By: r.By, StartedAt: r.StartedAt,
-		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model})
+		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model, RunKind: r.Kind})
 	return err
 }
 

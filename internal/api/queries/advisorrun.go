@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/duty"
+	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/notice"
 )
@@ -99,7 +101,7 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	if len(pending) > 0 {
 		p := pending[0]
 		return &AdvisorRunSummary{RunID: p.ID, Trigger: string(advisordomain.TriggerPerson), By: p.By,
-			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: RunKindRules,
+			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: string(p.Kind.OrRules()),
 			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}, nil
 	}
 	row, found, err := s.Advisor.LatestRun(ctx, advisorFresh)
@@ -144,13 +146,26 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 			}
 		}
 	}
+	out.Kind = string(row.Kind.OrRules())
 	if len(row.Model) > 0 && string(row.Model) != "null" {
-		var pass advisor.Pass
+		// A DEEP RUN'S RECORD is a pass with its progress, bounds and stop.
+		var pass modelpass.DeepRun
 		if err := json.Unmarshal(row.Model, &pass); err != nil {
 			return nil, fmt.Errorf("queries: run %s's model pass does not decode: %w", row.ID, err)
 		}
 		out.Model = &AdvisorModelSummary{Status: pass.Status, Tokens: pass.InputTokens + pass.OutputTokens,
 			Listed: pass.Listed, Dropped: nonNilMap(pass.Dropped), Reason: pass.Reason}
+		if row.Kind == advisordomain.RunKindDeep {
+			for _, p := range pass.Progress {
+				out.Progress = append(out.Progress, AdvisorProgress{At: p.At, Text: p.Text})
+			}
+			out.Budget = &AdvisorRunBudget{Tokens: int64(pass.InputTokens + pass.OutputTokens),
+				TokensCeiling: int64(pass.Bounds.Tokens), Minutes: int64(math.Ceil(pass.Minutes)),
+				MinutesCeiling: int64(pass.Bounds.Minutes)}
+			if pass.StoppedBy != "" {
+				out.StoppedBy = &pass.StoppedBy
+			}
+		}
 	}
 	return out, nil
 }

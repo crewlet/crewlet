@@ -18,7 +18,8 @@ import (
 //
 //   - 1: the base format: every op of package doc's "Ops", and the
 //     framework's eviction, generation, barrier and trimmed record.
-const RecordVersion = 1
+//   - 2: a run's kind (`run_kind`) on its request and its record (ADR-0166).
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -29,12 +30,14 @@ const GateRecordVersion = 1
 
 // versionedFields is every field or kind an advisor record has gained since
 // the base format, with the version a reader needs to apply it: a new op is a
-// row at `op`, a new payload field a row at its path. None yet.
+// row at `op`, a new payload field a row at its path.
 //
 // A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling upgrade
 // disagree about it all the same, and a build without the row would fault on
 // the record rather than retain it.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "Run.RunKind", Since: 2, Path: []string{"mutation", "run_kind"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }

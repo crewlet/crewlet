@@ -224,6 +224,12 @@ Every Monday the Advisor writes one report of the week before, Monday to Monday 
 
 A server that was down on Monday writes the report when the Advisor next runs that week. A week the company did not exist through all of, such as the one before its first start, has no report: its numbers would read as a measured week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
 
+## The deep run
+
+Where `advisor.model` names a model, the Advisor also investigates: nightly at 03:00 on the company clock, early on Monday at 05:00 so the weekly report reads a fresh one, and when an administrator asks (`POST /advisor/runs` with `{"kind": "deep"}`, or Run deep on the Advisor page). It reads the company's numbers, then the engine's own reads as the administrator sees them (findings, seats' activity, tokens, schedules, workload and flow), follows what looks wrong and tests it against the data, and writes findings that lead with their number. Every number a finding states must be one it read, and its headline may say no other; one that is not is dropped, and the run counts it.
+
+It reads, never writes: no setting, item or message changes because of it, and it reads nothing about identity, sessions, credentials or conversations. It is bounded by `advisor.deep.tokens` (2,000,000 by default) and `advisor.deep.minutes` (20 by default), charged to the company and no seat; near either bound it submits what it has, and the run says which bound it stopped at. One runs at a time; while it does, the Advisor's other runs wait for it, and a server that stops holding the Advisor's lease stops its run, so the next one runs the request again. When it ends, `GET /advisor/runs/latest` shows its progress lines, what it spent of its bounds and where it stopped.
+
 ## The company's numbers
 
 `GET /advisor/snapshot` answers the company's numbers over the last 7, 14 or 30 company days (`range=7d`, `14d` or `30d`), today included, each beside the range before it: open items, the hours work waited for a seat, was held and stood blocked, the median pickup wait, turns, the share of turns that changed nothing and tokens per turn; and the charts the Advisor page draws from them: where each seat's work stood, open items by who holds them, what each kind of wake led to, and tokens per turn by seat. A source that could not be read is named in `unread` and its numbers left out. From a script:
