@@ -69,7 +69,9 @@ export function linesOf(model: ModelView, name: (handle: string) => string): Use
     if (seats.size > 0)
       lines.push({
         job: category,
-        label: CATEGORY_WORDS[category].label,
+        // THE PAGE'S SHORT WORDS (Coding, Reviews, Routines), as the seats name
+        // them: the long labels were cut in their own column.
+        label: CATEGORY_WORDS[category].short,
         seats: [...seats].map(name).sort(),
       });
   }
@@ -264,6 +266,10 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
     (m) => m.entry.health === "rejected" || m.entry.health === "no_sign_in",
   ).length;
   const sitting = models.filter((m) => m.entry.health === "sitting_out").length;
+  // NOT TESTED IS NOT BROKEN: a model nobody has called yet is said as that,
+  // apart from the ones that cannot answer.
+  const untested = models.filter((m) => m.entry.health === "untested").length;
+  const notReady = models.length - ready - untested;
   const unused = models.filter((m) => !inUse(m)).length;
   const usage = models.reduce(
     (sum, m) => {
@@ -321,11 +327,14 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               sub={
                 ready === models.length
                   ? "every model answers"
-                  : `${plural(models.length - ready, "model")} not ready`
+                  : listed([
+                      ...(notReady > 0 ? [`${plural(notReady, "model")} not ready`] : []),
+                      ...(untested > 0 ? [`${untested} not tested yet`] : []),
+                    ])
               }
             />
             <StatCard
-              label="Sitting out or refused"
+              label="Sitting out or cannot sign in"
               value={sitting + refused}
               sub={
                 sitting + refused === 0
@@ -368,6 +377,15 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 ? "Add one to give the agents a model to run on."
                 : "An admin adds the models the agents run on."
             }
+            {...(admin
+              ? {
+                  action: (
+                    <Button variant="primary" size="small" onClick={add}>
+                      Add a model
+                    </Button>
+                  ),
+                }
+              : {})}
           />
         ) : (
           <DataGrid<ModelView>
@@ -397,7 +415,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 key: "limits",
                 header: "Usage limits",
                 // Never gives way: on a phone it stacks into the row's card.
-                floor: "13rem",
+                floor: "11rem",
                 cell: (m) => <UsageLimitsCell model={m} />,
               },
               ...(admin
@@ -415,10 +433,10 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               {
                 key: "uses",
                 header: "Used by",
-                // The first use and its "+N", whole (QA M16). Who runs on a
-                // model is the list's point after its status: it gives way last.
+                // The first use and its "+N", whole (QA M16). WHAT A MODEL DOES
+                // IS THE LIST'S POINT after its status: it never gives way, so
+                // at no width does the list stop saying it.
                 shrink: true,
-                drop: 3,
                 cell: (m) => <UsedBy model={m} name={name} />,
               },
               {
@@ -457,8 +475,10 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
         )}
       </Card>
 
-      {/* UNDER THE MODELS: who runs on which, the helpers then the seats, on one card. */}
-      {models.length > 0 ? <WhoRuns data={data} onFlow={onFlow} /> : null}
+      {/* UNDER THE MODELS: who runs on which, the helpers then the seats, on one
+          card. KEPT WITH NO MODEL, every row reading Not set, so a company sees
+          which seats wait for one. */}
+      <WhoRuns data={data} />
     </div>
   );
 }

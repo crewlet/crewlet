@@ -1,32 +1,32 @@
 /**
- * One finding as a row of the Advisor's lists, and the fix it offers.
+ * One finding as a row of the Advisor's lists: its headline, one line of why,
+ * the numbers behind it, ONE press that says what it does ("Let Agent SWE
+ * watch the engine's health", "Take a backup", "Open ENG-12"), and a
+ * menu with the rest (the fix's other changes, Snooze, Dismiss with a reason,
+ * Ask Crewlet). Everything else is behind Details: the model's explanation,
+ * the records, when it was found and checked (`view.ts` reads the row off
+ * the finding).
  *
- * A ROW SAYS HOW FRESH IT IS. Each stored finding was last confirmed by a run
- * of its class; a row says when ("checked 4 minutes ago"), and one whose
- * class has not run for three of its intervals says it was not re-checked
- * since, so a reader never takes an old observation for the engine's view
- * now. Apply re-checks anyway (`apply.ts`).
+ * APPLY CONFIRMS IN PLACE: the press opens the re-check and the change's
+ * preview under the row itself ([ApplyPanel]), where the person confirms.
  *
- * ONE ACTION, BY THE FIX'S KIND, and the rest behind the row's menu: Snooze
- * (or End the snooze, on a snoozed one), Dismiss with a reason, and Ask
- * Crewlet about it.
- *
- * A ROW'S TIMES ARE READ, NOT LOGGED: a past instant as how long ago, one a
- * person plans by as the time of day ("until Sat, Nov 21, 12:48", never its
- * seconds or this year). The exact instant is on the finding's page.
+ * A ROW SAYS WHAT BECAME OF IT where that changes what to do: snoozed until a
+ * time, applied and checking its effect, not re-checked for a while, a change
+ * that did not clear it, seen before. A past instant is said as how long ago,
+ * one a person plans by to the minute.
  *
  * ONE CONDITION ON MANY SUBJECTS IS ONE ROW. A class whose fix is a change to
  * one seat is found once per seat, each its own finding, applied and
- * dismissed on its own; listed as such, seven seats were seven rows of the
- * same sentence. Two or more findings of one class in a list are one row
- * ("7 seats"), each subject inside it with its own fix and menu ([listItems]).
+ * dismissed on its own; two or more of one class in a list are one row
+ * ("7 seats"), each subject inside it with its own press and menu
+ * ([listItems]).
  */
 
 import { Suspense, type ReactNode } from "react";
 import {
   Button,
+  ButtonLink,
   IconButton,
-  InlineCode,
   Link,
   Menu,
   Text,
@@ -34,33 +34,16 @@ import {
   type MenuEntry,
 } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
-import type { AdvisorPage } from "~/protocol/advisor.ts";
 import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
 import { href } from "~/app/router.tsx";
-import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { ago } from "~/lib/ago.ts";
 import { fmtAt, plural } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type { AdvisorKeptFinding, AdvisorRecordRef } from "~/protocol/advisorFindings.ts";
 import type { DismissReason } from "./decisions.tsx";
-import { impactWords, toneOf } from "./words.ts";
-
-/** Where an `open_page` fix is taken, by the page the engine names and what it opens on. */
-const PAGE_FIXES: Readonly<
-  Record<
-    AdvisorPage,
-    (target: string) => { path: string[]; query?: Record<string, string>; action: string } | null
-  >
-> = {
-  backups: () => ({
-    path: ["settings", "backups"],
-    query: { take: TAKE_BACKUP },
-    action: "Take a backup",
-  }),
-  item: (key) => (key ? { path: ["worklet", key], action: `Open ${key}` } : null),
-  seat: (handle) =>
-    handle ? { path: ["company", "org", "seats", handle], action: "Open the agent" } : null,
-};
+import { figure } from "./Numbers.tsx";
+import { REASSIGN, findingView, type ViewAction, type ViewStat } from "./view.ts";
+import { toneOf } from "./words.ts";
 
 /** A cited record's page and how a list names it; null for one that has no page. */
 export function recordLink(
@@ -117,22 +100,18 @@ export function snoozed(f: AdvisorKeptFinding, now: number): boolean {
   return f.snoozed_until !== null && Date.parse(f.snoozed_until) > now;
 }
 
-/** How fresh a finding is, and what became of it, in its row's quiet line. */
-export function freshness(f: AdvisorKeptFinding, now: number): string[] {
+/**
+ * What became of a finding, where that changes what to do: snoozed, applied
+ * and waiting on its effect, not re-checked for a while, a change that did
+ * not clear it, seen before. A finding as found has none.
+ */
+export function marks(f: AdvisorKeptFinding, now: number): string[] {
   const parts: string[] = [];
-  const impact = impactWords(f);
-  if (impact) parts.push(impact);
   if (snoozed(f, now)) parts.push(`snoozed until ${fmtAt(f.snoozed_until, now)}`);
-  // A FINDING THE MODEL PASS FOUND is said to be the model's, as its page says.
-  parts.push(
-    `found ${f.source === "model" ? "by the Advisor's model " : ""}${ago(f.opened_at, now)}`,
-  );
   if (f.state === "applied" && f.effect_due_at) {
     parts.push(`applied, checking its effect until ${fmtAt(f.effect_due_at, now)}`);
   } else if (f.confirmed === "stale") {
     parts.push(`not re-checked since ${fmtAt(f.last_confirmed_at, now)}`);
-  } else {
-    parts.push(`checked ${ago(f.last_confirmed_at, now)}`);
   }
   if (f.ineffective)
     parts.push(`a change applied ${ago(f.ineffective.applied_at, now)} did not clear it`);
@@ -140,14 +119,27 @@ export function freshness(f: AdvisorKeptFinding, now: number): string[] {
   return parts;
 }
 
+/** When it was found, by whom, and when its check last confirmed it: Details' line. */
+export function freshness(f: AdvisorKeptFinding, now: number): string {
+  const found = `Found ${f.source === "model" ? "by the Advisor's model " : ""}${ago(f.opened_at, now)}`;
+  return f.confirmed === "stale" ? found : `${found} · checked ${ago(f.last_confirmed_at, now)}`;
+}
+
+/** A stat as the row says it: what it counts, then its number in its unit ("Hours held: 31 h"). */
+export function statWords(s: ViewStat): string {
+  const shown = figure(s.value ?? 0, s.unit);
+  const number = `${shown.value}${shown.unit && (s.unit === "hours" || s.unit === "minutes") ? ` ${shown.unit}` : ""}`;
+  return `${s.label}: ${number}`;
+}
+
 /** What a row's presses do. */
 export interface RowActions {
-  /** Open the Apply dialog on a finding whose change the engine builds. */
-  apply: (f: AdvisorKeptFinding) => void;
+  /** Open the in-place Apply on a finding's option. */
+  apply: (f: AdvisorKeptFinding, option: number) => void;
   /** Open an atlas finding's fix on the entries it names. */
   review: (f: AdvisorKeptFinding) => void;
-  /** Ask Crewlet about the finding: its page, with a question waiting in Ask Crewlet's box. */
-  ask: ((f: AdvisorKeptFinding) => void) | null;
+  /** Ask Crewlet about the finding: its page, with `question` (or a plain one) waiting in Ask Crewlet's box. */
+  ask: ((f: AdvisorKeptFinding, question?: string) => void) | null;
   snooze: (f: AdvisorKeptFinding) => void;
   /** End a person's snooze now: the finding is back on the list. */
   wake: (f: AdvisorKeptFinding) => void;
@@ -176,71 +168,103 @@ export function appliable(f: AdvisorKeptFinding): boolean {
 }
 
 /**
- * The one press a finding's fix offers, by its kind. `subject` names whom the
- * press is for where its words alone are the same on every line beside it
- * (the subjects inside a row of one class).
+ * A finding's one press, labelled with what it does. `subject` names whom it
+ * is for where its words alone are the same on every line beside it (the
+ * subjects inside a row of one class).
  */
-export function fixAction(f: AdvisorKeptFinding, actions: RowActions, subject?: string): ReactNode {
-  if (appliable(f)) {
-    return (
-      <Button
-        size="small"
-        onClick={() => actions.apply(f)}
-        {...(subject ? { "aria-label": `Apply for ${subject}` } : {})}
-      >
-        Apply
-      </Button>
-    );
+export function ActionButton({
+  f,
+  action,
+  actions,
+  subject,
+}: {
+  f: AdvisorKeptFinding;
+  action: ViewAction;
+  actions: RowActions;
+  subject?: string | undefined;
+}): ReactNode {
+  const named = subject ? { "aria-label": `${action.label} for ${subject}` } : {};
+  switch (action.kind) {
+    case "apply":
+      return (
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={() => actions.apply(f, action.option)}
+          {...named}
+        >
+          {action.label}
+        </Button>
+      );
+    case "open":
+      return (
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={action.href}
+          {...(action.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+          {...named}
+        >
+          {action.label}
+        </ButtonLink>
+      );
+    case "ask":
+      return actions.ask ? (
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={() => actions.ask!(f, action.question)}
+          {...named}
+        >
+          {action.label}
+        </Button>
+      ) : null;
+    case "review":
+      return (
+        <Button size="small" variant="secondary" onClick={() => actions.review(f)} {...named}>
+          {action.label}
+        </Button>
+      );
+    case "reassign":
+      // MOVED IN PLACE, as Apply is: re-checked, the moves shown, confirmed.
+      return (
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={() => actions.apply(f, REASSIGN)}
+          {...named}
+        >
+          {action.label}
+        </Button>
+      );
   }
-  if (f.state !== "open") return null;
-  if (f.fix.kind === "ask_crewlet" && actions.ask) {
-    const ask = actions.ask;
-    return (
-      <Button size="small" onClick={() => ask(f)}>
-        Ask Crewlet about this
-      </Button>
-    );
+}
+
+/** A secondary press, as a menu entry. */
+function menuEntry(
+  f: AdvisorKeptFinding,
+  a: ViewAction,
+  actions: RowActions,
+  i: number,
+): MenuEntry | null {
+  switch (a.kind) {
+    case "apply":
+      return { key: `apply-${i}`, label: a.label, onSelect: () => actions.apply(f, a.option) };
+    case "open":
+      return {
+        key: `open-${i}`,
+        label: a.label,
+        onSelect: () => window.open(a.href, a.external ? "_blank" : "_self"),
+      };
+    case "ask":
+      return actions.ask
+        ? { key: `ask-${i}`, label: a.label, onSelect: () => actions.ask!(f, a.question) }
+        : null;
+    case "review":
+      return { key: `review-${i}`, label: a.label, onSelect: () => actions.review(f) };
+    case "reassign":
+      return { key: `reassign-${i}`, label: a.label, onSelect: () => actions.apply(f, REASSIGN) };
   }
-  if (f.fix.kind === "external_step" && f.fix.url) {
-    return (
-      <Link href={f.fix.url} external size="caption">
-        {f.subject.name ? `Open ${f.subject.name}` : "Open it"}
-      </Link>
-    );
-  }
-  if (f.fix.kind === "open_page" && f.fix.page && f.fix.page in PAGE_FIXES) {
-    const page = PAGE_FIXES[f.fix.page as AdvisorPage](f.fix.target ?? "");
-    return page ? (
-      <Link href={href(page.path, page.query)} size="caption">
-        {page.action}
-      </Link>
-    ) : null;
-  }
-  if (f.fix.kind === "open_setting") {
-    return (
-      <Link href={href(["settings", "config"])} size="caption">
-        Open the settings
-      </Link>
-    );
-  }
-  // AN ATLAS FIX IS SENT WITH THE ATLAS'S OWN TOOLS, on the entries the
-  // finding names; a reader the engine names none (no atlas app) is sent to
-  // the atlas instead.
-  if (f.fix.kind === "atlas_act" && f.fix.act && f.entries !== null) {
-    return (
-      <Button size="small" onClick={() => actions.review(f)}>
-        Review the fix
-      </Button>
-    );
-  }
-  if (f.fix.kind === "atlas_act") {
-    return (
-      <Link href={href(["company", "atlas"])} size="caption">
-        Open the atlas
-      </Link>
-    );
-  }
-  return null;
 }
 
 /**
@@ -260,7 +284,12 @@ export function FindingMenu({
   name?: string;
 }) {
   if (f.state !== "open") return null;
+  const others = findingView(f)
+    .actions.secondary.map((a, i) => menuEntry(f, a, actions, i))
+    .filter((e): e is MenuEntry => e !== null);
   const items: MenuEntry[] = [
+    ...others,
+    ...(others.length > 0 ? [{ kind: "separator" as const, key: "sep-fix" }] : []),
     snoozed(f, now)
       ? { key: "wake", label: "End the snooze", onSelect: () => actions.wake(f) }
       : { key: "snooze", label: "Snooze for 7 days", onSelect: () => actions.snooze(f) },
@@ -301,13 +330,57 @@ export function FindingMenu({
   );
 }
 
-/** One finding as a row of a list: what is wrong, how fresh it is, its fix and its menu. */
+/** The Apply a page has open: on which finding, and which of its fix's options. */
+export interface OpenApply {
+  id: string;
+  option: number;
+}
+
+/** What draws the open Apply: the page's own [ApplyPanel]. */
+export type ApplyFor = (f: AdvisorKeptFinding, option: number) => ReactNode;
+
+/** The row's one line of numbers and what became of it. */
+function statLine(f: AdvisorKeptFinding, now: number) {
+  const items = [...findingView(f).stats.map(statWords), ...marks(f, now)];
+  return items.length > 0 ? [{ items }] : undefined;
+}
+
+/** What Details opens: the model's words, the records, and when it was found and checked. */
+function Details({ f, now }: { f: AdvisorKeptFinding; now: number }) {
+  const view = findingView(f);
+  return (
+    <div className="col gap-1">
+      {view.why !== f.why ? <Text as="p">{marked(f.why)}</Text> : null}
+      {f.explanation ? (
+        <Text as="p">
+          <span className="advisor-said">The Advisor's model explains: </span>
+          {marked(f.explanation)}
+        </Text>
+      ) : null}
+      <Text as="p">{marked(f.fix.sentence)}</Text>
+      <RecordLinks records={f.evidence.records} />
+      <Text as="p" variant="caption" tone="secondary">
+        {freshness(f, now)} ·{" "}
+        <Link href={href(["advisor", "findings", f.id])} size="caption">
+          Its page
+        </Link>
+      </Text>
+    </div>
+  );
+}
+
+/** One finding as a row of a list: its headline, why, numbers, one press, its menu, and its open Apply. */
 export function findingItem(
   f: AdvisorKeptFinding,
   now: number,
   actions: RowActions,
+  open: OpenApply | null = null,
+  applyFor: ApplyFor | null = null,
 ): AttentionItem {
-  const action = fixAction(f, actions);
+  const view = findingView(f);
+  const primary = view.actions.primary;
+  const applying = open !== null && open.id === f.id && applyFor !== null;
+  const label = view.actions.primary?.kind === "apply" ? view.actions.primary.label : "the fix";
   return {
     key: f.id,
     tone: toneOf(f.severity),
@@ -315,35 +388,37 @@ export function findingItem(
     // THE ENGINE'S SENTENCES, drawn as every engine sentence is ([marked]).
     title: (
       <Link href={href(["advisor", "findings", f.id])} size="body">
-        {marked(f.title)}
+        {marked(view.headline)}
       </Link>
     ),
-    meta: freshness(f, now).join(" · "),
+    lines: statLine(f, now),
+    meta: marked(view.why),
     action: (
       <span className="advisor-row-actions">
-        {action}
+        {primary ? <ActionButton f={f} action={primary} actions={actions} /> : null}
         <FindingMenu f={f} actions={actions} now={now} />
       </span>
     ),
-    details: (
-      <div className="col gap-1">
-        <Text as="p">{marked(f.why)}</Text>
-        {f.explanation ? (
-          <Text as="p">
-            <span className="advisor-said">The Advisor's model explains: </span>
-            {marked(f.explanation)}
-          </Text>
-        ) : null}
-        <Text as="p">{marked(f.fix.sentence)}</Text>
-        {f.fix.kind === "open_setting" && f.fix.setting ? (
-          <Text as="p" tone="secondary">
-            The setting: <InlineCode>{f.fix.setting}</InlineCode>
-          </Text>
-        ) : null}
-        <RecordLinks records={f.evidence.records} />
-      </div>
-    ),
+    details: <Details f={f} now={now} />,
+    ...(applying
+      ? {
+          panel: applyFor(f, open.option),
+          panelLabel: `Apply: ${optionLabel(f, open.option) ?? label}`,
+        }
+      : {}),
   };
+}
+
+/** The label of a fix's option, as its press says it. */
+function optionLabel(f: AdvisorKeptFinding, option: number): string | null {
+  const v = findingView(f).actions;
+  const all = [v.primary, ...v.secondary];
+  const a = all.find(
+    (x) =>
+      (x?.kind === "apply" && x.option === option) ||
+      (x?.kind === "reassign" && option === REASSIGN),
+  );
+  return a ? a.label : null;
 }
 
 /** What a subject of each kind is called, one and many, counted in a row of one class: "7 seats". */
@@ -377,6 +452,8 @@ export function listItems(
   findings: readonly AdvisorKeptFinding[],
   now: number,
   actions: RowActions,
+  open: OpenApply | null = null,
+  applyFor: ApplyFor | null = null,
 ): AttentionItem[] {
   const byClass = new Map<string, AdvisorKeptFinding[]>();
   for (const f of findings) byClass.set(f.class, [...(byClass.get(f.class) ?? []), f]);
@@ -385,10 +462,10 @@ export function listItems(
   for (const f of findings) {
     const same = byClass.get(f.class)!;
     if (same.length < 2) {
-      items.push(findingItem(f, now, actions));
+      items.push(findingItem(f, now, actions, open, applyFor));
     } else if (!drawn.has(f.class)) {
       drawn.add(f.class);
-      items.push(groupItem(same, now, actions));
+      items.push(groupItem(same, now, actions, open, applyFor));
     }
   }
   return items;
@@ -396,50 +473,60 @@ export function listItems(
 
 /**
  * Findings of one class as one row: the class's sentence (the engine writes
- * one per class), how many subjects it holds and since when, and inside it
- * each subject with its own fix, its menu and how fresh it is.
+ * one per class), how many subjects it holds, and inside it each subject with
+ * its own press and menu. An Apply opened on one of them opens under the row.
  */
 export function groupItem(
   findings: readonly AdvisorKeptFinding[],
   now: number,
   actions: RowActions,
+  open: OpenApply | null = null,
+  applyFor: ApplyFor | null = null,
 ): AttentionItem {
   const first = findings[0]!;
-  const oldest = findings.reduce((a, b) =>
-    Date.parse(a.opened_at) <= Date.parse(b.opened_at) ? a : b,
-  );
+  const view = findingView(first);
+  const target = open ? findings.find((f) => f.id === open.id) : undefined;
   return {
     key: `class:${first.class}`,
     tone: toneOf(first.severity),
     subject: subjectsWords(findings),
-    title: marked(first.title),
-    meta: `found ${ago(oldest.opened_at, now)}`,
+    title: marked(view.headline),
+    meta: marked(view.why),
     details: (
-      <div className="col gap-2">
-        <Text as="p">{marked(first.why)}</Text>
-        <ul className="advisor-group" aria-label={`Each of the ${subjectsWords(findings)}`}>
-          {findings.map((f) => {
-            const name = f.subject.name || f.subject.id;
-            return (
-              <li key={f.id} className="advisor-group__row">
-                <span className="col">
-                  <Link href={href(["advisor", "findings", f.id])} size="body">
-                    {name}
-                  </Link>
+      <ul className="advisor-group" aria-label={`Each of the ${subjectsWords(findings)}`}>
+        {findings.map((f) => {
+          const name = f.subject.name || f.subject.id;
+          const primary = findingView(f).actions.primary;
+          const line = [...findingView(f).stats.map(statWords), ...marks(f, now)].join(" · ");
+          return (
+            <li key={f.id} className="advisor-group__row">
+              <span className="col">
+                <Link href={href(["advisor", "findings", f.id])} size="body">
+                  {name}
+                </Link>
+                {line ? (
                   <Text as="span" variant="caption" tone="secondary">
-                    {freshness(f, now).join(" · ")}
+                    {line}
                   </Text>
-                </span>
-                <span className="advisor-row-actions">
-                  {fixAction(f, actions, name)}
-                  <FindingMenu f={f} actions={actions} now={now} name={`${name}: ${f.title}`} />
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+                ) : null}
+              </span>
+              <span className="advisor-row-actions">
+                {primary ? (
+                  <ActionButton f={f} action={primary} actions={actions} subject={name} />
+                ) : null}
+                <FindingMenu f={f} actions={actions} now={now} name={`${name}: ${f.title}`} />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     ),
+    ...(target && open && applyFor
+      ? {
+          panel: applyFor(target, open.option),
+          panelLabel: `Apply for ${target.subject.name || target.subject.id}: ${optionLabel(target, open.option) ?? "the fix"}`,
+        }
+      : {}),
   };
 }
 

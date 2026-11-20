@@ -35,11 +35,12 @@ import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ModelReference } from "~/protocol/models.ts";
-import { removeModel, type Removal } from "../api.ts";
+import { CATEGORY_OF, SEAT_JOBS, type SeatJob } from "~/lib/modelUses.ts";
+import { modelReferences, removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
-import { JOB_WORDS, seatName } from "../places.ts";
+import { seatName } from "../places.ts";
 import { modelLabel, modelMark } from "../modelPicker.tsx";
-import { HEALTH } from "../words.ts";
+import { CATEGORY_WORDS, HEALTH } from "../words.ts";
 
 /** What one place becomes: another model, or none (Ask Crewlet turned off, or the Advisor run with no model). */
 export type Choice = { to: string } | { to: null };
@@ -139,38 +140,80 @@ function likeliest(
 }
 
 /**
- * One place's own first choice, where no model fits every place: its backup
- * where it can take the job, else the eligible model likeliest to answer,
- * else none.
+ * The models a place already runs on besides the one removed: its own backups,
+ * the seat's other jobs' models, and for a helper the other helper's. A
+ * removal only moves a place to one of these unasked.
+ */
+export type AlreadyUsed = (ref: ModelReference) => ReadonlySet<string>;
+
+/** What each place already runs on, from the engine's uses and the helpers' models. */
+export function alreadyUsedIn(
+  data: Pick<ModelsData, "models" | "assistant" | "advisor">,
+  removing: string,
+): AlreadyUsed {
+  return (ref) => {
+    const out = new Set(ref.chain.filter((k) => k !== removing));
+    if (askCrewlets(ref) && data.advisor.key) out.add(data.advisor.key);
+    else if (advisors(ref) && data.assistant.key) out.add(data.assistant.key);
+    else if (ref.at.seat)
+      for (const m of data.models)
+        for (const job of SEAT_JOBS) if (m.uses.jobs[job].includes(ref.at.seat)) out.add(m.key);
+    out.delete(removing);
+    return out;
+  };
+}
+
+/**
+ * One place's own first choice: its backup where it can take the job, else a
+ * model it already runs on that can, else none: the person chooses.
  */
 export function defaultChoice(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
-): Choice {
+  used: AlreadyUsed = () => new Set(),
+): Choice | undefined {
   const eligible = targetsFor(ref, removing, models);
   const backup = ref.chain.find((k) => k !== removing && eligible.some((m) => m.key === k));
   if (backup) return { to: backup };
-  const best = likeliest(eligible, removing, models);
-  return best ? { to: best.key } : { to: null };
+  const known = used(ref);
+  const best = likeliest(
+    eligible.filter((m) => known.has(m.key)),
+    removing,
+    models,
+  );
+  return best ? { to: best.key } : undefined;
 }
 
 /**
- * The choices a removal opens with: every place to the one model likeliest to
- * answer that fits them all, or, where none fits them all, each place's own.
+ * The choices a removal opens with. NO SILENT MOVE: every place goes to one
+ * model only where each of them already runs on it; else each place to its
+ * own backup or a model it already runs on, and the rest wait for the
+ * person's choice. Picking the healthiest model for all moved twelve seats to
+ * a model only the Advisor used.
  */
 export function firstChoices(
   refs: readonly ModelReference[],
   removing: string,
   models: readonly ModelView[],
+  used: AlreadyUsed = () => new Set(),
 ): Record<string, Choice> {
-  const one = likeliest(commonTargets(refs, removing, models), removing, models);
-  return Object.fromEntries(
-    refs.map((ref) => [refId(ref), one ? { to: one.key } : defaultChoice(ref, removing, models)]),
+  const one = likeliest(
+    commonTargets(refs, removing, models).filter((m) => refs.every((r) => used(r).has(m.key))),
+    removing,
+    models,
   );
+  const out: Record<string, Choice> = {};
+  for (const ref of refs) {
+    const choice = one ? { to: one.key } : defaultChoice(ref, removing, models, used);
+    if (choice) out[refId(ref)] = choice;
+  }
+  return out;
 }
 
-const valueOf = (c: Choice | undefined) => (!c || c.to === null ? UNSET : c.to);
+/** A choice as its picker holds it: undefined while the person has not chosen. */
+const valueOf = (c: Choice | undefined) =>
+  c === undefined ? undefined : c.to === null ? UNSET : c.to;
 const choiceOf = (value: string): Choice => (value === UNSET ? { to: null } : { to: value });
 
 /** The request every choice makes. */
@@ -236,10 +279,34 @@ export function placeNames(
       if (advisors(r)) return [refId(r), "The Advisor"];
       const name = seatName(seats, r.at.seat ?? "");
       const several = (jobs.get(r.at.seat ?? "") ?? 0) > 1 && r.at.job;
-      return [refId(r), several ? `${name}, ${JOB_WORDS[r.at.job!]}` : name];
+      return [refId(r), several ? `${name}, ${jobName(refs, r)}` : name];
     }),
   );
 }
+
+/**
+ * A seat's job in the page's own categories ("routines"), the engine's job
+ * beside it only where the seat has two of one category on the model.
+ */
+function jobName(refs: readonly ModelReference[], r: ModelReference): string {
+  const job = r.at.job as SeatJob;
+  const category = CATEGORY_OF[job];
+  const word = CATEGORY_WORDS[category].short.toLowerCase();
+  const twice =
+    refs.filter(
+      (o) => o.at.seat === r.at.seat && o.at.job && CATEGORY_OF[o.at.job as SeatJob] === category,
+    ).length > 1;
+  return twice ? `${word} (${JOB_DETAIL[job]})` : word;
+}
+
+/** What tells two jobs of one category apart, in the page's words. */
+const JOB_DETAIL: Record<SeatJob, string> = {
+  executor: "coding",
+  review: "reviewing",
+  subagent: "delegations",
+  auxiliary: "memory and summaries",
+  judge: "onboarding checks",
+};
 
 /**
  * What the removal leaves with no model, as the one thing the person confirms:
@@ -254,7 +321,10 @@ export function leftWithNoModel(
   removing: string,
   models: readonly ModelView[],
 ): string | null {
-  const left = refs.filter((r) => (choices[refId(r)]?.to ?? null) === null);
+  // A PLACE NOT YET CHOSEN is no loss to confirm: it is not left unset yet.
+  const left = refs.filter(
+    (r) => choices[refId(r)] !== undefined && choices[refId(r)]!.to === null,
+  );
   const nothingLeft = !models.some((m) => m.key !== removing);
   const seats = nothingLeft
     ? new Set(left.filter((r) => !helpers(r)).map((r) => r.at.seat ?? "")).size
@@ -315,7 +385,12 @@ type Load =
   | { kind: "failed"; message: string }
   | { kind: "ready"; etag: string; refs: ModelReference[] };
 
-type Check = { kind: "checking" } | { kind: "valid" } | { kind: "refused"; message: string };
+type Check =
+  | { kind: "checking" }
+  /** A place still waits for the person's choice: nothing to check yet. */
+  | { kind: "choosing" }
+  | { kind: "valid" }
+  | { kind: "refused"; message: string };
 
 /** The check of a removal: valid, or the engine's refusal in words. */
 export function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
@@ -361,6 +436,8 @@ export function RemoveDialog({
   const listId = useId();
   const modelsRef = useRef(models);
   modelsRef.current = models;
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
   // READ THE ENTRY, THEN ASK THE ENGINE WHAT NAMES THE MODEL: a dry run
   // with no repoints answers every reference, or is valid when none does.
@@ -380,19 +457,16 @@ export function RemoveDialog({
         });
         return;
       }
-      const answer = await removeModel(
-        key,
-        { repoint: [] },
-        { etag: read.etag, summary: "", dryRun: true },
-        abort.signal,
-      );
-      if (answer.outcome.kind !== "valid" && answer.references.length === 0) {
-        setLoad({ kind: "failed", message: refusalWords(answer.outcome, key, "check") });
+      // READ, NOT REFUSED: the list comes from a read, so opening the dialog
+      // logs no failed request; the moves are checked once chosen.
+      const listed = await modelReferences(key, abort.signal);
+      if ("refused" in listed) {
+        setLoad({ kind: "failed", message: refusalWords(listed.refused, key, "check") });
         return;
       }
-      const refs = answer.references;
+      const refs = listed.references;
       const current = modelsRef.current;
-      setChoices(firstChoices(refs, key, current));
+      setChoices(firstChoices(refs, key, current, alreadyUsedIn(dataRef.current, key)));
       // NO MODEL FITS THEM ALL: the list opens, since the one choice can only leave them unset.
       setEach(
         refs.length > 1 &&
@@ -413,8 +487,13 @@ export function RemoveDialog({
 
   // EVERY SET OF MOVES IS CHECKED AS IT CHANGES, so the button below always
   // removes what the engine just accepted.
+  const complete = refs.every((ref) => choices[refId(ref)] !== undefined);
   useEffect(() => {
     if (!etag) return;
+    if (!complete) {
+      setCheck({ kind: "choosing" });
+      return;
+    }
     const abort = new AbortController();
     setCheck({ kind: "checking" });
     removeModel(key, removal, { etag, summary: "", dryRun: true }, abort.signal).then(
@@ -426,7 +505,7 @@ export function RemoveDialog({
     return () => abort.abort();
     // The removal's content is the dependency, not its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, etag, removalKey]);
+  }, [key, etag, removalKey, complete]);
 
   async function remove() {
     if (!etag) return;
@@ -461,6 +540,7 @@ export function RemoveDialog({
   const values = refs.map((ref) => valueOf(choices[refId(ref)]));
   // ONE VALUE WHILE EVERY PLACE SHARES IT; a split made in the list reads as one.
   const shared = values.length > 0 && values.every((v) => v === values[0]) ? values[0] : undefined;
+  const unchosen = values.every((v) => v === undefined);
   const consequence = leftWithNoModel(refs, choices, key, models);
   const confirmed = consequence === null || agreed === consequence;
   const ready = load.kind === "ready" && check.kind === "valid";
@@ -524,7 +604,7 @@ export function RemoveDialog({
                   <Select
                     id={field.id}
                     value={shared}
-                    placeholder="Different for each"
+                    placeholder={unchosen ? "Choose a model" : "Different for each"}
                     options={[...modelOptions(common), LEAVE_UNSET]}
                     disabled={removing}
                     onChange={(next) =>
@@ -546,6 +626,7 @@ export function RemoveDialog({
                         <Select
                           ariaLabel={`Where ${name} moves`}
                           value={valueOf(choices[id])}
+                          placeholder="Choose a model"
                           options={optionsFor(ref, key, models)}
                           disabled={removing}
                           onChange={(next) =>

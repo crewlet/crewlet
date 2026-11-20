@@ -25,6 +25,9 @@ func (observing) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, 
 	return []advisor.Metric{{Key: "turns", Label: "Turns", Value: 12, Unit: advisor.UnitTurns}}, []string{}, nil
 }
 
+// Holds holds every premise: no finding here states one.
+func (observing) Holds(context.Context, advisor.Premise) (bool, error) { return true, nil }
+
 // THE DUTY'S RECORDS ARE ONES THE LOG KEEPS: one tick of the duty, written
 // through the domain's own writer, stores a finding about the whole company
 // (whose subject is the only one of its kind, so it has no id) beside a seat's,

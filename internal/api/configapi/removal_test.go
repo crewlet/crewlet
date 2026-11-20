@@ -112,6 +112,42 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	}
 }
 
+// WHAT NAMES A MODEL IS READ, NOT REFUSED: the list a removal's refusal
+// carries, answered 200 by a read with no write asked, so a page opening its
+// removal draws the list without a failed request in every browser's log.
+func TestAModelsReferencesAreReadWithNoWriteAsked(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+
+	res := s.do(t, http.MethodGet, "/config/llm-providers/codex-review/references", "", nil)
+	body := decode(t, res)
+	if res.Code != http.StatusOK {
+		t.Fatalf("references = %d %v, want 200", res.Code, body)
+	}
+	refs, _ := body["references"].([]any)
+	if len(refs) != 2 {
+		t.Fatalf("references = %v, want qa's reviewing and backend's delegated tasks", refs)
+	}
+	// THE SAME LIST the dry run's refusal names, reference for reference.
+	_, refused := removeModel(t, s, "codex-review", "?dry_run=true", "", nil)
+	read, _ := json.Marshal(refs)
+	said, _ := json.Marshal(refused["references"])
+	if string(read) != string(said) {
+		t.Errorf("read %s, refusal %s: want one list", read, said)
+	}
+	// A MODEL NOTHING NAMES reads an empty list, and one that is not there is 404.
+	res = s.do(t, http.MethodGet, "/config/llm-providers/default/references", "", nil)
+	if body = decode(t, res); res.Code != http.StatusOK {
+		t.Errorf("an unnamed model = %d %v", res.Code, body)
+	} else if refs, ok := body["references"].([]any); !ok || len(refs) != 0 {
+		t.Errorf("an unnamed model's references = %v, want []", body["references"])
+	}
+	if res = s.do(t, http.MethodGet, "/config/llm-providers/nope/references", "", nil); res.Code != http.StatusNotFound {
+		t.Errorf("an absent model = %d, want 404", res.Code)
+	}
+}
+
 // A REMOVAL IS DECIDED ON THE ENTRY'S OWN TAG, as an edit of it is: the one
 // its GET answers. The document's tag names the whole revision and is
 // refused, so a client that sends it (as the dashboard once did, for every

@@ -52,7 +52,23 @@ export function routeOf(method: Method, fallback: ModelSignInRoute): ModelSignIn
 export function testWords(test: TestState, current: string): string {
   if (test.kind === "idle" || test.for !== current) return "Not run";
   if (test.kind === "running") return "Running";
-  if (test.kind === "failed") return `Failed: ${test.message}`;
+  if (test.kind === "failed") return `Failed: ${personWords(test.message)}`;
   const seconds = /in ([\d.]+) s/.exec(test.verified)?.[1];
   return seconds ? `Passed in ${seconds} s` : "Passed";
+}
+
+/**
+ * A failure's sentences in a person's words, up to the first that reads as
+ * the engine's own chain ("failed: llm harness/claude-code/haiku: auth: ..."),
+ * which the row keeps for its hover. A remedy written for the person stays.
+ */
+export function personWords(message: string): string {
+  const sentences = message.trim().match(/[^.!?]+[.!?]*(\s+|$)/g) ?? [message];
+  const chain = /\bfailed:|\w+\/[\w-]+\/|\w: \w+:|·/;
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    if (chain.test(sentence)) break;
+    kept.push(sentence.trim());
+  }
+  return (kept.length > 0 ? kept : [sentences[0]!.trim()]).join(" ");
 }

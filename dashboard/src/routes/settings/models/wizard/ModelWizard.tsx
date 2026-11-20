@@ -27,11 +27,21 @@
  * a deep link into a step opens it quiet, with its field focused.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
-import { useNavigator } from "~/app/router.tsx";
+import { useNavigator, useUnloadGuard } from "~/app/router.tsx";
+import { nodeStanding } from "~/lib/nodeStanding.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
 import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
@@ -74,8 +84,11 @@ import {
   messageOf,
   nextDocument,
   pastesCredential,
+  fixable,
   stepOf,
   stepsFor,
+  hasSandbox,
+  withHostSandbox,
   storedCloudSecrets,
   suggestedVariable,
   type Harness,
@@ -365,7 +378,7 @@ export function ModelWizard({
     route: routeOf(draft.method, editing?.entry.sign_in.route ?? "none"),
     expiresAt: null,
   };
-  const local = draftProblems(draft, existing, kept);
+  const local = draftProblems(draft, existing, kept, !!original);
   const shown = [...local.filter((p) => attempted.has(stepOf(p, draft.key))), ...engineProblems];
   const listedProblems = distinctProblems(local, engineProblems, draft.key);
   const errorWhere = (match: (s: (string | number)[]) => boolean) => {
@@ -486,6 +499,57 @@ export function ModelWizard({
     return false;
   }
 
+  // THIS NODE'S HEALTH, read as it stands when the host's write is waited on.
+  const client = useContext(ClientContext);
+  // A FIRST CODING MODEL WITH NO PLACE TO RUN IT: the save sets up this host (M-002).
+  const needsHost = canExecute(draft) && !!data.doc && !hasSandbox(data.doc);
+
+  /**
+   * Sets up this engine's host to run coding, checked then written, before a
+   * first coding model's test: the engine's own remedy for a company with no
+   * `providers.sandbox`. Whether it stands now.
+   */
+  async function setUpHost(signal: AbortSignal): Promise<boolean> {
+    setCheck({ kind: "checking", what: "document" });
+    const read = await getConfig(signal);
+    if (read.kind !== "document") {
+      setCheck({ kind: "blocked", message: "No company is configured yet. Set one up first." });
+      return false;
+    }
+    if (hasSandbox(read.document)) return true;
+    const doc = withHostSandbox(read.document);
+    const dry = await writeDocument(doc, { etag: read.etag, summary: "", dryRun: true }, signal);
+    if (dry.kind !== "valid") {
+      setCheck({ kind: "blocked", message: refusalWords(dry as ConfigRefusal, "check") });
+      return false;
+    }
+    const saved = await writeDocument(doc, {
+      etag: read.etag,
+      summary: "Set up running coding on this engine's host",
+      dryRun: false,
+    });
+    if (saved.kind !== "saved") {
+      setCheck({ kind: "blocked", message: refusalWords(saved as ConfigRefusal, "save") });
+      return false;
+    }
+    // THE TEST RUNS ON THIS NODE ONCE IT RUNS THE HOST: tested the moment the
+    // write returned, the node had not yet built the box the test launches in.
+    const write = { revisionId: saved.revisionId, epoch: saved.epoch };
+    const ran = await until(() => {
+      const h = client?.store.state.health ?? null;
+      // NO HEALTH READ YET: nothing to wait on, so the test goes ahead.
+      return h ? nodeStanding(h, write).kind : "applied";
+    }, signal);
+    if (ran === "refused") {
+      setCheck({
+        kind: "blocked",
+        message: "This engine did not take up running coding on its host. Nothing else was saved.",
+      });
+      return false;
+    }
+    return true;
+  }
+
   /**
    * Review's check: the test call where a credential is pasted (or `withTest`
    * asks for one), then the whole next document's dry run. The prepared write, or null.
@@ -502,8 +566,13 @@ export function ModelWizard({
       if (
         (withTest || names.length > 0) &&
         storedFor !== signature &&
-        !(test.kind === "passed" && test.for === signature)
+        !(test.kind === "passed" && test.for === signature) &&
+        // NO PLACE TO RUN CODING YET: the engine checks a draft's test against
+        // the company as it stands, which refuses it, so the test waits for
+        // Finish and save to set up this host first; opening Review writes nothing.
+        (!needsHost || finishing.current)
       ) {
+        if (needsHost && !(await setUpHost(ctrl.signal))) return null;
         setCheck({ kind: "checking", what: "credential" });
         if (!(await runTest(ctrl.signal))) {
           setCheck({ kind: "problems" });
@@ -725,6 +794,9 @@ export function ModelWizard({
     focusWhenShown(() => findOpener(opener));
   };
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  // A RELOAD OR A CLOSED TAB ASKS FIRST while something is typed: the draft
+  // lives here alone, and a reload on its second step threw it away unasked.
+  useUnloadGuard(dirty);
   const cancel = () => (dirty ? setDiscarding(true) : close());
 
   /**
@@ -744,7 +816,8 @@ export function ModelWizard({
     }
   }
 
-  const attention = new Set(shown.map((p) => stepOf(p, draft.key)));
+  // A STEP IS FLAGGED ONLY FOR WHAT IT CAN FIX: a program missing on the host is none's.
+  const attention = new Set(shown.filter(fixable).map((p) => stepOf(p, draft.key)));
   const stepList: StepperStep[] = steps.map((id) => ({
     id,
     label: STEP_LABELS[id],
@@ -758,9 +831,15 @@ export function ModelWizard({
   // THE TEST CALL'S BUTTON AND ITS RESULT, one line on Review. It costs a few tokens.
   const testRow = signsInAfter ? (
     "After it is saved"
+  ) : needsHost && !passed && !testing ? (
+    // THE TEST NEEDS THE HOST SET UP, which Finish and save does first.
+    "Runs when you save"
   ) : (
     <span className="models-test-row">
-      <span>{storedFor === signature ? "Passed" : testWords(test, signature)}</span>
+      {/* ONE LINE, the whole of what the engine said on hover. */}
+      <span {...(test.kind === "failed" && test.for === signature ? { title: test.message } : {})}>
+        {storedFor === signature ? "Passed" : testWords(test, signature)}
+      </span>
       {!passed ? (
         <Button
           size="small"
@@ -776,12 +855,15 @@ export function ModelWizard({
   );
 
   const reviewing = step === "review";
+  // REVIEW'S PROBLEMS BLOCK ITS SAVE until a step changes the draft: pressing
+  // it again only asked the engine the same question.
+  const blocked = reviewing && check.kind === "problems" && listedProblems.length > 0;
   const finishButton = (variant: "primary" | "secondary") => (
     <Button
       variant={variant}
       onClick={() => void finishAndSave()}
       loading={finish.kind === "running"}
-      disabled={finish.kind === "running" || saving !== false}
+      disabled={finish.kind === "running" || saving !== false || blocked}
     >
       Finish and save
     </Button>
@@ -962,4 +1044,21 @@ export function ModelWizard({
       />
     </div>
   );
+}
+
+/**
+ * Waits for this node to conclude a revision: "applied" or "passed" once it
+ * runs it or a later one, "refused" where it did not, or "applying" when 30
+ * seconds pass with neither, which the caller goes on from.
+ */
+async function until(
+  standing: () => "applied" | "passed" | "refused" | "applying",
+  signal: AbortSignal,
+): Promise<"applied" | "passed" | "refused" | "applying"> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const now = standing();
+    if (now !== "applying" || Date.now() > deadline || signal.aborted) return now;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
