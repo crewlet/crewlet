@@ -63,7 +63,10 @@ ENG-4", "Restore page Runbook", with everything the request sends as its rows,
 a prune's cutoff included. A record is named by what people call it, read with
 the person's own access where its address says nothing a person reads (a page
 by its title, a chat room by its name), and in plain words ("the page") where
-that read is not theirs, never by an internal id. A change that deletes
+that read is not theirs, never by an internal id. Where the card knows what
+the record is (a seat, a team, a room, an artifact), it is drawn as itself and
+opens its page, and a record read by its address (an artifact, a task, a page)
+is listed by its own name, with its kind's icon. A change that deletes
 something, destroys it for good, removes a member such as a seat, or removes
 fields is marked destructive: the card says what goes and whether the
 configuration history can revert it. Nothing undoes a purge, erasing or pruning

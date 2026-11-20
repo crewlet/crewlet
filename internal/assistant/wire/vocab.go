@@ -4,7 +4,7 @@ import "slices"
 
 // ProtocolVersion is the version of this vocabulary every frame and every
 // request carries. See the package doc for how it moves.
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 // The bounds the dashboard holds a person to before anything is sent, so a
 // limit is met where somebody is typing rather than as a refusal after the

@@ -17,7 +17,7 @@ func inferred(t *testing.T, answer string) (wire.Card, bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, rows, ok := cards.Infer(doc, "Things")
+	spec, rows, ok := cards.Infer(doc, "Things", nil)
 	if !ok {
 		return wire.Card{}, false
 	}
@@ -151,7 +151,7 @@ func TestTheStateLogsEnvelopeIsBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, _, ok := cards.Infer(answer, "Room")
+	spec, _, ok := cards.Infer(answer, "Room", nil)
 	if !ok || spec.Entity == nil {
 		t.Fatalf("the room inferred %+v", spec)
 	}
@@ -191,7 +191,7 @@ func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, _, ok := cards.Infer(answer, "Containers")
+	spec, _, ok := cards.Infer(answer, "Containers", nil)
 	if !ok || spec.Table == nil {
 		t.Fatalf("the containers inferred %+v", spec)
 	}
@@ -216,7 +216,7 @@ func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, doc, ok := cards.Infer(series, "Tokens series")
+	spec, doc, ok := cards.Infer(series, "Tokens series", nil)
 	if !ok {
 		t.Fatal("the series inferred no card")
 	}
@@ -229,5 +229,52 @@ func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
 	if strings.Contains(string(encoded), "Entry 1") || !strings.Contains(string(encoded), "2026-10-13") ||
 		!strings.Contains(string(encoded), "Tokens: 120") {
 		t.Errorf("the series reads %s", encoded)
+	}
+}
+
+// A ROUTE THAT SERVES ONE RECORD OF A KNOWN KIND DRAWS THAT RECORD: its kind,
+// id, title and page, never a card titled by the route with the id in it.
+// Mutation: drop the known identity, or read it off the answer's root.
+func TestAKnownRecordsAnswerIsThatRecordsCard(t *testing.T) {
+	t.Parallel()
+	known := &cards.Entity{Kind: wire.ResourcePage, Root: "page", ID: "id", Title: "title",
+		Open: &cards.Open{Screen: "page", Params: map[string]string{"id": "id"}}}
+	const id = "0b5e6f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
+	draw := func(answer string) wire.Card {
+		t.Helper()
+		doc, err := cards.Decode([]byte(answer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, rows, ok := cards.Infer(doc, "Page · "+id, known)
+		if !ok {
+			t.Fatalf("%s drew no card", answer)
+		}
+		encoded, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := cards.Build(spec, encoded, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built.Card
+	}
+	card := draw(`{"page":{"id":"` + id + `","title":"Launch plan","status":"published"},` +
+		`"comments":[{"id":"c1","body":"Looks good"}]}`)
+	e := card.Entity
+	switch {
+	case card.Type != wire.CardEntity || e == nil:
+		t.Fatalf("the page drew %+v", card)
+	case e.Kind != wire.ResourcePage || e.ID != id || e.Title != "Launch plan":
+		t.Errorf("the page is %s %q titled %q", e.Kind, e.ID, e.Title)
+	case e.Open == nil || e.Open.Href != "#/doclet/pages/"+id:
+		t.Errorf("the page opens %+v", e.Open)
+	case len(e.Items) != 1:
+		t.Errorf("the page's comments are %+v", e.Items)
+	}
+	untyped := draw(`{"title":"Launch plan","status":"published"}`).Entity
+	if untyped == nil || untyped.Kind != "" {
+		t.Errorf("an answer with no id is typed: %+v", untyped)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -187,8 +188,11 @@ func value(doc any, path string) string { return cards.Text(cards.Lookup(doc, pa
 // something, in D10's order.
 type changes []wire.Change
 
-func (c *changes) fact(field, label, v string) {
-	if v != "" {
+func (c *changes) fact(field, label, v string) { c.factOf(field, label, wire.Plain(v)) }
+
+// factOf is a fact whose value names records.
+func (c *changes) factOf(field, label string, v wire.Phrase) {
+	if len(v) > 0 {
 		*c = append(*c, proposal.Fact(field, label, v))
 	}
 }
@@ -199,8 +203,18 @@ func (c *changes) move(field, label, from, to string) {
 	}
 }
 
-func (c *changes) add(field, label, to string) {
-	if to != "" {
+// moveOf is a value that names records moving from from to to.
+func (c *changes) moveOf(field, label string, from, to wire.Phrase) {
+	if row, moved := proposal.ValueOf(field, label, from, to); moved {
+		*c = append(*c, row)
+	}
+}
+
+func (c *changes) add(field, label, to string) { c.addOf(field, label, wire.Plain(to)) }
+
+// addOf is a value that names records, set where there was none.
+func (c *changes) addOf(field, label string, to wire.Phrase) {
+	if len(to) > 0 {
 		*c = append(*c, proposal.Added(field, label, to, false))
 	}
 }
@@ -230,21 +244,23 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		}
 		a := Args(args)
 		var c changes
-		c.fact("project", "Project", a.String("project"))
+		c.factOf("project", "Project", naming(wire.ResourceProject, a.String("project"),
+			a.String("project")))
 		c.add("title", "Title", a.String("title"))
-		c.add("assignee", "Assignee", chart.seatName(a.String("assignee")))
-		c.add("ask", "Asks", chart.seatName(a.String("ask")))
-		for _, f := range []struct{ arg, label string }{{"parent", "Parent"}, {"type", "Type"},
+		c.addOf("assignee", "Assignee", chart.seat(a.String("assignee")))
+		c.addOf("ask", "Asks", chart.seat(a.String("ask")))
+		c.addOf("parent", "Parent", taskRef(a.String("parent")))
+		for _, f := range []struct{ arg, label string }{{"type", "Type"},
 			{"status", "Status"}, {"priority", "Priority"}} {
 			c.add(f.arg, f.label, a.String(f.arg))
 		}
 		c.add("due", "Due", due)
 		c.add("labels", "Tags", strings.Join(a.Strings("labels"), ", "))
 		c.move("body", "Description", "", a.String("body"))
-		note := ""
+		var note wire.Phrase
 		switch {
 		case a.String("ask") != "":
-			note = chart.seatName(a.String("ask")) + " is asked the question and owes an answer."
+			note = chart.seat(a.String("ask")).Plain(" is asked the question and owes an answer.")
 		case a.String("assignee") != "":
 			note = chart.handover(ctx, read, a.String("assignee"), "the new task")
 		}
@@ -279,7 +295,7 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 				"was prepared against version %d; read it again", ErrStale, key, version, want)
 		}
 		var c changes
-		c.fact("task", "Task", key+" "+value(doc, "task.title"))
+		c.factOf("task", "Task", taskLine(key, value(doc, "task.title")))
 		for _, f := range []struct{ arg, path, label string }{{"title", "task.title", "Title"},
 			{"status", "task.status", "Status"}, {"priority", "task.priority", "Priority"},
 			{"body", "task.body", "Description"}} {
@@ -288,8 +304,8 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 			}
 		}
 		if _, given := args["assignee"]; given {
-			c.move("assignee", "Assignee", chart.seatName(value(doc, "task.assignee")),
-				chart.seatName(a.String("assignee")))
+			c.moveOf("assignee", "Assignee", chart.seat(value(doc, "task.assignee")),
+				chart.seat(a.String("assignee")))
 		}
 		if _, given := args["due"]; given {
 			c.move("due", "Due", chart.dueOf(value(doc, "task.due_at"),
@@ -303,9 +319,9 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 				ErrInvalidArguments, key)
 		}
 		c.fact("reason", "Why", a.String("reason"))
-		note := ""
+		var note wire.Phrase
 		if to, given := args["assignee"]; given && to != value(doc, "task.assignee") {
-			note = "Nobody is assigned to it any more."
+			note = wire.Plain("Nobody is assigned to it any more.")
 			if a.String("assignee") != "" {
 				note = chart.handover(ctx, read, a.String("assignee"), "the work")
 			}
@@ -323,6 +339,8 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 type company struct {
 	zone  *time.Location
 	seats map[string]seatShown
+	// units are the chart's teams' names, by id.
+	units map[string]string
 }
 
 // seatShown is how a preview names one seat.
@@ -338,8 +356,11 @@ func companyOf(ctx context.Context, read proposal.Read) (company, error) {
 	if err != nil {
 		return company{}, fmt.Errorf("%w: the company's clock: %w", ErrPreviewRead, err)
 	}
-	out := company{zone: zone, seats: map[string]seatShown{}}
+	out := company{zone: zone, seats: map[string]seatShown{}, units: map[string]string{}}
 	walkUnits(doc, func(node any) {
+		if id := value(node, "id"); id != "" {
+			out.units[id] = value(node, "name")
+		}
 		roles, _ := cards.Lookup(node, "roles").([]any)
 		for _, r := range roles {
 			if handle := value(r, "handle"); handle != "" {
@@ -386,15 +407,15 @@ func (c company) entries() []Entry {
 //
 // THE PROMISE IS READ, NOT ASSUMED: "starts on the work once this is
 // approved" was once printed for a seat that could not onboard at all.
-func (c company) handover(ctx context.Context, read proposal.Read, handle, what string) string {
-	name := c.seatName(handle)
+func (c company) handover(ctx context.Context, read proposal.Read, handle, what string) wire.Phrase {
+	name := c.seat(handle)
 	seat, held := c.seats[handle]
-	assigned := name + " is assigned " + what + " once this is approved."
+	assigned := name.Plain(" is assigned " + what + " once this is approved.")
 	switch {
 	case !held:
 		return assigned
 	case seat.kind == "human":
-		return name + " is notified of " + what + " once this is approved."
+		return name.Plain(" is notified of " + what + " once this is approved.")
 	}
 	doc, err := readGet(ctx, read, "GET /agents/{id}", map[string]string{"id": handle}, seatAlone)
 	if err != nil {
@@ -403,16 +424,16 @@ func (c company) handover(ctx context.Context, read proposal.Read, handle, what 
 	switch value(doc, "live.activity") {
 	case "stopped":
 		if wait, known := stoppedWaits[value(doc, "live.stopped_reason")]; known {
-			return assigned + " " + name + wait
+			return assigned.Plain(" ").Then(name).Plain(wait)
 		}
-		return assigned + " " + name + " cannot take work right now, so it does not start " +
-			"until it can."
+		return assigned.Plain(" ").Then(name).Plain(" cannot take work right now, so it " +
+			"does not start until it can.")
 	case "working", "needs", "idle":
 		if value(doc, "live.last_turn.outcome") == "failed" {
-			return assigned + " Its last turn failed, so check it before relying on it " +
-				"to start."
+			return assigned.Plain(" Its last turn failed, so check it before relying on it " +
+				"to start.")
 		}
-		return assigned + " It picks the work up on its next turn."
+		return assigned.Plain(" It picks the work up on its next turn.")
 	}
 	return assigned
 }
@@ -459,12 +480,12 @@ func (c company) resolveDue(args map[string]any, now time.Time) (map[string]any,
 }
 
 // valueShown is a page action's value as a person reads it: a seat's handle
-// by the seat's name, and any other value as it is.
-func (c company) valueShown(v string) string {
+// as the seat, and any other value as it is.
+func (c company) valueShown(v string) wire.Phrase {
 	if _, held := c.seats[v]; held {
-		return c.seatName(v)
+		return c.seat(v)
 	}
-	return v
+	return wire.Plain(v)
 }
 
 // dueOf shows a task's stored due date, an RFC 3339 instant, or "" for none.
@@ -498,13 +519,45 @@ func commentPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("task", "Task", value(doc, "task.key")+" "+value(doc, "task.title"))
-		c.fact("reply_to", "Replying to", a.String("reply_to"))
+		c.factOf("task", "Task", taskLine(value(doc, "task.key"), value(doc, "task.title")))
+		if id := a.String("reply_to"); id != "" {
+			replied, err := repliedTo(ctx, read, a.String("item"), id)
+			if err != nil {
+				return proposal.Preview{}, err
+			}
+			c.factOf("reply_to", "Replying to", replied)
+		}
 		c.move("body", "Comment", "", a.String("body"))
 		return proposal.Preview{Title: "Comment on task", Target: value(doc, "task.key"),
-			Note:         "Everyone following the task is told about the comment.",
+			Note:         wire.Plain("Everyone following the task is told about the comment."),
 			ApproveLabel: "Approve and post", Changes: c.rows(), Request: req}, nil
 	}
+}
+
+// repliedTo is the comment id on item as a reply's card names it: its author
+// and the first words it says; its id where the thread no longer holds it.
+func repliedTo(ctx context.Context, read proposal.Read, item, id string) (wire.Phrase, error) {
+	var found any
+	err := walkThread(ctx, read, item, url.Values{"thread": {id}, "with_root": {"true"}},
+		func(_ question, comments []any) bool {
+			for _, c := range comments {
+				if value(c, "id") == id {
+					found = c
+					return true
+				}
+			}
+			return false
+		})
+	if err != nil || found == nil {
+		return wire.Plain(id), err
+	}
+	chart, err := companyOf(ctx, read)
+	if err != nil {
+		return nil, err
+	}
+	words := strings.Join(strings.Fields(value(found, "body")), " ")
+	return chart.seat(value(found, "author")).
+		Plain(": " + textcut.Within(words, cardLineBytes)), nil
 }
 
 // answerPreview previews an answer to an open question put to the person, bound to
@@ -538,7 +591,7 @@ func answerPreview(t Tool) proposal.Previewer {
 			return p, err
 		}
 		var c changes
-		c.fact("task", "Task", q.key+" "+q.title)
+		c.factOf("task", "Task", taskLine(q.key, q.title))
 		c.fact("question", "Question", orDefault(value(q.comment, "decision.question"),
 			value(q.comment, "body")))
 		if choice := a.String("choice"); choice != "" {
@@ -551,7 +604,7 @@ func answerPreview(t Tool) proposal.Previewer {
 		}
 		c.move("body", "Comment", "", a.String("body"))
 		return proposal.Preview{Title: "Answer question", Target: q.key,
-			Note:         "Whoever asked is woken with the answer and goes on from it.",
+			Note:         wire.Plain("Whoever asked is woken with the answer and goes on from it."),
 			ApproveLabel: "Approve and answer", Changes: c.rows(),
 			SourceRevision: q.bound(), Request: req}, nil
 	}
@@ -774,10 +827,25 @@ func prioritiesPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		chart, err := companyOf(ctx, read)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		var c changes
-		c.fact("whose", "Whose list", handle)
-		c.move("priorities", "Order", strings.ReplaceAll(value(person, "priorities"), ", ", "\n"),
-			strings.Join(a.Strings("items"), "\n"))
+		c.factOf("whose", "Whose list", chart.seat(handle))
+		var held []wire.Phrase
+		for _, key := range strings.Split(value(person, "priorities"), ", ") {
+			if key != "" {
+				held = append(held, taskRef(key))
+			}
+		}
+		var next []wire.Phrase
+		for _, key := range a.Strings("items") {
+			next = append(next, taskRef(key))
+		}
+		if row, moved := proposal.ListOf("priorities", "Order", held, next); moved {
+			c = append(c, row)
+		}
 		if len(c) < 2 {
 			return proposal.Preview{}, fmt.Errorf("%w: the order is the one %s already has",
 				ErrInvalidArguments, handle)
@@ -839,12 +907,12 @@ const (
 // noticeNames reads the person's inbox through the grant until every id in
 // ids is found or the inbox ends, answering each found notice's name by its
 // record id.
-func noticeNames(ctx context.Context, read proposal.Read, ids []string) (map[string]string, error) {
+func noticeNames(ctx context.Context, read proposal.Read, ids []string) (map[string]wire.Phrase, error) {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
 	}
-	out := map[string]string{}
+	out := map[string]wire.Phrase{}
 	cursor := ""
 	for range inboxPages {
 		q := url.Values{"limit": {strconv.Itoa(inboxPage)}}
@@ -868,25 +936,31 @@ func noticeNames(ctx context.Context, read proposal.Read, ids []string) (map[str
 	return out, nil
 }
 
-// noticeName is how a card names one notice: what it is about and what it
-// says, as the inbox shows it.
-func noticeName(n any) string {
-	about := orDefault(value(n, "subject_key"), value(n, "task"))
-	says := orDefault(value(n, "excerpt"), value(n, "reason"))
-	name := strings.TrimSpace(about + ": " + says)
-	switch {
-	case about == "":
-		name = says
-	case says == "":
-		name = about
+// noticeName is how a card names one notice: the task it is about, where it
+// names one, and what it says, as the inbox shows it.
+func noticeName(n any) wire.Phrase {
+	key, task := value(n, "subject_key"), value(n, "task")
+	if value(n, "subject_key_collision") == "true" {
+		key = ""
 	}
-	return textcut.Within(orDefault(name, "A notice"), cardLineBytes)
+	about := wire.Plain(key)
+	if task != "" {
+		about = naming(wire.ResourceTask, task, key)
+	}
+	says := textcut.Within(orDefault(value(n, "excerpt"), value(n, "reason")), cardLineBytes)
+	switch {
+	case len(about) == 0:
+		return wire.Plain(orDefault(says, "A notice"))
+	case says == "":
+		return about
+	}
+	return about.Plain(": " + says)
 }
 
 // notices adds one row per notice of ids, named where the inbox read found it
 // and said to be missing where it did not, then how many more past
 // [listNamed].
-func (c *changes) notices(field, label string, ids []string, names map[string]string) {
+func (c *changes) notices(field, label string, ids []string, names map[string]wire.Phrase) {
 	for i, id := range ids {
 		if i == listNamed {
 			c.fact(field+".more", label, fmt.Sprintf("And %d more", len(ids)-listNamed))
@@ -894,9 +968,9 @@ func (c *changes) notices(field, label string, ids []string, names map[string]st
 		}
 		name, found := names[id]
 		if !found {
-			name = "A notice not in your inbox (" + id + ")"
+			name = wire.Plain("A notice not in your inbox (" + id + ")")
 		}
-		c.fact(fmt.Sprintf("%s.%d", field, i+1), label, name)
+		c.factOf(fmt.Sprintf("%s.%d", field, i+1), label, name)
 	}
 }
 
@@ -914,7 +988,8 @@ func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 				return proposal.Preview{}, err
 			}
 			var c changes
-			c.fact("seat", "Seat", value(doc, "role")+" ("+a.String("handle")+")")
+			c.factOf("seat", "Seat", naming(wire.ResourceSeat, a.String("handle"),
+				value(doc, "role")))
 			now := orDefault(value(doc, "live.activity"), "unknown")
 			title, label, to, note := "Resume agent", "Approve and resume", "resumed",
 				"The seat takes its queued work up again."
@@ -926,9 +1001,9 @@ func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 						"until somebody resumes it."
 				}
 			}
-			c = append(c, proposal.Changed("state", "State", now, to))
+			c = append(c, proposal.Changed("state", "State", wire.Plain(now), wire.Plain(to)))
 			c.fact("reason", "Why", a.String("reason"))
-			return proposal.Preview{Title: title, Target: a.String("handle"), Note: note,
+			return proposal.Preview{Title: title, Target: a.String("handle"), Note: wire.Plain(note),
 				ApproveLabel: label, Changes: c.rows(), Request: req}, nil
 		}
 	}
@@ -942,12 +1017,12 @@ func steerPreview(t Tool) proposal.Previewer {
 		}
 		a := Args(args)
 		var c changes
-		c.fact("turn", "Turn", a.String("turn_id"))
+		c.factOf("turn", "Turn", naming(wire.ResourceTurn, a.String("turn_id"), a.String("turn_id")))
 		c.move("note", "Note", "", a.String("note"))
 		return proposal.Preview{Title: "Steer turn", Target: a.String("turn_id"),
-			Note: "The turn reads the note at its next step — a round of the engine's own loop, " +
-				"or a step of its executor in its box — and keeps to it for the rest of the turn; " +
-				"an executor waiting on a person's answer reads it once that is answered.",
+			Note: wire.Plain("The turn reads the note at its next step (a round of the engine's " +
+				"own loop, or a step of its executor in its box) and keeps to it for the rest of " +
+				"the turn; an executor waiting on a person's answer reads it once that is answered."),
 			ApproveLabel: "Approve and send", Changes: c.rows(), Request: req}, nil
 	}
 }
@@ -982,9 +1057,16 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 				"another question since; read it again and answer that one", ErrInvalidArguments,
 				a.String("turn_id"))
 		}
+		chart, err := companyOf(ctx, read)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		work := wire.Plain("no task")
+		if key := value(run, "work_key"); key != "" {
+			work = taskRef(key)
+		}
 		var c changes
-		c.fact("run", "Executor", value(run, "agent_handle")+" on "+
-			orDefault(value(run, "work_key"), "no task"))
+		c.factOf("run", "Executor", chart.seat(value(run, "agent_handle")).Plain(" on ").Then(work))
 		c.fact("question", "Question", value(run, "question"))
 		if choice := a.String("choice"); choice != "" {
 			label := ""
@@ -1002,7 +1084,7 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 		}
 		c.move("answer", "Answer", "", a.String("answer"))
 		return proposal.Preview{Title: "Answer executor", Target: a.String("turn_id"),
-			Note:         "The executor carries on with the answer.",
+			Note:         wire.Plain("The executor carries on with the answer."),
 			ApproveLabel: "Approve and answer", Changes: c.rows(), Request: req}, nil
 	}
 }
@@ -1019,10 +1101,19 @@ func createPagePreview(t Tool) proposal.Previewer {
 		}
 		a := Args(args)
 		var c changes
-		c.fact("container", "Space", a.String("container"))
+		c.factOf("container", "Space", naming(wire.ResourceContainer, a.String("container"),
+			a.String("container")))
 		c.add("title", "Title", a.String("title"))
 		c.add("status", "Status", a.String("status"))
-		c.add("parent", "Under", a.String("parent"))
+		if parent := a.String("parent"); parent != "" {
+			doc, err := readGet(ctx, read, "GET /doclet/pages/{id}",
+				map[string]string{"id": parent}, nil)
+			if err != nil {
+				return proposal.Preview{}, err
+			}
+			c.addOf("parent", "Under", naming(wire.ResourcePage, value(doc, "page.id"),
+				value(doc, "page.title")))
+		}
 		c.add("labels", "Labels", strings.Join(a.Strings("labels"), ", "))
 		c.move("body", "Page", "", a.String("body"))
 		return proposal.Preview{Title: "Create page", Target: a.String("title"),
@@ -1048,7 +1139,7 @@ func editPagePreview(t Tool) proposal.Previewer {
 				"was prepared against version %d; read it again", ErrStale, version, base)
 		}
 		var c changes
-		c.fact("page", "Page", value(doc, "page.title"))
+		c.factOf("page", "Page", naming(wire.ResourcePage, id, value(doc, "page.title")))
 		if _, given := args["title"]; given {
 			c.move("title", "Title", value(doc, "page.title"), a.String("title"))
 		}
@@ -1077,22 +1168,27 @@ func sharePreview(share bool) func(t Tool) proposal.Previewer {
 			if err != nil {
 				return proposal.Preview{}, err
 			}
+			chart, err := companyOf(ctx, read)
+			if err != nil {
+				return proposal.Preview{}, err
+			}
 			var c changes
-			c.fact("artifact", "Artifact", value(doc, "title"))
+			c.factOf("artifact", "Artifact", artifactRef(doc))
 			p := proposal.Preview{Target: value(doc, "title"), Request: req,
 				SourceRevision: proposal.Revision{Kind: proposal.RevisionArtifact,
 					ID: value(doc, "id"), Version: value(doc, "head_number")}.String()}
 			if share {
-				who := audienceLabel(a.String("to"))
-				c.add("audience", "Shared with", who+" as "+a.String("role"))
-				p.Title, p.ApproveLabel, p.Audience = "Share artifact", "Approve and share", []string{who}
-				p.Note = who + " can open it."
+				who := chart.audience(a.String("to"))
+				c.addOf("audience", "Shared with", who.Plain(" as "+a.String("role")))
+				p.Title, p.ApproveLabel = "Share artifact", "Approve and share"
+				p.Audience, p.Note = []wire.Phrase{who}, who.Plain(" can open it.")
 				p.StepUp = t.StepUp != nil && t.StepUp(a)
 			} else {
-				who := audienceLabel(a.String("from"))
+				who := chart.audience(a.String("from"))
 				c = append(c, proposal.Removed("audience", "Shared with", who))
-				p.Title, p.ApproveLabel, p.Audience = "Withdraw share", "Approve and withdraw", []string{who}
-				p.Note = who + " can no longer open it, unless another share reaches them."
+				p.Title, p.ApproveLabel = "Withdraw share", "Approve and withdraw"
+				p.Audience = []wire.Phrase{who}
+				p.Note = who.Plain(" can no longer open it, unless another share reaches them.")
 			}
 			p.Changes = c.rows()
 			return p, nil
@@ -1100,15 +1196,19 @@ func sharePreview(share bool) func(t Tool) proposal.Previewer {
 	}
 }
 
-// audienceLabel names an audience as the card shows it.
-func audienceLabel(s string) string {
+// audience is a share's audience as the card names it: a seat or a team by
+// its name on the chart, or the whole company.
+func (c company) audience(s string) wire.Phrase {
+	kind, id, _ := strings.Cut(s, ":")
 	switch {
-	case s == "company":
-		return "The whole company"
-	case strings.HasPrefix(s, "unit:"):
-		return "The " + strings.TrimPrefix(s, "unit:") + " team and everybody under it"
+	case s == string(artifacts.AudienceCompany):
+		return wire.Plain("The whole company")
+	case kind == string(artifacts.AudienceUnit):
+		return wire.Plain("The ").Then(c.unit(id)).Plain(" team and everybody under it")
+	case kind == string(artifacts.AudienceSeat):
+		return c.seat(id)
 	}
-	return strings.TrimPrefix(s, "seat:")
+	return c.seat(s)
 }
 
 func pageActionPreview(t Tool) proposal.Previewer {
@@ -1140,9 +1240,12 @@ func pageActionPreview(t Tool) proposal.Previewer {
 			// declared them (assistant's draftRows).
 			row := proposal.Fact(k, cards.FieldLabel(k), chart.valueShown(draftValueShown(payload[k])))
 			if items, ok := plainItems(payload[k]); ok {
-				row.Items = items
+				row.Items = make([]wire.Phrase, len(items))
+				for i, item := range items {
+					row.Items[i] = chart.valueShown(item)
+				}
 			}
-			if row.To != "" {
+			if len(row.To) > 0 {
 				c = append(c, row)
 			}
 		}

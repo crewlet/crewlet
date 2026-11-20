@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -118,11 +119,21 @@ func TestAnAgentsAccessIsChangedAsItsTabChangesIt(t *testing.T) {
 		t.Errorf("the draft is %+v, want the SRE on at Datadog's admin role id", got)
 	}
 	got := rows(p)
-	if row := got["level"]; row.From != "Datadog Standard Role" || row.To != "Datadog Admin Role" {
+	if row := got["level"]; row.From.Text() != "Datadog Standard Role" ||
+		row.To.Text() != "Datadog Admin Role" {
 		t.Errorf("the role row is %+v", row)
 	}
-	if got["plan.1"].To == "" || got["raise"].To == "" {
+	if got["plan.1"].To.Text() == "" || got["raise"].To.Text() == "" {
 		t.Errorf("the card does not show the plan and the raise: %v", got)
+	}
+	// THE AGENT IS A RECORD, by its name, on its row and in the raise's sentence.
+	agent := soleRef(t, got["agent"].To)
+	if agent.Kind != wire.ResourceSeat || agent.ID != "sre" || agent.Name != "SRE" ||
+		agent.Open == nil || agent.Open.Screen != "seat" {
+		t.Errorf("the card names the agent as %+v", agent)
+	}
+	if r := soleRef(t, got["raise"].To); r.Kind != agent.Kind || r.ID != agent.ID || r.Name != agent.Name {
+		t.Errorf("the raise names %+v, want the agent", r)
 	}
 	r, err := proposal.ParseRevision(p.SourceRevision)
 	if err != nil || r.Kind != proposal.RevisionEntity ||

@@ -152,7 +152,7 @@ func fit(card wire.Card) (wire.Card, error) {
 	p.Changes = append([]wire.Change(nil), p.Changes...)
 	for i := range p.Changes {
 		if p.Changes[i].Kind == wire.ChangeText {
-			p.Changes[i].From, p.Changes[i].To = "", ""
+			p.Changes[i].From, p.Changes[i].To = nil, nil
 		}
 	}
 	card.Proposal = &p

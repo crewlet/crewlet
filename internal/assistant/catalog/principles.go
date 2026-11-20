@@ -149,8 +149,8 @@ func principlesPreview(t Tool) proposal.Previewer {
 		recency, _ := authz.RecencyOf(authz.Action(t.Act))
 		return proposal.Preview{Title: "Update the company's principles",
 			Target: "Company principles",
-			Note: "Every agent works from the principles, so each one follows the new " +
-				"wording from its next turn.",
+			Note: wire.Plain("Every agent works from the principles, so each one follows the new " +
+				"wording from its next turn."),
 			ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 			// THE ROW'S OWN STEP-UP, shown on the card: the approval asks it
 			// either way (authz.RecencyOf), and the card says so beforehand.
@@ -204,9 +204,9 @@ func textChange(field, label, was, is string) []wire.Change {
 	case was == is:
 		return nil
 	case was == "":
-		return []wire.Change{proposal.Added(field, label, is, false)}
+		return []wire.Change{proposal.Added(field, label, wire.Plain(is), false)}
 	case is == "":
-		return []wire.Change{proposal.Removed(field, label, was)}
+		return []wire.Change{proposal.Removed(field, label, wire.Plain(was))}
 	}
 	return []wire.Change{proposal.Text(field, label, was, is)}
 }
@@ -246,11 +246,11 @@ func policyChanges(was, is []string) []wire.Change {
 			out = append(out, proposal.Text(field(j), label(j), was[i], is[j]))
 			i, j = i+1, j+1
 		case j < m && (i == n || lcs[i][j+1] >= lcs[i+1][j]):
-			out = append(out, proposal.Added(field(j), label(j), is[j], false))
+			out = append(out, proposal.Added(field(j), label(j), wire.Plain(is[j]), false))
 			j++
 		default:
 			out = append(out, proposal.Removed("policies.was."+strconv.Itoa(i+1),
-				label(i), was[i]))
+				label(i), wire.Plain(was[i])))
 			i++
 		}
 	}
