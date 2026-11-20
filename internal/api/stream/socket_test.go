@@ -1005,7 +1005,7 @@ func TestAQueryThatPanicsIsAnsweredAsFailedAndTheSocketGoesOn(t *testing.T) {
 	var mu sync.Mutex
 	var heard []panics.Scope
 	defer panics.Observe(func(p *panics.Panic) {
-		if p.Value == defect {
+		if err, ok := p.Value.(error); ok && errors.Is(err, defect) {
 			mu.Lock()
 			heard = append(heard, p.Scope)
 			mu.Unlock()
