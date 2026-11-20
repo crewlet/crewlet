@@ -107,7 +107,8 @@ type saveMemo struct {
 	// mark is the job's stream length read at the start of this node's last
 	// landed save of the job; -1 for none.
 	mark int64
-	// counted is what the job's last save to reach its charge was counted at.
+	// counted is what the job's last save to reach its charge, or to be
+	// paced after its pack, was counted at.
 	counted int64
 	// running is the task under way on this node, nil for none.
 	running *saveRun
@@ -178,8 +179,8 @@ type saveJob struct {
 	// last is the last attempt's start (or its first-sight estimate), which
 	// pacing counts from.
 	last time.Time
-	// counted is what this launch's last save to reach its charge was
-	// counted at, pacing's expected size before any save of it lands.
+	// counted is what this launch's last save to reach its charge, or to be
+	// paced after its pack, was counted at: what pacing expects ([expectedSave]).
 	counted int64
 	// taken, where set, is closed once the task has passed its spool and
 	// joined the keeps, or ended before.
@@ -201,7 +202,8 @@ type saveOutcome struct {
 	// streamed is the job's stream length read before the pack; -1 where
 	// it could not be read.
 	streamed int64
-	// counted is what the save was counted at, where it reached its charge.
+	// counted is what the save was counted at, where it reached its charge
+	// or was paced after its pack.
 	counted int64
 	// pacedUntil is where a paced save is due again.
 	pacedUntil time.Time
@@ -356,8 +358,9 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 		}
 		return end(saveNotYet, err.Error())
 	}
+	expected := expectedSave(row, job)
 	if job.drainEnd.IsZero() {
-		if until, paced := paceSave(row, job, room, c.now()); paced {
+		if until, paced := paceAt(expected, job, room, c.now()); paced {
 			out.pacedUntil = until
 			return end(savePaced, fmt.Sprintf("the seat's saves leave %d bytes of its budget", room))
 		}
@@ -403,6 +406,19 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 		_ = saver.ReleaseSave(rel, box, archive.Path)
 	}
 	counted := countedFor(archive.Size)
+	// PACED AT WHAT THE PACK MEASURED, before its charge, where nothing told
+	// the session's size before it ([expectedSave]): released uncharged, its
+	// size kept so the next is paced before its pack. Never again past an
+	// estimate, which a growing session would outrun pack after pack; a drain
+	// saves what it has.
+	if job.drainEnd.IsZero() && expected <= 0 {
+		if until, paced := paceAt(counted, job, room, c.now()); paced {
+			release()
+			out.counted, out.pacedUntil = counted, until
+			return end(savePaced, fmt.Sprintf("the seat's saves leave %d bytes of its budget, and the "+
+				"session packed at %d", room, counted))
+		}
+	}
 	spooling.shrinkTo(counted)
 	entry := savedEntry{ID: uuid.New(), Until: c.now().UTC().Add(saveLedgerHold), Bytes: counted}
 	if refused, refusal := c.chargeSave(ctx, row.AgentHandle, entry, policy.SeatBudget); refused != "" {
@@ -488,19 +504,45 @@ func (c *Coordinator) saveHanded(ctx context.Context, row PendingRun) string {
 	return ""
 }
 
-// paceSave is rule 8's pacing of a periodic save: held back while the seat's
-// room, spent at the session's expected size once per hold, would not last
-// the interval, until min(last + paced, now + [saveRetryCeiling]). The
-// expected size is this launch's newest landed save's, else what its last
-// save was counted at; another launch's is never read.
-func paceSave(row PendingRun, job saveJob, room int64, now time.Time) (time.Time, bool) {
-	ceiling := now.Add(saveRetryCeiling)
-	if room <= 0 {
-		return ceiling, true
-	}
+// expectedSave is the size rule 8 paces a launch's next save at before its
+// pack: this launch's newest landed save's, else what this node last counted
+// of it, else the kept capture the launch continued ([continuedKept]), the
+// one other launch's capture it reads. 0 where none says, and the pack's own
+// size paces it.
+func expectedSave(row PendingRun, job saveJob) int64 {
 	expected := job.counted
 	if kept := launchKept(row); kept != nil {
 		expected = kept.ObjectSize
+	}
+	if kept := continuedKept(row); expected <= 0 && kept != nil {
+		expected = kept.ObjectSize
+	}
+	return expected
+}
+
+// continuedKept is run's kept capture where its launch continued it
+// ([LaunchRecord.Continued]): that launch and save point. Nil otherwise: the
+// box's own copy and the conversation's base are sized by no row, so their
+// first save is paced after its pack.
+func continuedKept(run PendingRun) *SessionCapture {
+	p, kept := run.Launch.Continued, run.Kept
+	if p == nil || p.LaunchSeq <= 0 || kept == nil || kept.LaunchSeq != p.LaunchSeq {
+		return nil
+	}
+	if at, stated := kept.SavePoint(); !stated || at != p.Through {
+		return nil
+	}
+	return kept
+}
+
+// paceAt is rule 8's pacing of a periodic save of a session of expected
+// bytes: held back while the seat's room, spent at that size once per hold,
+// would not last the interval, until min(last + paced, now +
+// [saveRetryCeiling]).
+func paceAt(expected int64, job saveJob, room int64, now time.Time) (time.Time, bool) {
+	ceiling := now.Add(saveRetryCeiling)
+	if room <= 0 {
+		return ceiling, true
 	}
 	if expected <= 0 {
 		return time.Time{}, false

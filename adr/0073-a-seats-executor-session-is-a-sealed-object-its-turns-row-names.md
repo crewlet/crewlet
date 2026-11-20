@@ -4210,8 +4210,8 @@ after a restart or an `e2b` duty's handover, the last save is taken as the
 later of the launch's start and that launch's newest capture, instants other
 machines stamped, clamped into the last interval: as the amendment on a
 capture's life says, an age read across machines decides only a wait one
-interval bounds, so the first save comes within an interval of first sight
-whatever any clock says.
+interval bounds, so the first save falls due within an interval of first
+sight whatever any clock says, and is paced as any other.
 
 THE SLOTS HOLD THROUGH THE KEEP: a save gives its slot back only once its
 upload has ended, so four bound a node's packs, scrubs, spools (about 132 MiB
@@ -4255,12 +4255,22 @@ and nothing waits between the instant and the reservation that a capture's
 life does not count. A spool that seals past what was counted is refused
 before its keep, so a landed save is never under-counted. Beyond the interval
 a periodic save is PACED: spaced by the hold times this launch's last save's
-size over the room left, so at the defaults a session past about 0.37 MiB
-sealed is saved about every 27 minutes per sealed MiB, doubling once the seat
-has saved past the hold and its room settles near half; a session growing
-1.2 to 1.8 MiB sealed an hour is saved every 0.54 to 0.81 times its age, 1.1
-to 1.6 in a busy seat. Releasing a superseded save's object without waiting
-out the collector is the root fix (crewlet/crewlet#1469).
+size over the room left, or before its first the size of the kept capture the
+launch continued (`LaunchRecord.Continued`), so at the defaults a session past
+about 0.37 MiB sealed is saved about every 27 minutes per sealed MiB, doubling
+once the seat has saved past the hold and its room settles near half; a
+session growing 1.2 to 1.8 MiB sealed an hour is saved every 0.54 to 0.81
+times its age, 1.1 to 1.6 in a busy seat. Paced by nothing, a relaunch
+continuing a session at the bound would pack and charge it an interval in and
+hold most of the seat's allowance for the hold; paced by the capture it
+continued, a 2 MiB one is first saved about 54 minutes in, and a crash before
+then continues the kept copy. A first save no row sizes (the box's own copy,
+the conversation's base, a fresh session) is paced again at its pack's size
+before its charge: released uncharged where its pace has not come, its size
+kept so the next is paced unpacked. Never again past an estimate, which a
+growing session would outrun pack after pack. Releasing a superseded save's
+object without waiting out the collector is the root fix
+(crewlet/crewlet#1469).
 
 A DRAINING NODE SAVES EACH DIRECT JOB IT LAUNCHED whose session moved
 (`Coordinator.SaveHosted`, from `Engine.Drain`), beside its wait for turns,
