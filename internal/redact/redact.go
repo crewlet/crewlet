@@ -6030,8 +6030,8 @@ func inBase64(c byte) bool {
 //     which the next line holding a key of its own leaves it — since held
 //     there, each line of a run of `password:"` held the one above it and a
 //     live view showed nothing of the run while it went on; unless the
-//     line that decided it is held for a key, by the three above, since
-//     what is written next may read it as a key's, or as no longer one;
+//     line that decided it is held for a key, by the three above or the
+//     next, since what is written next may read it otherwise;
 //   - a password key whose value, as the keys are read beside it — in the
 //     text with no key's block replaced ([claims]) — a line at or after the
 //     boundary decides, as the fourth holds the value the rule reads: the
@@ -6041,10 +6041,10 @@ func inBase64(c byte) bool {
 //     (`-----END RSA PRIVATE KEY-----|passwd:`): there the rule reads a
 //     marker, which can join the value's line to the END's or take the
 //     gutter the END's line opened with, so the claim keeps out of the block
-//     a value the rule does not take.
+//     a value the rule does not take, and holds the block until it decides
+//     whether to cut it.
 //
-// What follows the last line break is never settled: a credential is matched
-// by its whole shape, and half a token is a line its other half changes.
+// Nothing past the last line break settles: a credential's shape is whole.
 //
 // READ IN ANY PIECES, IT ANSWERS WHAT IT ANSWERS WHOLE ([settling]): nothing
 // written after a settled point reads back across it, so no reader holds
@@ -6153,8 +6153,9 @@ func settle(text string) (settled, read int) {
 	// rewritable is where the lines the keys hold begin: what is written
 	// next may still read any of them as a key's, or as no longer one — a
 	// one-line key an END below reads back across into a block, a block an
-	// END closes — and a password's value decided on such a line may be
-	// decided again once it reads otherwise ([passwordInput]).
+	// END closes, a block a password's claim may yet cut apart (below) —
+	// and a password's value decided on such a line may be decided again
+	// once it reads otherwise ([passwordInput]).
 	rewritable := settled
 	written := spans
 	if c != nil {
@@ -6185,15 +6186,20 @@ func settle(text string) (settled, read int) {
 		// A block that reaches the line of a password's key before the
 		// key is written apart from that line's gutter by the line the
 		// value is read on ([claims.apart]): while that is undecided, so
-		// is the block.
+		// is the block, and its lines are rewritable: once it is cut, a
+		// key line above whose value the rule read no further than the
+		// block reads the gutter the cut leaves as its value.
 		for _, h := range claimHolds {
 			if h.decided < settled {
 				continue
 			}
 			ls := lineStart(whole, h.start)
 			for _, s := range spans {
-				if s[1] > ls && s[1] <= h.start && settled > lineStart(whole, s[0]) {
-					settled, moved = lineStart(whole, s[0]), true
+				if s[1] > ls && s[1] <= h.start {
+					rewritable = min(rewritable, lineStart(whole, s[0]))
+					if settled > lineStart(whole, s[0]) {
+						settled, moved = lineStart(whole, s[0]), true
+					}
 				}
 			}
 		}

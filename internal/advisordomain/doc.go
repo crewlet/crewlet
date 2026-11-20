@@ -9,7 +9,7 @@
 // The whole company, with history, readable from any node: the Advisor's page
 // is read from whichever node a person reaches, its duty writes from the one
 // node holding its lease, people's decisions (apply, snooze, dismiss, reopen,
-// Run now) are written from any node, and the history must outlive any one
+// Run) are written from any node, and the history must outlive any one
 // node's event store. That is the replicated estate, which only this domain's
 // applier writes. Nothing here is a person's words (a finding holds the
 // engine's words, numbers, handles and record ids), so nothing is sealed and

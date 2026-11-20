@@ -175,3 +175,37 @@ func TestAFinishedRunKeepsItsWholeTrailReadable(t *testing.T) {
 		t.Errorf("latest with its lines gone = %+v (%v), want the record's last three", gone, err)
 	}
 }
+
+// A PRESS'S RUN SAYS WHY ITS DEEP PART DID NOT RUN, and what it mended: a deep
+// part kept from an investigation that concluded lately says so and from
+// when, with no budget it never had; one that could not run says why; and a
+// run's model summary counts the findings listed after a repair beside those
+// dropped. Mutation: answer a kept part as a deep run that spent nothing, and
+// the page says it investigated.
+func TestAPressesRunSaysWhyItsDeepPartDidNotRun(t *testing.T) {
+	t.Parallel()
+	from := time.Unix(1000, 0).UTC()
+	kept, err := json.Marshal(map[string]any{"status": "done", "skipped": "kept", "kept_from": from,
+		"reason": "The deep investigation from 2 h ago is kept.", "listed": 2,
+		"repaired": map[string]int{"fix_not_built": 1, "reworded": 1}, "dropped": map[string]int{"wrong_number": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Sources{Advisor: finishedLog{record: kept}}.latestRun(t.Context())
+	if err != nil || got.DeepSkipped == nil || *got.DeepSkipped != "kept" || got.DeepKeptFrom == nil ||
+		!got.DeepKeptFrom.Equal(from) || got.Budget != nil {
+		t.Fatalf("latest = %+v (%v), want the deep part kept from its time, no budget", got, err)
+	}
+	if got.Model.Repaired[advisor.RepairNoFix] != 1 || got.Model.Repaired[advisor.RepairReworded] != 1 ||
+		got.Model.Dropped[advisor.DropWrongFact] != 1 {
+		t.Errorf("model = %+v, want what was mended beside what was dropped", got.Model)
+	}
+	ran, err := json.Marshal(modelpass.DeepRun{Pass: advisor.Pass{Status: advisor.PassDone}, StoppedBy: "done"}.Kept())
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := Sources{Advisor: finishedLog{record: ran}}.latestRun(t.Context())
+	if err != nil || full.DeepSkipped != nil || full.Budget == nil || full.Model.Repaired == nil {
+		t.Errorf("a run that investigated = %+v (%v), want its budget and no skip", full, err)
+	}
+}

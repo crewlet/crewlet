@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -39,7 +40,7 @@ const PackReleaseFloor = packReleaseFloor
 // RedactContext is how much more than it keeps a read from the error stream's
 // end takes, never shown, so what decides how the end it keeps redacts is read
 // with it.
-const RedactContext = redactContext
+const RedactContext = redact.LookBack
 
 // HumanSize is a byte count as the notes a run's failure writes say it.
 func HumanSize(n int64) string { return humanSize(n) }
