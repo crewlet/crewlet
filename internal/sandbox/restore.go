@@ -1952,10 +1952,9 @@ const (
 	startsItsOwn = "the run starts a session of its own, handed the brief written for one"
 )
 
-// restoreSpoolPrefix names a launch's spool of the session it carries, under
-// [spoolPrefix] and in the same directory, so a spool a crash left behind is
-// swept with the captures' ([Coordinator.sweepSpools]).
-const restoreSpoolPrefix = spoolPrefix + "restore-"
+// restoreSpoolPrefix names a launch's spool of the session it carries, in its
+// process's own spool directory beside the captures' ([Coordinator.spoolHere]).
+const restoreSpoolPrefix = "restore-"
 
 // fetchedSession is a kept session spooled SEALED on this node's disk, its seal
 // opened whole once, ready to be carried into a box.
@@ -1966,11 +1965,13 @@ type fetchedSession struct {
 
 // fetchSession spools row's session sealed and checks it can be read whole,
 // before any of it reaches a box (executordomain.SessionStore.Fetch), in the
-// coordinator's spool directory ([Coordinator.spoolDirectory]), where its sweep
-// looks.
+// coordinator's own spool directory ([Coordinator.spoolHere]).
 func (c *Coordinator) fetchSession(ctx context.Context, row executorkeep.TurnRow) (*fetchedSession, error) {
-	c.sweepSpools()
-	file, err := os.CreateTemp(c.spoolDirectory(), restoreSpoolPrefix+"*")
+	dir, err := c.spoolHere()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.CreateTemp(dir, restoreSpoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("a spool for the session on this node's disk: %w", err)
 	}

@@ -202,12 +202,6 @@ takes the store's word for it ([Coordination](../concepts/coordination.md#the-th
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
-The same hour bounds one step of a single machine's own clock: a node removes
-a session spool a crash left behind only once it is an hour older than the
-longest a keep may wait to open it, by that machine's clock, so NTP stepping
-the clock forward by up to an hour to correct it never removes a spool a keep
-is still about to upload.
-
 Every data node reads the fleet's clocks on its position heartbeat, every ten
 seconds, off the position register in the coordination store, which it reads on
 that beat anyway. Each data node's row there carries the instant the node

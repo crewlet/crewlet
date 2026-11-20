@@ -208,11 +208,12 @@ func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req La
 	return c.Launch(t.Context(), rig.manager, req)
 }
 
-// restoreSpools is every spool a launch left of a session it carried, in the
-// rig's spool directory.
+// restoreSpools is every spool a launch left of a session it carried, in any
+// coordinator's own directory under the rig's spool directory.
 func restoreSpools(t *testing.T, rig *coordRig) []string {
 	t.Helper()
-	left, err := filepath.Glob(filepath.Join(rig.coordinator.spoolDirectory(), restoreSpoolPrefix+"*"))
+	left, err := filepath.Glob(filepath.Join(rig.coordinator.spoolDirectory(), spoolDirPrefix+"*",
+		restoreSpoolPrefix+"*"))
 	if err != nil {
 		t.Fatalf("listing the restore spools: %v", err)
 	}

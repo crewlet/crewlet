@@ -41,47 +41,65 @@ func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 	})
 }
 
-// A SPOOL A CRASH LEFT BEHIND IS SWEPT BY THE FIRST TAKE AFTER IT AGES past the
-// longest a keep may still wait to open its spool, and by every take after — a
-// younger one, a keep under way, never. Swept only once a process, a node
-// restarted soon after a crash would find its spools young and never sweep them.
+// A PROCESS'S SPOOLS ARE SWEPT ONCE ITS LOCK IS GONE, AND NEVER BEFORE. Each
+// process spools into a directory of its own, holding its lock while it lives;
+// a take sweeps every directory whose lock it can take (a crash's, a staging
+// one a crash left half made), and never one whose process lives, its own
+// included. The other process is played by a directory made as a coordinator
+// makes its own: flock locks conflict across descriptors, so one test process
+// plays both.
 //
-// Mutation: sweep once a coordinator, sweep a young spool, or sweep another
-// directory than the coordinator's own, and a check below goes red.
-func TestASpoolACrashLeftIsSweptByTheTakesAfterItAges(t *testing.T) {
+// Mutation: sweep a directory whatever its lock, or sweep once a coordinator,
+// and a check below goes red.
+func TestASpoolDirectoryIsSweptOnlyOnceItsProcessHasLetGo(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := keepingRig(t)
-		plant := func(name string, age time.Duration) string {
-			file := filepath.Join(rig.coordinator.spoolDirectory(), spoolPrefix+name)
-			if err := os.WriteFile(file, []byte("sealed"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			at := time.Now().Add(-age)
-			if err := os.Chtimes(file, at, at); err != nil {
-				t.Fatal(err)
-			}
-			return file
-		}
 		take := func(turnID string) {
 			rig.launchKept(t, turnID)
 			session := rig.runner.Session
 			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 			collectHeld(t, rig, turnID)
 		}
-		crashed := plant("crashed", 3*SessionCaptureBudget)
-		young := plant("under-way", time.Minute)
+		other := func() (string, string, func()) {
+			dir, lock, err := makeSpoolDir(rig.coordinator.spoolDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spool := filepath.Join(dir, spoolPrefix+"under-way")
+			if err := os.WriteFile(spool, []byte("sealed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return dir, spool, lock.Release
+		}
+		gone := func(what, dir string) {
+			t.Helper()
+			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s was left by the take after it (%v)", what, err)
+			}
+		}
+		live, liveSpool, ends := other()
+		crashed, _, crash := other()
+		crash()
+		half := filepath.Join(rig.coordinator.spoolDir, spoolDirPrefix+"half-made"+spoolStaging)
+		if err := os.Mkdir(half, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		take("t1")
-		if _, err := os.Stat(crashed); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a spool older than a keep may wait to open it was left by the take after it (%v)", err)
+		gone("a crashed process's spool directory", crashed)
+		gone("a staging directory a crash left", half)
+		if _, err := os.Stat(liveSpool); err != nil {
+			t.Errorf("a live process's spool was swept: %v", err)
 		}
-		if _, err := os.Stat(young); err != nil {
-			t.Errorf("a spool younger than a keep may wait to open it was swept: %v", err)
+		own := rig.coordinator.ownSpoolDir()
+		if _, err := os.Stat(filepath.Join(own, spoolLockName)); own == "" || err != nil {
+			t.Errorf("the take's own spool directory %q is gone (%v)", own, err)
 		}
-		later := plant("crashed-later", 3*SessionCaptureBudget)
+		ends()
 		take("t2")
-		if _, err := os.Stat(later); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a spool aged past the cutoff was left by a later take (%v)", err)
+		gone("a process's spool directory once it let go", live)
+		if _, err := os.Stat(filepath.Join(own, spoolLockName)); err != nil {
+			t.Errorf("the coordinator's own spool directory was swept while it lives: %v", err)
 		}
 	})
 }

@@ -647,9 +647,9 @@ type CoordinatorOptions struct {
 
 	// SpoolDir is where this node spools sealed sessions: a capture's between its
 	// take and keep ([Coordinator.spool]), a relaunch's fetched session between
-	// fetch and run start ([Coordinator.fetchSession]); every take and fetch
-	// sweeps leftovers ([Coordinator.sweepSpools]). Empty is os.TempDir; a test
-	// names its own directory so what is left is the case's to see.
+	// fetch and run start ([Coordinator.fetchSession]), each in a directory of
+	// the process's own under it ([Coordinator.spoolHere]). Empty is
+	// os.TempDir; a test names its own directory so what is left is its own.
 	SpoolDir string
 
 	// Now is the clock, injectable for tests.
@@ -763,11 +763,13 @@ type Coordinator struct {
 	// keepLife is the lifetime every keep runs under, off the read that took its
 	// capture ([Coordinator.keepLater]); keeping counts them: [Coordinator.Stop]
 	// lets those under way finish for [sessionKeepDrain], then ends them.
-	// spoolDir is [CoordinatorOptions.SpoolDir], resolved.
+	// spoolDir is [CoordinatorOptions.SpoolDir], resolved, and spools the
+	// coordinator's own directory under it (spooldir.go).
 	keepLife context.Context
 	endKeeps context.CancelFunc
 	keeping  sync.WaitGroup
 	spoolDir string
+	spools   ownSpools
 
 	// mu guards runs, the two seat-level answers the inbox screening reads on
 	// every delivery, and attempts beside them. In memory rather than a store
@@ -1055,6 +1057,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if opts.Takers != nil {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
+	c.sweepSpools()
 	return c, nil
 }
 
@@ -1105,6 +1108,7 @@ func (c *Coordinator) Stop() {
 	}
 	c.endKeeps()
 	<-kept
+	c.closeSpools()
 	if c.taker != nil {
 		c.taker.stop()
 	}

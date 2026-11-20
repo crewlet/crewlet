@@ -398,10 +398,10 @@ func (r *coordRig) launchKept(t *testing.T, turnID string) PendingRun {
 // awaitKeeps waits for every keep under way ([Coordinator.keepLater]).
 func (r *coordRig) awaitKeeps() { r.coordinator.keeping.Wait() }
 
-// spools are the spools left in the rig's spool directory.
+// spools are the spools left in the rig's coordinator's own spool directory.
 func (r *coordRig) spools(t *testing.T) []string {
 	t.Helper()
-	left, err := filepath.Glob(filepath.Join(r.coordinator.spoolDirectory(), spoolPrefix+"*"))
+	left, err := filepath.Glob(filepath.Join(r.coordinator.ownSpoolDir(), spoolPrefix+"*"))
 	if err != nil {
 		t.Fatalf("listing the spools: %v", err)
 	}
@@ -1497,4 +1497,11 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 			})
 		})
 	}
+}
+
+// ownSpoolDir is c's own spool directory, "" before its first spool.
+func (c *Coordinator) ownSpoolDir() string {
+	c.spools.mu.Lock()
+	defer c.spools.mu.Unlock()
+	return c.spools.dir
 }

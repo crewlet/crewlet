@@ -135,6 +135,14 @@
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
 //
+// # Each process's own spool directory
+//
+// A spool's age is no proof its process is gone, and a container restart keeps
+// /tmp, so each process spools into a directory of its own, held by an flock
+// the kernel drops however the process ends (spooldir.go). A sweep removes only
+// a directory whose lock it takes; made under a staging name and renamed once
+// locked, a live one is never found unlocked.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // restore.go. A relaunch continues the job before's newest kept capture, the

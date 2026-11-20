@@ -9,7 +9,6 @@ import (
 	"maps"
 	"os"
 	"path"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -974,16 +973,6 @@ var takeOverLife = 4*captureStampBudget + SessionKeepBudget
 // abandoned. An hour and twelve minutes today, a takeover's being the longer.
 var captureLife = max(takeLife, takeOverLife)
 
-// spoolOpenedWithin is the longest a spool waits on its node's disk for its
-// keep to open it ([Coordinator.keepCapture]), from its last byte: its digest
-// ([discardGrace]); for a standby's, its wait ([standbyWait]) and seven
-// changes of the row: the window's five ([standbyWindow]) and, where the store
-// did not answer the takeover, the withdrawal and the read back; and the
-// keep's two reads ([keepReadRoom]). The crash sweep spares a spool that long
-// ([Coordinator.sweepSpools]): two hours, forty-eight minutes and a fraction
-// at today's bounds.
-var spoolOpenedWithin = discardGrace + standbyWait + 7*captureStampBudget + 2*keepReadRoom
-
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
 // way finish before it cancels them ([Coordinator.Stop]): the teardown grace
 // every box call is given ([discardGrace]). A keep cut there is stamped refused
@@ -1231,10 +1220,9 @@ type spooledCapture struct {
 	places *savePlaces
 }
 
-// spoolPrefix names this package's spools in the node's spool directory
-// ([CoordinatorOptions.SpoolDir]), so a spool a crash left behind is found
-// again ([Coordinator.sweepSpools]).
-const spoolPrefix = "crewlet-session-"
+// spoolPrefix names a session's spool in its process's own spool directory
+// ([Coordinator.spoolHere]).
+const spoolPrefix = "session-"
 
 // takeCapture takes the session of run's job out of box (the package doc's "Two
 // halves") and stamps where it stands on the run's row, reporting what came of
@@ -1987,7 +1975,11 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	if ended != nil {
 		return nil, fmt.Errorf("sandbox: the take ended before its session was spooled: %w", ended)
 	}
-	file, err := os.CreateTemp(c.spoolDirectory(), spoolPrefix+"*")
+	dir, err := c.spoolHere()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.CreateTemp(dir, spoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
@@ -1999,38 +1991,6 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		return nil, err
 	}
 	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), places: places}, nil
-}
-
-// spoolDirectory is where this coordinator's spools wait:
-// [CoordinatorOptions.SpoolDir], or the node's temporary directory.
-func (c *Coordinator) spoolDirectory() string {
-	if c.spoolDir != "" {
-		return c.spoolDir
-	}
-	return os.TempDir()
-}
-
-// sweepSpools removes every spool in the node's spool directory older than
-// the longest a keep may still wait to open its spool ([spoolOpenedWithin]),
-// and an hour more (objstore.AssumedClockSkew): what a crash between a take
-// and its keep left behind; never a younger one, which may be a keep of this
-// or another process sharing the directory, still under way. AN HOUR MORE,
-// since a spool's age is read off this machine's wall clock, which NTP may
-// step by up to the assumed skew: a step forward would age a live spool early.
-// ON EVERY TAKE, not once a process: a node restarting soon after a crash
-// finds that crash's spools young, and would leave them, a few dozen mebibytes
-// each in a directory that may be memory, until its next restart.
-func (c *Coordinator) sweepSpools() {
-	matches, err := filepath.Glob(filepath.Join(c.spoolDirectory(), spoolPrefix+"*"))
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-(spoolOpenedWithin + objstore.AssumedClockSkew))
-	for _, name := range matches {
-		if info, statErr := os.Stat(name); statErr == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(name)
-		}
-	}
 }
 
 // keepLater keeps a spooled capture off the frame that took it, on the
