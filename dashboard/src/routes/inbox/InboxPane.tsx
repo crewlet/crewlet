@@ -90,7 +90,14 @@ import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, closedAt, type GivenAnswer } from "./answerFate.ts";
 import { fmtAt } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
-import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import {
+  CHECKED_WORDS,
+  renderInline,
+  renderMarkdown,
+  renderQuoted,
+  renderTokens,
+} from "~/lib/markdown.ts";
+import { Said } from "~/components/Said.tsx";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -632,17 +639,43 @@ function ArtifactNoticePane({
   );
 }
 
+/** What an outcome line says of an answer, and what stands under it. */
+interface Outcome {
+  line: ReactNode;
+  under: ReactNode;
+}
+
+/**
+ * The words written in an answer, read by the conversation's rule
+ * (`CHECKED_WORDS`): quoted in the line where they are one paragraph, and as
+ * a quote under it where they are more, since the line is a paragraph and
+ * holds no list.
+ */
+function writtenOutcome(text: string): Outcome {
+  const quoted = renderQuoted(text, CHECKED_WORDS);
+  return "inline" in quoted
+    ? { line: <Said quoted={quoted} />, under: null }
+    : { line: null, under: <ReadingPaneQuote>{quoted.blocks}</ReadingPaneQuote> };
+}
+
 /**
  * "Answered Exact search (Recommended)", where the controls that answered it
  * were: an ask's, or an executor's once it took the answer.
  */
-function answeredWith(answer: AskAnswer): ReactNode {
-  return (
-    <>
-      Answered <strong>{answer.kind === "choice" ? answer.label : `“${answer.text}”`}</strong>
-      {answer.kind === "choice" && answer.recommended && " (Recommended)"}
-    </>
-  );
+function answeredWith(answer: AskAnswer): Outcome {
+  if (answer.kind === "choice") {
+    return {
+      line: (
+        <>
+          Answered <strong>{answer.label}</strong>
+          {answer.recommended && " (Recommended)"}
+        </>
+      ),
+      under: null,
+    };
+  }
+  const written = writtenOutcome(answer.text);
+  return { line: <>Answered{written.line}</>, under: written.under };
 }
 
 function AskPane({
@@ -700,6 +733,7 @@ function AskPane({
   // A QUESTION ANSWERED IN WORDS is answered in its own field above, so the
   // conversation carries no second box.
   const inWords = options.length === 0 || open;
+  const outcome = answer ? answeredWith(answer) : null;
 
   const onAnswered = (given: AskAnswer) => {
     setAnswer(given);
@@ -748,8 +782,11 @@ function AskPane({
         ) : (
           chips
         )}
-        {answer ? (
-          <ReadingPaneOutcome {...landing}>{answeredWith(answer)}</ReadingPaneOutcome>
+        {outcome ? (
+          <>
+            <ReadingPaneOutcome {...landing}>{outcome.line}</ReadingPaneOutcome>
+            {outcome.under}
+          </>
         ) : (
           <AnswerAsk
             layout="buttons"
@@ -831,7 +868,8 @@ function AnsweredPane({
   const ask = "run" in answered ? null : answered;
   const decision = run ? run.decision : ask?.ask.decision;
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
-  const said = words.kind === "choice" ? words.said : words.said ? `“${words.said}”` : null;
+  const written = words.kind === "choice" ? words.note : words.said;
+  const outcome = written ? writtenOutcome(written) : null;
   // An answered message is read whole, since its heading does not quote it.
   const context = run
     ? run.question_context.trim()
@@ -871,21 +909,19 @@ function AnsweredPane({
           />
         )}
         <ReadingPaneOutcome>
-          {`${words.who} ${words.verb}${words.kind === "withdrawn" && said ? ":" : ""}`}
-          {said && (
+          {`${words.who} ${words.verb}`}
+          {words.kind === "choice" && (
             <>
               {" "}
-              <strong>{said}</strong>
+              <strong>{words.said}</strong>
+              {words.recommended && " (Recommended)"}
+              {outcome && " and wrote"}
             </>
           )}
-          {words.recommended && " (Recommended)"}
-          {words.note && (
-            <>
-              {" and wrote "}
-              <strong>{`“${words.note}”`}</strong>
-            </>
-          )}
+          {words.kind === "withdrawn" && outcome && ":"}
+          {outcome?.line}
         </ReadingPaneOutcome>
+        {outcome?.under}
         {words.replaced && <ReplacedBy replaced={words.replaced} />}
         {words.who !== "You" && words.kind !== "withdrawn" && (
           <Text as="p" variant="caption">
@@ -1270,6 +1306,7 @@ function RunPane({
       ? "taken"
       : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
+  const taken = said !== null && fate === "taken" ? answeredWith(said) : null;
   // THE OUTCOME TAKES THE FOCUS from the control that sent the answer, which
   // it replaces.
   const landing = useFocusLanding(given !== null);
@@ -1466,22 +1503,25 @@ function RunPane({
         {said !== null ? (
           // PENDING UNTIL THE EXECUTOR TOOK IT: sent, recorded or ended is
           // never the success check a used answer gets.
-          <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
-            {fate === "taken" ? (
-              answeredWith(said)
-            ) : fate === "recorded" ? (
-              <>
-                Answer recorded.{" "}
-                {busyOn
-                  ? busyLine(busyOn, frame.name)
-                  : `${frame.name}’s executor picks it up next.`}
-              </>
-            ) : fate === "ended" ? (
-              <>Answer sent. {frame.name}’s executor is no longer running.</>
-            ) : (
-              <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
-            )}
-          </ReadingPaneOutcome>
+          <>
+            <ReadingPaneOutcome {...landing} tone={taken ? "done" : "pending"}>
+              {taken ? (
+                taken.line
+              ) : fate === "recorded" ? (
+                <>
+                  Answer recorded.{" "}
+                  {busyOn
+                    ? busyLine(busyOn, frame.name)
+                    : `${frame.name}’s executor picks it up next.`}
+                </>
+              ) : fate === "ended" ? (
+                <>Answer sent. {frame.name}’s executor is no longer running.</>
+              ) : (
+                <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
+              )}
+            </ReadingPaneOutcome>
+            {taken?.under}
+          </>
         ) : superseded ? (
           // THE PANE'S OWN SENTENCE names nobody, so the line beside it says
           // whose answer was used as well as when.

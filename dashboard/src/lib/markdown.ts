@@ -967,6 +967,31 @@ export function renderMarkdown(source: string, given: RenderOptions = {}): React
   return blocks.map((block, i) => renderBlock(block, `b${i}`, options, ids.get(i)));
 }
 
+/** Somebody's words, drawn for the sentence that quotes them ([renderQuoted]). */
+export type Quoted =
+  /** The one paragraph's inline runs, quoted in place in the sentence. */
+  | { inline: ReactNode }
+  /** Every block, drawn as [renderMarkdown] draws it, under the sentence. */
+  | { blocks: ReactNode[] };
+
+/**
+ * Somebody's words as a sentence about them quotes them: "You replied “Hold
+ * it a **week**.”". Words that are ONE paragraph are its inline runs, quoted
+ * in place; anything more (a list, a second paragraph) is its blocks, set
+ * under the sentence, since a list quoted inline reads as one line of dashes.
+ * One walk either way, so a paragraph reads the same in the sentence as in
+ * the thread that holds it. No anchors and no heading shift ([renderBlocks]).
+ */
+export function renderQuoted(source: string, given: RenderOptions = {}): Quoted {
+  const blocks = parseMarkdown(source ?? "");
+  const options: RenderOptions = { message: source ?? "", ...given };
+  const [first] = blocks;
+  if (blocks.length === 1 && first?.kind === "paragraph") {
+    return { inline: inlineOf(options)(first.text, "q0", opening(options)) };
+  }
+  return { blocks: renderBlocks(blocks, options, "q") };
+}
+
 /**
  * How a MODEL'S WORDS are rendered: a round's speech, an
  * executor's report. Every newline is the line break the model meant, and a heading
