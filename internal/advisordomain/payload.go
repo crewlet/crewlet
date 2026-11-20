@@ -134,7 +134,7 @@ type Explanation struct {
 // nothing: the key is its subject.
 type Release struct{}
 
-// RunRequest is a person's press of Run now (op `request` on the run).
+// RunRequest is a person's press of Run (op `request` on the run).
 type RunRequest struct {
 	Run string `json:"run"`
 
@@ -173,7 +173,7 @@ type RunRecord struct {
 	Run     string  `json:"run"`
 	Trigger Trigger `json:"trigger"`
 
-	// By is the person who pressed Run now, empty for another trigger.
+	// By is the person who pressed Run, empty for another trigger.
 	By string `json:"by,omitempty"`
 
 	StartedAt time.Time `json:"started_at"`

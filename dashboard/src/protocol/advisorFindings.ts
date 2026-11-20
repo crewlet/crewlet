@@ -220,10 +220,12 @@ export interface AdvisorModelSummary {
   tokens: number;
   listed: number;
   dropped: Record<string, number>;
+  /** The findings listed after a repair, by the repair (an older engine sends none). */
+  repaired?: Record<string, number>;
   reason: string;
 }
 
-/** One run of the Advisor; `running` is a Run now the duty has not taken yet. */
+/** One run of the Advisor; `running` is a press the duty has not taken yet. */
 export interface AdvisorRunSummary {
   run_id: string;
   trigger: "schedule" | "event" | "person" | (string & {});
@@ -250,6 +252,13 @@ export interface AdvisorRunSummary {
   } | null;
   /** What ended a deep run, null for a rules run and a run still going. */
   stopped_by: "done" | "tokens" | "minutes" | "rounds" | (string & {}) | null;
+  /**
+   * Why a press's deep part did not run: `kept` (the investigation from
+   * `deep_kept_from` stands) or `no_model`; null where it ran, or where the
+   * run has none. Absent from an older engine.
+   */
+  deep_skipped?: "kept" | "no_model" | (string & {}) | null;
+  deep_kept_from?: string | null;
   /** What each class it ran concluded, and why where it could not judge. */
   classes: {
     class: string;

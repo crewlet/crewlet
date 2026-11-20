@@ -606,7 +606,7 @@ func (x AdvisorWrites) Release(ctx context.Context, c advisordomain.Call, key st
 	return call(ctx, x.r, opAdvisorRelease, nil, advisorReleaseArgs{Call: c, Key: key, IfMatch: ifMatch})
 }
 
-// RequestRun writes a person's press of Run now.
+// RequestRun writes a person's press of Run.
 func (x AdvisorWrites) RequestRun(ctx context.Context, c advisordomain.Call,
 	r advisordomain.RunRequest) (statelog.Result, error) {
 	return call(ctx, x.r, opAdvisorRequestRun, nil, advisorRequestArgs{Call: c, Request: r})
