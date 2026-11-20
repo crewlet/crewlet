@@ -58,6 +58,8 @@ const { getConfig } = await import("~/protocol/configWrite.ts");
 const DOC = {
   name: "Acme",
   providers: {
+    // A COMPANY WITH MODELS has a place to run coding; M-002's case takes it away.
+    sandbox: { local: {}, default_run_in: "direct" },
     llm: {
       default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
       sonnet: {
@@ -1138,4 +1140,53 @@ test("a reload asks before it throws a typed draft away, and not before anything
   expect(reload()).toBe(false);
   fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "draft" } });
   expect(reload()).toBe(true);
+});
+
+// M-002: A FIRST CODING MODEL ON A COMPANY WITH NO PLACE TO RUN CODING. The
+// engine checks a draft's test against the company as it stands, which refuses
+// it, so Finish and save sets this host up first, then tests and saves; opening
+// Review writes nothing.
+test("with no sandbox, Finish and save sets up this host, then tests and saves the first coding model", async () => {
+  const doc = structuredClone(DOC) as Record<string, any>;
+  delete doc.providers.sandbox;
+  vi.mocked(getConfig).mockImplementation(async () => {
+    calls.push("read");
+    return { kind: "document", document: structuredClone(doc), etag: '"rev-1"' };
+  });
+  const written: Record<string, any>[] = [];
+  vi.mocked(api.writeDocument).mockImplementation(async (next, options) => {
+    calls.push(options.dryRun ? "dry-run" : `write:${options.summary}`);
+    if (!options.dryRun) {
+      written.push(next as Record<string, any>);
+      Object.assign(doc, structuredClone(next));
+    }
+    return options.dryRun
+      ? { kind: "valid", baseRevisionId: "rev-1", warnings: [], derived: null }
+      : { kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null };
+  });
+  const d = data();
+  render(
+    <Router>
+      <ModelWizard
+        data={{ ...d, doc: structuredClone(doc) as never }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  await walkToReview("sonnet-key", { accepted: true });
+  // OPENING REVIEW TESTED NOTHING AND WROTE NOTHING: the test waits for the save.
+  expect(calls).toEqual(["read", "dry-run", "dry-run"]);
+  expect(screen.getByText("Runs when you save")).toBeTruthy();
+  expect(screen.getByText("On this engine's host, set up by this save")).toBeTruthy();
+  calls.length = 0;
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:Add model/));
+  expect(calls.slice(0, 4)).toEqual([
+    "read",
+    "dry-run",
+    "write:Set up running coding on this engine's host",
+    "test",
+  ]);
+  expect(written[0]!.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
 });

@@ -76,6 +76,8 @@ import {
   pastesCredential,
   stepOf,
   stepsFor,
+  hasSandbox,
+  withHostSandbox,
   storedCloudSecrets,
   suggestedVariable,
   type Harness,
@@ -486,6 +488,40 @@ export function ModelWizard({
     return false;
   }
 
+  // A FIRST CODING MODEL WITH NO PLACE TO RUN IT: the save sets up this host (M-002).
+  const needsHost = canExecute(draft) && !!data.doc && !hasSandbox(data.doc);
+
+  /**
+   * Sets up this engine's host to run coding, checked then written, before a
+   * first coding model's test: the engine's own remedy for a company with no
+   * `providers.sandbox`. Whether it stands now.
+   */
+  async function setUpHost(signal: AbortSignal): Promise<boolean> {
+    setCheck({ kind: "checking", what: "document" });
+    const read = await getConfig(signal);
+    if (read.kind !== "document") {
+      setCheck({ kind: "blocked", message: "No company is configured yet. Set one up first." });
+      return false;
+    }
+    if (hasSandbox(read.document)) return true;
+    const doc = withHostSandbox(read.document);
+    const dry = await writeDocument(doc, { etag: read.etag, summary: "", dryRun: true }, signal);
+    if (dry.kind !== "valid") {
+      setCheck({ kind: "blocked", message: refusalWords(dry as ConfigRefusal, "check") });
+      return false;
+    }
+    const saved = await writeDocument(doc, {
+      etag: read.etag,
+      summary: "Set up running coding on this engine's host",
+      dryRun: false,
+    });
+    if (saved.kind !== "saved") {
+      setCheck({ kind: "blocked", message: refusalWords(saved as ConfigRefusal, "save") });
+      return false;
+    }
+    return true;
+  }
+
   /**
    * Review's check: the test call where a credential is pasted (or `withTest`
    * asks for one), then the whole next document's dry run. The prepared write, or null.
@@ -502,8 +538,13 @@ export function ModelWizard({
       if (
         (withTest || names.length > 0) &&
         storedFor !== signature &&
-        !(test.kind === "passed" && test.for === signature)
+        !(test.kind === "passed" && test.for === signature) &&
+        // NO PLACE TO RUN CODING YET: the engine checks a draft's test against
+        // the company as it stands, which refuses it, so the test waits for
+        // Finish and save to set up this host first; opening Review writes nothing.
+        (!needsHost || finishing.current)
       ) {
+        if (needsHost && !(await setUpHost(ctrl.signal))) return null;
         setCheck({ kind: "checking", what: "credential" });
         if (!(await runTest(ctrl.signal))) {
           setCheck({ kind: "problems" });
@@ -761,6 +802,9 @@ export function ModelWizard({
   // THE TEST CALL'S BUTTON AND ITS RESULT, one line on Review. It costs a few tokens.
   const testRow = signsInAfter ? (
     "After it is saved"
+  ) : needsHost && !passed && !testing ? (
+    // THE TEST NEEDS THE HOST SET UP, which Finish and save does first.
+    "Runs when you save"
   ) : (
     <span className="models-test-row">
       {/* ONE LINE, the whole of what the engine said on hover. */}

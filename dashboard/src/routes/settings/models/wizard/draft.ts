@@ -684,6 +684,17 @@ export function nextDocument(
 /** The place to run coding a save sets up where the company has none: this engine's host. */
 const HOST_SANDBOX = { local: {}, default_run_in: "direct" } as const;
 
+/** The document with this engine's host set up to run coding, as the engine's own remedy says. */
+export function withHostSandbox(doc: CompanyDocument): CompanyDocument {
+  const next = structuredClone(doc) as Record<string, unknown>;
+  const providers = (isRecord(next.providers) ? next.providers : (next.providers = {})) as Record<
+    string,
+    unknown
+  >;
+  providers.sandbox = { ...HOST_SANDBOX };
+  return next as CompanyDocument;
+}
+
 /** Whether the company document configures a place to run a seat's executor (`providers.sandbox`). */
 export function hasSandbox(doc: CompanyDocument | null): boolean {
   return !!doc && isRecord(doc.providers) && isRecord(doc.providers.sandbox);
