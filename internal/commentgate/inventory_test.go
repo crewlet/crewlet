@@ -71,7 +71,7 @@ var rowInventory = map[string]int{
 	"presence":                               3662,
 	"providers/embeddings":                   1949,
 	"regexlit, regexlit/regexlittest":        2785,
-	"sandbox":                                123665,
+	"sandbox":                                123644,
 	"scenario":                               1053,
 	"sigv4":                                  739,
 	"skipgate":                               2452,

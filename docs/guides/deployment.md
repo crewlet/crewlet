@@ -166,7 +166,7 @@ hours of each other:
   and any other node reads it as still being kept until its life and two
   hours have passed by its own clock, about three hours and twelve minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and thirty-seven and a half minutes.
+  hours have passed, about four hours and forty-two and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose

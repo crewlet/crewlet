@@ -798,7 +798,7 @@ var standbyWait = captureLife + captureWaitTick
 // wait's end, the read of the turn's row past it and the settle it decides
 // ([Coordinator.namedAtWaitsEnd]), its last read, and its takeover. Each at
 // the slowest crossing, since the standby and the wait reading it may be any
-// two nodes. Two hours, thirty-seven minutes and thirty-two seconds today.
+// two nodes. Two hours, forty-two minutes and thirty-two seconds today.
 var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureStampBudget
 
 // standbyBudget is how long after the instant a read stood by
@@ -807,7 +807,7 @@ var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 6*captureSt
 // the engine allows any one machine's clock (objstore.AssumedClockSkew), since
 // the instant is the standby's node's clock's and the reader any other node.
 // Past it, a wait reads the read as gone; a lapsed taker lease withdraws it
-// sooner ([Coordinator.standDownGone]). FOUR HOURS, THIRTY-SEVEN MINUTES AND
+// sooner ([Coordinator.standDownGone]). FOUR HOURS, FORTY-TWO MINUTES AND
 // THIRTY-TWO SECONDS today. Against the window alone, a reader whose clock
 // stood ahead read the standby as gone while its takeover could still land,
 // and a turn's end tombstoned the turn ahead of the session kept. A turn's end
@@ -869,17 +869,18 @@ const (
 	sessionRetryCeiling = 8 * time.Second
 )
 
-// SessionScrubWait bounds the scrub of a session as it streams out of its box:
-// two readings of an archive at its bound — a tar is read twice, to learn each
-// file's size as rewritten — each of up to the plaintext the scrub admits
-// (internal/sandbox/executor's scrubPlainMax, 256 MiB), redacted at the tens
-// of mebibytes a second the redaction runs at, and the archive read out of a
-// box whose agent serves it at a mebibyte a second at the least.
+// SessionScrubWait bounds the scrub of a session as it streams out of its box,
+// both readings of its tar.
 //
-// TWO MINUTES, and a judgment: what the redaction costs per mebibyte is the
-// redaction's own, which grows with its rules. A session that is still being
-// scrubbed when it runs out is refused rather than left holding its box.
-const SessionScrubWait = 2 * time.Minute
+// SEVEN MINUTES, from the measured worst: the archive read twice out of a box
+// at its floor pace of a mebibyte a second (96 s at 48 MiB), and the slowest
+// session a harness writes scrubbed at its 256 MiB of plaintext (238 s), 334 s
+// counted apart though the two overlap. Only sessions a harness writes set it.
+// A take still scrubbing at its end FAILS CLOSED: nothing is kept, its place
+// is refused and the last kept copy stands, so a box costs only its own
+// session (docs/concepts/code-sandbox.md, "Seven minutes for the scrub";
+// ADR-0073).
+const SessionScrubWait = 7 * time.Minute
 
 // SessionTakeBudget is the most a take adds to the read of a box it is made in:
 // the pack ([SessionPackWait]) and the scrub ([SessionScrubWait]).
@@ -947,7 +948,7 @@ const keepReadRoom = sessionRecordBudget
 // ([SessionTakeBudget], [captureStampBudget], [Coordinator.takeContext]), the
 // digest it leaves in the box ([discardGrace], [stampContext]), the keep, which
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
-// what came of it ([captureStampBudget]). Forty-nine and a half minutes and a
+// what came of it ([captureStampBudget]). Fifty-four and a half minutes and a
 // fraction at today's bounds.
 var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
 

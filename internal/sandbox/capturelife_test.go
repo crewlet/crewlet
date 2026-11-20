@@ -53,13 +53,13 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"a keep", SessionKeepBudget, keep, "18m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "49m30.051326748s"},
+		{"a take's life", takeLife, take, "54m30.051326748s"},
 		{"a takeover's life", takeOverLife, over, "1h12m0.102653496s"},
 		{"a capture's life", captureLife, life, "1h12m0.102653496s"},
 		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h12m0.102653496s"},
 		{"a standby's wait", standbyWait, wait, "1h12m2.102653496s"},
-		{"a standby's window", standbyWindow, window, "2h37m32.25663374s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h37m32.25663374s"},
+		{"a standby's window", standbyWindow, window, "2h42m32.25663374s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h42m32.25663374s"},
 		{"a spool's longest wait for its keep", spoolOpenedWithin, opened, "2h48m2.282297114s"},
 	} {
 		if c.got != c.want {

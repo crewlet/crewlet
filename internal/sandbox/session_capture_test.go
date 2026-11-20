@@ -396,6 +396,65 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 	}
 }
 
+// A TAKE WHOSE SCRUB RUNS PAST ITS WAIT FAILS CLOSED: a session still
+// streaming out of its scrub when the take's time ends, which holds the
+// scrub's whole wait ([SessionScrubWait]) beside the pack's, is cut there,
+// its place stamped refused and nothing uploaded, and the run's row still
+// names the copy kept before it: a box whose session scrubs too slowly costs
+// only that session's newest copy (docs/concepts/code-sandbox.md, "Seven
+// minutes for the scrub").
+//
+// Mutation: hold the take to the pack's wait alone, or spool what a cut
+// stream read, and a check goes red.
+func TestATakeWhoseScrubRunsPastItsWaitIsNotKept(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		box := rig.provider.Box(run.SandboxID)
+		first, _ := rig.coordinator.takeCapture(t.Context(), run, box, rig.runner,
+			readCapture(BoxReadStop, Result{}, false))
+		if first == nil {
+			t.Fatal("the premise: the first take spooled nothing")
+		}
+		rig.coordinator.keepLater(t.Context(), first)
+		rig.awaitKeeps()
+		kept := rig.get("t1").Kept
+		if kept == nil || kept.State != CaptureLanded {
+			t.Fatalf("the premise: the first take was kept as %+v, want it landed", kept)
+		}
+		uploads := len(keep.uploads())
+		streamed := make(chan time.Duration, 1)
+		rig.runner.Session.Streaming = func(ctx context.Context) {
+			start := time.Now()
+			<-ctx.Done()
+			streamed <- time.Since(start)
+		}
+		spooled, _ := rig.coordinator.takeCapture(t.Context(), rig.get("t1"), box, rig.runner,
+			readCapture(BoxReadStop, Result{}, false))
+		rig.coordinator.keepLater(t.Context(), spooled)
+		rig.awaitKeeps()
+		if spooled != nil {
+			t.Errorf("a take whose stream ran out its time spooled %+v, want nothing", spooled)
+		}
+		if took := <-streamed; took < SessionScrubWait || took > SessionTakeBudget+rig.coordinator.reserveRoom() {
+			t.Errorf("the stream was cut %v after it began, want within the take's budget and no sooner than "+
+				"the scrub's wait of %v", took, SessionScrubWait)
+		}
+		row := rig.get("t1")
+		if c := row.Capture; c == nil || c.CaptureSeq != kept.CaptureSeq+1 || c.State != CaptureRefused {
+			t.Errorf("the cut take's capture stands %+v, want its place refused", c)
+		}
+		if row.Kept == nil || row.Kept.CaptureSeq != kept.CaptureSeq || row.Kept.State != CaptureLanded {
+			t.Errorf("the run's kept copy is %+v after the cut take, want the one kept before it, %+v",
+				row.Kept, kept)
+		}
+		if got := len(keep.uploads()); got != uploads {
+			t.Errorf("the cut take uploaded %d sessions, want none", got-uploads)
+		}
+	})
+}
+
 // lateStore is a run store whose answer to a take's reservation of its place
 // never reaches the take in time, as a coordination store's does when the
 // leader of the stream under it stalls or steps down: the reservation is

@@ -61,7 +61,7 @@ const (
 // take's life before its object is stored, the collector's grace and two of
 // its passes, and twice the engine's assumed skew for an end written on one
 // node's clock and read on another's (the package doc's "A save taken as its
-// job works"). Twenty-eight hours and forty-nine and a half minutes at today's
+// job works"). Twenty-eight hours and fifty-four and a half minutes at today's
 // bounds, under the uploads bucket's age, which a test holds.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 

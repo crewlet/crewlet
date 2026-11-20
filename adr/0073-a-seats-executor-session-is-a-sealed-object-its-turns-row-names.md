@@ -168,8 +168,14 @@ follows (internal/sandbox's `session.go` and `handed.go`, internal/engine's
 before the box is paused or reclaimed: the archive, packed where it must be,
 streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
-(`SessionTakeBudget`). The KEEP — the upload at the object store's pace and the
-record — runs after the read has answered, off its frame, on the coordinator's
+(`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is seven minutes, from
+its measured worst: the slowest session a harness writes at the scrub's
+256 MiB of plaintext (`scrubPlainMax`), 238 s, and the archive read twice out
+of a box at a mebibyte a second, 96 s at 48 MiB; lines that are no JSON, which
+only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
+nothing is kept, its place is refused and the last kept copy stands, so a box
+can only cost its own session. The KEEP — the upload at the object store's
+pace and the record — runs after the read has answered, off its frame, on the coordinator's
 own lifetime (`SessionKeepBudget`). A cross-node read waits for the take alone,
 sized so the host's three-quarter share of the asker's wait holds it
 (`BoxReadBudget`). A stop's read and a loss's capture are handed to the
@@ -309,13 +315,13 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 4,700.1 seconds (a Claude
+it, a collection of a turn with no cap waits about 5,100.1 seconds (a Claude
 Code one 36 more, for its main thread's read, `MainThreadReadWait`, below) and
-a stop's or a loss's about 4,893.5: the poll's 60-second bound, and at the
-share the take's 240 seconds, its reservation's 30, three 30-second graces and
+a stop's or a loss's about 5,293.5: the poll's 60-second bound, and at the
+share the take's 540 seconds, its reservation's 30, three 30-second graces and
 the four changes of the run's row its host makes, each at the slowest node's
 crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
-60 + 3,480.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+60 + 3,780.1 / 0.75. The figures first given here, 460 and 653 seconds, were
 from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
@@ -692,15 +698,15 @@ read do, with the record that the cap ended a job it saw working on top, at
 its grace and the slowest node's crossing (`recordsTheCap`), whether or not
 the cap has passed on the asker's clock, since the host decides on its own as
 it reads; a collection of a turn with none waits as it did. As the code
-computes them, that is about 5,973.5 seconds for a collection of a turn with a
-cap, 4,700.1 + (145 + 30 + 780.03) / 0.75, and about 4,700.1 for one with none
+computes them, that is about 6,373.5 seconds for a collection of a turn with a
+cap, 5,100.1 + (145 + 30 + 780.03) / 0.75, and about 5,100.1 for one with none
 (the derivation is in the amendment above), and a Claude Code collection waits
 36 seconds more for its main thread's read (`MainThreadReadWait`,
 `internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code
 read whose run holds a hook's serve to its job (`asksReceipts`) waits for that
 read, the verdict on the serve (`hookVerdictWait`, 10 s) and one more change of
-the row at the slowest crossing: about 5,789.5 seconds for a collection of a
-turn with no cap, 7,062.9 with one, and 5,982.8 for a stop's or a loss's
+the row at the slowest crossing: about 6,189.5 seconds for a collection of a
+turn with no cap, 7,462.9 with one, and 6,382.8 for a stop's or a loss's
 read. The figures
 first given here, 653 and 460 seconds, were from before the changes of the
 run's row were counted at their crossings and before the cap's record was
@@ -2791,8 +2797,8 @@ reply's usage, read by the layer's one rule for a reply's usage) and the count
 and ONE read of the job's main thread in the read that collects a job, on the
 box's host, before the take, within `sandbox.MainThreadReadWait` (27 s), which
 `sandbox.BoxReadBudget` holds for a Claude Code or an OpenCode collection, 36 s
-more for its asker than a read that asks no thread (about 4,736 s for an
-uncapped turn's, about 6,010 s with a cap), a look at each saved compaction's
+more for its asker than a read that asks no thread (about 5,136 s for an
+uncapped turn's, about 6,410 s with a cap), a look at each saved compaction's
 size and never a read of
 its body, written with how the harness ended in the one write
 (`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not
@@ -3730,16 +3736,16 @@ crossing (internal/sandbox's `session.go`): the keep's two reads each in a
 room of their own beside the upload's pace (`keepReadRoom`,
 `SessionKeepBudget`, eighteen minutes), a mint past it refusing the capture
 and a listing past it deciding nothing; a take's life from its instant
-(`takeLife`, forty-nine and a half minutes) and a takeover's (`takeOverLife`,
+(`takeLife`, fifty-four and a half minutes) and a takeover's (`takeOverLife`,
 an hour and twelve), the longer of them a capture's life (`captureLife`);
 and a read standing by's window from its own instant, its take's rest, its
 own wait, the read of the turn's row on the log past it and the settle it
 decides, and three changes of the row around its takeover (`standbyWindow`,
-two hours and thirty-seven and a half). Past a capture's life nothing its taker sends
+two hours and forty-two and a half). Past a capture's life nothing its taker sends
 lands, and past a standby's window nothing the standby sends does. Every node
 reads a stamp's age against those and twice the skew (`SessionCaptureBudget`,
 three hours and twelve minutes; `standbyBudget`, four hours and
-thirty-seven and a half), so a reader whose clock stands ahead never releases a capture still
+forty-two and a half), so a reader whose clock stands ahead never releases a capture still
 being kept. The waits decide on their own monotonic clocks instead of on a
 reader's word: a read standing by waits for the capture it stood by for that
 capture's whole life and one read (`standbyWait`), then reads the turn's row
@@ -3757,7 +3763,7 @@ it, and a takeover that landed after that read, in the window's last
 instants, was otherwise never seen and its record met the end's tombstone.
 The bounds are allowances at the floor: an hour and twenty-five and a half
 minutes for a capture from first sight, its life and that read, and four
-hours and sixteen and a half for a standby's, its window, its takeover's
+hours and twenty-one and a half for a standby's, its window, its takeover's
 life and a read after each. The
 spools a crash left behind are swept once past the longest a keep may still
 wait to open its spool and an hour for a step of the machine's own clock
@@ -4008,7 +4014,7 @@ reads the turn's row on the log once there, held to one change of the record,
 before it reads the run's row and decides (`waitedOut`), so a wait that ran
 out first does not upload the session a second time either. The standby's
 window counts that read and the settle it decides (`standbyWindow`, two
-hours and thirty-seven and a half minutes). The landed arm needs no fence: the row names the place
+hours and forty-two and a half minutes). The landed arm needs no fence: the row names the place
 only once the log has taken the record, and nothing takes a record back; so a
 lease the store cannot say of is admitted to it as a lease that holds is, for
 the end's, the relaunch's and the standby's reads alike, since a store that
@@ -4239,7 +4245,7 @@ allowance of a seat's saves, and a seat holds up to twice it. The whole
 company has to agree on it, so it is one value per seat in the coordination
 store's uploads bucket (`coord.SaveAllowances`, key class `save.<seat>`), aged
 out by the bucket's thirty hours with no sweep and no retirement step. Each
-entry is held `saveLedgerHold`, 28 h 49.5 min: the take's life before its
+entry is held `saveLedgerHold`, 28 h 54.5 min: the take's life before its
 object is stored, the collector's grace and two of its passes, and twice the
 assumed clock skew, since its end is written on one node's clock and read on
 another's. THE CHARGE COMES BEFORE THE STAMP'S INSTANT, by compare-and-swap,
