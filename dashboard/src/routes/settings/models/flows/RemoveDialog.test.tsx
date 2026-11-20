@@ -109,6 +109,9 @@ const settle = () => act(async () => {});
 
 const button = () => screen.getByRole("button", { name: "Remove model" }) as HTMLButtonElement;
 
+/** An option's key: what stands before the model's name. */
+const keyOf = (text: string | null) => (text ?? "").split(" · ")[0];
+
 /** Picks an option of a kit Select: the list opens on a click, and an option commits on its press. */
 async function pick(picker: HTMLElement, option: RegExp | string) {
   fireEvent.click(picker);
@@ -149,7 +152,11 @@ test("the one choice moves every place, and each set of moves is checked by a dr
 
   // ONLY WHAT FITS EVERY PLACE is offered, then Leave unset.
   fireEvent.click(choice);
-  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["big", "Leave unset"]);
+  // EACH MODEL NAMED IN FULL, its key first: "big · claude-sonnet-5".
+  expect(screen.getAllByRole("option").map((o) => keyOf(o.textContent))).toEqual([
+    "big",
+    "Leave unset",
+  ]);
   fireEvent.mouseDown(screen.getByRole("option", { name: "Leave unset" }));
   await settle();
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
@@ -173,7 +180,7 @@ test("Choose per seat opens a row per place, just its name and a picker, and a r
   ).toEqual(["Backend Engineer", "QA", "Ask Crewlet"]);
   expect(list.textContent).not.toMatch(/Coding|Reviewing|Chat|no tools of its own/);
 
-  await pick(screen.getByRole("combobox", { name: "Where QA moves" }), "default");
+  await pick(screen.getByRole("combobox", { name: "Where QA moves" }), /^default/);
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: [
       { at: REFS[0]!.at, to: "big" },
@@ -186,7 +193,7 @@ test("Choose per seat opens a row per place, just its name and a picker, and a r
     "Different for each",
   );
   // …and choosing it again moves every place once more.
-  await pick(screen.getByRole("combobox", { name: "Move them to" }), "big");
+  await pick(screen.getByRole("combobox", { name: "Move them to" }), /^big/);
   expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: REFS.map((r) => ({ at: r.at, to: "big" })),
   });
@@ -245,7 +252,7 @@ test("leaving something with no model asks for one confirm, which names what is 
   fireEvent.click(confirm);
   expect(button().disabled).toBe(false);
   // A DIFFERENT LOSS ASKS AGAIN: moving Ask Crewlet back clears the confirm.
-  await pick(screen.getByRole("combobox", { name: "Move them to" }), "big");
+  await pick(screen.getByRole("combobox", { name: "Move them to" }), /^big/);
   expect(screen.queryByRole("checkbox")).toBeNull();
   expect(button().disabled).toBe(false);
 });
@@ -437,7 +444,11 @@ test("the Advisor's model moves with the rest, or runs with no model once confir
   fireEvent.click(screen.getByRole("button", { name: "Choose per seat" }));
   const picker = screen.getByRole("combobox", { name: "Where The Advisor moves" });
   fireEvent.click(picker);
-  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["big", "Leave unset"]);
+  // EACH MODEL NAMED IN FULL, its key first: "big · claude-sonnet-5".
+  expect(screen.getAllByRole("option").map((o) => keyOf(o.textContent))).toEqual([
+    "big",
+    "Leave unset",
+  ]);
   fireEvent.mouseDown(screen.getByRole("option", { name: "Leave unset" }));
   await settle();
   expect(screen.getByRole("checkbox", { name: "Run the Advisor with no model" })).toBeDefined();

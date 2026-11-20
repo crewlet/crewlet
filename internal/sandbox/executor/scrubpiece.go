@@ -120,6 +120,9 @@ func newFirstPieces(use *memoUse) *firstPieces {
 // begin readies r for one first reading, planning on plan.
 func (r *firstPieces) begin(plan *tarPlan) *firstPieces {
 	r.plan, r.unit = plan, 0
+	if plan.resume != nil {
+		r.unit = plan.resume.unit
+	}
 	for i := range r.ways {
 		r.ways[i].pending = nil
 	}
