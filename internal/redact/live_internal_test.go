@@ -324,3 +324,27 @@ func TestAFlushAfterCloseCountsAllTheStreamWrote(t *testing.T) {
 		}
 	}
 }
+
+// WINDOWS DECIDED EARLY PAST THE LIMIT KEEP THE EARLIEST WRITE: once more
+// than [earlyWindows] wait on their claims, the oldest two merge, and what
+// stays final is still no more than the end had written when the first of
+// them was decided, however many merge into it.
+//
+// Mutation: keep the later write of the two merged ([keyStage.decide]), and
+// the count runs past the first window still waiting.
+func TestWindowsMergedPastTheLimitKeepTheEarliestWrite(t *testing.T) {
+	t.Parallel()
+	k := &keyStage{out: &endSink{n: 1 << 30}}
+	for i := range 3 * earlyWindows {
+		k.decide(earlyWrite{end: (i + 1) * stageAdvance, written: int64(1000 + i)})
+		if len(k.decided) > earlyWindows {
+			t.Fatalf("after %d windows decided early, %d wait, past %d", i+1, len(k.decided), earlyWindows)
+		}
+		if got := k.finalWritten(); got != 1000 {
+			t.Fatalf("after %d windows decided early, the first written at 1000, %d is answered final", i+1, got)
+		}
+	}
+	if last := k.decided[len(k.decided)-1]; last.written != int64(999+3*earlyWindows) {
+		t.Errorf("the newest window waiting wrote %d, not its own %d", last.written, 999+3*earlyWindows)
+	}
+}
