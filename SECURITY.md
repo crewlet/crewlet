@@ -2,166 +2,140 @@
 
 ## Supported versions
 
-Security fixes go to the latest release and `main`; there are no backports to
-older releases.
+Security fixes go to the latest release and `main`; no backports.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities **privately** via
+Report vulnerabilities **privately** via
 [GitHub's private vulnerability reporting](https://github.com/crewlet/crewlet/security/advisories/new)
-("Report a vulnerability" on the repository's Security tab). Do not open a
+("Report a vulnerability" on the repository's Security tab). Never open a
 public issue for anything you believe is exploitable.
 
 Include what you can: affected version/commit, a reproduction or proof of
-concept, and the impact you believe it has. You should receive an
-acknowledgement within a few days; we'll keep you updated as we triage and
-fix.
+concept, and the impact. Expect an acknowledgement within a few days, then
+updates.
 
 ## Scope notes for operators
 
-A few things worth knowing when deploying Crewlet:
-
 - **Agent credentials are per-seat by design.** Each agent's external
-  identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
-  scope them minimally; the engine never needs a personal admin token at
-  runtime (provisioning CLIs do need an admin credential, once).
+  identities (Atlassian/GitLab/Slack tokens) are separate service accounts;
+  scope them minimally. The engine never needs a personal admin token at
+  runtime (provisioning CLIs need an admin credential, once).
 - **Session cookies are signed with the Tier A keyring, and a node without
   one does not start.** Every node needs a keyring (`crewlet validate`
-  refuses a file without one), and the engine refuses to build a session
-  signer from a keyring that cannot sign for the fleet rather than falling
-  back to a per-process key: with a fallback, every ingress node would accept
-  only cookies it minted itself, so a browser would be signed in on whichever
-  node its request happened to reach. The cookie is `HttpOnly`, `Secure`,
-  `SameSite=Lax` and carries the `__Host-` prefix on any deployment whose
-  `api.external_url` is not plain http, which is what stops a sibling
-  subdomain writing one. It carries no login, no address and no permissions —
-  only ids, two deadlines and a MAC — so a cookie recovered from a proxy log
-  discloses nothing and authenticates nothing. **Dropping a keyring entry ends
-  every session signed under it**; see the rotation runbook in
-  `docs/concepts/secret-store.md`.
-- **A sign-in endpoint discloses nothing about who exists.** The refusal is
-  one generic error for every arm — no such login, wrong password, wrong
-  second-factor code, code already spent — because telling a caller which one
-  applies tells an attacker the same, and the first of them is the company's
-  roster. Two mechanisms keep the timing from saying it instead: the
-  throttle is keyed on the subject as TYPED from the request's source, and
-  decides before anything is looked up (a throttle keyed on who the subject
-  resolved to is one only real people can trigger, so its delay becomes the
-  oracle); and a subject that does not exist is still verified against — one
-  dummy verifier at this build's cost, so a miss is the same argon2id
+  refuses a file without one). The engine never falls back to a per-process
+  key: each ingress node would accept only cookies it minted. The cookie is
+  `HttpOnly`, `Secure`, `SameSite=Lax` and carries the `__Host-` prefix when
+  `api.external_url` is not plain http, which stops a sibling subdomain
+  writing one. It holds only ids, two deadlines and a MAC (no login, address
+  or permissions), so one recovered from a proxy log discloses and
+  authenticates nothing. **Dropping a keyring entry ends every session signed
+  under it**; see the rotation runbook in `docs/concepts/secret-store.md`.
+- **A sign-in endpoint discloses nothing about who exists.** Every refusal is
+  one generic error (no such login, wrong password, wrong second-factor code,
+  code already spent). Timing is kept equal two ways: the throttle is keyed on
+  the subject as TYPED, from the request's source, and decides before any
+  lookup (a throttle keyed on the resolved person is one only real people can
+  trigger, so its delay becomes the oracle); and a nonexistent subject is
+  verified against one dummy verifier at this build's cost, the same argon2id
   derivation under the same verify cap as a hit. What still separates the
-  arms is stated rather than hidden, and not padded: the directory read before
-  the derivation, and a stored verifier written at another cost than this
-  build's, until the next sign-in rewrites it.
+  arms: the directory read before the derivation, and a verifier stored at
+  another cost than this build's, until the next sign-in rewrites it.
 - **A failed sign-in costs a wait, never a lockout.** Each failure doubles the
-  wait before the next attempt on its key, one second to thirty, and a correct
-  credential after the wait always succeeds — a lockout is something an
-  outsider can cause, against any login they can type. A success clears only
-  its own (subject, source) pair, so holding one account never wipes the
-  record of guesses at another. A second-factor code is also decided on a
-  curve keyed on the person, reached only past their password, so somebody
-  holding it cannot spread their guesses at the code across addresses; the
-  wrong code that takes it to its ceiling is announced as
-  `iam_second_factor_throttled`, which means the password is known and should
-  be rotated. No address is ever refused on its own: a
-  curve on the source alone let any stranger at an office's or a proxy's
-  address hold every sign-in from it at `429`, so one password tried across
-  many names from one address is bounded by the password floor, the argon2id
-  cost and the verify cap instead, and shown in the audit trail's per-minute
-  failure count by source; an invitation link meets no curve at all, its secret's 256
-  bits being what bounds a walk. No curve
-  stands in front of a bearer — a Tier A token, a machine token or a session
-  cookie: a bearer names nobody until it is compared, so a curve there could
-  only be keyed on the address, and one was a way for any stranger at an
-  address to hold every token used from it at `429`. A bearer's protection is its length and randomness (a Tier A value is
-  refused under 26 characters), and every refused one is counted in the audit
-  trail's per-minute failure count by source. Behind a proxy, name it in
-  `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
-  guessing at somebody's login slows that person's own sign-in. The curve is
-  each node's own and is not shared through the coordination store, so on a
-  fleet of N nodes serving sign-ins a run a load balancer spreads across all
-  of them is admitted up to N times as often — still bounded by the
-  twelve-character floor, the blocklist, the argon2id cost and, for a person
-  who holds one, a second factor.
+  wait before the next attempt on its key, one second to thirty; a correct
+  credential after the wait always succeeds (an outsider could cause a lockout
+  against any login they can type). A success clears only its own (subject,
+  source) pair. A second-factor code is also throttled on a curve keyed on the
+  person, reached only past their password, so guesses cannot be spread across
+  addresses; the wrong code that takes it to its ceiling is announced as
+  `iam_second_factor_throttled`, meaning the password is known and should be
+  rotated.
+  - No address is refused on its own: that let any stranger at an office's or
+    proxy's address hold every sign-in from it at `429`. One password tried
+    across many names from one address is bounded by the password floor, the
+    argon2id cost and the verify cap, and shown in the audit trail's
+    per-minute failure count by source.
+  - An invitation link meets no curve; its secret's 256 bits bound a walk.
+  - No curve stands before a bearer (Tier A token, machine token, session
+    cookie): it names nobody until compared, so a curve could only key on the
+    address, with the same `429` hold. A bearer is protected by its length and
+    randomness (a Tier A value under 26 characters is refused); every refused
+    one is counted in that same per-minute count.
+  - Behind a proxy, name it in `api.trusted_proxies`; otherwise every caller is
+    the proxy, and a stranger guessing at somebody's login slows their own
+    sign-in.
+  - The curve is per node, not shared through the coordination store: on N
+    nodes behind a load balancer, up to N times as many attempts are admitted,
+    still bounded by the twelve-character floor, the blocklist, the argon2id
+    cost and, for a person who holds one, a second factor.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next
-  successful sign-in — the only instant a stronger digest can be computed,
-  because the plaintext is not stored. A re-hash only ever raises a cost: a
-  node still on an older build during a rolling upgrade leaves a verifier the
-  newer build wrote exactly as it is. Machine tokens and recovery codes are
-  SHA-256 rather than argon2id, deliberately: both are minted by this engine
-  from `crypto/rand`, so there is no dictionary to grind and the memory cost
-  would buy nothing while adding a hundred milliseconds to every request a CI
-  job makes.
+  successful sign-in (the only moment the plaintext is available). A re-hash
+  only raises a cost: a node on an older build in a rolling upgrade leaves a
+  newer verifier as is. Machine tokens and recovery codes are SHA-256,
+  deliberately: both are minted from `crypto/rand`, so there is no dictionary
+  to grind, and argon2id would add a hundred milliseconds to every CI request
+  for nothing.
 - **A second factor's seed is sealed, under the fleet keyring.** TOTP is
-  symmetric, so the seed is the one credential the identity estate has to keep
-  as a secret rather than a verifier — and that estate is replicated to every
-  node, snapshotted, backed up and donated to joining peers. The seed is sealed
-  when it is enrolled, bound to the person *and* the credential it was enrolled
-  as, and opened only to check a code; removing the person erases it from every
-  node's rows, as it does their name and address. **Builds before this change stored it in the clear**, so a
-  deployment running one holds every enrolled seed in its identity log, its
-  snapshots and every backup taken since. Treat those seeds as disclosed: a
-  seed stored in the clear no longer verifies (the node logs
+  symmetric, so the seed must be kept as a secret, not a verifier, in an
+  estate replicated to every node, snapshotted, backed up and donated to
+  joining peers. It is sealed at enrolment, bound to the person *and* the
+  credential, and opened only to check a code; removing the person erases it
+  from every node's rows, as it does their name and address. **Builds before
+  this change stored it in the clear**, so such a deployment holds every
+  enrolled seed in its identity log, snapshots and backups. Treat those seeds
+  as disclosed: a clear seed no longer verifies (the node logs
   `api_totp_seed_unopenable` naming the person and credential), so have each
   such person sign in with a recovery code and enrol their app again, or reset
   their second factor (`crewlet iam reset-mfa`, `POST
-  /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in —
-  re-sealing the old value would leave the copies already written readable.
+  /iam/people/{id}/mfa/reset`) so they re-enrol at their next sign-in.
+  Re-sealing the old value would leave the copies already written readable.
 - **An invitation link carries a secret, and the estate keeps only its hash.**
-  The invitation's id is the row's key — in its record, every snapshot and
-  backup, and every access log a request for it passed through — so it opens
-  nothing on its own. The link is `…/dashboard#/invite/<id>.<secret>`, the
-  secret after the `#`, which no browser sends to a server; the dashboard
-  presents it beside the id in a header or a body, never in a URL, and a wrong
-  one is refused exactly as an id nobody issued is. **Builds before this change
-  made the id itself the link**, so an invitation they issued is in every
-  backup as a working credential: such an invitation is now redeemable by
-  nobody, and the remedy is to issue it again.
+  The invitation's id is the row's key (in every snapshot, backup and access
+  log it passed), so it opens nothing alone. The link is
+  `…/dashboard#/invite/<id>.<secret>`, the secret after the `#`, which no
+  browser sends to a server; the dashboard presents it beside the id in a
+  header or body, never a URL, and a wrong one is refused exactly as an id
+  nobody issued is. **Builds before this change made the id itself the
+  link**, so their invitations are in every backup as working credentials;
+  they are now redeemable by nobody, and the remedy is to issue them again.
 - **Whoever creates a person is shown that person's first password link.** An
   administrator can create somebody directly on a vacant human seat (`POST
   /iam/people`, `crewlet iam create`, or **Create person** on the seat in the
-  org chart) instead of inviting them, and the answer carries the person's
-  first password link, shown once, for the administrator to send on. Until it
-  is spent, or for its week, that link sets the password of an `active` person
-  who acts as the seat they hold — so holding `admin`, with a vacant
-  human seat to name, is enough to obtain a credential that will act as that
-  seat once its password is set. Two rules bound it: a create confers only
-  permissions its writer holds, exactly as an invitation does, so nobody creates a
-  person holding more than they could act with themselves; and the link signs
-  nobody in, so a second factor the company requires is enrolled at that
-  person's first sign-in. `admin` is already host access (below), so this
-  widens nothing an administrator could not reach another way; give it only to
-  the people you would trust to put somebody on any vacant seat, and treat a created person's link as you
-  would an invitation: send it over a channel only they read, and if it may
-  have been seen by anybody else, end it — issue a password reset link, or end
-  their sessions — before it is spent. The issue is an
-  `iam_password_reset_issued` event marked `first`, naming who created them.
+  org chart) instead of inviting them; the answer carries the first password
+  link, shown once, to send on. Until spent, or for its week, it sets the
+  password of an `active` person who acts as that seat, so holding `admin`
+  plus a vacant human seat is enough to obtain a credential that acts as the
+  seat. Two rules bound it: a create confers only permissions its writer
+  holds, as an invitation does; and the link signs nobody in, so a required
+  second factor is enrolled at that person's first sign-in. `admin` is already
+  host access (below), so this widens nothing; give it only to people you
+  would trust to put somebody on any vacant seat. Treat the link as an
+  invitation: send it over a channel only they read, and if anybody else may
+  have seen it, end it before it is spent by issuing a password reset link or
+  ending their sessions. The issue is an `iam_password_reset_issued` event
+  marked `first`, naming who created them.
 - **A first password link and an invitation link are derived, under the
-  company's blind key.** So that a retry of a create or an invitation whose
-  answer was lost hands back the same link rather than a second person or a
-  second invitation, each link's id and secret are MACs under the company's
-  blind-index key — an invitation's of its operation key, a first password
-  link's of the person the create's key derived — and the estate keeps only the
-  SHA-256 of the secret. Whoever holds that key can compute the secret of every link that
-  is still open. That adds no exposure beyond the keyring: the blind-index key
-  is itself sealed under the fleet keyring, and whoever holds the keyring can
-  already sign any state-log record, open every sealed name, address and
-  second-factor seed, and sign session cookies. Protect the keyring as the root
-  of trust it is, and a stolen copy of the identity log, a snapshot or a backup
+  company's blind key.** So a retry of a create or invitation whose answer was
+  lost returns the same link, each link's id and secret are MACs under the
+  blind-index key (an invitation's of its operation key, a first password
+  link's of the person the create's key derived), and the estate keeps only
+  the SHA-256 of the secret. Whoever holds that key can compute every open
+  link's secret, which adds no exposure beyond the keyring: the key is sealed
+  under the fleet keyring, whose holder can already sign any state-log record,
+  open every sealed name, address and seed, and sign session cookies. Protect
+  the keyring as the root of trust; a stolen identity log, snapshot or backup
   without it computes no link.
-- **Every API route requires a credential, reads included.** `allow_anonymous_read`
-  is gone: it served `/events`, `/agents/{id}/memory` and `/ws/stream` — full
-  LLM transcripts, diary entries and the roster — without one, by default, and
-  it could not be closed durably because it was an `omitempty` bool whose safe
-  value was its zero, so `false` did not survive an export round trip. A
-  script that only reads what the company is doing holds a service account's
-  token with no permission at all. What stays reachable without one is a short fixed
-  list — the probes, the signed webhook edges, the per-run token paths, and the
-  dashboard shell, which ships no data — and it is a list of *exemptions*
-  rather than a posture anything can widen.
-
+- **Every API route requires a credential, reads included.**
+  `allow_anonymous_read` is gone: it served `/events`, `/agents/{id}/memory`
+  and `/ws/stream` (full LLM transcripts, diary entries, the roster) without
+  one, by default, and could not be closed durably (an `omitempty` bool whose
+  safe value was its zero, so `false` did not survive an export round trip). A read-only
+  script holds a service account's token with no permission at all. Reachable
+  without one is a short fixed list of *exemptions*, not a posture anything
+  can widen: the probes, the signed webhook edges, the per-run token paths, and
+  the dashboard shell, which ships no data.
   `api.auth.disabled`, which authenticated the *empty* credential into full
   operator authority with no bind check anywhere, is gone with it.
   `crewlet run -dev-principal <login>` is what replaces it for local work, and

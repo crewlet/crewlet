@@ -190,13 +190,23 @@ wording:
 | `ssh_operate` | The server as the approver is shown it, the command and its stdin. |
 
 The `reason`, and a deploy's `rollback`, are the agent's words and are not part
-of it. While a request waits on a delegate or on a person, the same agent's
-repeat of it holds nothing new: no second delegate turn, no second Inbox
-entry. The repeating turn is told the request already waits, under its id, and
-is not parked; the turn that asked first carries the work on when the answer
-comes. A new head, another method, environment or command, or the same ask by
-another agent, is a request of its own. So is the same ask once the first was
-answered, allowed or denied: nothing is open to join, and it is asked afresh.
+of it. Until a request has come to its end, the same agent's repeat of it
+holds nothing new: no second delegate turn, no second Inbox entry. That is while
+it waits on a delegate or on a person, and while its answer is on its way to the
+turn that asked and, allowed, is being carried out. The repeating turn is told
+the request already waits or is being acted on, under its id, and is not
+parked; the turn that asked first carries the work on with the answer. A new
+head, another method, environment or command, or the same ask by another agent,
+is a request of its own. So is the same ask once the first came to its end (its
+denial read by the turn that asked, or its call made, a merge that failed
+included): nothing is open to join, and it is asked afresh.
+
+A merge request whose pull request has already merged by the time its delegate
+would read it is answered by Crewlet itself, as not carried out, without waking
+the delegate: there is nothing left to decide. The access log records it as
+Crewlet's verdict, `already_merged`, and the asking turn is told the pull
+request merged. A Gitlet change is read only for a turn, so its delegate reads
+it and an allow of a change no longer open still goes to people.
 
 Without a rule for the kind, the request goes to people. A person who may
 approve one is an administrator, a lead of the agent, or a person the kind's

@@ -1060,7 +1060,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The transcript is the observability surface of an agent with no
 	// telemetry: the parser's from streamed events, else the error stream,
 	// read once and reused below for the failure detail.
-	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redactContext)
+	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redact.LookBack)
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
 		refused = append(refused, refusal)
 		errTail, err = sandbox.FileTail{}, nil

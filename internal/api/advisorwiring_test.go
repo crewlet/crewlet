@@ -187,19 +187,21 @@ func TestAnAdministratorsRunNowAndDecisionsAreRecorded(t *testing.T) {
 		fakeRuntime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}, log: log}})
 	status, answer := writeAs(t, a, "/advisor/runs", "")
 	if status != http.StatusAccepted || answer["run_id"] == nil || len(log.asked) != 1 || log.asked[0].RunKind != "" {
-		t.Fatalf("Run now answered %d %v, asked %+v; want 202 and one run of the rules asked for", status, answer, log.asked)
+		t.Fatalf("Run answered %d %v, asked %+v; want 202 and one run asked for", status, answer, log.asked)
 	}
 	// AN API TOKEN HOLDS NO SEAT, and its run still names who asked: the
 	// log refuses a run asked by nobody.
 	if by := log.asked[0].By; by == "" || strings.TrimSpace(by) != by {
 		t.Errorf("a token's Run now is asked by %q, want the token's own name", by)
 	}
-	if status, answer := writeAs(t, a, "/advisor/runs", `{"kind":"everything"}`); status != http.StatusBadRequest {
-		t.Errorf("a run of an unknown kind answered %d %v, want 400", status, answer)
+	// ONE RUN, NO KIND TO CHOOSE: a body naming one is refused, and {} is a run.
+	for _, body := range []string{`{"kind":"deep"}`, `{"kind":"rules"}`} {
+		if status, answer := writeAs(t, a, "/advisor/runs", body); status != http.StatusBadRequest {
+			t.Errorf("a run asked with %s answered %d %v, want 400", body, status, answer)
+		}
 	}
-	if status, _ := writeAs(t, a, "/advisor/runs", `{"kind":"deep"}`); status != http.StatusAccepted ||
-		len(log.asked) != 2 || log.asked[1].RunKind != advisordomain.RunKindDeep {
-		t.Errorf("Run deep answered %d, asked %+v; want a deep run asked for", status, log.asked)
+	if len(log.asked) != 1 {
+		t.Errorf("a refused body asked %+v, want nothing more", log.asked)
 	}
 	for _, decision := range []string{`{"decision":"snooze"}`, `{"decision":"useful"}`,
 		`{"decision":"dismiss","reason":"known"}`} {

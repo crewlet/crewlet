@@ -158,16 +158,61 @@ func TestAnAskThatDiffersInSubstanceIsItsOwnRequest(t *testing.T) {
 	}
 }
 
-// A request already answered, being carried out, or whose run ended or moved
-// on to another job is no longer open: the same ask after it is a new request.
+// A request on its way to its end joins a repeat as an open one does: its
+// job's completion claimed and not yet parked, answered and the answer not yet
+// taken by the turn that asked, or being made. A second request raised in any
+// of those reached its delegate after the first was carried out: the delegate
+// was woken for a merge already made and denied it as a duplicate.
+//
+// Mutation: join only a request that waits on its answer, and each of these
+// holds a second request.
+func TestARepeatAskJoinsTheRequestBeingCarriedOut(t *testing.T) {
+	t.Parallel()
+	for name, carry := range map[string]func(*sandbox.PendingRun){
+		"collected, not yet parked": func(r *sandbox.PendingRun) { r.Status = sandbox.StatusResumed },
+		"answered, not yet taken": func(r *sandbox.PendingRun) {
+			r.Status, r.Answer = sandbox.StatusAnswered, &sandbox.RecordedAnswer{RecordedAt: time.Now()}
+		},
+		"claimed for its answer": func(r *sandbox.PendingRun) {
+			r.Status, r.Answer = sandbox.StatusResumed, &sandbox.RecordedAnswer{RecordedAt: time.Now()}
+		},
+		"being made": func(r *sandbox.PendingRun) {
+			r.Status, r.Answer = sandbox.StatusResumed, &sandbox.RecordedAnswer{TakenAt: time.Now()}
+			r.HeldCall.CallingAt = time.Now()
+		},
+	} {
+		f := newJoinFixture(t)
+		if res := f.ask("sre", "run-1", builtin.AskToMergeTool, pullMergeArgs(pullHead)); !res.Held {
+			t.Fatalf("%s: the first ask answered %+v, want it held", name, res)
+		}
+		carry(&f.desk.rows[0])
+		open := f.desk.rows[0].HeldCall
+		again := f.ask("sre", "run-2", builtin.AskToMergeTool, pullMergeArgs(pullHead))
+		if again.Held || again.Refusal() != tools.RefusalConflict || f.held() != 1 ||
+			!strings.Contains(again.Output, open.ID) {
+			t.Errorf("%s: the repeat answered %+v with %d calls held, want it joined to %s", name, again,
+				f.held(), open.ID)
+		}
+	}
+}
+
+// A request that came to its end is no longer open: the same ask after it is a
+// new request. Its answer taken with nothing made (a denial the turn read), its
+// call made (a merge that failed is asked again), or its run ended or moved on
+// to another job.
 //
 // Mutation: join whatever the seat's rows still name, and an ask after a
 // denial or a merge that failed waits on an answer that already came.
 func TestAnAskAfterItsRequestWasDecidedIsANewRequest(t *testing.T) {
 	t.Parallel()
 	for name, decide := range map[string]func(*sandbox.PendingRun){
-		"answered":            func(r *sandbox.PendingRun) { r.Status = sandbox.StatusAnswered },
-		"being carried out":   func(r *sandbox.PendingRun) { r.HeldCall.CallingAt = time.Now() },
+		"its denial was read": func(r *sandbox.PendingRun) {
+			r.Status, r.Answer = sandbox.StatusResumed, &sandbox.RecordedAnswer{TakenAt: time.Now()}
+		},
+		"it was made": func(r *sandbox.PendingRun) {
+			r.Status, r.Answer = sandbox.StatusResumed, &sandbox.RecordedAnswer{TakenAt: time.Now()}
+			r.HeldCall.CallingAt, r.HeldCall.MadeAt = time.Now(), time.Now()
+		},
 		"its run is ending":   func(r *sandbox.PendingRun) { r.Ending = &sandbox.RecordedEnding{} },
 		"its run took a job":  func(r *sandbox.PendingRun) { r.LaunchID = "launch-next" },
 		"its question is off": func(r *sandbox.PendingRun) { r.Question = "" },

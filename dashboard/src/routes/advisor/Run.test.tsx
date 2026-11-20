@@ -29,6 +29,10 @@ const running: ViewRun = {
   budget: null,
   reason: null,
   dropped: 0,
+  droppedWhy: {},
+  repaired: {},
+  deepSkipped: null,
+  keptFrom: null,
 };
 
 // A RUN IS FOLLOWED, NEVER WAITED ON: its elapsed time and what it is doing
@@ -132,4 +136,72 @@ test("a deep run says it is one, what it spent, the bound it stopped at, and why
     reason: "Bound.",
     dropped: 3,
   });
+});
+
+// ONE PRESS, ONE RUN: a press whose deep part was kept says from when, one
+// that could not investigate says why, and either way what its checks moved.
+test("a run says its deep part was kept, or could not run, and why", () => {
+  const done = {
+    ...running,
+    status: "done" as const,
+    kind: "deep" as const,
+    endedAt: "2026-11-20T09:59:00Z",
+    progress: [],
+  };
+  expect(
+    runWords({ ...done, opened: 2, deepSkipped: "kept", keptFrom: "2026-11-20T08:00:00Z" }, NOW),
+  ).toBe(
+    "All checks ran 1 minute ago. It found 2 new findings. The deep investigation from 2 hours ago is kept.",
+  );
+  expect(
+    runWords(
+      {
+        ...done,
+        deepSkipped: "no_model",
+        reason: "The Advisor has no model assigned (advisor.model).",
+      },
+      NOW,
+    ),
+  ).toBe(
+    "All checks ran 1 minute ago. The deep investigation could not run. The Advisor has no model assigned (advisor.model).",
+  );
+});
+
+// WHAT THE MODEL FOUND IS ACCOUNTED FOR: findings listed after a repair are
+// counted by the repair, and those left out by why, so an empty list never
+// reads as nothing found.
+test("a deep run counts what it mended and what it left out, and why", () => {
+  const view = runView({
+    run_id: "r",
+    trigger: "person",
+    by: "ada",
+    started_at: "2026-11-20T09:40:00Z",
+    ended_at: "2026-11-20T09:59:00Z",
+    status: "done",
+    classes_run: 0,
+    unread: [],
+    opened: 1,
+    resolved: 0,
+    model: {
+      status: "done",
+      tokens: 600_000,
+      listed: 3,
+      dropped: { wrong_number: 1 },
+      repaired: { fix_not_built: 2, reworded: 1 },
+      reason: "",
+    },
+    kind: "deep",
+    progress: [],
+    budget: { tokens: 600_000, tokens_ceiling: 2_000_000, minutes: 19, minutes_ceiling: 20 },
+    stopped_by: "done",
+    classes: [],
+    deep_skipped: null,
+    deep_kept_from: null,
+  });
+  const words = runWords(view, NOW);
+  expect(words).toContain("listed 2 findings with no fix it could build");
+  expect(words).toContain("reworded 1 finding the wording rule refused");
+  expect(words).toContain(
+    "left out 1 finding it could not ground in what it read (1 cited a number not where it said)",
+  );
 });

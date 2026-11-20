@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -37,31 +38,37 @@ func (u *digestUploader) Put(_ context.Context, r io.Reader, _ int64, _ objstore
 }
 
 // A KEPT LOG READS ONLY THE BYTES IT KEEPS FROM THE BOX: an output a MiB past
-// gitlet.MaxCheckLogBytes keeps its last MaxCheckLogBytes, byte for byte, and
-// the box hands out exactly those, never the MiB before, which a remote box
-// would send over the wire for nothing.
+// a log's bound and the redaction's look-back keeps its end within the bound,
+// from a line, byte for byte where nothing redacts, and the box hands out
+// exactly the bound and the look-back, never the MiB before, which a remote
+// box would send over the wire for nothing.
 //
 // Mutation: read from the output's start and discard the earlier bytes (the box
 // hands out the whole output, red).
 func TestAKeptLogReadsOnlyItsKeptBytesFromTheBox(t *testing.T) {
 	t.Parallel()
-	output := make([]byte, gitlet.MaxCheckLogBytes+1<<20)
-	for i := range output {
-		output[i] = byte(i % 251)
+	const limit = 1 << 20
+	var b strings.Builder
+	for b.Len() < limit+redact.LookBack+1<<20 {
+		fmt.Fprintf(&b, "line %d of the build\n", b.Len())
 	}
+	output := b.String()
 	box := sandbox.NewFakeSandbox("box-1")
-	box.Put(checkrun.OutputFile, string(output))
+	box.Put(checkrun.OutputFile, output)
 	logs := &digestUploader{}
-	log, why := checkrun.KeepLog(t.Context(), box, logs)
+	log, why := checkrun.KeepLogWithin(t.Context(), box, logs, limit)
 	if log == nil || why != "" {
-		t.Fatalf("KeepLog = %+v, %q; want the log kept", log, why)
+		t.Fatalf("KeepLogWithin = %+v, %q; want the log kept", log, why)
 	}
-	if logs.n != gitlet.MaxCheckLogBytes || logs.sum != sha256.Sum256(output[1<<20:]) {
-		t.Errorf("the kept log is %d bytes; want the output's last %d, byte for byte", logs.n,
-			gitlet.MaxCheckLogBytes)
+	from := len(output) - int(logs.n)
+	if logs.n > limit || logs.n < limit-64 || output[from-1] != '\n' ||
+		logs.sum != sha256.Sum256([]byte(output[from:])) {
+		t.Errorf("the kept log is %d bytes; want the output's last whole lines within %d, byte for byte", logs.n,
+			limit)
 	}
-	if read := box.Delivered(); read != gitlet.MaxCheckLogBytes {
-		t.Errorf("keeping the log read %d bytes from the box; want the %d kept", read, gitlet.MaxCheckLogBytes)
+	if read := box.Delivered(); read != limit+redact.LookBack {
+		t.Errorf("keeping the log read %d bytes from the box; want the %d kept and the look-back", read,
+			limit+redact.LookBack)
 	}
 }
 

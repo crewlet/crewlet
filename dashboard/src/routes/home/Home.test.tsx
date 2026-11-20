@@ -695,6 +695,31 @@ describe("the decisions", () => {
     );
   });
 
+  // A REPLY IS MARKDOWN, quoted as the conversation draws it: its bold as
+  // bold and its list as a list, under the line. Mutation: quote the words
+  // as text, and the line reads `**Hold**` and its dashes.
+  test("a reply in markdown is quoted with its marks drawn", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    fireEvent.click(within(card).getByRole("radio", { name: /Something else/ }));
+    fireEvent.change(within(card).getByRole("textbox", { name: "Something else" }), {
+      target: { value: "**Hold**, and:\n- ship the hotfix alone\n- skip the rest" },
+    });
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Send" }));
+    });
+    await settle();
+    const line = card.querySelector(".decision-answered")!;
+    expect(line.querySelector("strong")?.textContent).toBe("Hold");
+    expect([...line.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "ship the hotfix alone",
+      "skip the rest",
+    ]);
+    expect(line.textContent).not.toMatch(/\*\*|- /);
+  });
+
   test("one ask's options are open at a time", async () => {
     mount({
       answers: {

@@ -410,11 +410,7 @@ func wakeBody(record MutationRecord) (string, provenance.Source) {
 	}
 	candidates := []candidate{}
 	if c := carried.Comment; c != nil {
-		body := strings.TrimSpace(c.Body)
-		if answered := record.Notify.Answered; answered != nil && answered.Choice != nil {
-			body = choiceExcerpt(answered.Choice.Label, body)
-		}
-		candidates = append(candidates, candidate{body, provenance.SourceWorkComment})
+		candidates = append(candidates, candidate{strings.TrimSpace(c.Body), provenance.SourceWorkComment})
 	}
 	if record.Notify.Kind == ChangeCreated {
 		candidates = append(candidates, candidate{
