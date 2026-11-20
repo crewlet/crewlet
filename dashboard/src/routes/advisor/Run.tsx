@@ -1,6 +1,6 @@
 /**
  * The Advisor's run, at the head of its page: when every check last ran and
- * what it moved, Run now, and while a run is going, how long it has run and
+ * what it moved, Run, and while a run is going, how long it has run and
  * what it is doing.
  *
  * A RUN IS FOLLOWED, NEVER WAITED ON: the page under it stays in use while it

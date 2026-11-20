@@ -6,7 +6,7 @@
  * # Anatomy
  *
  * THE HEAD says when every check last ran, and while a run is going how long
- * it has run and what it is doing (`Run.tsx`), with Run now and the range the
+ * it has run and what it is doing (`Run.tsx`), with Run and the range the
  * numbers cover.
  *
  * FINDINGS, the first tab, opens on the NUMBERS: a strip of figures, each
