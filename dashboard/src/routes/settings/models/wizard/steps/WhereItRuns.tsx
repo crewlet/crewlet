@@ -2,8 +2,12 @@
  * Where a model's executors run, as three cards in the harness step's shape:
  * each place's glyph and name, one line saying what it is, and two facts,
  * whether the fleet can start one there and how isolated it is. The company
- * default is tagged; a place no node can use is unavailable, its Ready fact
- * saying why and what fixes it (N5).
+ * default is tagged; a place no node can use is unavailable, its Status fact
+ * saying why and what fixes it, in a person's words (N5).
+ *
+ * A COMPANY WITH NO PLACE SET UP gets this host: the save writes the sandbox
+ * block the engine asks for (`draft.ts`, `nextDocument`), so a first coding
+ * model can be added from here, and the card says the save sets it up.
  *
  * THE FLEET ANSWERS, NOT THIS NODE (`llm_runners`): a seat's executor launches
  * from whichever node holds the seat, so a place ready on some nodes and not on
@@ -50,11 +54,26 @@ const PLACE_WORDS: Record<
  * cell"), which says the same thing to someone who already knows the schema.
  */
 const NOT_SET_UP: Record<RunnerCellName, string> = {
-  direct: "Running on this engine's host isn't set up for this company.",
-  container:
-    "Containers aren't set up for this company. Add them under providers.sandbox to use them.",
-  e2b: "E2B isn't set up for this company. Add it under providers.sandbox to use it.",
+  direct:
+    "Running on this engine's host isn't set up for this company. Set it up in Configuration.",
+  container: "Containers aren't set up for this company. Set them up in Configuration.",
+  e2b: "E2B isn't set up for this company. Set it up in Configuration.",
 };
+
+/**
+ * A node's reason in a person's words where the engine's names a field: the
+ * container image is the one a node reports, and its fix is a field path.
+ */
+function nodeWords(detail: string, fix: string): string {
+  if (/providers\.sandbox\.local\.image/.test(`${detail} ${fix}`))
+    return "Containers need an image with the harness installed. Set it in Configuration.";
+  return [detail.replace(/\.$/, ""), fix].filter(Boolean).join(". ");
+}
+
+/** Whether the company sets up no place at all, so the save sets up this host. */
+export function noPlaceSetUp(answer: RunnersAnswer): boolean {
+  return !answer.default_run_in && PLACES.every((p) => !answer.cells[p].declared);
+}
 
 /**
  * Why a place cannot start a run on any node. A place the company never set
@@ -65,9 +84,7 @@ function unready(answer: RunnersAnswer, place: RunnerCellName): string {
   if (!answer.cells[place].declared) return NOT_SET_UP[place];
   for (const node of answer.nodes) {
     const cell = node[place];
-    if (cell && cell.state !== "ready") {
-      return [cell.detail.replace(/\.$/, ""), cell.fix].filter(Boolean).join(". ");
-    }
+    if (cell && cell.state !== "ready") return nodeWords(cell.detail, cell.fix ?? "");
   }
   return "Not ready on any node.";
 }
@@ -78,6 +95,9 @@ export function readiness(
   place: RunnerCellName,
 ): { value: string; tone: "success" | "warning" | "neutral"; available: boolean } {
   const cell = answer.cells[place];
+  // THIS HOST, WHERE NOTHING IS SET UP: the save sets it up.
+  if (place === "direct" && noPlaceSetUp(answer))
+    return { value: "Set up when you save", tone: "neutral", available: true };
   if (cell.ready_on.length > 0 && cell.not_ready_on.length === 0)
     return { value: `Ready on ${listed(cell.ready_on)}`, tone: "success", available: true };
   if (cell.ready_on.length > 0)
@@ -112,7 +132,8 @@ export function WhereItRuns({
     }
     return <Skeleton variant="text" rows={4} label="Checking where coding can run" />;
   }
-  const chosen: RunnerCellName = draft.runIn || answer.default_run_in;
+  const chosen: RunnerCellName | "" =
+    draft.runIn || answer.default_run_in || (noPlaceSetUp(answer) ? "direct" : "");
   const hostLogin = draft.method === "host-login";
   const options: ChoiceCardOption[] = PLACES.map((place) => {
     const words = PLACE_WORDS[place];
@@ -126,7 +147,7 @@ export function WhereItRuns({
       ...(place === answer.default_run_in ? { tag: "Company default" } : {}),
       description: words.description,
       facts: [
-        { label: "Ready", value: ready.value, tone: ready.tone },
+        { label: "Status", value: ready.value, tone: ready.tone },
         { label: "Isolation", value: words.isolation },
       ],
       ...(blocked

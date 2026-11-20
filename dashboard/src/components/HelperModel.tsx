@@ -17,6 +17,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Select, Text } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { documentLimit } from "~/lib/limits.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
 import { SettingWriteStatus, standingWords } from "./SettingWriteStatus.tsx";
@@ -26,17 +27,19 @@ export type Helper = "assistant" | "advisor";
 
 /** What each helper is called, where its model is written, and what having none means. */
 export const HELPERS: Readonly<
-  Record<Helper, { name: string; settingKey: string; without: string }>
+  Record<Helper, { name: string; settingKey: string; without: string; off: string }>
 > = {
   assistant: {
     name: "Ask Crewlet",
     settingKey: "assistant.model",
     without: "Ask Crewlet is off without a model",
+    off: "Turn Ask Crewlet off",
   },
   advisor: {
     name: "Advisor",
     settingKey: "advisor.model",
     without: "Its checks still run, with no explanations or report summary",
+    off: "Run the Advisor with no model",
   },
 };
 
@@ -115,6 +118,8 @@ export function HelperModel({
     if (chosen !== undefined && chosen === current) setChosen(undefined);
   }, [chosen, current]);
   const shown = chosen !== undefined ? chosen : current;
+  /** A pick waiting for its one confirm: the model, or null for none. */
+  const [asked, setAsked] = useState<{ key: string | null } | null>(null);
   if (!canAssign) {
     return (
       <Text as="span" variant="caption" tone="secondary" className="helper-model">
@@ -149,12 +154,32 @@ export function HelperModel({
         value={shown ?? NONE}
         options={options}
         disabled={write.busy}
+        // ONE CONFIRM, as every model picker on its page asks: a pick saved
+        // at once changed Ask Crewlet's model by a stray choice.
         onChange={(value) => {
           const key = String(value) === NONE ? null : String(value);
-          setChosen(key);
-          write.submit(helperModelPlan(helper, key));
+          if (key !== shown) setAsked({ key });
         }}
       />
+      {asked ? (
+        <ConfirmModal
+          open
+          onClose={() => setAsked(null)}
+          onConfirm={() => {
+            setChosen(asked.key);
+            write.submit(helperModelPlan(helper, asked.key));
+            setAsked(null);
+          }}
+          title={asked.key === null ? `${HELPERS[helper].off}?` : `Move ${name} to ${asked.key}?`}
+          message={
+            asked.key === null
+              ? `${HELPERS[helper].without}.`
+              : `${name} runs on ${asked.key} from now on.`
+          }
+          confirmLabel={asked.key === null ? "Turn off" : "Move"}
+          {...(asked.key === null ? { destructive: true } : {})}
+        />
+      ) : null}
       <SettingWriteStatus write={write} onReload={onApplied} answersWarning />
       {write.state.kind === "saved" ? (
         <Text as="span" variant="caption" tone="secondary" role="status">
