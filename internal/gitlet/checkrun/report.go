@@ -57,6 +57,12 @@ var failureOverhead = func() int {
 // deterministic, so an id still names the same test); its path, a file of the
 // change's, is kept as written.
 func (fs *failures) add(f gitlet.CheckFailure) {
+	// FULL, a failure is only counted: redacting the hundreds of thousands
+	// a report can name past what an ending keeps costs their time and heap.
+	if len(fs.kept) >= gitlet.MaxCheckFailures || fs.bytes >= gitlet.MaxCheckFailureBytes {
+		fs.omitted++
+		return
+	}
 	f.Path = strings.ToValidUTF8(f.Path, "")
 	f.TestID = redact.Secrets(strings.ToValidUTF8(f.TestID, ""))
 	message, _ := redact.Prefix(strings.ToValidUTF8(f.Message, ""), gitlet.CheckFailureMessageBytes+1)
@@ -65,7 +71,7 @@ func (fs *failures) add(f gitlet.CheckFailure) {
 		f.Line = 0
 	}
 	weight := failureOverhead + jsonBytes(f.Path) + jsonBytes(f.TestID) + jsonBytes(f.Message) + 20
-	if len(fs.kept) >= gitlet.MaxCheckFailures || fs.bytes+weight > gitlet.MaxCheckFailureBytes {
+	if fs.bytes+weight > gitlet.MaxCheckFailureBytes {
 		fs.omitted++
 		return
 	}
