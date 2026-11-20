@@ -102,20 +102,20 @@ func TestTheAdvisorNamesASourceItCouldNotRead(t *testing.T) {
 		want      advisor.Evidence
 	}{
 		{"every source read", patternsWork{work: worklet.WorkPatterns{AgentComments: 3}}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, StaffingUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
 				Ledger: turns, Backup: advisor.Backup{Standing: true}}},
 		{"the tracker failed", patternsWork{err: errors.New("no data node answered")}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, StaffingUnread: true, WorkUnread: true, Ledger: turns,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, WorkUnread: true, Ledger: turns,
 				Backup: advisor.Backup{Standing: true}}},
 		{"the ledger failed", patternsWork{}, ledgerUsage{err: errors.New("no data node answered")},
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, StaffingUnread: true, LedgerUnread: true,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, LedgerUnread: true,
 				Backup: advisor.Backup{Standing: true}}},
 		{"a node with no usage half", patternsWork{}, nil, func() bool { return true },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, SkipsUnread: true, StaffingUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, SkipsUnread: true, StaffingUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
 		{"the alarms not yet evaluated", patternsWork{}, read, func() bool { return false },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
 		{"a node with no alarm table", patternsWork{}, read, nil,
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
 	} {
 		s := Sources{Work: c.work, Usage: c.usage, AlarmsEvaluated: c.evaluated,
 			Alarms: func() []statelog.Alarm { return standing }}
@@ -217,6 +217,12 @@ func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain
 	}
 	raw, err := json.Marshal(scopes)
 	return advisordomain.RunRow{ID: "r", Status: advisordomain.RunDone, Classes: raw}, true, err
+}
+func (noticeLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (noticeLog) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
 }
 func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil

@@ -50,6 +50,7 @@ import { ASSISTANT_ACTION_CONTEXT_INVALIDATE } from "~/contract/assistant.ts";
 import type { AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import type { StreamState } from "~/protocol/assistant.ts";
 import type { ActionLocal } from "./pageActions.ts";
+import { plainPhrase } from "./phrase.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 
 /** The page a message was sent with, as its chip shows it. */
@@ -736,7 +737,8 @@ function actionSettled(turn: TurnView, actionId: string, local: ActionLocal): Tu
       cards: next.cards.map((card) => {
         const proposal = proposalOf(card);
         if (proposal?.proposal_id !== proposalId) return card;
-        const receipt = after === "applied" ? { summary: local.words } : proposal.receipt;
+        const receipt =
+          after === "applied" ? { summary: plainPhrase(local.words) } : proposal.receipt;
         return {
           ...card,
           card: {

@@ -905,6 +905,8 @@ func taskCensuses() map[string]plannedRead {
 	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openQuestionsStatement()
 	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openWaitsStatement()
+	out["every open wait by item"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	// AND THE FLOW DUTY'S PAGE of the items in progress, through the partial
 	// index over them, each item's flow and its recorded flow read inside it
 	// (ADR-0162).

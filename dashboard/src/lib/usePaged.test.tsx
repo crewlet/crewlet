@@ -151,7 +151,7 @@ test("a refreshed page is read again under its own cursor and replaced in place"
       [12, 11, 10, 9, 8, 7, 6, 4, 3, 2].map((n) => `e-${n}`),
     ),
   );
-  expect(page).toHaveBeenLastCalledWith("8", null);
+  expect(page).toHaveBeenLastCalledWith("8", null, expect.any(AbortSignal));
   // AND THE PAGER NOW BEGINS WHERE THE PAGE ENDS.
   expect(result.current.more).toBe(true);
 });
@@ -265,7 +265,7 @@ test("a re-read page is never drawn short of the next before the gap is read", a
   );
   act(() => result.current.refresh());
   await waitFor(() => expect(page).toHaveBeenCalledTimes(5));
-  expect(page).toHaveBeenLastCalledWith("11", null);
+  expect(page).toHaveBeenLastCalledWith("11", null, expect.any(AbortSignal));
   // AS IT WAS LAST DRAWN until the gap has been read — never the re-read
   // page, 15..11, beside the held one under it, 5..1.
   expect(ids(result.current.items)).toEqual(before);
@@ -563,7 +563,7 @@ test("a page that fails keeps the pages held, and next asks it again", async () 
 
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
-  expect(page).toHaveBeenLastCalledWith("6", null);
+  expect(page).toHaveBeenLastCalledWith("6", null, expect.any(AbortSignal));
   expect(ids(result.current.items)).toEqual(down(15, 1).map((n) => `e-${n}`));
   expect(result.current.pageError).toBeNull();
 });
@@ -599,7 +599,7 @@ test("a later page whose cursor is refused starts the list again", async () => {
   // AND THE NEXT PRESS PAGES ON FROM THE FIRST PAGE, saying nothing more.
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(2 * PAGE));
-  expect(page).toHaveBeenLastCalledWith("11", null);
+  expect(page).toHaveBeenLastCalledWith("11", null, expect.any(AbortSignal));
   expect(result.current.restarted).toBe(false);
 });
 
@@ -676,7 +676,7 @@ const cursorAt = (answer: AtAnswer) => answer.next;
 test("a window that moved reads every held page again at its edges, and moves in one step", async () => {
   const history = down(12, 1);
   const { result, rerender, page } = await windowedBack(history);
-  expect(page).toHaveBeenLastCalledWith("8", { day: "d1" });
+  expect(page).toHaveBeenLastCalledWith("8", { day: "d1" }, expect.any(AbortSignal));
   expect(result.current.edges).toEqual({ day: "d1" });
   let release: () => void = () => undefined;
   page.mockImplementationOnce(
@@ -686,7 +686,9 @@ test("a window that moved reads every held page again at its edges, and moves in
       }),
   );
   rerender({ first: answeredAt(pageAt(history, "d2"), { day: "d2" }) });
-  await waitFor(() => expect(page).toHaveBeenLastCalledWith("8", { day: "d2" }));
+  await waitFor(() =>
+    expect(page).toHaveBeenLastCalledWith("8", { day: "d2" }, expect.any(AbortSignal)),
+  );
   expect(atOf(result.current.items)).toEqual(["d1"]);
   expect(result.current.items).toHaveLength(2 * PAGE);
   expect(result.current.edges).toEqual({ day: "d1" });
@@ -697,7 +699,7 @@ test("a window that moved reads every held page again at its edges, and moves in
   // AND THE NEXT PAGE IS ASKED AT THE EDGES DRAWN.
   act(() => result.current.next());
   await waitFor(() => expect(result.current.items).toHaveLength(12));
-  expect(page).toHaveBeenLastCalledWith("3", { day: "d2" });
+  expect(page).toHaveBeenLastCalledWith("3", { day: "d2" }, expect.any(AbortSignal));
 });
 
 // A HELD PAGE THAT CANNOT BE READ AT THE MOVED WINDOW ends the list there, and says why: what it

@@ -279,7 +279,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			r.Failure.Refusal.Code)
 	}
 	if r.Receipt != nil && !r.ClientReported {
-		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary))
+		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary.Text()))
 	}
 	if len(r.Answer) > 0 {
 		answer := redact.Secrets(string(r.Answer))
@@ -294,7 +294,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			answer))
 	}
 	if r.ClientReported && r.Receipt != nil {
-		out.WriteString("\n" + pageReport(b, r.Receipt.Summary, read))
+		out.WriteString("\n" + pageReport(b, r.Receipt.Summary.Text(), read))
 	}
 	return out.String()
 }

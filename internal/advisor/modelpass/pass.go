@@ -112,6 +112,9 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 	for drop, n := range out.Dropped {
 		dropped[drop] += n
 	}
+	for i := range findings {
+		findings[i] = advisor.SayNumbers(findings[i])
+	}
 	out.Findings, out.Dropped = findings, dropped
 	out.Listed = len(out.Findings)
 	return out
@@ -178,7 +181,7 @@ func explained(submitted []submittedExplanation, asked []advisor.Explainable, dr
 		e := asked[at]
 		done[x.ID] = true
 		out = append(out, advisor.Explained{ID: e.ID, Key: e.Key, VerdictDigest: e.VerdictDigest,
-			Text: strings.TrimSpace(x.Text)})
+			Text: advisor.NumbersSaid(strings.TrimSpace(x.Text), advisor.TokenValues(e.Facts))})
 	}
 	return out
 }

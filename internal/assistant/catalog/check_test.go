@@ -147,17 +147,17 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	}
 	got := rows(p)
 	if w := got["check.warning.1"]; w.Label != "Warning" ||
-		!strings.Contains(w.To, "above the company's") {
+		!strings.Contains(w.To.Text(), "above the company's") {
 		t.Errorf("the check's warning is %+v on the card", w)
 	}
 	// ONLY WHAT THIS CHANGE INTRODUCES: a warning the company already
 	// carried is not news about this change.
 	for field, row := range got {
-		if strings.Contains(row.To, "morgan") {
+		if strings.Contains(row.To.Text(), "morgan") {
 			t.Errorf("row %s carries a warning the change did not introduce: %+v", field, row)
 		}
 	}
-	if got["roles.qa.name"].To != "QA Engineer" {
+	if got["roles.qa.name"].To.Text() != "QA Engineer" {
 		t.Errorf("the added seat's rows are %+v", got)
 	}
 }
@@ -202,7 +202,7 @@ func TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved(t *testing.T) {
 				body[catalog.SummaryKey], err, c.want)
 		}
 		got := rows(p)
-		if got["request.summary"].To != c.want || got["request.summary"].Label != "History note" {
+		if got["request.summary"].To.Text() != c.want || got["request.summary"].Label != "History note" {
 			t.Errorf("%s: the card's history row is %+v", name, got["request.summary"])
 		}
 		if _, diffed := got[catalog.SummaryKey]; diffed {
@@ -270,7 +270,7 @@ func TestACreatesCardNamesWhereItLandsOrIsNoCard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.tool, err)
 		}
-		if got := rows(p)[c.arg].To; got != "BRAND" {
+		if got := rows(p)[c.arg].To.Text(); got != "BRAND" {
 			t.Errorf("%s's card names %q, want the resolved BRAND", c.tool, got)
 		}
 		var body struct {

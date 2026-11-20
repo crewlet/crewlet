@@ -467,7 +467,7 @@ func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	applied := p.Card
 	card := *applied.Proposal
 	card.State = wire.ProposalApplied
-	card.Receipt = &wire.Receipt{Summary: "Created ENG-8.",
+	card.Receipt = &wire.Receipt{Summary: wire.Plain("Created ENG-8."),
 		Position: "CREWLET_TRACKER_LOG@1:42"}
 	applied.Proposal = &card
 	resumed, err := s.rig.Svc.Resume(iam.WithPrincipal(context.Background(), s.rig.Person),

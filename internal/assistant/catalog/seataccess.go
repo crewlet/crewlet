@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -188,7 +189,9 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 			ErrPreviewRead, req.Path, err)
 	}
 
+	agent := naming(wire.ResourceSeat, seat.Handle, seat.Name)
 	var c changes
+	c.factOf("agent", "Agent", agent)
 	c.move("enabled", title, onWords(before.Enabled), onWords(after.Enabled))
 	c.move("level", title+" role", levelWords(offer, before.Level), levelWords(offer, after.Level))
 	for _, p := range offer.Permissions {
@@ -215,9 +218,9 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		}
 	}
 	if plan.StepUp {
-		c.fact("raise", "Administration", "This may give "+seat.Name+" an administration "+
-			"role at "+title+", or "+title+" could not confirm it does not, so approving it "+
-			"asks you to confirm it is you, at a keyboard.")
+		c.factOf("raise", "Administration", wire.Plain("This may give ").Then(agent).Plain(
+			" an administration role at "+title+", or "+title+" could not confirm it does "+
+				"not, so approving it asks you to confirm it is you, at a keyboard."))
 	}
 	for i, warning := range checkWarnings(body) {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
@@ -225,9 +228,9 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 	recency, _ := authz.RecencyOf(authz.ActionSetupAccessWrite)
 	return proposal.Preview{Title: "Change an agent's access",
 		Target: seat.Name + " on " + title,
-		Note: "Saved as one change to the company configuration, then applied at " + title +
-			" by the next sync. Turning an agent off keeps its account, so it can be " +
-			"turned back on.",
+		Note: wire.Plain("Saved as one change to the company configuration, then applied at " +
+			title + " by the next sync. Turning an agent off keeps its account, so it can be " +
+			"turned back on."),
 		ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 		StepUp:         recency == iam.RecencyStepUp || plan.StepUp,
 		SourceRevision: rep.revision}, nil

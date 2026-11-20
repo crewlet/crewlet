@@ -125,6 +125,10 @@ export const MAX_EVENTS = 400;
  * far beyond the slowest query's normal latency and still short enough that a
  * screen shows an error rather than an eternal skeleton.
  *
+ * THE QUERY FRAME CARRIES IT (`wait_ms`), and the engine stops answering a
+ * question once it has passed, so a read this tab gave up on frees the slots it
+ * holds rather than running on for nobody.
+ *
  * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
  * (`engine.BrokerReadWait`), held there by `internal/api`'s
  * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
@@ -132,6 +136,23 @@ export const MAX_EVENTS = 400;
  * that gave up first would report a slow answer as a failed one.
  */
 export const QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a transcript page's query (`executor_session`) waits for its answer
+ * once sent: the engine's `executor.TranscriptAnsweredWithin`, held there by
+ * `internal/api/queries`'s `TestTheDashboardWaitsPastAPersonsReadOfASession`.
+ *
+ * THE SLOWEST READ OF WHAT HARNESSES WRITE PLUS ONE SLOT'S WAIT: a person's
+ * read at its bounds takes up to 55 s (`password:` lines to the read budget,
+ * 49 s measured and a tenth more), and one queued behind every slot waits at
+ * most one such read more. A value no harness writes at that density (a
+ * password every few bytes) takes 98 s or more, sets no wait, and FAILS CLOSED
+ * once it runs past it: the frame carries the wait, so the engine ends the
+ * read there, and the screen says it could not be read in time. A screen that
+ * stops waiting sooner (left, or another session chosen) cancels the read
+ * (`query_cancel`), which stops it then.
+ */
+export const TRANSCRIPT_QUERY_TIMEOUT_MS = 110_000;
 
 /**
  * How many queries one socket runs at once.

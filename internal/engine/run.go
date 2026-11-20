@@ -374,6 +374,9 @@ type Engine struct {
 	// hostLogins is what each model entry's harness says of its login on this
 	// node's disk, and its loop ([hostLogins]).
 	hostLogins hostLogins
+	// verified is each model's last answer heard by a test of its credential
+	// rather than by its own calls ([Engine.Verified]).
+	verified verifiedAnswers
 
 	// retries is this node's watched copy of the fleet's model retries
 	// ([modelRetries]).

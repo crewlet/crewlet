@@ -18,7 +18,11 @@ import (
 //
 //   - 1: the base format: every op of package doc's "Ops", and the
 //     framework's eviction, generation, barrier and trimmed record.
-const RecordVersion = 1
+//   - 2: a run's kind (`run_kind`) on its request and its record, and a deep
+//     run's progress lines (op `progress`) (ADR-0166).
+//   - 3: a deep run's checkpoint on its progress record (`checkpoint`), which
+//     a holder taking the run over resumes from (ADR-0166).
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -29,12 +33,16 @@ const GateRecordVersion = 1
 
 // versionedFields is every field or kind an advisor record has gained since
 // the base format, with the version a reader needs to apply it: a new op is a
-// row at `op`, a new payload field a row at its path. None yet.
+// row at `op`, a new payload field a row at its path.
 //
 // A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling upgrade
 // disagree about it all the same, and a build without the row would fault on
 // the record rather than retain it.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "Run.RunKind", Since: 2, Path: []string{"mutation", "run_kind"}},
+	{Name: "Op progress", Since: 2, Path: []string{"op"}, Equals: string(OpProgress)},
+	{Name: "RunProgress.Checkpoint", Since: 3, Path: []string{"mutation", "checkpoint"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -92,12 +100,15 @@ const (
 
 	// OpTrimmed is the trim's payload-free record (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
+
+	// OpProgress is one line of a deep run's progress ([RunProgress]).
+	OpProgress OpKind = "progress"
 )
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpOpen, OpRevise, OpRefresh, OpMove, OpExplain, OpRelease, OpRequest, OpRecord, OpWrite,
-	OpRaise, OpClear, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpRaise, OpClear, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpProgress,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

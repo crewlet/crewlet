@@ -164,6 +164,15 @@ func resource(path, etag string, doc any) proposal.Read {
 	}
 }
 
+// genericTexts are phrases as their words, for comparing a list's items.
+func genericTexts(phrases []wire.Phrase) []string {
+	out := make([]string, len(phrases))
+	for i, p := range phrases {
+		out[i] = p.Text()
+	}
+	return out
+}
+
 // rows are a preview's changes by field.
 func rows(p proposal.Preview) map[string]wire.Change {
 	out := map[string]wire.Change{}
@@ -218,18 +227,18 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 		"_summary":                               {wire.ChangeAdded, "", "raise the cap with [REDACTED:github-token]"},
 	} {
 		c, ok := got[field]
-		if !ok || c.Kind != want.kind || c.From != want.from || c.To != want.to {
+		if !ok || c.Kind != want.kind || c.From.Text() != want.from || c.To.Text() != want.to {
 			t.Errorf("row %s is %+v, want %+v", field, c, want)
 		}
 	}
 	// A LIST OF PLAIN VALUES IS DRAWN AS A LIST, never a word diff of its
 	// joined line: its items ride beside the line, on each side it has.
-	if c := got["roles.crewlet-swe.responsibilities"]; !slices.Equal(c.Items, []string{"Build", "Review"}) {
-		t.Errorf("an added list carries the items %q", c.Items)
+	if c := got["roles.crewlet-swe.responsibilities"]; !slices.Equal(genericTexts(c.Items), []string{"Build", "Review"}) {
+		t.Errorf("an added list carries the items %q", genericTexts(c.Items))
 	}
-	if c := got["labels"]; !slices.Equal(c.FromItems, []string{"billing", "core"}) ||
-		!slices.Equal(c.Items, []string{"billing", "growth"}) {
-		t.Errorf("a changed list carries the items %q to %q", c.FromItems, c.Items)
+	if c := got["labels"]; !slices.Equal(genericTexts(c.FromItems), []string{"billing", "core"}) ||
+		!slices.Equal(genericTexts(c.Items), []string{"billing", "growth"}) {
+		t.Errorf("a changed list carries the items %q to %q", genericTexts(c.FromItems), genericTexts(c.Items))
 	}
 	for _, untouched := range []string{"name", "mission", "roles.ceo.name"} {
 		if _, ok := got[untouched]; ok {
@@ -280,8 +289,8 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	// A DELETE, a POST, and a change that moves nothing.
 	p, err = change.Preview(t.Context(), resource("/worklet/items/ENG-1", "", nil), wednesday,
 		map[string]any{"route": "DELETE /worklet/items/{key}", "path": map[string]any{"key": "ENG-1"}})
-	if err != nil || rows(p)["removes"].To != "Item ENG-1" || p.Title != "Delete item ENG-1" ||
-		p.Risk != wire.RiskDestructive || p.Summary != "This deletes item ENG-1." || p.Note == "" {
+	if err != nil || rows(p)["removes"].To.Text() != "Item ENG-1" || p.Title != "Delete item ENG-1" ||
+		p.Risk != wire.RiskDestructive || p.Summary.Text() != "This deletes item ENG-1." || len(p.Note) == 0 {
 		t.Errorf("a delete of a resource nothing reads previews %+v, %v", p, err)
 	}
 	p, err = change.Preview(t.Context(), read, wednesday, map[string]any{
@@ -336,10 +345,10 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 			t.Errorf("row %s is %s, want the argument as sent", c.Field, c.Kind)
 		}
 	}
-	if emoji := rows(p)["args.emoji"]; emoji.To != "tada" || emoji.Label != "Emoji" {
+	if emoji := rows(p)["args.emoji"]; emoji.To.Text() != "tada" || emoji.Label != "Emoji" {
 		t.Errorf("the reaction's emoji is shown as %+v", emoji)
 	}
-	if id := rows(p)["args.message_id"]; id.To != "m1" || id.Label != "Message ID" {
+	if id := rows(p)["args.message_id"]; id.To.Text() != "m1" || id.Label != "Message ID" {
 		t.Errorf("the reaction's message is shown as %+v", id)
 	}
 	// A TOOL'S NAME IS SAID AS A PERSON WRITES IT, an initialism in it
@@ -354,7 +363,7 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 	p, err = change.Preview(t.Context(), resource("/nowhere", "", nil), wednesday,
 		call(react, map[string]any{}))
 	if err != nil || len(p.Changes) != 1 || p.Changes[0].Label != "Details" ||
-		p.Changes[0].To != "None" {
+		p.Changes[0].To.Text() != "None" {
 		t.Errorf("a call sending no argument previews %+v (%v)", p.Changes, err)
 	}
 	_, err = change.Request(call(members, map[string]any{"channel": "c1",
@@ -425,13 +434,13 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 	p, err := preview("POST /worklet/items/{key}/purge", map[string]any{"key": "ENG-1"},
 		map[string]any{"reason": "A key was pasted."})
 	if err != nil || p.Title != "Purge item ENG-1" || p.ApproveLabel != "Approve and purge" ||
-		p.Risk != wire.RiskDestructive || p.Summary != "This purges item ENG-1." ||
-		p.Note != "This cannot be undone from Ask Crewlet." {
+		p.Risk != wire.RiskDestructive || p.Summary.Text() != "This purges item ENG-1." ||
+		p.Note.Text() != "This cannot be undone from Ask Crewlet." {
 		t.Errorf("a purge reads %q / %q at risk %q: %q %q (%v)", p.Title, p.ApproveLabel, p.Risk,
-			p.Summary, p.Note, err)
+			p.Summary.Text(), p.Note.Text(), err)
 	}
 	if reason := rows(p)["reason"]; reason.Kind != wire.ChangeFact ||
-		reason.To != "A key was pasted." {
+		reason.To.Text() != "A key was pasted." {
 		t.Errorf("the purge's reason is shown as %+v", reason)
 	}
 
@@ -444,24 +453,24 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 	p, err = change.Preview(t.Context(), resource("/doclet/pages/"+page, "", map[string]any{
 		"page": map[string]any{"id": page, "title": "Runbook"}, "revision": 4}), wednesday, restore)
 	if err != nil || p.Title != "Restore page Runbook" || len(p.Changes) != 1 ||
-		p.Changes[0].To != "Page Runbook" {
+		p.Changes[0].To.Text() != "Page Runbook" {
 		t.Errorf("a named page's restore reads %q with %+v (%v)", p.Title, p.Changes, err)
 	}
 	p, err = change.Preview(t.Context(), resource("/nowhere", "", nil), wednesday, restore)
-	if err != nil || p.Title != "Restore the page" || p.Changes[0].To != "The page" {
+	if err != nil || p.Title != "Restore the page" || p.Changes[0].To.Text() != "The page" {
 		t.Errorf("an unread page's restore reads %q with %+v (%v)", p.Title, p.Changes, err)
 	}
 
 	p, err = preview("POST /worklet/items/{key}/restore", map[string]any{"key": "ENG-1"}, nil)
 	if err != nil || p.Title != "Restore item ENG-1" || p.ApproveLabel != "Approve and restore" ||
-		p.Risk != "" || len(p.Changes) != 1 || p.Changes[0].To != "Item ENG-1" {
+		p.Risk != "" || len(p.Changes) != 1 || p.Changes[0].To.Text() != "Item ENG-1" {
 		t.Errorf("a restore reads %q at risk %q with %+v (%v)", p.Title, p.Risk, p.Changes, err)
 	}
 
 	p, err = preview("POST /artifacts/checks", nil, map[string]any{"title": "Q3 deck"})
 	if err != nil || p.Title != "Check an artifact's files" || p.Risk != "" ||
-		!strings.Contains(p.Note, "changes nothing") || rows(p)["title"].Kind != wire.ChangeFact {
-		t.Errorf("a check reads %q: %q with %+v (%v)", p.Title, p.Note, p.Changes, err)
+		!strings.Contains(p.Note.Text(), "changes nothing") || rows(p)["title"].Kind != wire.ChangeFact {
+		t.Errorf("a check reads %q: %q with %+v (%v)", p.Title, p.Note.Text(), p.Changes, err)
 	}
 
 	p, err = preview("POST /worklet/items", nil, map[string]any{"title": "Ship it"})
@@ -522,7 +531,7 @@ func TestAChatDestructionSaysWhatGoesAndFromWhichRoom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", route, err)
 		}
-		for _, words := range []string{p.Title, p.Summary, p.Note} {
+		for _, words := range []string{p.Title, p.Summary.Text(), p.Note.Text()} {
 			if strings.Contains(words, room) {
 				t.Errorf("%s names the room by its id: %q", route, words)
 			}
@@ -536,34 +545,43 @@ func TestAChatDestructionSaysWhatGoesAndFromWhichRoom(t *testing.T) {
 		map[string]any{"message_ids": []any{"m1", "m2", "m1"}, "reason": "A key was pasted."})
 	if p.Title != "Erase 2 messages from #general" || p.ApproveLabel != "Approve and erase" ||
 		p.Risk != wire.RiskDestructive ||
-		p.Summary != "This erases 2 messages from #general for good." || p.Note != undone {
+		p.Summary.Text() != "This erases 2 messages from #general for good." || p.Note.Text() != undone {
 		t.Errorf("an erase reads %q / %q at risk %q: %q %q", p.Title, p.ApproveLabel, p.Risk,
-			p.Summary, p.Note)
+			p.Summary.Text(), p.Note.Text())
+	}
+	// THE ROOM IS A REF, by its id, shown as its name, opening the room.
+	if refs := p.Summary.Refs(); len(refs) != 1 || refs[0].Kind != wire.ResourceRoom ||
+		refs[0].ID != room || refs[0].Name != "#general" || refs[0].Open == nil ||
+		refs[0].Open.Href != "#/chatlet/"+room {
+		t.Errorf("the erase's summary names %+v", refs)
 	}
 	if ids := rows(p)["message_ids"]; ids.Kind != wire.ChangeFact || len(ids.Items) != 3 {
 		t.Errorf("the erase's messages are shown as %+v", ids)
 	}
-	if confirm := rows(p)["query.confirm"]; confirm.Kind != wire.ChangeFact || confirm.To != "2" {
+	if confirm := rows(p)["query.confirm"]; confirm.Kind != wire.ChangeFact || confirm.To.Text() != "2" {
 		t.Errorf("the erase's confirmation is shown as %+v", confirm)
 	}
 	p = preview(refused, "POST /chatlet/channels/{channel_id}/erase", nil,
 		map[string]any{"message_ids": []any{"m1"}, "reason": "A key was pasted."})
+	if refs := p.Summary.Refs(); len(refs) != 0 {
+		t.Errorf("a room the person may not read is named as %+v", refs)
+	}
 	if p.Title != "Erase a message from the room" ||
-		p.Summary != "This erases a message from the room for good." {
-		t.Errorf("an erase in a room the person may not read reads %q: %q", p.Title, p.Summary)
+		p.Summary.Text() != "This erases a message from the room for good." {
+		t.Errorf("an erase in a room the person may not read reads %q: %q", p.Title, p.Summary.Text())
 	}
 
 	p = preview(general, "POST /chatlet/channels/{channel_id}/prune",
 		map[string]any{"cutoff": "2031-01-01T00:00:00Z", "confirm": "2031-01-01T00:00:00Z"}, nil)
 	if p.Title != "Delete what #general said before 1 January 2031" ||
 		p.ApproveLabel != "Approve and delete" || p.Risk != wire.RiskDestructive ||
-		p.Summary != "This deletes everything said in #general before 1 January 2031 for good." ||
-		p.Note != undone {
+		p.Summary.Text() != "This deletes everything said in #general before 1 January 2031 for good." ||
+		p.Note.Text() != undone {
 		t.Errorf("a prune reads %q / %q at risk %q: %q %q", p.Title, p.ApproveLabel, p.Risk,
-			p.Summary, p.Note)
+			p.Summary.Text(), p.Note.Text())
 	}
 	if cutoff := rows(p)["query.cutoff"]; cutoff.Kind != wire.ChangeFact ||
-		cutoff.To != "2031-01-01T00:00:00Z" {
+		cutoff.To.Text() != "2031-01-01T00:00:00Z" {
 		t.Errorf("the prune's cutoff is shown as %+v", cutoff)
 	}
 
@@ -584,10 +602,10 @@ func TestAChatDestructionSaysWhatGoesAndFromWhichRoom(t *testing.T) {
 	} {
 		p = preview(general, "PUT /chatlet/channels/{channel_id}/retention", nil,
 			map[string]any{"retention_days": c.days})
-		if p.Title != c.title || p.Summary != c.summary || p.Risk != c.risk {
-			t.Errorf("a horizon of %v reads %q: %q at risk %q", c.days, p.Title, p.Summary, p.Risk)
+		if p.Title != c.title || p.Summary.Text() != c.summary || p.Risk != c.risk {
+			t.Errorf("a horizon of %v reads %q: %q at risk %q", c.days, p.Title, p.Summary.Text(), p.Risk)
 		}
-		if days := rows(p)["retention_days"]; c.days == nil && days.To != "Cleared" {
+		if days := rows(p)["retention_days"]; c.days == nil && days.To.Text() != "Cleared" {
 			t.Errorf("a horizon taken back shows its field as %+v", days)
 		}
 	}
@@ -683,6 +701,37 @@ func TestAGenericReadIsHandedToTheModelWhole(t *testing.T) {
 	}
 }
 
+// A GENERIC READ OF AN ARTIFACT IS THE ARTIFACT'S CARD: headed by its title,
+// with its kind and its page, never titled by the route with its id in it.
+// Mutation: leave the artifact route out of the record table.
+func TestAGenericReadOfAnArtifactIsTheArtifactsCard(t *testing.T) {
+	t.Parallel()
+	table, err := catalog.NewRouteTable([]catalog.Route{{Pattern: "GET /artifacts/{id}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := catalog.GenericTools(table, admin, nil)[1]
+	const id = "d6333845-123a-57ea-9083-a60f2c1d34da"
+	answer, _ := json.Marshal(map[string]any{"id": id, "title": "Deck link previews",
+		"kind": "slides", "status": "published", "head_number": 3})
+	args := catalog.Args{"route": "GET /artifacts/{id}", "path": map[string]any{"id": id}}
+	shaped, err := catalog.Shape(read, args, exec.Response{Status: 200, Body: answer},
+		provenance.NewBoundary(), wednesday, cards.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shaped.Cards) != 1 || shaped.Cards[0].Entity == nil {
+		t.Fatalf("the read drew %+v", shaped.Cards)
+	}
+	e := shaped.Cards[0].Entity
+	if e.Kind != wire.ResourceArtifact || e.ID != id || e.Title != "Deck link previews" ||
+		e.Subtitle != "slides" || e.Open == nil || e.Open.Href != "#/artifacts/"+id ||
+		strings.Contains(e.Title, id) {
+		t.Errorf("the artifact read is %s %q titled %q (%q), opening %+v", e.Kind, e.ID,
+			e.Title, e.Subtitle, e.Open)
+	}
+}
+
 // A HUMAN-ONLY GESTURE IS REFUSED IN THE PERSON'S OWN WORDS, AND A BODY PAST
 // THE CAP IS REFUSED BEFORE ANYTHING IS SENT.
 //
@@ -739,7 +788,7 @@ func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
 	}
 	got := rows(p)
 	for _, field := range []string{"name", "command"} {
-		if got[field].Kind != wire.ChangeAdded || got[field].From != "" {
+		if got[field].Kind != wire.ChangeAdded || len(got[field].From) != 0 {
 			t.Errorf("row %s is %+v, want it added", field, got[field])
 		}
 	}

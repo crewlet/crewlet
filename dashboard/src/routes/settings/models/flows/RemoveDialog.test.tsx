@@ -13,7 +13,13 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelReference } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
+import {
+  apiKeyEntry,
+  modelsData,
+  modelsDoc,
+  runs,
+  seat,
+} from "~/routes/settings/models/fixtures.ts";
 import {
   defaultChoice,
   leftWithNoModel,
@@ -24,7 +30,9 @@ import {
 } from "./RemoveDialog.tsx";
 
 const removeModel = vi.hoisted(() => vi.fn());
-vi.mock("../api.ts", () => ({ removeModel }));
+// WHAT NAMES THE MODEL IS READ (`GET .../references`), never asked as a refused dry run.
+const modelReferences = vi.hoisted(() => vi.fn());
+vi.mock("../api.ts", () => ({ removeModel, modelReferences }));
 // THE DOCUMENT'S TAG IS NOT THE ENTRY'S: a removal sent the document's and was
 // refused 412 for every model. The entry's is the one answered here.
 vi.mock("~/protocol/configWrite.ts", () => ({
@@ -55,6 +63,7 @@ const valid = {
 };
 
 beforeEach(() => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: REFS }));
   removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
     Promise.resolve(removal.repoint.length === 0 ? refusal : valid),
   );
@@ -66,7 +75,12 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-/** The dialog on `sonnet`, Ask Crewlet's model, with `big` one a helper can run on or not. */
+/**
+ * The dialog on `sonnet`, Ask Crewlet's model, with `big` one a helper can run
+ * on or not. Every place already runs on `big` somewhere: the Backend Engineer
+ * reviews on it, QA delegates on it, and the Advisor explains with it, so it is
+ * the one model a removal may move all of them to unasked.
+ */
 function open(bigRunsAHelper: boolean) {
   const data = modelsData({
     entries: [
@@ -74,6 +88,11 @@ function open(bigRunsAHelper: boolean) {
       apiKeyEntry({
         key: "big",
         helper_problem: bigRunsAHelper ? null : "Its tool runs with tools Crewlet cannot turn off.",
+        used_by: [
+          ...runs("backend-engineer", "review"),
+          ...runs("qa", "subagent"),
+          { advisor: "findings", position: 0 },
+        ],
       }),
       apiKeyEntry({
         key: "default",
@@ -81,7 +100,7 @@ function open(bigRunsAHelper: boolean) {
         helper_problem: "Its tool runs with tools Crewlet cannot turn off.",
       }),
     ],
-    doc: modelsDoc({}),
+    doc: { ...modelsDoc({}), advisor: { model: "big" } } as ReturnType<typeof modelsDoc>,
     seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],
     assistant: { key: "sonnet" },
   });
@@ -137,7 +156,10 @@ test("one line says what uses the model, and no handle, field or config key is p
   expect(screen.queryByRole("list", { name: "Each place" })).toBeNull();
   expect(said).not.toContain("runs the model with no tools of its own");
   // The first ask carried no repoints: the engine's refusal drew the places.
-  expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [] });
+  // M-021: THE LIST IS READ, never asked as a dry run with no moves, which the
+  // engine refuses 422 and every browser logs as a failed request.
+  expect(modelReferences).toHaveBeenCalledWith("sonnet", expect.anything());
+  expect(removeModel.mock.calls.every((c) => c[1].repoint.length > 0)).toBe(true);
 });
 
 test("the one choice moves every place, and each set of moves is checked by a dry run", async () => {
@@ -199,19 +221,39 @@ test("Choose per seat opens a row per place, just its name and a picker, and a r
   });
 });
 
-test("a seat that runs on the model for more than one job is told apart by the job", () => {
+// M-021: A SEAT'S JOBS IN THE PAGE'S OWN CATEGORIES (Coding, Reviews,
+// Routines), the engine's job beside one only where two share a category.
+test("a seat that runs on the model for more than one job is told apart by the page's categories", () => {
   const refs: ModelReference[] = [
     { at: { seat: "qa", job: "executor" }, segments: ["roles", 1, "llm"], chain: ["sonnet"] },
     { at: { seat: "qa", job: "review" }, segments: ["roles", 1, "llm_review"], chain: ["sonnet"] },
     { at: { seat: "pm", job: "review" }, segments: ["roles", 2, "llm_review"], chain: ["sonnet"] },
+    { at: { seat: "ds", job: "judge" }, segments: ["roles", 3, "llm_judge"], chain: ["sonnet"] },
+    { at: { seat: "ds", job: "executor" }, segments: ["roles", 3, "llm"], chain: ["sonnet"] },
+    {
+      at: { seat: "ops", job: "auxiliary" },
+      segments: ["roles", 4, "llm_auxiliary"],
+      chain: ["sonnet"],
+    },
+    { at: { seat: "ops", job: "judge" }, segments: ["roles", 4, "llm_judge"], chain: ["sonnet"] },
     REFS[2]!,
     ADVISOR_REF,
   ];
-  const names = placeNames(refs, [seat("qa", "QA"), seat("pm", "Product Manager")]);
+  const names = placeNames(refs, [
+    seat("qa", "QA"),
+    seat("pm", "Product Manager"),
+    seat("ds", "Design Systems"),
+    seat("ops", "Ops"),
+  ]);
   expect(refs.map((r) => names.get(refId(r)))).toEqual([
     "QA, coding",
-    "QA, reviewing",
+    "QA, reviews",
     "Product Manager",
+    // NEVER "evaluations" where the page says Routines.
+    "Design Systems, routines",
+    "Design Systems, coding",
+    "Ops, routines (memory and summaries)",
+    "Ops, routines (onboarding checks)",
     "Ask Crewlet",
     "The Advisor",
   ]);
@@ -257,17 +299,25 @@ test("leaving something with no model asks for one confirm, which names what is 
   expect(button().disabled).toBe(false);
 });
 
-// NO MODEL FITS EVERY PLACE: each place opens on its own default and the list is shown.
-test("where no model fits every place, the list opens with each place's own default", async () => {
+// NO MODEL FITS EVERY PLACE: each place opens on a model it already runs on,
+// and a place with none waits for the person's choice, which holds Remove.
+test("where no model fits every place, each place opens on a model it already runs on, or waits", async () => {
   open(false);
   const list = await screen.findByRole("list", { name: "Each place" });
   await settle();
-  expect(list).toBeDefined();
-  const removal = removeModel.mock.calls.at(-1)![1];
-  expect(Object.keys(removal)).toEqual(["repoint"]);
-  // Coding to a model that codes, the backup to the model ahead of it, and Ask
-  // Crewlet, with no model a helper can run on, to none.
-  expect(removal.repoint).toEqual([
+  // ASK CREWLET HAS NO MODEL IT CAN RUN ON ALREADY: it waits, and nothing is checked yet.
+  expect(
+    within(list).getByRole("combobox", { name: "Where Ask Crewlet moves" }).textContent,
+  ).toContain("Choose a model");
+  expect(removeModel).not.toHaveBeenCalled();
+  expect(button().disabled).toBe(true);
+  await pick(
+    within(list).getByRole("combobox", { name: "Where Ask Crewlet moves" }),
+    "Leave unset",
+  );
+  // Coding to the model the seat already reviews on, the backup to the model
+  // ahead of it, and Ask Crewlet, by the person's choice, to none.
+  expect(removeModel.mock.calls.at(-1)![1].repoint).toEqual([
     { at: REFS[0]!.at, to: "big" },
     { at: REFS[1]!.at, to: "default" },
     { at: { assistant: "chat" }, to: null },
@@ -276,7 +326,44 @@ test("where no model fits every place, the list opens with each place's own defa
   expect(button().disabled).toBe(true);
 });
 
+// M-013: NO SILENT MOVE TO A MODEL NOBODY CHOSE. With nothing these places
+// already run on, the dialog asks; the healthiest model is no reason alone.
+test("with no model the places already use, the removal asks for one and holds the button", async () => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [REFS[0]!] }));
+  const data = modelsData({
+    entries: [
+      apiKeyEntry({ key: "sonnet" }),
+      apiKeyEntry({ key: "healthy" }),
+      apiKeyEntry({ key: "other" }),
+    ],
+    doc: modelsDoc({}),
+    seats: [seat("backend-engineer", "Backend Engineer")],
+  });
+  view = render(
+    <Router>
+      <RemoveDialog
+        model={data.models[0]!}
+        data={data}
+        onClose={() => {}}
+        onDone={() => {}}
+        onRemoved={onRemoved}
+      />
+    </Router>,
+  );
+  const choice = await screen.findByRole("combobox", { name: "Move it to" });
+  await settle();
+  expect(choice.textContent).toContain("Choose a model");
+  expect(removeModel).not.toHaveBeenCalled();
+  expect(button().disabled).toBe(true);
+  await pick(choice, /^healthy/);
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: [{ at: REFS[0]!.at, to: "healthy" }],
+  });
+  expect(button().disabled).toBe(false);
+});
+
 test("a model nothing uses says so in one line, and the button removes it", async () => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [] }));
   removeModel.mockImplementation(() => Promise.resolve(valid));
   open(true);
   expect(await screen.findByText("Nothing uses this model.")).toBeDefined();
@@ -366,10 +453,8 @@ const UNSETTLED = [
 test.each(UNSETTLED)(
   "a check answered with status %i (by the engine: %s) says what happened, and that nothing was removed",
   async (status, answered, detail, said) => {
-    removeModel.mockReset();
-    removeModel.mockResolvedValue({
-      outcome: { kind: "unsettled", answered, status, detail },
-      references: [],
+    modelReferences.mockResolvedValue({
+      refused: { kind: "unsettled", answered, status, detail },
     });
     const words = new RegExp(`^${said.replace(/[.()]/g, "\\$&")} Nothing was removed\\.$`);
     open(true);
@@ -407,7 +492,7 @@ test.each(UNSETTLED)(
 // A DEFAULT IS A RECOMMENDATION: it never sends a seat's job to a model that
 // cannot answer while one that can is eligible, and it keeps the job on the
 // removed model's harness where it can.
-test("a place's default is a model that answers, on the same harness where one does", () => {
+test("a place's default is a model it already runs on, the one likeliest to answer, or none", () => {
   const data = modelsData({
     entries: [
       apiKeyEntry({ key: "sonnet" }),
@@ -424,7 +509,11 @@ test("a place's default is a model that answers, on the same harness where one d
     segments: ["roles", 0, "llm_review"],
     chain: ["sonnet"],
   };
-  expect(defaultChoice(ref, "sonnet", data.models)).toEqual({ to: "d-ready" });
+  // NOTHING IT RUNS ON ALREADY: no default, the person chooses.
+  expect(defaultChoice(ref, "sonnet", data.models)).toBeUndefined();
+  // Among models it already runs on, the one likeliest to answer.
+  const used = () => new Set(["a-refused", "d-ready"]);
+  expect(defaultChoice(ref, "sonnet", data.models, used)).toEqual({ to: "d-ready" });
   // Its own backup still wins, whatever the list order.
   expect(defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models)).toEqual({
     to: "c-codex",
@@ -434,11 +523,7 @@ test("a place's default is a model that answers, on the same harness where one d
 // THE ADVISOR'S MODEL IS MOVED LIKE ASK CREWLET'S: named in the one line, a
 // row of its own, and running with no model the one confirm names.
 test("the Advisor's model moves with the rest, or runs with no model once confirmed", async () => {
-  removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
-    Promise.resolve(
-      removal.repoint.length === 0 ? { ...refusal, references: [...REFS, ADVISOR_REF] } : valid,
-    ),
-  );
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [...REFS, ADVISOR_REF] }));
   open(true);
   expect(await screen.findByText("Used by 2 seats, Ask Crewlet, and the Advisor.")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Choose per seat" }));

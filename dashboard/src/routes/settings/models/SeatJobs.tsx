@@ -13,11 +13,12 @@
  * by job" in the row's menu shows a picker per category under the seat's name
  * (Coding, Reviews, Routines), and "Use one model" folds them back; a seat
  * whose jobs already differ shows its three. A category whose two jobs the
- * document split by hand reads "Split" on its picker.
+ * document split by hand names its models on its picker ("sonnet + haiku").
  *
- * A PICK IS NOT A WRITE. Choosing a model opens THAT model's wizard on Use it
- * for with this seat's categories added (all three from the one picker), so the
- * change is reviewed and saved as any change to a model is, job by job.
+ * ONE INTERACTION FOR EVERY PICKER: a pick asks once, then saves in place, as
+ * the helpers' do (`flows/SeatMove.tsx`): the model's uses with this seat's
+ * categories added (all three from the one picker), written job by job, as
+ * Finish and save writes them.
  *
  * EVERY MODEL IS NAMED IN FULL: its harness's mark, its key and the model it
  * runs by name (`modelPicker.tsx`). A model's condition is said once, by the
@@ -42,11 +43,15 @@ import { HelperModel, type HelperChoice } from "~/components/HelperModel.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph } from "./JobGlyph.tsx";
 import { modelLabel, modelMark, modelOption } from "./modelPicker.tsx";
-import type { OnFlow } from "./parts.tsx";
+import { SeatMoveDialog, type SeatMoveAsk } from "./flows/SeatMove.tsx";
 import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, FAST_NOTE, isFastModel } from "./words.ts";
 
 /** What runs a seat's category: one model, a split across its jobs, or nothing reported. */
-type CellState = { kind: "one"; key: string } | { kind: "split" } | { kind: "none" };
+type CellState =
+  | { kind: "one"; key: string }
+  /** A category whose jobs the document split by hand, with the models it runs on. */
+  | { kind: "split"; keys: string[] }
+  | { kind: "none" };
 
 /** A fast model's mark inside a picker whose category has a deadline. */
 const FAST = (
@@ -113,7 +118,11 @@ function Value({
 }
 
 /** Who runs on which model: Ask Crewlet and the Advisor, then every seat, on one card. */
-export function WhoRuns({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
+export function WhoRuns({ data }: { data: ModelsData }) {
+  /** A seat's pick, waiting for its one confirm. */
+  const [moving, setMoving] = useState<SeatMoveAsk | null>(null);
+  // WITH NO MODEL THERE IS NOTHING TO PICK: every row reads Not set.
+  const picks = data.admin && data.models.length > 0;
   const helpersId = useId();
   const seatsId = useId();
   const byKey = useMemo(() => new Map(data.models.map((m) => [m.key, m])), [data.models]);
@@ -127,7 +136,7 @@ export function WhoRuns({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) 
   const keyFor = (seat: string, job: SeatJob) => runs.get(`${seat}/${job}`) ?? "";
   const cellOf = (seat: string, category: JobCategory): CellState => {
     const keys = new Set(CATEGORY_JOBS[category].map((job) => keyFor(seat, job)));
-    if (keys.size > 1) return { kind: "split" };
+    if (keys.size > 1) return { kind: "split", keys: [...keys].map((k) => k || "no model") };
     const [only] = keys;
     return only ? { kind: "one", key: only } : { kind: "none" };
   };
@@ -190,7 +199,7 @@ export function WhoRuns({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) 
                   </span>
                 }
                 model={
-                  data.admin ? (
+                  picks ? (
                     <HelperModel
                       helper={helper}
                       current={key || null}
@@ -229,20 +238,16 @@ export function WhoRuns({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) 
                     CellState
                   >
                 }
-                admin={data.admin}
+                admin={picks}
                 options={options}
                 byKey={byKey}
-                onPick={(key, categories) =>
-                  onFlow("edit", key, {
-                    step: "assign",
-                    add: categories.map((job) => ({ job, seat: s.handle })),
-                  })
-                }
+                onPick={(key, categories) => setMoving({ key, seat: s.handle, categories })}
               />
             ))}
           </ul>
         )}
       </section>
+      <SeatMoveDialog ask={moving} data={data} onClose={() => setMoving(null)} />
     </Card>
   );
 }
@@ -286,7 +291,8 @@ function SeatRow({
   const lineOf = (c: JobCategory) => {
     const cell = cells[c];
     const key = cell.kind === "one" ? cell.key : "";
-    const placeholder = cell.kind === "split" ? "Split" : "Not set";
+    // A HAND SPLIT NAMES ITS MODELS, never a bare "Split" that says nothing.
+    const placeholder = cell.kind === "split" ? cell.keys.join(" + ") : "Not set";
     return {
       key: c,
       label: CATEGORY_WORDS[c].short,
@@ -338,7 +344,7 @@ function SeatRow({
           ariaLabel={`${name}'s model`}
           value={one || undefined}
           // A SEAT WHOSE JOBS DIFFER, folded to one picker: the next pick sets all three.
-          placeholder={one === null ? "Split" : "Not set"}
+          placeholder={one === null ? "Different per job" : "Not set"}
           options={options.one}
           onChange={(v) => String(v) !== one && onPick(String(v), CATEGORY_ORDER)}
         />

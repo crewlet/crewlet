@@ -127,6 +127,11 @@ type Engine interface {
 	// RunningRunsOn counts the executor runs running now on any of keys.
 	RunningRunsOn(ctx context.Context, keys []string) (int, error)
 
+	// Verified records that the entry key's credential answered a real run of
+	// its harness at at, on a test rather than one of the model's own calls,
+	// so a model saved after its test passed does not read untested.
+	Verified(key string, at time.Time)
+
 	// StartModelCheck runs run, a check of ask's entry, on this node's own
 	// time and answers its record: ended where it ended within the engine's
 	// short hold, running otherwise. run is handed the check's own context,

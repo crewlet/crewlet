@@ -140,7 +140,33 @@ type RunRequest struct {
 
 	// By is the person's handle.
 	By string `json:"by"`
+
+	// RunKind is what the run does: [RunKindRules] (the empty kind, every
+	// record before version 2) or [RunKindDeep], an investigation.
+	RunKind RunKind `json:"run_kind,omitempty"`
 }
+
+// RunProgress is one line of a deep run's progress (op `progress` on the run),
+// readable from any node while the run is in flight, or its checkpoint, or
+// both.
+type RunProgress struct {
+	Run  string    `json:"run"`
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+	// Checkpoint is where the run stands, as the deep run keeps it (its
+	// agenda with each verdict and the reads it asked), so a holder that
+	// takes the run over resumes from it rather than starting over; the
+	// newest one a run wrote stands (ADR-0166). Absent from a line alone.
+	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
+}
+
+// MaxProgressBytes bounds one progress line, and MaxCheckpointBytes one
+// checkpoint: an agenda of a few dozen items with their verdicts, and the
+// reads asked, with room.
+const (
+	MaxProgressBytes   = 512
+	MaxCheckpointBytes = 64 << 10
+)
 
 // RunRecord is a run's end (op `record` on the run).
 type RunRecord struct {
@@ -160,6 +186,9 @@ type RunRecord struct {
 
 	// Model is the model pass's summary as a JSON object, or null.
 	Model json.RawMessage `json:"model,omitempty"`
+
+	// RunKind is what the run did, as its request named it.
+	RunKind RunKind `json:"run_kind,omitempty"`
 }
 
 // Report writes one week's report, once (op `write`): the ISO week, the period
@@ -247,6 +276,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[RunRequest](rec)
 	case k == KindRun && op == OpRecord:
 		return decodePayload[RunRecord](rec)
+	case k == KindRun && op == OpProgress:
+		return decodePayload[RunProgress](rec)
 	case k == KindReport && op == OpWrite:
 		return decodePayload[Report](rec)
 	case k == KindAlarm && op == OpRaise:

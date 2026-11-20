@@ -23,6 +23,7 @@ type LogReads interface {
 	Key(ctx context.Context, key string, fresh statelog.Freshness) (advisordomain.KeyRow, bool, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
 	Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (advisordomain.Tally, error)
+	Checkpoint(ctx context.Context, run string, fresh statelog.Freshness) (json.RawMessage, bool, error)
 }
 
 // LogWrites is the advisor log's write side as the duty writes it.
@@ -32,6 +33,7 @@ type LogWrites interface {
 	Refresh(ctx context.Context, c advisordomain.Call, key string, r advisordomain.Refresh, ifMatch uint64) (statelog.Result, error)
 	Move(ctx context.Context, c advisordomain.Call, key string, m advisordomain.Move, ifMatch uint64) (statelog.Result, error)
 	RecordRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRecord) (statelog.Result, error)
+	Progress(ctx context.Context, c advisordomain.Call, p advisordomain.RunProgress) (statelog.Result, error)
 	Expire(ctx context.Context, c advisordomain.Call, day time.Time, e advisordomain.Expiry) (statelog.Result, error)
 	WriteReport(ctx context.Context, c advisordomain.Call, r advisordomain.Report) (statelog.Result, error)
 	Explain(ctx context.Context, c advisordomain.Call, key string, e advisordomain.Explanation) (statelog.Result, error)
@@ -122,7 +124,7 @@ func (l advisorLog) Requested(ctx context.Context) ([]Request, error) {
 	}
 	out := make([]Request, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Request{Run: r.ID, By: r.By})
+		out = append(out, Request{Run: r.ID, By: r.By, Kind: r.Kind})
 	}
 	return out, nil
 }
@@ -237,6 +239,10 @@ type ScopeRecord struct {
 	Opened   int                       `json:"opened"`
 	Revised  int                       `json:"revised"`
 	Resolved int                       `json:"resolved"`
+	// Outcome and Reason are a class's line rather than a scope's: what the
+	// run concluded about it, and why where it could not judge.
+	Outcome advisor.Outcome `json:"outcome,omitempty"`
+	Reason  string          `json:"reason,omitempty"`
 }
 
 // RecordRun publishes how r ended.
@@ -249,6 +255,16 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 		}
 		scopes = append(scopes, ScopeRecord{Class: s.Scope, Status: status, Opened: s.Steps[advisor.StepOpen],
 			Revised: s.Steps[advisor.StepRevise], Resolved: s.Steps[advisor.StepClose]})
+	}
+	// EACH CLASS'S OUTCOME rides beside the scopes, told apart by its
+	// outcome: a class that could not judge says so (ADR-0166).
+	for _, c := range r.Classes {
+		status := advisordomain.ClassDone
+		if c.Outcome == advisor.OutcomeUnread {
+			status = advisordomain.ClassUnread
+		}
+		scopes = append(scopes, ScopeRecord{Class: string(c.Class), Status: status, Outcome: c.Outcome,
+			Reason: c.Reason})
 	}
 	classes, err := json.Marshal(scopes)
 	if err != nil {
@@ -266,7 +282,7 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 	}
 	_, err = l.writes.RecordRun(ctx, l.call("advisor_run"), advisordomain.RunRecord{
 		Run: r.ID, Trigger: advisordomain.Trigger(r.Trigger), By: r.By, StartedAt: r.StartedAt,
-		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model})
+		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model, RunKind: r.Kind})
 	return err
 }
 
@@ -350,4 +366,27 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 			Observation: o, Body: r.Body})
 	}
 	return out, nil
+}
+
+// Checkpoint publishes where a deep run stands.
+func (l advisorLog) Checkpoint(ctx context.Context, run string, at time.Time, body json.RawMessage) error {
+	_, err := l.writes.Progress(ctx, l.call("advisor_checkpoint"), advisordomain.RunProgress{Run: run, At: at.UTC(),
+		Checkpoint: body})
+	return err
+}
+
+// Resume is the newest checkpoint run wrote, nil where it wrote none.
+func (l advisorLog) Resume(ctx context.Context, run string) (json.RawMessage, error) {
+	body, found, err := l.reads.Checkpoint(ctx, run, fresh)
+	if err != nil || !found {
+		return nil, err
+	}
+	return body, nil
+}
+
+// Progress publishes one line of a deep run's progress.
+func (l advisorLog) Progress(ctx context.Context, run string, at time.Time, text string) error {
+	_, err := l.writes.Progress(ctx, l.call("advisor_progress"), advisordomain.RunProgress{Run: run, At: at.UTC(),
+		Text: text})
+	return err
 }

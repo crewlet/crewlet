@@ -201,7 +201,8 @@ func TestACardCarriesExactlyItsKindsBody(t *testing.T) {
 		p := &wire.ProposalCard{ProposalID: uuid.New(), Scope: wire.ScopeServer,
 			Tool: "create_task", Title: "Create task", ApproveLabel: "Approve and save",
 			Digest: wire.DigestPrefix + strings.Repeat("ab", 32), State: wire.ProposalProposed,
-			Changes: []wire.Change{{Kind: wire.ChangeAdded, Field: "title", Label: "Title", To: "x"}}}
+			Changes: []wire.Change{{Kind: wire.ChangeAdded, Field: "title", Label: "Title",
+				To: wire.Plain("x")}}}
 		mutate(p)
 		return wire.Card{Type: wire.CardProposal, Proposal: p}
 	}
@@ -214,6 +215,21 @@ func TestACardCarriesExactlyItsKindsBody(t *testing.T) {
 		"no approve label": proposal(func(p *wire.ProposalCard) { p.ApproveLabel = "" }),
 		"a text change with no words": proposal(func(p *wire.ProposalCard) {
 			p.Changes = []wire.Change{{Kind: wire.ChangeText, Field: "body", Label: "Body"}}
+		}),
+		"a run that is words and a record": proposal(func(p *wire.ProposalCard) {
+			p.Note = wire.Phrase{{Text: "QA", Ref: &wire.Ref{Kind: wire.ResourceSeat, ID: "qa",
+				Name: "QA"}}}
+		}),
+		"an empty run": proposal(func(p *wire.ProposalCard) { p.Changes[0].To = wire.Phrase{{}} }),
+		"a record of no kind": proposal(func(p *wire.ProposalCard) {
+			p.Audience = []wire.Phrase{{{Ref: &wire.Ref{Kind: "person", ID: "ada", Name: "Ada"}}}}
+		}),
+		"a record with no name": proposal(func(p *wire.ProposalCard) {
+			p.Changes[0].Items = []wire.Phrase{{{Ref: &wire.Ref{Kind: wire.ResourceSeat, ID: "qa"}}}}
+		}),
+		"a receipt naming a record with no address": proposal(func(p *wire.ProposalCard) {
+			p.Receipt = &wire.Receipt{Summary: wire.Phrase{{Ref: &wire.Ref{Kind: wire.ResourceTask,
+				ID: "ENG-1", Name: "ENG-1", Open: &wire.Link{Label: "ENG-1"}}}}}
 		}),
 		"a second body": {Type: wire.CardNotice,
 			Notice: &wire.NoticeCard{Tone: wire.NoticeInfo, Text: "x"},
@@ -442,5 +458,31 @@ func TestEveryErrorCodeHasASentence(t *testing.T) {
 		if s := code.Sentence(); s == "" || !strings.HasSuffix(s, ".") {
 			t.Errorf("%s has the sentence %q, want a sentence", code, s)
 		}
+	}
+}
+
+// A PHRASE IS ITS WORDS TO EVERY PLAIN READER, each record by its name, and a
+// record nobody identified is its name alone.
+// Mutation: write a record's id in place of its name.
+func TestAPhraseReadsAsItsWords(t *testing.T) {
+	t.Parallel()
+	qa := wire.Ref{Kind: wire.ResourceSeat, ID: "qa", Name: "QA"}
+	note := wire.Naming(qa).Plain(" can open it.")
+	if got := note.Text(); got != "QA can open it." {
+		t.Errorf("the note reads %q", got)
+	}
+	if refs := note.Refs(); len(refs) != 1 || refs[0].ID != "qa" {
+		t.Errorf("the note names %+v, want the seat", refs)
+	}
+	unknown := wire.Plain("Shared with ").Name(wire.Ref{Kind: wire.ResourceSeat, Name: "Somebody"})
+	if len(unknown.Refs()) != 0 || unknown.Text() != "Shared with Somebody" {
+		t.Errorf("a record with no id reads %+v, want its name as words", unknown)
+	}
+	listed := wire.Join([]wire.Phrase{wire.Naming(qa), wire.Plain("Design")}, ", ")
+	if listed.Text() != "QA, Design" || len(listed.Refs()) != 1 {
+		t.Errorf("a list reads %+v", listed)
+	}
+	if wire.Plain("") != nil {
+		t.Error("no words is a phrase of no runs")
 	}
 }

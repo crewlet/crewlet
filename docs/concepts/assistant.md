@@ -240,6 +240,10 @@ model's description of it.
 
 - **Approve** sends that one request, as you, from your own browser session.
   The receipt appears on the card and the screen behind it refreshes.
+- Every record the card names is shown as itself: an agent with its face and a
+  person with their initials, each by name, an artifact with its kind's icon,
+  and a task, a room or a page with its own icon. Each is a link that opens it
+  beside the conversation; the receipt names what changed the same way.
 - A change prepared after Ask Crewlet read text that may have been written
   **outside the company** says so at the top of the card, naming where it
   read it ("Prepared after reading an agent's question"), so you can check
