@@ -451,9 +451,34 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 		}
 	}
 	if rules {
+		d.closeDuplicates(ctx, now, live, observed, moved)
 		run.Scopes = append(run.Scopes, d.recheckPremises(ctx, now, live, moved))
 	}
 	return run
+}
+
+// closeDuplicates closes every open model finding a rule's finding of this
+// run already says with its numbers ([advisor.Restates]), as a duplicate.
+func (d *Duty) closeDuplicates(ctx context.Context, now time.Time, live []advisor.Stored,
+	observed []advisor.Observation, moved map[string]bool) {
+	for i := range live {
+		s := &live[i]
+		if moved[s.ID] || s.State != advisor.StateOpen || s.Observation.Finding.Source != advisor.SourceModel {
+			continue
+		}
+		if !slices.ContainsFunc(observed, func(o advisor.Observation) bool {
+			return advisor.Restates(s.Observation.Finding, o.Finding)
+		}) {
+			continue
+		}
+		t := advisor.Transition{Step: advisor.StepClose, Stored: s, State: advisor.StateRetired,
+			Reason: advisor.ReasonDuplicate}
+		if err := d.Log.Record(ctx, t, now); err != nil {
+			log.WarnContext(ctx, "advisor_finding_not_recorded", "step", string(t.Step), "error", err.Error())
+			continue
+		}
+		moved[s.ID] = true
+	}
 }
 
 // PremiseScope is the scope a rules run records once it asked every open

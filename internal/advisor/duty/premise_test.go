@@ -36,3 +36,29 @@ func TestAFindingWhosePremiseNoLongerHoldsIsResolved(t *testing.T) {
 		t.Errorf("the run's scopes = %+v, want the premises' check recorded", l.runs[0].Scopes)
 	}
 }
+
+// A MODEL FINDING A RULE'S FINDING SAYS IS CLOSED AS A DUPLICATE on the rules
+// run that observes the rule's finding. Mutation: leave it, and the list says
+// one cause twice, once without numbers.
+func TestAModelFindingARuleFindingSaysIsClosedAsADuplicate(t *testing.T) {
+	t.Parallel()
+	said := openFinding(t, "said", advisor.SeverityCosts, "pm", start)
+	said.Observation.Finding.Class, said.Observation.Finding.Source = advisor.ClassModel, advisor.SourceModel
+	said.Observation.Finding.Title = "pm's lead-fallback wakes did nothing."
+	rule := advisor.Finding{Class: advisor.ClassWakeReasonWaste, Severity: advisor.SeverityCosts,
+		Source: advisor.SourceEvidence, Subject: advisor.Subject{Kind: advisor.SubjectWake, Name: "lead_fallback"},
+		Seats: []advisor.SeatShare{{Seat: "pm"}}, Fix: advisor.Fix{Kind: advisor.FixNone}}
+	l := &fakeLog{live: []advisor.Stored{said}}
+	r := &fakeReader{signature: "r1", observed: []advisor.Observation{
+		advisor.Observe(rule, advisor.Span{From: start.Add(-advisor.Window), To: start}, "r1")}}
+	step(t, newDuty(l, r, nil, &clock{now: start}))
+	for _, tr := range l.recorded {
+		if tr.Stored != nil && tr.Stored.ID == "said" {
+			if tr.Step != advisor.StepClose || tr.State != advisor.StateRetired || tr.Reason != advisor.ReasonDuplicate {
+				t.Errorf("the model finding took %+v, want closed as a duplicate", tr)
+			}
+			return
+		}
+	}
+	t.Error("the model finding the rule's finding says was left open")
+}

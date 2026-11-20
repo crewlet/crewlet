@@ -270,3 +270,43 @@ func rubberStampFix(fs []Finding, sums map[string]int64) Fix {
 			"asking, keeping every other decision with the person. Show me the change before making it.",
 			sums["recommended"], sums["decided"], strings.Join(said, "; "))}
 }
+
+// Restates reports whether model finding m says what rule finding r already
+// says with its numbers: they are about a seat in common and m's words name
+// what r is about (the kind of wake, the model entry, the schedule). Such a
+// model finding is not listed, and one already open is closed as a duplicate.
+func Restates(m, r Finding) bool {
+	if m.Source != SourceModel || r.Source == SourceModel {
+		return false
+	}
+	name := r.Subject.Name
+	if r.Subject.Kind == SubjectSchedule {
+		name = r.Subject.Schedule
+	}
+	if name == "" || r.Subject.Kind == SubjectSeat || r.Subject.Kind == SubjectCompany {
+		return false
+	}
+	if !slices.ContainsFunc(seatsAbout(m), func(s string) bool { return slices.Contains(seatsAbout(r), s) }) {
+		return false
+	}
+	return strings.Contains(plainOf(m.Title+" "+m.Headline+" "+m.Item+" "+m.Why), plainOf(name))
+}
+
+// seatsAbout is every seat a finding is about.
+func seatsAbout(f Finding) []string {
+	var out []string
+	if f.Subject.Seat != "" {
+		out = append(out, f.Subject.Seat)
+	}
+	for _, s := range f.Seats {
+		out = append(out, s.Seat)
+	}
+	return out
+}
+
+// plainOf is s lowercased with its separators as spaces, so "lead-fallback",
+// "lead_fallback" and "Lead fallback" read alike.
+func plainOf(s string) string {
+	s = strings.NewReplacer("-", " ", "_", " ", ":", " ").Replace(strings.ToLower(s))
+	return " " + strings.Join(strings.Fields(s), " ") + " "
+}

@@ -299,7 +299,7 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		f.Premise = &premise
 	}
 	f.Focus = Fingerprint(f)
-	if repeats(f, g.Rules) {
+	if repeats(f, g.Rules) || slices.ContainsFunc(g.Rules, func(r Finding) bool { return Restates(f, r) }) {
 		return Finding{}, DropRepeat
 	}
 	if g.Answered[Fingerprint(f)] {

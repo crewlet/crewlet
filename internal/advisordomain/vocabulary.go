@@ -99,12 +99,15 @@ const (
 	ReasonDismissedWontFix CloseReason = "dismissed_wont_fix"
 	ReasonDismissedWrong   CloseReason = "dismissed_wrong"
 	ReasonDismissedKnown   CloseReason = "dismissed_known"
+	// ReasonDuplicate is a model finding a rule's finding says too, with
+	// its numbers (ADR-0166).
+	ReasonDuplicate CloseReason = "duplicate"
 )
 
 // closeReasons is each closed state's reasons.
 var closeReasons = map[State][]CloseReason{
 	StateResolved:  {ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere},
-	StateRetired:   {ReasonSubjectGone, ReasonFixUnbuildable},
+	StateRetired:   {ReasonSubjectGone, ReasonFixUnbuildable, ReasonDuplicate},
 	StateExpired:   {ReasonNotConfirmed},
 	StateDismissed: {ReasonDismissedWontFix, ReasonDismissedWrong, ReasonDismissedKnown},
 }
@@ -113,7 +116,7 @@ var closeReasons = map[State][]CloseReason{
 var CloseReasons = []CloseReason{
 	ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere, ReasonSubjectGone,
 	ReasonFixUnbuildable, ReasonNotConfirmed, ReasonDismissedWontFix, ReasonDismissedWrong,
-	ReasonDismissedKnown,
+	ReasonDismissedKnown, ReasonDuplicate,
 }
 
 // Valid reports whether a reason is one this build knows.

@@ -25,10 +25,12 @@ const (
 	ClassAskOvertaken             Class = "ask.overtaken"
 	ClassReviewIdle               Class = "review.idle"
 	ClassNoticeLoad               Class = "person.notice_load"
-	ClassNoopShare                Class = "wake.noop_share"
-	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
-	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
-	ClassRedeliveredSeen          Class = "wake.redelivered_seen"
+	// ClassNoopShare is retired: wake.reason_waste says the same by what woke
+	// the turns, with its numbers. Its findings resolve on the next run.
+	ClassNoopShare          Class = "wake.noop_share"
+	ClassPickupStillWaiting Class = "work.pickup_still_waiting"
+	ClassAuxiliaryShare     Class = "spend.auxiliary_share"
+	ClassRedeliveredSeen    Class = "wake.redelivered_seen"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
@@ -210,7 +212,6 @@ var detectors = []detector{
 	{ClassAskOvertaken, sourceWork, askOvertaken},
 	{ClassReviewIdle, sourceWork, reviewIdle},
 	{ClassNoticeLoad, sourceWork, noticeLoad},
-	{ClassNoopShare, sourceLedger, noopShare},
 	{ClassPickupStillWaiting, sourceLedger, pickupStillWaiting},
 	{ClassAuxiliaryShare, sourceLedger, auxiliaryShare},
 	{ClassRedeliveredSeen, sourceLedger, redeliveredSeen},
@@ -421,8 +422,6 @@ var engineWords = map[Class]said{
 	ClassNoticeLoad: {"A person was sent more notices than anyone reads.",
 		"Most of the notices these people were sent asked nothing of them, so what does ask them " +
 			"waits among the rest."},
-	ClassNoopShare: {"An agent was woken for turns that changed nothing.",
-		"A quarter or more of these agents' turns committed nothing: no work moved and no words written."},
 	ClassPickupStillWaiting: {"Agents picked up work and moved none of it.",
 		"These pickups ended with words only (a comment or a chat post) and nothing typed on the " +
 			"item, as when an agent says the item still waits on something."},
@@ -462,7 +461,6 @@ var engineSentences = map[Class]string{
 	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",
 	ClassReviewIdle:               "An item in review waits on whoever reviews it: the agent holding it, or the person its holder asked.",
 	ClassNoticeLoad:               "Notices that ask something of a person lead their Inbox; the rest are context.",
-	ClassNoopShare:                "Turns that commit nothing are counted by what woke them, so those wakes can be reduced.",
 	ClassPickupStillWaiting:       "Work that waits on something else is better marked as waiting on it, so it is not handed out.",
 	ClassAuxiliaryShare:           "Auxiliary calls run on the seat's auxiliary model, and a smaller one costs less.",
 	ClassRedeliveredSeen:          "A wake for a change a completed turn already read starts no turn.",
@@ -705,20 +703,6 @@ const (
 	deadWaitWake = types.OriginWorkItem + ":" + types.DeadWaitReason
 	scheduleWake = types.OriginSchedule + ":"
 )
-
-// noopShare is one finding per agent whose started turns often committed nothing.
-func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
-	var out []Finding
-	for _, s := range seatsOf(ev.Ledger) {
-		if s.turns < minStartedTurns || s.nothing*100 < noopPercent*s.turns {
-			continue
-		}
-		out = append(out, engineFinding(ClassNoopShare, Subject{Kind: SubjectSeat, Seat: s.handle},
-			fmt.Sprintf("%d of %d turns", s.nothing, s.turns),
-			[]Fact{{Key: "turns", Value: s.turns}, {Key: "nothing", Value: s.nothing}}, nil))
-	}
-	return out
-}
 
 // pickupStillWaiting is one finding for the company when pickups often ended
 // in words only: the work handed out was waiting on something else. A pickup

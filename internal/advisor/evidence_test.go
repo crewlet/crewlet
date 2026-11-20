@@ -124,8 +124,10 @@ func TestEachLedgerDetectorFiresAtItsThresholdAndNotBelow(t *testing.T) {
 		ledger []usage.TurnLedgerRow
 		want   []advisor.Class
 	}{
+		// WAKE.REASON_WASTE says a seat's turns that did nothing, by what
+		// woke them: no class counts them by seat alone any more.
 		"5 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 5),
-			started("app", "chat:message", "moved", 15)}, []advisor.Class{advisor.ClassNoopShare}},
+			started("app", "chat:message", "moved", 15)}, nil},
 		"4 of 20 turns did nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 4),
 			started("app", "chat:message", "moved", 16)}, nil},
 		"19 turns, all nothing": {[]usage.TurnLedgerRow{started("app", "chat:message", "nothing", 19), held}, nil},
@@ -186,16 +188,16 @@ func TestAHealthyLedgerRaisesNothing(t *testing.T) {
 // seat's id when the ledger carries none, so no finding is about nobody.
 func TestALedgerFindingNamesItsSeat(t *testing.T) {
 	t.Parallel()
-	unnamed := started("", "chat:message", "nothing", 20)
-	unnamed.AgentID = "id-gone"
+	unnamed, gone := started("", "chat:message", "moved", 10), absorbed("", 10)
+	unnamed.AgentID, gone.AgentID = "id-gone", "id-gone"
 	found := advisor.Detect(advisor.Evidence{Ledger: []usage.TurnLedgerRow{
-		started("app", "chat:message", "nothing", 20), unnamed}}, kindOf)
+		started("app", "chat:message", "moved", 10), absorbed("app", 10), unnamed, gone}}, kindOf)
 	var seats []string
 	for _, f := range found {
 		seats = append(seats, f.Subject.Seat)
 	}
 	if !slices.Equal(seats, []string{"app", "id-gone"}) {
-		t.Errorf("the no-op findings name %v, want app and the unnamed seat's id", seats)
+		t.Errorf("the ledger findings name %v, want app and the unnamed seat's id", seats)
 	}
 }
 
@@ -335,9 +337,9 @@ func TestThePatternsWindowIsAWeekAndAReviewIsIdleAfterADay(t *testing.T) {
 func TestAnUnreadSourceRaisesNothingAndIsNamed(t *testing.T) {
 	t.Parallel()
 	firing := advisor.Evidence{Work: worklet.WorkPatterns{Answers: 4, Moot: 4, Overtaken: []string{"c-1"}},
-		Ledger: []usage.TurnLedgerRow{started("app", "chat:message", "nothing", 20)},
+		Ledger: []usage.TurnLedgerRow{started("app", "lead_fallback", "nothing", 60)},
 		Backup: advisor.Backup{Standing: true}}
-	classes := []advisor.Class{advisor.ClassAskOvertaken, advisor.ClassNoopShare, advisor.ClassNoVerifiedBackup}
+	classes := []advisor.Class{advisor.ClassAskOvertaken, advisor.ClassWakeReasonWaste, advisor.ClassNoVerifiedBackup}
 	in := advisor.Inputs{Company: liveShape(t), Revision: "rev-1", Integrations: []integration.State{}}
 	read := advisor.ReadWithEvidence(in, firing)
 	if !slices.Equal(read.Unread, []string{}) {

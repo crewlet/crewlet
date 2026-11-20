@@ -56,12 +56,15 @@ const (
 	ReasonDismissedWontFix CloseReason = "dismissed_wont_fix"
 	ReasonDismissedWrong   CloseReason = "dismissed_wrong"
 	ReasonDismissedKnown   CloseReason = "dismissed_known"
+	// ReasonDuplicate is a model finding a rule's finding says too.
+	ReasonDuplicate CloseReason = "duplicate"
 )
 
 // CloseReasons is every reason.
 func CloseReasons() []CloseReason {
 	return []CloseReason{ReasonConditionCleared, ReasonFixedByThis, ReasonFixedElsewhere, ReasonSubjectGone,
-		ReasonFixUnbuildable, ReasonNotConfirmed, ReasonDismissedWontFix, ReasonDismissedWrong, ReasonDismissedKnown}
+		ReasonFixUnbuildable, ReasonNotConfirmed, ReasonDismissedWontFix, ReasonDismissedWrong, ReasonDismissedKnown,
+		ReasonDuplicate}
 }
 
 // Valid reports whether r is a reason this build knows.

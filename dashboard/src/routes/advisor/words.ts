@@ -52,6 +52,7 @@ export const CLOSE_REASONS: Readonly<Record<AdvisorCloseReason, string>> = {
   dismissed_wont_fix: "Dismissed: won't fix",
   dismissed_wrong: "Dismissed as wrong",
   dismissed_known: "Dismissed: already known",
+  duplicate: "Said by another finding, with its numbers",
 };
 
 /** Where a finding stands, in one word. */

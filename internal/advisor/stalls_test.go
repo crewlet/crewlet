@@ -311,7 +311,7 @@ func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
 		byClass[f.Class] = append(byClass[f.Class], f)
 	}
 	for _, class := range []advisor.Class{advisor.ClassPersonRequestsWithoutAsk, advisor.ClassNoticeLoad,
-		advisor.ClassReviewIdle, advisor.ClassNoopShare,
+		advisor.ClassReviewIdle,
 		advisor.ClassRedeliveredSeen, advisor.ClassAuxiliaryShare, advisor.ClassSandboxOutOfMemory,
 		advisor.ClassRoundCap, advisor.ClassBudgetStopped, advisor.ClassWorkBottleneck,
 		advisor.ClassWorkHeldByPerson, advisor.ClassMergeNoChecks} {
