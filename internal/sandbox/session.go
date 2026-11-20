@@ -872,10 +872,9 @@ const (
 // SessionScrubWait bounds the scrub of a session as it streams out of its box:
 // two readings of an archive at its bound — a tar is read twice, to learn each
 // file's size as rewritten — each of up to the plaintext the scrub admits
-// (internal/sandbox/executor's scrubExpansion times the archive's bound, which
-// its boundsFor computes: eight times), redacted at the tens of mebibytes a
-// second the redaction runs at, and the archive read out of a box whose agent
-// serves it at a mebibyte a second at the least.
+// (internal/sandbox/executor's scrubPlainMax, 256 MiB), redacted at the tens
+// of mebibytes a second the redaction runs at, and the archive read out of a
+// box whose agent serves it at a mebibyte a second at the least.
 //
 // TWO MINUTES, and a judgment: what the redaction costs per mebibyte is the
 // redaction's own, which grows with its rules. A session that is still being

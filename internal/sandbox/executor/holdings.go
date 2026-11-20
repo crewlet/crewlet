@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -50,7 +49,7 @@ type holdingsReader interface {
 // reading; ask and archive held to it; the writer held to its floor
 // ([readsRelease]); the readings' slot ([HoldingsReadsAtOnce]); then archive
 // opened once, through open, closed before the slot goes back, and read
-// within a kept session's scrub bounds ([boundsFor]). A refusal before the
+// within a kept session's scrub bounds ([scrubPlainMax]). A refusal before the
 // slot holds none and opens no store connection.
 //
 // Whether this runner restores archive is not asked again: the caller asked
@@ -88,7 +87,7 @@ func (r *Runner) ReadHoldings(ctx context.Context, archive sandbox.SessionArchiv
 		return sandbox.SessionHoldings{}, fmt.Errorf("executor: opening the session's archive: %w", err)
 	}
 	defer func() { _ = body.Close() }()
-	return h.readHoldings(ctx, body, archive, ask, boundsFor(executorkeep.SessionMaxBytes))
+	return h.readHoldings(ctx, body, archive, ask, plainBounds(scrubPlainMax))
 }
 
 var _ sandbox.HoldingsReader = (*Runner)(nil)

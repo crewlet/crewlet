@@ -34,9 +34,10 @@ import (
 //	[GOGC=10] GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	const (
-		line     = 2053           // a real main thread's average line, probe P6
-		measured = 118.0 / 32     // what a session at the archive's bound inflates by, probe P6
-		bound    = scrubExpansion // what one must inflate by to reach the plaintext's bound
+		line     = 2053       // a real main thread's average line, probe P6
+		measured = 118.0 / 32 // what a session at the archive's bound inflates by, probe P6
+		// bound is what one must inflate by to reach the plaintext's bound.
+		bound = float64(scrubPlainMax) / float64(executorkeep.SessionMaxBytes)
 	)
 	ordinary := int64(math.Round(1.51 * measured * (1 << 20)))
 	atBound := int64(math.Round(measured * executorkeep.SessionMaxBytes))
@@ -102,7 +103,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 					b.Fatal(err)
 				}
 				got, err = ClaudeCode{}.readHoldings(b.Context(), bufio.NewReader(f), archive, ask,
-					boundsFor(executorkeep.SessionMaxBytes))
+					plainBounds(scrubPlainMax))
 				_ = f.Close()
 				var own *holdingsError
 				switch {

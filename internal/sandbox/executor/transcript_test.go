@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -1423,15 +1422,13 @@ func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
 
 // THE TRANSCRIPT'S BOUNDS ARE THE ENGINE'S OWN, and hold to what their values
 // argue: a page holds sixty-four entries at the entry's bound; a line is read
-// to the bound every read of a run's record takes; the read budget is eight
-// times an archive's largest stored size (gzip's ratio over text), so an
-// ordinary session at its bound reads whole; and at least two reads run at
-// once, at worst (each a line at its bound, as much again while its slice
+// to the bound every read of a run's record takes; and at least two reads run
+// at once, at worst (each a line at its bound, as much again while its slice
 // grows, its decoded copy and its whole redaction) about 454 MiB.
 //
 // Mutation: raise the entry's bound past a sixty-fourth of the page's, read
-// lines to a bound of their own, shrink the budget under eight archives, or let
-// one read at a time, or a third, run at once, and a row goes red.
+// lines to a bound of their own, or let one read at a time, or a third, run
+// at once, and a row goes red.
 func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	bounds := executor.TranscriptReadBounds()
@@ -1447,10 +1444,6 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	if bounds.LineBytes != executor.MaxLineBytes {
 		t.Errorf("a transcript's line is read to %d, and a run's record to %d", bounds.LineBytes,
 			executor.MaxLineBytes)
-	}
-	if bounds.ReadBytes < 8*executorkeep.SessionMaxBytes {
-		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
-			executorkeep.SessionMaxBytes)
 	}
 	if n := executor.TranscriptReadsAtOnce; n < 2 || n*3*bounds.LineBytes > 200<<20 {
 		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",

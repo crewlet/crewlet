@@ -836,8 +836,8 @@
 //
 // The archive is the box's own: its code can write a gzip that expands a
 // thousandfold, a value nested a million deep, or a session of nothing but
-// text the redaction has to read. So the scrub reads at most [scrubExpansion]
-// times the archive's bound of plaintext in one reading ([scrubBounds]) and
+// text the redaction has to read. So the scrub reads at most [scrubPlainMax]
+// of plaintext in one reading ([scrubBounds]) and
 // rewrites no value nested deeper than jsonscan.MaxDepth as JSON (a
 // transcript's line or a `.json` file so nested is text, and an export is
 // refused). A session past the plaintext, or one whose text the redaction
@@ -859,7 +859,7 @@
 // two JSON rewrites, each its scanner, its read buffer and a frame a container
 // open; the readers and writers of the archive's gzip and tar; and the plan, a
 // sixteenth of the plaintext at most and a 512th for its texts' digests. About
-// 116 MiB at the archive's bound, 16.5 MiB of it the plan, which a real
+// 116 MiB at the scrub's bound, 16.5 MiB of it the plan, which a real
 // session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.

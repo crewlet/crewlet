@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -33,7 +32,7 @@ import (
 //
 //	go test -run '^$' -bench '^BenchmarkTheScrubAtThePlaintextBound$' -benchtime 1x -timeout 30m
 func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {
-	bounds := boundsFor(executorkeep.SessionMaxBytes)
+	bounds := plainBounds(scrubPlainMax)
 	// Room for the tar's header and its end, and the line's own words.
 	body := int(bounds.plain) - 64<<10
 	s := newScrubber([]string{longValue})
@@ -118,8 +117,8 @@ func BenchmarkTheScrubAtThePlaintextBound(b *testing.B) {
 
 // writeBase64Blocks writes n bytes of base64 made of blocks drawn at random
 // from four random ones, each within gzip's window of the last time it was
-// written, so gzip shrinks it well past the eight times a session must to
-// reach the plaintext's bound from the archive's.
+// written, so gzip shrinks it well past what a session must to reach the
+// plaintext's bound from the archive's.
 func writeBase64Blocks(w io.Writer, r *rand.Rand, n int) error {
 	blocks := make([]string, 4)
 	for i := range blocks {

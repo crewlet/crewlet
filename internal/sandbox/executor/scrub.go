@@ -58,17 +58,15 @@ const credentialMarker = redact.Marker + "credential]"
 // backstop for one that is.
 const minScrubBytes = 8
 
-// scrubExpansion is how many times its archive's bound the plaintext of one
-// reading of an archive may be: a session the scrub reads further than that is
-// refused.
+// scrubPlainMax is the most plaintext one reading of an archive yields to a
+// scrub: a session the scrub reads further than that is refused.
 //
-// EIGHT. A harness's transcript is JSON, which gzip shrinks about five to ten
-// times, so a session near its bound reads some hundreds of mebibytes; eight
-// times the thirty-two mebibyte bound is a quarter of a gibibyte, which the
-// scrub's budget (internal/sandbox's SessionScrubWait) reads twice. A session
-// more compressible than eight to one at the bound is refused — a judgment the
-// two bounds make together, raised by raising this with the budget.
-const scrubExpansion = 8
+// 256 MiB, apart from the archive's bound (executorkeep.SessionMaxBytes): it is
+// what the take's wait (internal/sandbox's SessionScrubWait) is derived for,
+// read twice. A text-only session gzip shrinks further than the two bounds'
+// ratio is refused here first; media, already compressed, inflates to about
+// its archive's size, so it is held by the archive's bound and no ratio.
+const scrubPlainMax = 256 << 20
 
 // keptGzipLevel is the level the scrub writes a kept archive at: seven, the
 // lowest of Go's compress/flate levels that entropy-codes base64. The take
@@ -115,9 +113,10 @@ type scrubBounds struct {
 	memo *memoUse
 }
 
-// boundsFor is the scrub of an archive of at most archiveMax bytes.
-func boundsFor(archiveMax int64) scrubBounds {
-	return scrubBounds{plain: scrubExpansion * archiveMax}
+// plainBounds is a scrub that reads at most plain bytes of plaintext in one
+// reading.
+func plainBounds(plain int64) scrubBounds {
+	return scrubBounds{plain: plain}
 }
 
 // gatedBy is b with every piece past the base held under large's one slot

@@ -205,10 +205,10 @@ seal the node cannot open, refuses the capture, and so does
 a login read again past what a launch may hand, or a set past four times that.
 A key's PEM armour is never a value: every key of its kind carries it, and the
 shapes read a key by it. Keys of JSON objects, members' names (by value and by
-shape) and the tar's metadata are scrubbed too. The scrub reads at most eight
-times the archive's bound of plaintext, refusing a session past it, and holds
-no line, string or stretch of text whole, so it refuses none for its length
-and what it holds stays within its own bound whatever the box wrote.
+shape) and the tar's metadata are scrubbed too. The scrub reads at most its
+own bound of plaintext (`scrubPlainMax`, 256 MiB), refusing a session past it,
+and holds no line, string or stretch of text whole, so it refuses none for its
+length and what it holds stays within its own bound whatever the box wrote.
 
 **A turn's end is owed on the run's row**, written there by whatever decides
 it, and recorded by the run's ending only after every capture of the turn has
@@ -1315,7 +1315,7 @@ OpenCode's waits for its server), and the page's image requirements say so —
 and a box whose `sleep` refuses one fails the pack, saying so, rather than run
 its wait out at once. It then lists every file of the session, its inode and
 its size, and refuses a session whose files add up past what one reading of an
-archive yields a kept session's scrub (eight times `SessionMaxBytes`) before
+archive yields a kept session's scrub (`scrubPlainMax`, 256 MiB) before
 any tar, since the take would refuse it once packed. After the tar, whatever
 its exit 0 or 1 said, it
 refuses the pack where the archive does not list back through gunzip —

@@ -250,13 +250,12 @@ const (
 	// TranscriptReadBytes is the most bytes one read takes as the archive
 	// inflates, and the most the members of a tar hand the reader.
 	//
-	// 256 MiB: eight times the most an archive is stored as (internal/executorkeep's
-	// SessionMaxBytes, 32 MiB), gzip's ratio over JSON, so an ordinary archive
+	// What a kept session's scrub reads ([scrubPlainMax]), so an archive kept
 	// reads whole and one that inflates past it stops there. A tar's members are
 	// held to it APART, on what they hand out: a sparse member hands out holes
 	// the archive does not hold, and unmetered, a member of 1.5 KiB could hold the
 	// read for its declared size, up to an exbibyte.
-	TranscriptReadBytes = 256 << 20
+	TranscriptReadBytes = scrubPlainMax
 )
 
 // TranscriptReadBounds are the bounds every read the engine makes is held to.
