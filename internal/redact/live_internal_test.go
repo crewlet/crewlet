@@ -19,6 +19,20 @@ func NewStreamHolding(w io.Writer, h int, liveStream bool) *Stream {
 	return s
 }
 
+// CountEarly counts in n each window s's keys' stage decides early.
+func CountEarly(s *Stream, n *int) {
+	s.observe = &keyObserver{decided: func(int, int) { *n++ }}
+}
+
+// RefusingLayouts is [refusingLayouts]: each its name, its text, and whether
+// it is in a layout the package doc names.
+func RefusingLayouts(r *rand.Rand) (layouts [][2]string, named []bool) {
+	for _, l := range refusingLayouts(r) {
+		layouts, named = append(layouts, [2]string{l.name, l.text}), append(named, l.refuses)
+	}
+	return layouts, named
+}
+
 // RefusedAt is the byte of the text a refusal names, or -1 for any other
 // answer.
 func RefusedAt(err error) int {

@@ -12,12 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// liveRun is what a stream wrote for a text and answered, and at each flush
-// how much it had written and how much of that it answered final.
+// liveRun is what a stream wrote for a text and answered, at each flush how
+// much it had written and how much of that it answered final, and how many
+// windows its keys' stage decided early.
 type liveRun struct {
 	out     string
 	err     error
 	flushes [][2]int64
+	early   int
 }
 
 // readLive is text written to a stream holding h, live where flush is not
@@ -27,6 +29,7 @@ func readLive(text string, h int, r *rand.Rand, most int, flush func() bool) liv
 	var run liveRun
 	var out bytes.Buffer
 	s := redact.NewStreamHolding(&out, h, flush != nil)
+	redact.CountEarly(s, &run.early)
 	for at := 0; at < len(text); {
 		n := min(len(text)-at, 1+r.IntN(most))
 		_, _ = s.Write([]byte(text[at : at+n]))
@@ -56,8 +59,12 @@ type liveText struct {
 // liveTexts is a text of each kind the package's tests draw, at each length
 // a live stream reads apart: a transcript of every shape the keys' reader
 // tells apart, below wholeBytes, across it and past it; the keys in every
-// wrapping; every shape a stage carries across its window; and texts built to
-// hold a stream, read at a hold that refuses some of them.
+// wrapping; and every shape a stage carries across its window, all shorter
+// than the hold they are read at. Then texts a stream decides early: a shape
+// of each hold at 256 KiB, an armour beside a run, an AWS secret's blanks or
+// a Google token's dots in no layout that refuses there; and at the stream's
+// own hold, after 600 KiB of lines, each layout the package doc names, and
+// its neighbours, beside a run past the lag.
 func liveTexts(r *rand.Rand) (texts []liveText) {
 	add := func(name, text string, h int, canRefuse bool) {
 		texts = append(texts, liveText{name, text, h, canRefuse})
@@ -74,29 +81,35 @@ func liveTexts(r *rand.Rand) (texts []liveText) {
 		add("the keys of "+name+" in every wrapping", text, redact.HoldBytes(), false)
 	}
 	add("the stages' shapes", redact.StreamText(r, 4*redact.WholeBytes), redact.HoldBytes(), false)
-	// A shape of each hold, and every one a stream refuses at this hold.
+	// A shape of each hold, every one a stream refuses at this hold, and
+	// three that [TestAStreamThatDecidesEarlySaysSo] holds it never does.
 	each := []string{"a1", "a3", "a5", "a6", "b1", "c1", "d1", "e1", "g1", "g2", "gd1", "hc5", "p1", "pa3", "pb1", "pc4"}
 	for _, s := range redact.HoldShapes(768 << 10) {
 		if slices.Contains(each, s[0]) {
-			add("hold shape "+s[0], s[1], 256<<10, true)
+			add("hold shape "+s[0], s[1], 256<<10, !slices.Contains([]string{"a1", "b1", "gd1"}, s[0]))
 		}
 	}
 	add("an early text", redact.EarlyText(r, 1<<20, 512<<10), 256<<10, true)
+	layouts, named := redact.RefusingLayouts(r)
+	lines := strings.Repeat("ok\n", 200<<10)
+	for i, l := range layouts {
+		add(l[0]+", after 600 KiB of lines", lines+l[1], redact.HoldBytes(), named[i])
+	}
 	return texts
 }
 
 // A LIVE STREAM WRITES WHAT THE WHOLE TEXT REDACTS TO HOWEVER IT IS FLUSHED:
-// over [liveTexts], cut at random and flushed at random points, where Close
-// answers nil it wrote [redact.Secrets] of the text, and a flush then answers
-// all of it final; at every flush, and after a refusal, what it answered final
-// is a prefix of Secrets; a text in no layout that can refuse is never
-// refused; and never flushed, it answers as a [redact.NewStream] does. In a
-// layout that can, a flush moves where windows are decided, so it may spare a
-// refusal, make one, or move its byte ([redact.Stream.Flush]).
+// over [liveTexts], cut and flushed at random, where Close answers nil it
+// wrote [redact.Secrets], and a flush then answers all of it final; what any
+// flush answered final is a prefix of Secrets; a text in no layout that can
+// refuse, flushed around windows decided early, is never refused; never
+// flushed, it answers as a [redact.NewStream] does. In a layout that can, a
+// flush may spare, make or move a refusal ([redact.Stream.Flush]).
 //
-// Mutation: decide each stage to what it was handed whether or not it is
-// settled ([redact.Stream.Flush]), or have the end keep what the head's
-// flushes wrote, and a text is written otherwise than Secrets.
+// Mutation: decide each stage to what it was handed, settled or not, or have
+// the end keep what the head's flushes wrote, and a text is written otherwise
+// than Secrets; refuse at a flush while a window decided early waits on its
+// claims, and a text in no layout that can refuse is refused.
 func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 2))
@@ -111,7 +124,7 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 		{"up to 8 KiB, flushed 1 in 4", 8 << 10, 4},
 		{"up to 96 KiB, flushed 1 in 2", 96 << 10, 2},
 	}
-	refused, differ := 0, 0
+	refused, differ, early := 0, 0, 0
 	for _, tx := range texts {
 		want := redact.Secrets(tx.text)
 		plain := readLive(tx.text, tx.hold, r, 64<<10, nil)
@@ -127,6 +140,9 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 			at, plainAt := redact.RefusedAt(got.err), redact.RefusedAt(plain.err)
 			if at != plainAt {
 				differ++
+			}
+			if sc.odds > 0 && !tx.canRefuse && got.early > 0 {
+				early++
 			}
 			last := got.flushes[len(got.flushes)-1]
 			switch {
@@ -147,7 +163,10 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 			}
 		}
 	}
-	t.Logf("%d texts, %d refused by a stream; %d flushed live readings refused otherwise than it", len(texts), refused, differ)
+	if early == 0 {
+		t.Errorf("no flushed reading of a text in no layout that can refuse decided a window early, so none of them could be refused")
+	}
+	t.Logf("%d texts, %d refused by a stream; %d flushed live readings refused otherwise than it; %d flushed readings of a text in no layout that can refuse decided a window early", len(texts), refused, differ, early)
 }
 
 // BenchmarkALiveStream is what a live stream costs against a [redact.Stream]
