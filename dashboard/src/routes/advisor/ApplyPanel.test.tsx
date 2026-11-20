@@ -65,6 +65,12 @@ const FINDING: AdvisorKeptFinding = {
     sentence: "Add a second Backend Engineer, cloned from the first.",
     options: [],
   },
+  headline: "Work waits for Backend Engineer every day",
+  stats: [],
+  chart: null,
+  seats: [],
+  actions: { primary: null, secondary: [] },
+  premise_checked_at: null,
 };
 
 /** A fix offering two changes, for the person to pick between. */

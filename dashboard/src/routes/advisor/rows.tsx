@@ -125,15 +125,10 @@ export function freshness(f: AdvisorKeptFinding, now: number): string {
   return f.confirmed === "stale" ? found : `${found} · checked ${ago(f.last_confirmed_at, now)}`;
 }
 
-/**
- * A stat as the row says it: what it counts, then its number in its unit
- * ("Logs without a verified backup: 14", "Hours work waited for a seat:
- * 31 h"). A measured cost a week reads as one ("31 h a week").
- */
+/** A stat as the row says it: what it counts, then its number in its unit ("Hours held: 31 h"). */
 export function statWords(s: ViewStat): string {
   const shown = figure(s.value ?? 0, s.unit);
   const number = `${shown.value}${shown.unit && (s.unit === "hours" || s.unit === "minutes") ? ` ${shown.unit}` : ""}`;
-  if (s.key === "hours_per_week" || s.key === "tokens_per_week") return `${number} ${s.label}`;
   return `${s.label}: ${number}`;
 }
 

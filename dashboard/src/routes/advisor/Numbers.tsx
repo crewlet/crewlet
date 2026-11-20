@@ -32,14 +32,12 @@ import { href } from "~/app/router.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
-import { useReport, useReports } from "./api.ts";
 import {
   RANGES,
   explainer,
-  snapshotOf,
+  snapshotView,
   type RangeDays,
   type StatUnit,
   type ViewChart,
@@ -67,42 +65,18 @@ export function RangePicker({
   );
 }
 
-/** The page's numbers over `days`, from the questions the company's other screens ask. */
-export function useSnapshot(days: RangeDays, findings: readonly AdvisorKeptFinding[]) {
-  const flow = useQuery("work_flow", { bucket: "day", points: days });
-  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
-  const outcomes = useQuery("turn_outcomes", { days });
-  const previous = useQuery("turn_outcomes", { days, previous: true });
-  const reports = useReports();
-  const newest = reports.data?.reports[0]?.week ?? null;
-  const report = useReport(newest ?? "", newest !== null);
-  const badgeOf = useSeatBadgeOf();
-  const snapshot = useMemo(
-    () =>
-      snapshotOf(
-        {
-          flow: flow.data,
-          workload: workload.data,
-          outcomes: outcomes.data?.rows ?? null,
-          previous: previous.data?.rows ?? null,
-          report: report.data,
-          findings,
-        },
-        days,
-        (handle) => badgeOf(handle).name,
-      ),
-    [flow.data, workload.data, outcomes.data, previous.data, report.data, findings, days, badgeOf],
-  );
-  const loading: Record<string, boolean> = {
-    open_items: flow.loading && !flow.data,
-    stuck_hours:
-      (reports.loading && !reports.data) || (newest !== null && report.loading && !report.data),
-    capacity_lost_hours: false,
-    wasted_turns_percent: outcomes.loading && !outcomes.data,
-    tokens_per_turn: outcomes.loading && !outcomes.data,
-  };
-  return { snapshot, loading };
+/** The page's numbers over `days`, as the engine states them (`advisor_snapshot`). */
+export function useSnapshot(days: RangeDays) {
+  const answer = useQuery("advisor_snapshot", { range: `${days}d` }, { pollMs: SNAPSHOT_POLL_MS });
+  const snapshot = useMemo(() => snapshotView(answer.data, days), [answer.data, days]);
+  return { snapshot, loading: answer.loading && !answer.data, answer };
 }
+
+/**
+ * How often the numbers are read: the engine computes a snapshot on read and
+ * keeps it a few minutes, so a read a minute shows the next one within its life.
+ */
+export const SNAPSHOT_POLL_MS = 60_000;
 
 /** A figure in its unit, as its tile draws it: the number and the word after it. */
 export function figure(value: number, unit: StatUnit): { value: string; unit?: string } {
@@ -119,7 +93,7 @@ export function figure(value: number, unit: StatUnit): { value: string; unit?: s
       return { value: fmtCount(value), unit: value === 1 ? "item" : "items" };
     case "turns":
       return { value: fmtCount(value), unit: value === 1 ? "turn" : "turns" };
-    case "count":
+    default:
       return { value: fmtCount(value) };
   }
 }
@@ -162,18 +136,16 @@ function Tile({
 }) {
   const shown = stat.value === null ? null : figure(stat.value, stat.unit);
   const delta = deltaOf(stat);
-  const words =
+  const compared =
     shown === null
       ? "Not measured yet"
-      : delta
-        ? (stat.window ?? `vs previous ${days} days`)
-        : (stat.window ?? "");
+      : (stat.detail ?? (delta ? `vs previous ${days} days` : ""));
   const sub: ReactNode = (
     <>
-      {words}
+      {compared}
       {why ? (
         <>
-          {words ? " · " : ""}
+          {compared ? " · " : ""}
           <a
             className="t-link"
             href={href(["advisor", "findings", why.id])}
@@ -200,15 +172,8 @@ function Tile({
 }
 
 /**
- * The ids of the charts that carry a figure of their own: a stat whose key is
- * a chart's id (`tokens_per_turn`) is drawn on that chart, its breakdown
- * beside it, and not in the strip.
- */
-const charted = (snapshot: ViewSnapshot) => new Set(snapshot.charts.map((c) => c.id));
-
-/**
- * The strip of figures, one row. FOUR A ROW at most, the kit's widest row,
- * which folds two by two on a phone and leaves no tile alone on a row.
+ * The strip of figures, one row of four, the kit's widest, which folds two by
+ * two on a phone and leaves no tile alone on a row (`view.ts` chooses them).
  */
 export function StatsStrip({
   snapshot,
@@ -217,23 +182,17 @@ export function StatsStrip({
 }: {
   snapshot: ViewSnapshot;
   findings: readonly AdvisorKeptFinding[];
-  loading: Record<string, boolean>;
+  loading: boolean;
 }) {
-  const onCharts = charted(snapshot);
-  const shown = snapshot.stats.filter((s) => !onCharts.has(s.key));
-  const n = shown.length;
   return (
-    <StatGroup
-      columns={n % 3 === 0 && n % 4 !== 0 ? 3 : n === 2 ? 2 : 4}
-      aria-label="The company's numbers"
-    >
-      {shown.map((s) => (
+    <StatGroup columns={4} aria-label="The company's numbers">
+      {snapshot.stats.map((s) => (
         <Tile
           key={s.key}
           stat={s}
           days={snapshot.days}
           why={explainer(s.key, findings)}
-          loading={!!loading[s.key]}
+          loading={loading}
         />
       ))}
     </StatGroup>
@@ -356,7 +315,7 @@ export function Charts({
       aria-label={`The last ${plural(snapshot.days, "day")} in charts`}
     >
       {snapshot.charts.map((c) => {
-        const stat = snapshot.stats.find((s) => s.key === c.id) ?? null;
+        const stat = snapshot.charted.find((s) => s.key === c.id) ?? null;
         return (
           <ChartCard
             key={c.id}

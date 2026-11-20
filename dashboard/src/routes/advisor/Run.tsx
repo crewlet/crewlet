@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Text, useToast } from "@crewlethq/ui";
+import { Button, Disclosure, Text, useToast } from "@crewlethq/ui";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtElapsed, plural } from "~/lib/format.ts";
@@ -38,9 +38,18 @@ export interface ViewRun {
   progress: RunStep[];
   /** The sources it could not read, by their words. */
   unread: string[];
+  /** The classes it ran that could not judge, each with why. */
+  silent: ClassOutcome[];
 }
 
-/** The latest run, as the head draws it. Today's run reports no steps of its own. */
+/** One class a run ran, and why it could not judge where it could not. */
+export interface ClassOutcome {
+  class: string;
+  status: string;
+  reason: string | null;
+}
+
+/** A run as its head draws it. */
 export function runView(run: AdvisorRunSummary | null): ViewRun {
   if (run === null) {
     return {
@@ -51,6 +60,7 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
       resolved: 0,
       progress: [],
       unread: [],
+      silent: [],
     };
   }
   const status = run.status === "running" ? "running" : run.status === "failed" ? "failed" : "done";
@@ -60,8 +70,9 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
     endedAt: run.ended_at,
     opened: run.opened,
     resolved: run.resolved,
-    progress: [],
+    progress: run.progress,
     unread: run.unread,
+    silent: run.classes.filter((c) => c.status === "silent"),
   };
 }
 
@@ -107,6 +118,26 @@ export function RunLine({ run, now }: { run: ViewRun; now: number }) {
         {running && lead ? ` ${lead.text}` : ""}
         {run.unread.length > 0 ? ` Could not read ${unreadNames(run.unread)}.` : ""}
       </Text>
+      {/* A CHECK THAT COULD NOT JUDGE SAYS WHY, folded: a quiet list never
+          reads as one that judged and found nothing. */}
+      {!running && run.silent.length > 0 ? (
+        <Disclosure
+          title={`${plural(run.silent.length, "check")} could not judge`}
+          size="compact"
+          headingLevel="none"
+          flush
+        >
+          <ul className="advisor-run__steps">
+            {run.silent.map((c) => (
+              <li key={c.class}>
+                <Text as="span" variant="caption" tone="secondary">
+                  {c.reason ?? c.class}
+                </Text>
+              </li>
+            ))}
+          </ul>
+        </Disclosure>
+      ) : null}
       {running && run.progress.length > 1 ? (
         <ol className="advisor-run__steps" aria-label="What the run did so far">
           {run.progress.slice(0, -1).map((step) => (

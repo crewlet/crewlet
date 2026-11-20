@@ -104,7 +104,7 @@ function Findings({ days }: { days: RangeDays }) {
   const reload = useCallback(() => refetch(), [refetch]);
   const row = useRowActions(reload);
   const all = ranked(open.data?.findings ?? []);
-  const { snapshot, loading } = useSnapshot(days, all);
+  const { snapshot, loading } = useSnapshot(days);
   // A SNOOZED FINDING LEAVES THE LISTS it would stand in, for one of its own
   // that says until when.
   const shown = all.filter((f) => !snoozed(f, now));

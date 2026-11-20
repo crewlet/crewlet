@@ -23,6 +23,7 @@ const running: ViewRun = {
     { at: "2026-11-20T09:59:30Z", text: "Testing: releases pile up behind one seat." },
   ],
   unread: [],
+  silent: [],
 };
 
 // A RUN IS FOLLOWED, NEVER WAITED ON: its elapsed time and what it is doing

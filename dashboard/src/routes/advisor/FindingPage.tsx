@@ -34,12 +34,13 @@ import {
   RecordLinks,
   freshness,
   marks,
+  statWords,
   snoozed,
   type OpenApply,
   type RowActions,
 } from "./rows.tsx";
 import type { AdvisorFindingDetail } from "~/protocol/advisorFindings.ts";
-import { CLOSE_REASONS, STATE_WORDS, factWords, severityWord, toneOf } from "./words.ts";
+import { CLOSE_REASONS, STATE_WORDS, severityWord, toneOf } from "./words.ts";
 import { findingView } from "./view.ts";
 
 /** What each transition is called on the timeline; one this build does not know is said by its name. */
@@ -124,10 +125,7 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         {/* EVERY NUMBER ONCE, on one line under the headline: the facts it
             rests on and what became of it. */}
         <Text as="p" className="advisor-finding__stats">
-          {[
-            ...f.evidence.facts.map((fact) => `${fact.label}: ${factWords(fact)}`),
-            ...marks(f, now),
-          ].join(" · ")}
+          {[...f.stats.map(statWords), ...marks(f, now)].join(" · ")}
         </Text>
         {f.close_reason ? (
           <Callout variant="neutral">

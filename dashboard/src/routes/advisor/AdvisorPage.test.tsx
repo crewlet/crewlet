@@ -65,52 +65,68 @@ function finding(patch: Partial<AdvisorKeptFinding> = {}): AdvisorKeptFinding {
     impact: null,
     evidence: { window: { from: ago(60 * 24 * 7), to: ago(0) }, facts: [], records: [] },
     fix: { kind: "none", sentence: "Nothing to change by hand.", options: [] },
+    headline: patch.title ?? `Finding ${serial}`,
+    stats: [],
+    chart: null,
+    seats: [],
+    actions: { primary: null, secondary: [] },
+    premise_checked_at: null,
     ...patch,
   };
 }
 
-/** The company's work over the range, as `work_flow` answers it. */
-const FLOW = {
-  bucket: "day",
-  points: [
+/** The company's numbers over the range, as `advisor_snapshot` answers them. */
+const SNAPSHOT = {
+  as_of: ago(0),
+  run_id: null,
+  range: { from: ago(60 * 24 * 7), to: ago(0), days: 7 },
+  stats: [
+    { key: "open_items", label: "Open items", value: 15, unit: "items", was: 12, better: "down" },
+    { key: "turns", label: "Turns", value: 40, unit: "turns", was: null, better: null },
     {
-      window: "d1",
-      start: ago(60 * 24),
-      end: "",
-      not_started: 8,
-      active: 4,
-      done: 0,
-      closed: 0,
-      completed: 1,
-    },
-    {
-      window: "d2",
-      start: ago(60),
-      end: "",
-      not_started: 10,
-      active: 5,
-      done: 0,
-      closed: 0,
-      completed: 2,
+      key: "wasted_turns_percent",
+      label: "Wasted",
+      value: 75,
+      unit: "percent",
+      was: null,
+      better: "down",
     },
   ],
-  now: { not_started: 10, active: 5, blocked: 2, overdue: 1 },
-  blocked_history: false,
-  complete: true,
+  charts: [
+    {
+      id: "wasted_wakes",
+      title: "Turns that changed nothing, by what woke them",
+      unit: "turns",
+      kind: "bars",
+      x: {
+        kind: "reason",
+        keys: ["work_item:lead_fallback"],
+        labels: ["Work items (the unit's lead)"],
+      },
+      series: [
+        { id: "nothing", label: "Changed nothing", values: [30] },
+        { id: "moved", label: "Moved work", values: [10] },
+      ],
+      note: null,
+    },
+  ],
+  unread: [],
 };
 
-/** The range's turns, as `turn_outcomes` answers them. */
-const OUTCOMES = [
-  {
-    seat: "pm",
-    agent_id: "a-pm",
-    wake: "work_item:lead_fallback",
-    turns: 40,
-    tokens: 400_000,
-    nothing: 30,
-    nothing_tokens: 300_000,
-  },
-];
+/** A press of the engine's, every key sent. */
+const press = (patch: Record<string, unknown>) => ({
+  kind: "apply",
+  label: "",
+  option: null,
+  items: null,
+  to: null,
+  page: null,
+  target: null,
+  setting: null,
+  url: null,
+  question: null,
+  ...patch,
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -149,11 +165,7 @@ function engine(findings: AdvisorKeptFinding[], run: AdvisorRunSummary | null = 
       };
     }
     if (name === "advisor_run") return run;
-    if (name === "work_flow") return FLOW;
-    if (name === "work_workload") return { rows: [], flow_live: true, complete: true };
-    if (name === "turn_outcomes")
-      return { from: "", to: "", rows: params.previous ? [] : OUTCOMES };
-    if (name === "advisor_reports") return { reports: [], next_cursor: null };
+    if (name === "advisor_snapshot") return SNAPSHOT;
     return {};
   };
   return { sent, asked, answer };
@@ -235,7 +247,12 @@ test("findings are ranked by severity, then measured cost, then recency", () => 
 // is behind Details.
 test("each row says its numbers and what became of it, and Details when it was checked", async () => {
   const { answer } = engine([
-    finding({ title: "Fresh one", impact: { hours_per_week: 12, tokens_per_week: null } }),
+    finding({
+      title: "Fresh one",
+      stats: [
+        { key: "h", label: "Hours a week", value: 12, unit: "hours", was: null, better: null },
+      ],
+    }),
     finding({ title: "Stale one", confirmed: "stale", last_confirmed_at: "2026-11-01T08:00:00Z" }),
     finding({
       title: "Applied one",
@@ -246,7 +263,7 @@ test("each row says its numbers and what became of it, and Details when it was c
   ]);
   mount(answer);
   await screen.findByText("Fresh one");
-  expect(screen.getByText(/12 h a week/)).toBeDefined();
+  expect(screen.getByText(/Hours a week: 12 h/)).toBeDefined();
   expect(screen.getByText(/not re-checked since/)).toBeDefined();
   expect(screen.getByText(/applied, checking its effect until/)).toBeDefined();
   expect(screen.getByText(/seen 2 times before/)).toBeDefined();
@@ -268,6 +285,7 @@ test("a fix's press says what it does and opens its Apply in place, on a re-chec
         { label: "Add one", change: { entity: "units", id: "eng", set: {}, summary: "add" } },
       ],
     },
+    actions: { primary: press({ kind: "apply", label: "Add one", option: 0 }), secondary: [] },
   });
   const { id } = add;
   const { sent, answer } = engine([add]);
@@ -333,6 +351,11 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     opened: 2,
     resolved: 1,
     model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
   };
   const { sent, answer } = engine([], run);
   mount(answer);
@@ -358,12 +381,14 @@ test("an atlas finding offers its fix where the engine named its entries, and th
     options: [],
     act: { tool: "atlas_set_owner", asks: "owner" },
   };
+  const actions = { primary: press({ kind: "fix", label: "Review the fix" }), secondary: [] };
   const named = finding({
     title: "3 services have no owner",
     fix: act,
     entries: [{ id: "e1", kind: "service", key: "checkout", name: "Checkout" }],
+    actions,
   });
-  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null });
+  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null, actions });
   const { answer } = engine([named, unnamed]);
   mount(answer);
   await screen.findByText("3 services have no owner");
@@ -453,6 +478,11 @@ test("the run line says only what the run moved", () => {
     opened,
     resolved,
     model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
   });
   expect(runWords(runView(run(1, 0)), NOW)).toBe(
     "All checks ran 6 minutes ago. It found 1 new finding.",
@@ -553,6 +583,10 @@ test("findings of one class are one row, each subject inside it with its own fix
       title: "Agents that learn on their main model.",
       severity: "note",
       fix,
+      actions: {
+        primary: press({ kind: "apply", label: "Learn on Haiku", option: 0 }),
+        secondary: [],
+      },
     });
   const { answer } = engine([same(1), same(2), same(3), finding({ title: "Alone" })]);
   mount(answer);
@@ -646,7 +680,7 @@ test("the numbers open the page, each linked to the finding that explains it", a
   const open = strip.querySelector<HTMLElement>('[data-stat="open_items"]')!;
   expect(within(open).getByText("15")).toBeDefined();
   expect(within(open).queryByRole("link")).toBeNull();
-  expect(screen.getByText("Wasted turns, by what woke them")).toBeDefined();
+  expect(screen.getByText("Turns that changed nothing, by what woke them")).toBeDefined();
 });
 
 test("the range picker asks the numbers for its range", async () => {
@@ -657,7 +691,8 @@ test("the range picker asks the numbers for its range", async () => {
     fireEvent.click(screen.getByRole("radio", { name: "30 days" }));
   });
   await waitFor(() =>
-    expect(asked.filter((q) => q.name === "turn_outcomes").map((q) => q.params.days)).toContain(30),
+    expect(asked.filter((q) => q.name === "advisor_snapshot").map((q) => q.params.range)).toContain(
+      "30d",
+    ),
   );
-  expect(asked.filter((q) => q.name === "work_flow").map((q) => q.params.points)).toContain(30);
 });
