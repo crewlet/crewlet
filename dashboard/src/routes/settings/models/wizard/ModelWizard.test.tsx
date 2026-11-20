@@ -1190,3 +1190,41 @@ test("with no sandbox, Finish and save sets up this host, then tests and saves t
   ]);
   expect(written[0]!.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
 });
+
+// M-004: A PROGRAM MISSING ON THE ENGINE HOST flags no step and offers none to
+// fix it in, and Finish and save is held while Review lists it.
+test("a harness missing on the host is said plainly, flags no step, and holds Finish and save", async () => {
+  vi.mocked(api.testCredential).mockResolvedValue({
+    kind: "refused",
+    status: 422,
+    code: "validation_error",
+    sentence: "The configuration this change would produce is not valid, so nothing was stored.",
+    detail: "",
+    hint: "",
+    body: {
+      problems: [
+        {
+          path: "providers.llm.sonnet-key.harness",
+          segments: ["providers", "llm", "sonnet-key", "harness"],
+          kind: "invalid",
+          message:
+            'not on PATH "claude" is not on this host\'s PATH \u2014 the harness runs on the ENGINE host, so it must be installed here',
+        },
+      ],
+    },
+  } as never);
+  show();
+  await walkToReview("sonnet-key", { accepted: false });
+  await screen.findByText(/^Failed: /);
+  expect(document.body.textContent).toContain(
+    "Install claude on the engine host: the harness runs there.",
+  );
+  expect(document.body.textContent).not.toMatch(/PATH|ENGINE host/);
+  expect(screen.queryByRole("button", { name: /^Fix in/ })).toBeNull();
+  const steps = screen.getByRole("list", { name: /^Steps to/ });
+  expect(within(steps).queryByText("Needs attention")).toBeNull();
+  const finish = screen.getByRole("button", { name: "Finish and save" });
+  expect(finish.hasAttribute("disabled") || finish.getAttribute("aria-disabled") === "true").toBe(
+    true,
+  );
+});

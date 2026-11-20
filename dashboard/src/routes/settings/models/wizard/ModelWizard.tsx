@@ -27,11 +27,21 @@
  * a deep link into a step opens it quiet, with its field focused.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import { useNavigator, useUnloadGuard } from "~/app/router.tsx";
+import { nodeStanding } from "~/lib/nodeStanding.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
 import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
@@ -74,6 +84,7 @@ import {
   messageOf,
   nextDocument,
   pastesCredential,
+  fixable,
   stepOf,
   stepsFor,
   hasSandbox,
@@ -488,6 +499,8 @@ export function ModelWizard({
     return false;
   }
 
+  // THIS NODE'S HEALTH, read as it stands when the host's write is waited on.
+  const client = useContext(ClientContext);
   // A FIRST CODING MODEL WITH NO PLACE TO RUN IT: the save sets up this host (M-002).
   const needsHost = canExecute(draft) && !!data.doc && !hasSandbox(data.doc);
 
@@ -517,6 +530,21 @@ export function ModelWizard({
     });
     if (saved.kind !== "saved") {
       setCheck({ kind: "blocked", message: refusalWords(saved as ConfigRefusal, "save") });
+      return false;
+    }
+    // THE TEST RUNS ON THIS NODE ONCE IT RUNS THE HOST: tested the moment the
+    // write returned, the node had not yet built the box the test launches in.
+    const write = { revisionId: saved.revisionId, epoch: saved.epoch };
+    const ran = await until(() => {
+      const h = client?.store.state.health ?? null;
+      // NO HEALTH READ YET: nothing to wait on, so the test goes ahead.
+      return h ? nodeStanding(h, write).kind : "applied";
+    }, signal);
+    if (ran === "refused") {
+      setCheck({
+        kind: "blocked",
+        message: "This engine did not take up running coding on its host. Nothing else was saved.",
+      });
       return false;
     }
     return true;
@@ -788,7 +816,8 @@ export function ModelWizard({
     }
   }
 
-  const attention = new Set(shown.map((p) => stepOf(p, draft.key)));
+  // A STEP IS FLAGGED ONLY FOR WHAT IT CAN FIX: a program missing on the host is none's.
+  const attention = new Set(shown.filter(fixable).map((p) => stepOf(p, draft.key)));
   const stepList: StepperStep[] = steps.map((id) => ({
     id,
     label: STEP_LABELS[id],
@@ -1015,4 +1044,21 @@ export function ModelWizard({
       />
     </div>
   );
+}
+
+/**
+ * Waits for this node to conclude a revision: "applied" or "passed" once it
+ * runs it or a later one, "refused" where it did not, or "applying" when 30
+ * seconds pass with neither, which the caller goes on from.
+ */
+async function until(
+  standing: () => "applied" | "passed" | "refused" | "applying",
+  signal: AbortSignal,
+): Promise<"applied" | "passed" | "refused" | "applying"> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const now = standing();
+    if (now !== "applying" || Date.now() > deadline || signal.aborted) return now;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
