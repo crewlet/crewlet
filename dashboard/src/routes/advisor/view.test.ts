@@ -11,15 +11,17 @@ import type {
   AdvisorSnapshot,
   AdvisorStat,
 } from "~/protocol/advisorFindings.ts";
-import { deltaOf, figure } from "./Numbers.tsx";
+import { barRows, deltaOf, figure } from "./Numbers.tsx";
 import {
   actionView,
   chartColumns,
+  chartShape,
   explainer,
   findingView,
   firstSentence,
   snapshotView,
   stripOf,
+  withoutSubject,
 } from "./view.ts";
 
 const stat = (
@@ -128,6 +130,55 @@ test("the strip is four figures from the snapshot, flow hours summed with their 
   expect(strip[1]!.detail).toBe("29 h waiting · 4.3 h held · 2 h blocked · pickup 12 min");
   expect(strip[3]!.detail).toBe("of 440 turns");
   expect(stripOf(null).map((s) => s.value)).toEqual([null, null, null, null]);
+});
+
+// NAMES GO DOWN A LIST, DAYS GO ACROSS: a chart over seats, entries or reasons
+// is a list of named bars (each split by its series where there are several),
+// so every name is read in full on its own row; only a chart over days is
+// drawn as columns, whose first, middle and last days are short.
+test("a chart over names is drawn as named bars, and only a chart over days as columns", () => {
+  const over = (kind: string, chart: "columns" | "stacked_columns" | "bars") =>
+    chartShape({
+      id: "c",
+      title: "C",
+      unit: "hours",
+      kind: chart,
+      x: { kind, keys: ["a"], labels: ["A"] },
+      series: [{ id: "s", label: "S", values: [1] }],
+      note: null,
+    });
+  expect(over("seat", "stacked_columns")).toBe("bars");
+  expect(over("seat", "columns")).toBe("bars");
+  expect(over("reason", "bars")).toBe("bars");
+  expect(over("day", "stacked_columns")).toBe("columns");
+  expect(over("day", "columns")).toBe("line");
+});
+
+// A LIST OF NAMED BARS IS RANKED, the most first, and each part of a row is
+// said in the row's unit, as its whole is.
+test("named bars are ranked the most first, each part said in its unit", () => {
+  const rows = barRows({
+    id: "flow_by_seat",
+    title: "Where each seat's work stood",
+    unit: "hours",
+    kind: "stacked_columns",
+    x: {
+      kind: "seat",
+      keys: ["cto", "riley", "pm"],
+      labels: ["Agent CTO", "Riley Chen", "Agent PM"],
+    },
+    series: [
+      { id: "held", label: "Held", values: [35, 0, 17.4] },
+      { id: "stuck", label: "Stuck", values: [0, 85.8, 0.2] },
+    ],
+    note: null,
+  });
+  expect(rows.map((r) => [r.id, r.display])).toEqual([
+    ["riley", "86 h"],
+    ["cto", "35 h"],
+    ["pm", "18 h"],
+  ]);
+  expect(rows[2]!.parts?.map((p) => p.display)).toEqual(["17 h", "0.2 h"]);
 });
 
 test("a stat whose key is a chart's id heads that chart, and a chart over days is drawn over time", () => {
@@ -260,7 +311,8 @@ test("a row is the engine's headline, one line of why, three numbers and its pre
     },
   });
   const view = findingView(f);
-  expect(view.headline).toBe("Agent PM wasted 124 of 185 turns.");
+  // Its prefix names Agent PM, so the headline starts on what it did.
+  expect(view.headline).toBe("Wasted 124 of 185 turns.");
   expect(view.why).toBe("Most of its turns moved no work.");
   expect(view.stats.map((s) => s.key)).toEqual(["a", "b", "c"]);
   expect(view.actions).toEqual({
@@ -289,6 +341,47 @@ test("a primary this page does not route gives its place to the first secondary 
     primary: { kind: "open", label: "Open the seat", href: "#/company/org/seats/dev" },
     secondary: [{ kind: "ask", label: "Ask Crewlet", question: "Why?" }],
   });
+});
+
+// A ROW SAYS ITS SEAT ONCE, in its prefix: a label, the why or the headline
+// that opens on the seat (by its name or its handle) drops it, and a handle
+// anywhere else is said by the seat's name, never as a key.
+test("a row says its seat once, and never by its handle", () => {
+  const subject = {
+    kind: "seat",
+    id: "app-engineer",
+    name: "App Engineer",
+    seat: "app-engineer",
+    unit: "",
+    schedule: "",
+  };
+  const f = finding({
+    subject,
+    source: "model",
+    headline: "App Engineer used 1.4B tokens on 17 Nov.",
+    why: "app-engineer ran 137 turns on 17 Nov, most on its main model. It reads its whole tree.",
+    stats: [
+      { ...stat("t", 1.4e9, "tokens"), label: "app-engineer tokens on 17 Nov" },
+      { ...stat("n", 137, "turns"), label: "app-engineer turns on 17 Nov" },
+      { ...stat("s", 40, "percent"), label: "Share of turns by app-engineer" },
+      { ...stat("x", 1, "turns"), label: "app-engineer retries" },
+    ],
+  });
+  const view = findingView(f);
+  expect(view.headline).toBe("Used 1.4B tokens on 17 Nov.");
+  expect(view.why).toBe("Ran 137 turns on 17 Nov, most on its main model.");
+  expect(view.stats.map((s) => s.label)).toEqual([
+    "Tokens on 17 Nov",
+    "Turns on 17 Nov",
+    "Share of turns by App Engineer",
+  ]);
+  expect(withoutSubject("App Engineer's turns", f)).toBe("Turns");
+  expect(withoutSubject("Engineers' turns", f)).toBe("Engineers' turns");
+  // NO PREFIX, NOTHING TAKEN: a row that names no subject keeps its words.
+  const bare = finding({ ...f, subject: { ...subject, name: "" } });
+  expect(findingView(bare).why).toBe(
+    "app-engineer ran 137 turns on 17 Nov, most on its main model.",
+  );
 });
 
 test("a figure links the open finding that explains it, the most costly first", () => {
