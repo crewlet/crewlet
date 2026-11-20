@@ -14,6 +14,7 @@ import type {
 import { deltaOf, figure } from "./Numbers.tsx";
 import {
   actionView,
+  chartColumns,
   explainer,
   findingView,
   firstSentence,
@@ -159,6 +160,12 @@ test("a stat whose key is a chart's id heads that chart, and a chart over days i
   expect(view.charted.map((s) => s.key)).toEqual(["tokens_per_turn"]);
   expect(view.charts[0]!.at).toBeUndefined();
   expect(view.charts[1]!.at).toEqual([Date.parse("2026-11-19"), Date.parse("2026-11-20")]);
+});
+
+// NO CHART STANDS ALONE ON A ROW: the charts take as few rows of at most four
+// as they fit, and share them as evenly as they go.
+test("the charts are laid out in rows of at most four, as even as they go", () => {
+  expect([1, 2, 3, 4, 5, 6, 7, 8, 9].map(chartColumns)).toEqual([1, 2, 3, 4, 3, 3, 4, 4, 3]);
 });
 
 test("a change is said in the ink of whether it is the one wanted, a share in points", () => {

@@ -147,6 +147,16 @@ export function chartView(c: AdvisorChart): ViewChart {
   return c.x.kind === "day" ? { ...c, at: c.x.keys.map((k) => Date.parse(k)) } : c;
 }
 
+/**
+ * How many charts a row holds: as few rows of at most four as the charts fit,
+ * shared as evenly as they go (five are three and two), so no chart stands
+ * alone beside an empty row.
+ */
+export function chartColumns(count: number): number {
+  const rows = Math.max(1, Math.ceil(count / 4));
+  return Math.max(1, Math.ceil(count / rows));
+}
+
 /** The company's numbers over `days`, from the snapshot. */
 export function snapshotView(snapshot: AdvisorSnapshot | null, days: RangeDays): ViewSnapshot {
   const charts = (snapshot?.charts ?? []).map(chartView);

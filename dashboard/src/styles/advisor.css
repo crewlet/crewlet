@@ -127,17 +127,47 @@
 
 /* The range's charts, side by side where they fit (three on a laptop's
    width) and one a row on a phone. */
+/*
+ * The charts, in rows as even as they go (`chartColumns`: five are three and
+ * two), each at least 15rem, so a narrow window takes fewer a row; a short
+ * last row's charts share its width.
+ */
 .advisor-charts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  --advisor-chart-columns: 4;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-3);
 }
 
-.advisor-chart {
+.advisor-charts[data-columns="1"] {
+  --advisor-chart-columns: 1;
+}
+
+.advisor-charts[data-columns="2"] {
+  --advisor-chart-columns: 2;
+}
+
+.advisor-charts[data-columns="3"] {
+  --advisor-chart-columns: 3;
+}
+
+.advisor-chart,
+.advisor-chart__body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
+}
+
+.advisor-chart {
+  flex: 1 1
+    max(
+      15rem,
+      calc(
+        (100% - (var(--advisor-chart-columns) - 1) * var(--spacing-3)) /
+          var(--advisor-chart-columns)
+      )
+    );
 }
 
 /* Apply, in place: the state's line, the change, its effect, and the presses. */

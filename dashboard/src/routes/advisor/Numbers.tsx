@@ -38,6 +38,7 @@ import {
   RANGES,
   amount,
   amountWords,
+  chartColumns,
   explainer,
   snapshotView,
   type RangeDays,
@@ -226,19 +227,30 @@ export function ChartCard({
   from: number;
   to: number;
 }) {
-  return (
-    <Card padding="md" className="advisor-chart" data-chart={chart.id}>
-      {stat ? (
-        <Tile stat={{ ...stat, label: chart.title }} days={days} why={why} loading={false} flush />
-      ) : (
-        <Card.Title>{chart.title}</Card.Title>
-      )}
+  const body = (
+    <>
       <ChartBody chart={chart} from={from} to={to} />
       {chart.note ? (
         <Text as="p" variant="caption" tone="secondary">
           {chart.note}
         </Text>
       ) : null}
+    </>
+  );
+  // A FIGURE HEADS ITS CHART AT THE CARD'S OWN EDGE: the tile brings its own
+  // inset, so the card adds none, and the chart under it is inset as much,
+  // which lines the figure up with every other card's title.
+  return stat ? (
+    <Card padding="none" className="advisor-chart" data-chart={chart.id}>
+      <Tile stat={{ ...stat, label: chart.title }} days={days} why={why} loading={false} flush />
+      <Card.Body padding="md" className="advisor-chart__body">
+        {body}
+      </Card.Body>
+    </Card>
+  ) : (
+    <Card padding="md" className="advisor-chart" data-chart={chart.id}>
+      <Card.Title truncate>{chart.title}</Card.Title>
+      {body}
     </Card>
   );
 }
@@ -315,6 +327,7 @@ export function Charts({
   return (
     <div
       className="advisor-charts"
+      data-columns={chartColumns(snapshot.charts.length)}
       aria-label={`The last ${plural(snapshot.days, "day")} in charts`}
     >
       {snapshot.charts.map((c) => {
