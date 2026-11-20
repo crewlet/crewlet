@@ -159,7 +159,11 @@ export function SectionView({ id, data }: { id: SectionId; data: HomeData }) {
       return <LiveNow agents={data.agents} now={data.now} />;
     case "completed":
       return (
-        <CompletedChart flow={data.flow} locked={!data.viewer.loading && !data.viewer.worklet} />
+        <CompletedChart
+          flow={data.flow}
+          range={data.range}
+          locked={!data.viewer.loading && !data.viewer.worklet}
+        />
       );
     case "tokens":
       return <TokensByTeam spend={data.spend} range={data.range} />;

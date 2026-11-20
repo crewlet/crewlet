@@ -1,6 +1,7 @@
 /**
- * "Tasks completed" — deliveries per company day over the last fortnight,
- * from the engine's own series (`work_flow`).
+ * "Tasks completed" — deliveries per company day over Home's range (Today,
+ * 7 days, 30 days), from the engine's own series (`work_flow`): the window
+ * the page's range picker chose, as every period on Home reads it.
  *
  * TODAY IS THE ACCENT: the kit's accent means where the reader is, and on a
  * trend that is the present — the Sparkline's "now" point, drawn as a column.
@@ -21,22 +22,23 @@ import { WORKLET, needsWords } from "~/lib/access.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
 import { WidgetQuery, gapsOf } from "./board/kit.tsx";
-
-/** A fortnight: two weeks side by side, enough to see a week-on-week shape. */
-export const CHART_DAYS = 14;
+import { rangeSpan, type HomeRange } from "./model.ts";
 
 const SERIES = [{ id: "completed", name: "Completed", color: DATA_COLOR_OTHER }] as const;
 
 export function CompletedChart({
   flow,
+  range,
   locked,
 }: {
   flow: QueryResult<WorkFlowAnswer>;
+  /** Home's window: the days drawn, and the figure's span. */
+  range: HomeRange;
   /** The reader holds no Worklet, so the series was never asked. */
   locked: boolean;
 }) {
-  const points = flow.data?.points?.slice(-CHART_DAYS) ?? [];
-  const week = points.slice(-7).reduce((n, p) => n + p.completed, 0);
+  const points = flow.data?.points?.slice(-range.days) ?? [];
+  const total = points.reduce((n, p) => n + p.completed, 0);
   const last = points.length - 1;
   const buckets = points.map((p) => ({
     t: Date.parse(p.start),
@@ -53,12 +55,14 @@ export function CompletedChart({
     <Card padding="none" className="home-card">
       <Card.Header
         icon={<ChartColumnGlyph size="sm" />}
-        subtitle={`Per day · last ${CHART_DAYS} days`}
+        subtitle={rangeSpan(range)}
         actions={
           points.length > 0 ? (
             <span className="home-chart-figure">
-              {week.toLocaleString()}
-              <span className="home-chart-figure-unit"> in 7 days</span>
+              {total.toLocaleString()}
+              <span className="home-chart-figure-unit">
+                {range.days === 1 ? " today" : ` in ${range.words}`}
+              </span>
             </span>
           ) : undefined
         }
@@ -80,7 +84,11 @@ export function CompletedChart({
               buckets={buckets}
               legend="none"
               height="9.5rem"
-              label="Tasks completed per company day, the last fourteen days"
+              label={
+                range.days === 1
+                  ? "Tasks completed today"
+                  : `Tasks completed per company day, the last ${range.words}`
+              }
               format={(v) => Math.round(v).toLocaleString()}
               formatTime={(at) => labels.get(at) ?? ""}
             />

@@ -3259,8 +3259,10 @@ company did.** That is Home until its reader arranges it (see
   "Needs you" group (opened on the one when there is one). A reader
   nobody bound is told nothing about decisions at all, and before the first
   state arrives nothing about who is working. The **Today · 7 days · 30 days** control
-  (`range=`) sets the window the figures below read over; Today is one company
-  day, cut at the company's midnight by the engine. The choice is kept for
+  (`range=`) sets the window every period on Home reads over, the figures,
+  Tasks completed, Tokens by team and a section widget's own (Failed turns);
+  Today is one company day, cut at the company's midnight by the engine, and
+  a longer window opens on the company's midnight that many days back. The choice is kept for
   its reader, so Home opens on it however they come back (see
   [`window=`](#window--one-vocabulary-for-every-time-range)).
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
@@ -3277,7 +3279,8 @@ company did.** That is Home until its reader arranges it (see
   into the Inbox's decisions view; a stopped seat the reader can do neither
   about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
   nobody); *Tasks in progress* (`work_flow.now.active`, its change over the
-  week and what is blocked or overdue, with the fortnight's sparkline);
+  window's length and what is blocked or overdue, with the window's sparkline,
+  a fortnight at least);
   *Completed* over the window, against the window before it; and *Tokens* over
   the window, with the **week's** budget meter captioned as the week's ("63% of
   this week's budget · resets Mon") in the engine's own state — or "No weekly
@@ -3287,7 +3290,7 @@ company did.** That is Home until its reader arranges it (see
   text for anybody else. The Tokens tile draws no delta:
   its second line is the budget's, and a bare change in front of it read as a
   claim about the budget. A second line is whole FACTS, so a narrow tile breaks
-  between them ("+17 vs last week" / "· 2 blocked"), never inside one. Each
+  between them ("+17 vs 7 days ago" / "· 2 blocked"), never inside one. Each
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
@@ -3373,8 +3376,8 @@ company did.** That is Home until its reader arranges it (see
   were asked and both ended with nothing, the card says it once, one empty
   state ("Nothing waits on a person") in place of the two halves, rather than
   a line under one half beside a full empty state under the other.
-- **Tasks completed** per company day over the last fourteen (today in the
-  accent), **Tokens by team** over the window (tokens, never money), each
+- **Tasks completed** per company day over the window, with the window's total
+  (today in the accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
   engine's `parts`; a team of more than four seats names its three biggest and
   draws the rest as one part in the residual hue), and
@@ -11860,20 +11863,28 @@ written. The address only preselects: a seat the company no longer has, or
 coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
-menu. The page has no lenses: under that table come Ask Crewlet and the
-Advisor on one line, each its mark, its name and its model's picker, with no
-caption, whose picker writes the helper's one key in a step (the dry run, then
-the write under the revision it read), lists a model no helper can run on
-disabled beside the engine's reason, shows the choice at once while it is
-saved and then says where the helper runs now; then **Seats**, every agent
-seat as a row with its model. A seat on one model shows one picker that sets
-all three categories; *Split by job* shows a picker per category (*Coding*,
-*Reviews*, *Routines*), and a seat whose jobs differ shows its three, a
-category split by hand reading *Split*. Every model in a picker carries its
-harness's mark on the trigger and each option, with its condition in a word;
-a fast model is marked inside the Routines picker, and nothing is said per row
-or in a callout. A pick opens that model's wizard on *Use it for* with the
-seat's categories added. *Use it
+menu. The page has no lenses: under that table one card says who runs on
+which model, in two quiet groups, *Helpers* (Ask Crewlet and the Advisor)
+then *Seats*, with no header row. Every row has one anatomy: who on the left
+(a helper's product mark and name, a seat's avatar and name linking to the
+seat) and the model's picker on the right, in one column of one width. Every
+model is named in full on a picker's trigger and each option: its harness's
+mark, its key and, quieter, the model it runs by name ("sub-4 · Claude Opus
+5.5"), read from the entry's model id through the engine's `llm_models`
+answer (the harness's aliases with the version each follows, and the public
+catalogue's names); an id nothing names is said as itself. The list's model
+line, a model's page and the wizard's Review name the model the same way. A
+helper's picker writes its one key in a step (the dry run, then the write
+under the revision it read), lists a model no helper can run on disabled
+beside the engine's reason, shows the choice at once while it is saved and
+then says where the helper runs now. A seat on one model shows one picker that
+sets all three categories; *Split by job* in the row's menu shows a picker per
+category under the seat's name (*Coding*, *Reviews*, *Routines*), and *Use
+one model* folds them back; a seat whose jobs differ shows its three, a
+category split by hand reading *Split*. Each option says its model's
+condition in a word, and a fast model is marked inside the Routines picker;
+nothing is said per row or in a callout. A pick opens that model's wizard on
+*Use it for* with the seat's categories added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also
