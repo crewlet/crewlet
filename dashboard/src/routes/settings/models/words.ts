@@ -148,7 +148,7 @@ const WORDS = {
 } as const satisfies Record<JobCategory, CategoryWords>;
 
 /**
- * What a model is for, by category. Each label is a column's head on By job
+ * What a model is for, by category. Each label is a column's head on the seats' grid
  * and names it on a phone's card, so AN EMPTY WORD FAILS THE TYPECHECK here
  * (`Worded`) rather than drawing a column nothing names.
  */
@@ -164,7 +164,8 @@ export const ASSISTANT_USE = {
   label: "Ask Crewlet",
   hint: "Answers you in the dashboard.",
   tip: "Sets assistant.model. Ask Crewlet is the company's, so no seats are picked.",
-  rule: "Ask Crewlet runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
+  /** Its row under the list, in a few words. */
+  short: "Answers you in the dashboard.",
 } as const;
 
 /** The Advisor: the model it explains its findings and writes its weekly summary with. */
@@ -172,7 +173,8 @@ export const ADVISOR_USE = {
   label: "Advisor",
   hint: "Explains what it finds worth changing in the company.",
   tip: "Sets advisor.model. The Advisor is the company's, so no seats are picked; its checks run without a model too, with no explanations.",
-  rule: "The Advisor runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
+  /** Its row under the list, in a few words. */
+  short: "Explains what it finds worth changing.",
 } as const;
 
 /** Every seat job at once. */

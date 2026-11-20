@@ -1,6 +1,6 @@
 /**
  * Each use of a model by its glyph, one per use wherever it is named: the Use
- * it for list, the per-seat grid, Used by and its tooltip, and By job. Lucide
+ * it for list, the per-seat grid, Used by and its tooltip, and the seats' grid. Lucide
  * outlines from @crewlethq/icons, drawn in the text's ink; the Assistant takes
  * its own product mark, the spark the icon rules keep for it alone.
  */

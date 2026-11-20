@@ -1,0 +1,356 @@
+/**
+ * Under the list of models: Ask Crewlet's and the Advisor's rows, then every
+ * seat's jobs, drawn from the models' own uses. The grid says each model's condition where it is named, and a pick opens
+ * that model's wizard rather than writing anything.
+ *
+ * The invariants: a cell names the model the engine reports, and a category
+ * the document split says which job runs where; a cell on a model that will
+ * not answer says so (QA M19); a category with a deadline notes a slow model;
+ * coding offers only a harness that can code, and the Assistant only a model that
+ * denies web tools; every pick opens the picked model's wizard on Use it for
+ * with exactly this seat and category (the deep-link walk); a member reads
+ * values, with no picker, in the type an admin's picker draws (QA Nit 7); and
+ * each column head is named once (QA Minor 20).
+ */
+
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { LayerHost } from "@crewlethq/ui";
+import { Router } from "~/app/router.tsx";
+import { CATEGORY_JOBS, CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
+import { TestClient } from "~/test/client.tsx";
+import {
+  ASSISTANT_CHAT,
+  EVERY_JOB,
+  MODELS_NOW,
+  MODELS_SEATS,
+  modelEntry,
+  modelsData,
+  modelsDoc,
+  runs,
+} from "~/routes/settings/models/fixtures.ts";
+import { Helpers, SeatJobs } from "./SeatJobs.tsx";
+import type { ModelsData } from "./data.ts";
+import { WIZARD_STEPS } from "./parts.tsx";
+import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
+
+// A HELPER'S MODEL IS WRITTEN IN ONE STEP, by the configuration transport:
+// held here so the line can be read before and after the write.
+const writes = vi.hoisted(() => ({ patches: [] as unknown[] }));
+vi.mock("~/protocol/configWrite.ts", async (actual) => ({
+  ...(await actual<typeof import("~/protocol/configWrite.ts")>()),
+  getConfig: async () => ({
+    kind: "document",
+    document: { assistant: { model: "guarded" } },
+    etag: '"r1"',
+  }),
+  dryRunPatch: async () => ({ kind: "valid", baseRevisionId: "r1", warnings: [], derived: null }),
+  savePatch: async (patch: unknown) => {
+    writes.patches.push(patch);
+    return { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
+  },
+}));
+
+/** The categories with a deadline, and one without: the fast note's two sides. */
+const TIMED = CATEGORY_ORDER.find((c) => FAST_NOTE[c])!;
+const UNTIMED = CATEGORY_ORDER.find((c) => c !== "coding" && !FAST_NOTE[c])!;
+const [FIRST_JOB, SECOND_JOB] = CATEGORY_JOBS[UNTIMED];
+
+/**
+ * Backend Engineer runs every job on `default` (a strong, slow model).
+ * Product Manager codes on `default` and runs every other job on `haiku`.
+ * Quality Lead codes on `sonnet`, which cannot sign in; its untimed category
+ * is split by hand between `sonnet` and `codex-review` (a harness that cannot
+ * code); its timed one runs on `default`. The assistant chats on `guarded`,
+ * the one model that denies web tools.
+ */
+function company({ admin = true } = {}): ModelsData {
+  const others = (seat: string) =>
+    CATEGORY_ORDER.filter((c) => c !== "coding").flatMap((c) => runs(seat, ...CATEGORY_JOBS[c]));
+  return modelsData({
+    admin,
+    entries: [
+      modelEntry({
+        key: "default",
+        model: "claude-opus-5",
+        used_by: [
+          ...runs("backend-engineer", ...EVERY_JOB),
+          ...runs("pm", "executor"),
+          ...runs("qa", ...CATEGORY_JOBS[TIMED]),
+        ],
+      }),
+      modelEntry({ key: "haiku", model: "claude-haiku-5", used_by: others("pm") }),
+      modelEntry({
+        key: "sonnet",
+        health: "rejected",
+        used_by: [...runs("qa", "executor"), ...runs("qa", FIRST_JOB!)],
+      }),
+      modelEntry({
+        key: "codex-review",
+        harness: "codex",
+        model: "gpt-6.1",
+        used_by: runs("qa", SECOND_JOB!),
+        helper_problem: "This model's tool keeps a tool Crewlet cannot turn off.",
+      }),
+      modelEntry({ key: "guarded", model: "claude-sonnet-5", used_by: [ASSISTANT_CHAT] }),
+    ],
+    doc: {
+      ...modelsDoc({
+        default: {},
+        haiku: {},
+        sonnet: {},
+        "codex-review": { harness: "codex" },
+        guarded: {},
+      }),
+      assistant: { model: "guarded" },
+    } as ModelsData["doc"] & object,
+  });
+}
+
+function mount(data: ModelsData = company()) {
+  const onFlow = vi.fn();
+  render(
+    <TestClient>
+      <LayerHost>
+        <Router>
+          <Helpers data={data} />
+          <SeatJobs data={data} onFlow={onFlow} />
+        </Router>
+      </LayerHost>
+    </TestClient>,
+  );
+  return onFlow;
+}
+
+const seatName = (handle: string) => MODELS_SEATS.find((s) => s.handle === handle)!.name;
+const picker = (category: JobCategory, handle: string) =>
+  screen.getByRole("combobox", {
+    name: `${CATEGORY_WORDS[category].label} for ${seatName(handle)}`,
+  });
+/** The cell a picker (or a member's value) stands in. */
+const cellOf = (el: HTMLElement) => el.closest<HTMLElement>(".models-jobs__cell")!;
+const optionsOf = (trigger: HTMLElement) => {
+  fireEvent.click(trigger);
+  const found = screen.getAllByRole("option");
+  return found;
+};
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: MODELS_NOW, toFake: ["Date"] });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+test("each cell names the model the engine reports the seat's category runs on", () => {
+  mount();
+  expect(picker("coding", "pm").textContent).toContain("default");
+  expect(picker(TIMED, "pm").textContent).toContain("haiku");
+  expect(picker("coding", "qa").textContent).toContain("sonnet");
+  // ONE MODEL FOR EVERY JOB is said once, on the seat.
+  const rows = screen.getAllByRole("row");
+  const backend = rows.find((r) => r.textContent?.includes("Backend Engineer"))!;
+  expect(within(backend).getByText("Everything")).toBeDefined();
+  const pm = rows.find((r) => r.textContent?.includes("Product Manager"))!;
+  expect(within(pm).queryByText("Everything")).toBeNull();
+});
+
+test("a category the document split says which job runs where, and claims no one model", () => {
+  mount();
+  const split = picker(UNTIMED, "qa");
+  expect(split.textContent).toContain("Split");
+  const words = cellOf(split).querySelector(".models-jobs__notes")!.textContent ?? "";
+  expect(words).toMatch(/on sonnet/);
+  expect(words).toMatch(/on codex-review/);
+});
+
+test("a cell on a model that cannot sign in says so, to the eye and to the picker's description", () => {
+  mount();
+  const refused = picker("coding", "qa");
+  const notes = cellOf(refused).querySelector<HTMLElement>(".models-jobs__notes")!;
+  expect(notes.textContent).toContain("Sign-in refused");
+  expect(cellOf(refused).classList).toContain("models-jobs__cell--alarm");
+  expect(refused.getAttribute("aria-describedby")).toContain(notes.id);
+  expect(notes.textContent).toMatch(/cannot sign in/);
+  // A READY MODEL'S CELL carries no condition.
+  expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Ready");
+});
+
+test("a category with a deadline notes a slow model, and not a fast one", () => {
+  mount();
+  expect(cellOf(picker(TIMED, "qa")).textContent).toContain("Fast model recommended");
+  // ONE SENTENCE ON THE PAGE, NOT ONE PER SEAT: the callout above says it,
+  // and a cell marks a slow model with a glyph, its words for a screen reader.
+  const visible = [...cellOf(picker(TIMED, "qa")).querySelectorAll("span")].filter(
+    (el) =>
+      el.childElementCount === 0 &&
+      /Fast model recommended/.test(el.textContent ?? "") &&
+      !el.closest(".crewlet-visually-hidden"),
+  );
+  expect(visible).toEqual([]);
+  expect(cellOf(picker(TIMED, "pm")).textContent).not.toContain("Fast model recommended");
+  expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Fast model recommended");
+});
+
+test("each option names the model, its condition in a word and its model id, and coding offers only a harness that can code", () => {
+  mount();
+  const coding = optionsOf(picker("coding", "pm")).map((o) => o.textContent ?? "");
+  expect(coding.some((t) => t.includes("codex-review"))).toBe(false);
+  const sonnet = coding.find((t) => t.startsWith("sonnet"))!;
+  expect(sonnet).toContain("Sign-in refused");
+  expect(sonnet).toContain("claude-sonnet-5");
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  const other = optionsOf(picker(TIMED, "pm")).map((o) => o.textContent ?? "");
+  expect(other.some((t) => t.startsWith("codex-review"))).toBe(true);
+});
+
+/**
+ * THE DEEP-LINK WALK: every cell, picked to another model, opens THAT model's
+ * wizard on Use it for with this seat and this category, and the address
+ * carries nothing else. Picking the model a cell already runs opens nothing.
+ */
+test("every pick opens the picked model's wizard at Use it for, with only the seat and the category", () => {
+  const onFlow = mount();
+  const keys = company().models.map((m) => m.key);
+  const keyOf = (text: string | null) => keys.find((k) => text?.startsWith(k)) ?? "";
+  for (const seat of MODELS_SEATS) {
+    for (const category of CATEGORY_ORDER) {
+      const trigger = picker(category, seat.handle);
+      const current = keys.find((k) => trigger.textContent?.trim() === k) ?? "";
+      const other = optionsOf(trigger).find((o) => keyOf(o.textContent) !== current)!;
+      const key = keyOf(other.textContent);
+      onFlow.mockClear();
+      fireEvent.mouseDown(other);
+      expect(onFlow).toHaveBeenCalledTimes(1);
+      expect(onFlow).toHaveBeenCalledWith("edit", key, {
+        step: "assign",
+        add: [{ job: category, seat: seat.handle }],
+      });
+      const at = onFlow.mock.calls[0]![2] as Record<string, unknown>;
+      expect(Object.keys(at).sort()).toEqual(["add", "step"]);
+      expect(WIZARD_STEPS).toContain(at.step);
+    }
+  }
+  // THE MODEL ALREADY THERE is no change.
+  onFlow.mockClear();
+  const options = optionsOf(picker("coding", "pm"));
+  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+  expect(onFlow).not.toHaveBeenCalled();
+});
+
+// ANY MODEL A HELPER CAN RUN ON, as the engine says of each: an ordinary entry
+// qualifies as it is, and one whose harness keeps a tool that cannot be turned
+// off is listed disabled beside the engine's reason. CHOOSING ONE WRITES
+// `assistant.model` IN ONE STEP, as the helpers' own pickers do: it never
+// opens the model wizard, which has nothing more to ask of a company-wide helper.
+test("Ask Crewlet's picker writes its one model in a step, never the wizard", async () => {
+  writes.patches = [];
+  const onFlow = mount(company());
+  const trigger = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
+  expect(trigger.textContent).toContain("guarded");
+  const options = optionsOf(trigger);
+  const codex = options.find((o) => o.textContent?.startsWith("codex-review"))!;
+  expect(codex.getAttribute("aria-disabled")).toBe("true");
+  expect(codex.textContent).toContain("cannot turn off");
+  await act(async () => {
+    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
+  });
+  expect(onFlow).not.toHaveBeenCalled();
+  expect(await screen.findByText(/Ask Crewlet now runs on haiku/)).toBeDefined();
+  expect(writes.patches).toEqual([{ assistant: { model: "haiku" } }]);
+});
+
+// THE ADVISOR IS A USE LIKE ASK CREWLET: a row of its own, its
+// model chosen the same way, and drawn when it has none, since its checks
+// run without one.
+test("the Advisor has a line of its own, chosen in a step like Ask Crewlet's", async () => {
+  writes.patches = [];
+  const onFlow = mount({ ...company(), advisor: { key: null } });
+  const trigger = screen.getByRole("combobox", { name: "Advisor's model" });
+  expect(trigger.textContent).toContain("None");
+  const options = optionsOf(trigger);
+  await act(async () => {
+    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+  });
+  expect(onFlow).not.toHaveBeenCalled();
+  expect(await screen.findByText(/Advisor now runs on default/)).toBeDefined();
+  expect(writes.patches).toEqual([{ advisor: { model: "default" } }]);
+  cleanup();
+  mount({ ...company({ admin: false }), advisor: { key: "haiku" } });
+  expect(screen.getAllByText("haiku").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("combobox", { name: "Advisor's model" })).toBeNull();
+});
+
+// ONE MODEL, NO CHAIN: the line names no fallback, and is drawn when Ask
+// Crewlet has no model too, so the company sees that it is off.
+test("Ask Crewlet's line names its one model, and is drawn with none", () => {
+  mount(company());
+  expect(document.body.textContent).not.toContain("Falls back");
+  cleanup();
+  const off = company();
+  mount({ ...off, doc: modelsDoc({ guarded: {} }), assistant: { key: null } });
+  expect(screen.getByRole("combobox", { name: "Ask Crewlet's model" }).textContent).toContain(
+    "None",
+  );
+  cleanup();
+  mount({ ...company({ admin: false }), assistant: { key: null } });
+  // ASK CREWLET'S LINE AND THE ADVISOR'S each say they have no model.
+  expect(screen.getAllByText("Not set")).toHaveLength(2);
+});
+
+test("a member reads every value, in the picker's type, with no picker", () => {
+  mount(company({ admin: false }));
+  expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+  // The value is body text, never the mono a key is set in elsewhere (Nit 7).
+  const values = screen.getAllByText("sonnet", { selector: ".crewlet-text" });
+  expect(values.length).toBeGreaterThan(0);
+  expect(values.every((v) => !v.classList.contains("mono"))).toBe(true);
+  // THE CONDITION reaches a member too: it is why their seat waits.
+  expect(document.body.textContent).toContain("Sign-in refused");
+});
+
+/**
+ * EVERY HEAD HAS A NAME, as a screen reader and a phone's card read it. The
+ * source gate trusts a column whose label is the name of a word; this reads
+ * what that name holds once drawn, for every category and the seat column.
+ */
+test("every column head on the seats' grid has a name to read", () => {
+  mount();
+  const heads = screen.getAllByRole("columnheader");
+  expect(heads.length).toBe(CATEGORY_ORDER.length + 1);
+  expect(screen.getAllByRole("columnheader", { name: /\S/ })).toHaveLength(heads.length);
+  for (const category of CATEGORY_ORDER)
+    expect(
+      screen.getByRole("columnheader", { name: new RegExp(CATEGORY_WORDS[category].label) }),
+    ).toBeTruthy();
+});
+
+test("each category's column head is named once", () => {
+  mount();
+  for (const category of CATEGORY_ORDER) {
+    const label = CATEGORY_WORDS[category].label;
+    const heads = screen.getAllByRole("columnheader").filter((h) => h.textContent?.includes(label));
+    expect(heads).toHaveLength(1);
+    expect(within(heads[0]!).getByRole("button").getAttribute("aria-label")).toBe(label);
+  }
+});
+
+// A COMPACT ROW EACH, in a few words: the tool rule lives in the picker's
+// disabled option, never in a caption, and nothing says it has no seats.
+test("Ask Crewlet and the Advisor are a row each: name, picker and a few words", () => {
+  mount(company());
+  const rows = within(
+    screen.getByRole("list", { name: "Ask Crewlet and the Advisor" }),
+  ).getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  expect(rows[0]!.textContent).toContain("Ask Crewlet");
+  expect(within(rows[0]!).getByRole("combobox", { name: "Ask Crewlet's model" })).toBeDefined();
+  expect(rows[0]!.textContent).toContain("Answers you in the dashboard.");
+  expect(rows[1]!.textContent).toContain("Advisor");
+  expect(rows[1]!.textContent).toContain("Explains what it finds worth changing.");
+  const said = document.body.textContent ?? "";
+  expect(said).not.toContain("Company-wide, so it has no seats");
+  expect(said).not.toContain("no tools of its own");
+});

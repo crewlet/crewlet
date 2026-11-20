@@ -26,7 +26,6 @@ export const WIZARD_STEPS = [
   "runs",
   "assign",
   "limits",
-  "test",
   "review",
 ] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
@@ -38,7 +37,7 @@ export type WizardAdd = { job: JobCategory; seat: string } | { job: "assistant" 
  * Where the model wizard opens: the step, the field to focus there
  * (`credential` opens a stored secret for replacing; `host-login` is the
  * host's sign-in), and the uses to add to the model (a seat's category picked
- * on By job, every seat a limit holds, or the assistant).
+ * on the seats' grid, every seat a limit holds, or the assistant).
  */
 export interface WizardAt {
   step: WizardStep;
@@ -114,7 +113,7 @@ export function wizardQuery(at: WizardAt): Record<string, string> {
  * The open flow, the model it is about, and the ways to open and close one.
  *
  * `wizard` IS THE ONE WAY INTO THE MODEL WIZARD, for every action that changes
- * a model: an alarm's fix, a row's menu, the model page, a By job cell. It
+ * a model: an alarm's fix, a row's menu, the model page, a seat's job cell. It
  * opens the wizard at the step and field the action is about, in place, or on
  * that model's page where the action is about another model; closing it
  * returns to where it was opened. An alarm's deep link arrives on the same

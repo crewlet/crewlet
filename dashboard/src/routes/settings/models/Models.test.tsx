@@ -2,7 +2,7 @@
  * Settings › Models is open to every member and writable by an admin alone.
  *
  * The invariant: no write control reaches a reader without admin, however the
- * page is reached. The list, the alarms and By job each hide their own
+ * page is reached. The list, the alarms and the seats' grid each hide their own
  * controls (their suites read that); this reads the page whole, at every
  * address a flow opens at, so a member who follows a link or edits the URL to
  * `?flow=` gets the reading and nothing else. The engine decides every write
@@ -230,4 +230,29 @@ test("a model just added reads as being added until the reading holds it", async
   current = modelsData({ admin: true, entries: [modelEntry({ key: "fresh" })] });
   await mountAt({ hash: "#/settings/models/fresh?added=fresh", id: "fresh" });
   expect(location.hash).not.toContain("added=");
+});
+
+// ONE PAGE, NO LENSES: under the table of models, Ask Crewlet's and the
+// Advisor's rows, then every seat's jobs, in that order.
+test("the page has no lens tabs, and under the models come the helpers, then every seat's jobs", async () => {
+  current = company(true);
+  await mountAt({ hash: "#/settings/models" });
+  expect(screen.queryByRole("tablist", { name: "Lens" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "By job" })).toBeNull();
+  const models = screen.getByRole("columnheader", { name: /Usage limits/ });
+  const helpers = screen.getByRole("list", { name: "Ask Crewlet and the Advisor" });
+  const seats = screen.getByText("Every seat, every job");
+  const follows = (a: Node, b: Node) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  expect(follows(models, helpers)).toBe(true);
+  expect(follows(helpers, seats)).toBe(true);
+});
+
+// THE OLD LENS ADDRESS still works: it opens the one page, whose grid it asked for.
+test("an address for the old By job lens opens the one page", async () => {
+  current = company(true);
+  await mountAt({ hash: "#/settings/models?view=jobs" });
+  expect(location.hash).not.toContain("view=");
+  expect(screen.getByText("Every seat, every job")).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
 });
