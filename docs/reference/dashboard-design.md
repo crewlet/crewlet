@@ -1052,119 +1052,34 @@ The cells this governs: the frame's `SeatCell`, the shared `SeatChip`, the Workl
 A stat row's tiles are one grid's columns, and **every figure in a row stands at one height whatever its label does**. Each tile is a subgrid over the row's three lines (label, number, sub), so a line is as tall as the tallest of it across the row: a wrapped label makes the label line two lines tall for every tile, and each other label sits at its foot, one gap above its own number. Stacked per tile, a wrapped label pushed only its own number down (beside a node's peek at 1440, "Behind on config" broke over two lines and its figure sat 18px below the other three). Where the kit folds a row to two columns (below 1024px) an odd last tile takes the whole row, and a sub wraps rather than ending in an ellipsis. `styles/stats.test.tsx` holds the span to the lines the kit's tile renders.
 ### A dropdown's list sizes to its options
 
-The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
-and for a while this tree carried three rules compensating for it. All three
-are gone: they were fixed in the package, and `0.4.4` was the first release
-that carried them.
+The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode. Three compensating rules once lived in this tree; all were fixed in the package from `0.4.4`. The shapes recur:
 
-What they were is worth keeping, because the shapes recur. A row in the panel
-shrank below its own content — an explicit `min-height` on a flex item replaces
-the automatic content minimum, so a list taller than its panel squeezed every
-row before it scrolled, and the overflow drew over the next row. An option's
-label declared `overflow: hidden` and `text-overflow: ellipsis` and no
-`white-space`, and neither of the first two does anything to text that is
-allowed to wrap, so the ellipsis was inert. And the panel was placed with the
-TRIGGER's width while its height was measured off the panel, in the same object
-literal — which pinned a toolbar picker's list to whatever its current answer
-happened to be, made `align="right"` compute the same number as `align="left"`,
-and clamped a panel that had grown as though it had not, so it hung over the
-viewport's edge.
+- A row shrank below its content: an explicit `min-height` on a flex item replaces the automatic content minimum, so a tall list squeezed every row before it scrolled.
+- An option label declared `overflow: hidden` and `text-overflow: ellipsis` but no `white-space`; text allowed to wrap never ellipsizes.
+- The panel was placed with the TRIGGER's width while its height was measured off the panel. That pinned a toolbar picker's list to its current answer, made `align="right"` compute the same as `align="left"`, and clamped a grown panel as if it had not grown, so it hung over the viewport edge.
 
-**A rule compensating for a package is a rule with an expiry date, and it is
-the consumer's job to notice.** These were written with the diagnosis attached
-precisely so they could be deleted rather than inherited — the last of them
-said outright that the fix belonged upstream, in the `placePopup` call that
-already measured the panel's own height. It does now. Nothing in this tree
-styles `.crewlet-select__menu`, `.crewlet-listbox__option` or
-`.crewlet-select__option-label` any more, and `styles/classes.test.ts` is what
-keeps that true: a rule on a package class has to earn an `ALLOWED` entry with
-a reason, so the next one cannot arrive quietly or outlive its cause.
+**A rule compensating for a package expires; the consumer must notice.** The fix belonged upstream, in the `placePopup` call that already measured the panel's height. Nothing here styles `.crewlet-select__menu`, `.crewlet-listbox__option` or `.crewlet-select__option-label`, and `styles/classes.test.ts` keeps that true: a rule on a package class needs an `ALLOWED` entry with a reason.
 
-A screen's own class on the panel is no way round it either. An integration's
-Agents tab widened its level picker's list with `menuClassName` and a
-`min-width`, one class against the package's `.crewlet-select__menu`, and the
-built page links the app's sheet, the package's rules among it, after a
-screen's (`vite.config.ts`, `appSheetsToBodyEnd`), so the screen's rule lost
-and every level picker opened at its cell's 120px, each level's sentence a
-word or two to a line. The width a list is read at is the package's to set:
-`@crewlethq/ui` sets a list whose options carry a description at a reading
-width (a floor of 22rem and a measure of 28rem, never wider than the window)
-and never over the field it was opened from, so the Agents tab and Settings ›
-Models' seats keep no width rule of their own.
+A screen's own class on the panel is no way round it. An Agents tab widened its level picker with `menuClassName` and a `min-width`, but the built page links the app's sheet after the package's rules (`vite.config.ts`, `appSheetsToBodyEnd`), so the screen's rule lost and every level picker opened at its cell's 120px. The package owns the width: a list whose options carry a description gets a reading width (floor 22rem, measure 28rem, never wider than the window) and is never wider than the field it opened from. The Agents tab and Settings › Models' seats keep no width rule.
 
 ### An object's own facts
 
-`PropertiesRail` is the rail beside an object — its state, its people, its
-plan, its record. It draws with `@crewlethq/ui`'s `PropertyList` (each section
-a description list on one subgrid, so every label shares one term column, read
-from the description list's own measure), and translates the engine's routes,
-turns by id and change log instants into it; the rules below are the kit's and
-its suite holds them. Two components did this before it: a flat `KeyValue` with no sections
-used by the event, the run, the turn and the seat, and the work item's own
-sectioned rail used by nothing else. They had different label widths, different
-gaps and different rules about an absent value, so the same kind of panel read
-differently depending on which screen it was on — and neither could say **who**
-set a fact, which on a product whose objects are mostly written by agents is
-the thing a reader asks about most. "In progress" is a different fact from
-"moved to in progress by ada, eleven minutes ago, in turn ↗".
+`PropertiesRail` is the rail beside an object: its state, people, plan and record. It draws with `@crewlethq/ui`'s `PropertyList` (each section a description list on one subgrid, so every label shares one term column), and translates the engine's routes, turns by id and change log instants into it. The kit's suite holds the rules below. It replaced a flat `KeyValue` (event, run, turn, seat) and a separate sectioned work item rail, which differed in label widths, gaps and absent-value rules, and could not say **who** set a fact, which is what a reader of an agent-written object asks most: "moved to in progress by ada, eleven minutes ago, in turn ↗", not "In progress".
 
-**An absent value is a decision.** Four different facts share one empty cell
-and they are not interchangeable:
+**An absent value is a decision.** Four facts share one empty cell:
 
-- the row is **dropped** — this object has no such property at all (a task with
-  no collaborators has no collaborators row);
-- the row is a **dash** — the property exists and holds nothing (a task with no
-  due date has a due date, unset);
-- the row **says something** — the empty state means something a reader should
-  know ("none — reflection uses the default");
-- the whole **group says something**, in one line, because every property in it
-  is absent — `whenAllAbsent`. A section of nothing is not the same claim as a
-  row of nothing: a fresh task spent a heading, a hairline and four dashes
-  telling the reader that nothing about it is scheduled, which in a 420px peek
-  is most of the space between the header and the description. "Nothing
-  scheduled: no dates, no estimate, no size." states it once, the heading stays
-  — the group exists and is empty, which is not the claim the *dropped* case
-  makes — and the rows come back the moment any one of them is filled.
+- the row is **dropped**: the object has no such property (a task with no collaborators has no collaborators row);
+- the row is a **dash**: the property exists and holds nothing (an unset due date);
+- the row **says something**: the empty state means something ("none — reflection uses the default");
+- the whole **group says something**, in one line, because every property in it is absent: `whenAllAbsent`. A section of nothing is not a row of nothing: a fresh task spent a heading, hairline and four dashes saying nothing is scheduled, most of a 420px peek. "Nothing scheduled: no dates, no estimate, no size." says it once; the heading stays (the group exists and is empty, unlike *dropped*), and the rows return when any one is filled.
 
-The caller says which, on all four, and there is no path by which forgetting
-produces a plausible-looking wrong one. The fourth is deliberately an opt-in
-rather than something the rail works out for itself: a rail of annotation rows
-would fold into one sentence the day somebody cleared them, with nobody having
-decided that. `0` and `false` are values a property can hold and are rendered,
-never folded into "nothing set".
+The caller says which, on all four, so forgetting cannot produce a plausible wrong one. The fourth is opt-in, not inferred: a rail of annotation rows would otherwise fold into one sentence when somebody cleared them, undecided. `0` and `false` are values, rendered, never folded into "nothing set".
 
-**One attribution per change, not per row.** A change can set several fields at
-once, so consecutive rows carried identical copies of "agent-ceo · 21h ago ·
-turn ↗" — one sentence written out six times, which turned three rows of a
-peek into six lines. A **run** of consecutive properties sharing one (actor,
-instant, turn) draws ONE line, naming what it covers, under the last of them:
-"Status, Priority and Type · set by agent-ceo · 21h ago · turn ↗". It is the
-rule [A row is not a row](#a-row-is-not-a-row) already states for a feed —
-rows under one heading do not each repeat the actor — and a row that draws no
-line ends the run rather than being reached over, because a line naming
-"Status and Type" with a Priority between them is a claim the reader has to
-check.
+**One attribution per change, not per row.** A **run** of consecutive properties sharing one (actor, instant, turn) draws ONE line, naming what it covers, under the last: "Status, Priority and Type · set by agent-ceo · 21h ago · turn ↗". This is the rule [A row is not a row](#a-row-is-not-a-row) states for a feed. A row that draws no line ends the run rather than being reached over, since "Status and Type" with a Priority between them is a claim to check.
 
-**And never an attribution under an absence.** Provenance under a dash claims
-the engine recorded somebody setting nothing. The one exception is a change
-that EMPTIED the field, which the log did witness, and it reads "cleared by"
-rather than "set by" — they are different events about the same blank cell.
-The wording is one component shared with the header's fact line, because
-written twice it had already drifted: the line said "set by ada" and the rail
-said a bare "ada", which under a value reads as who wrote the row.
+**Never an attribution under an absence.** Provenance under a dash claims the engine recorded somebody setting nothing. The exception is a change that EMPTIED the field, which the log witnessed; it reads "cleared by", not "set by". One component, shared with the header's fact line, writes the wording (it drifted when written twice: the line said "set by ada", the rail a bare "ada", which under a value reads as who wrote the row).
 
-**A header and a rail stacked in one column are one reading.** On an object's
-page the rail sits BESIDE the header, in a sticky side column, so the header's
-fact line and the rail's rows are read across a gap — the line to scan in a
-second, the rows to study. In a **peek** both are in one 420px column with the
-rail a hundred pixels under the header, and there the same facts in both is not
-a second reading: it is the same answer given twice before the description has
-been reached. So a peek whose body is a properties rail passes NO facts and the
-rail states every property once; a peek with no rail under it — a unit, a
-revision — keeps its fact line, because there it is the only place the object's
-own values are stated. The caller decides, since the rule is about the frame's
-BODY rather than its header.
-
+**A header and a rail stacked in one column are one reading.** On an object's page the rail sits BESIDE the header in a sticky side column, so the fact line (scan in a second) and the rows (study) are read across a gap. In a **peek** both share one 420px column, so the same facts in both are the same answer twice before the description. A peek whose body is a properties rail passes NO facts and the rail states every property once; a peek with no rail (a unit, a revision) keeps its fact line, the only place the object's values are stated. The caller decides, since the rule is about the frame's BODY.
 ### A log is an axis, then its rows
 
 A page of rows answers *what happened*, not *when the company was busy*: the event log and the Inbox need a time axis.
@@ -4705,18 +4620,9 @@ at the chart without claiming anything about its seats. A token is still
 declared in Tier A (`api.auth.tokens`) and changes at a restart. **It never
 reads a value back** — not a token's, not a password's, not a second factor's.
 
-**Company › Integrations** (`#/company/integrations`) is **every reader's**, and
-lives under Company because which services the company runs and which apps it
-connects are the company's decisions, not the engine's. It is a **directory
-beside a detail** (the kit's `DirectoryList` in a `ListDetail`): the list holds
-its place while the detail scrolls beside it (above a phone's width the screen
-asks the frame for the window's height, as the Inbox does), and on a phone the
-two are one column, the list until something is chosen, then the detail with a
-way back.
+**Company › Integrations** (`#/company/integrations`) is **every reader's**, under Company because which services and apps the company runs are its decisions. It is a **directory beside a detail** (the kit's `DirectoryList` in a `ListDetail`): the list holds its place while the detail scrolls (above a phone's width the screen asks the frame for the window's height, as the Inbox does). On a phone it is one column: the list until something is chosen, then the detail with a way back.
 
-The directory is **every integration by category**, each of Crewlet's own
-services first in its category, so the built-in answer sits beside the apps
-that answer the same need:
+The directory is **every integration by category**, Crewlet's own services first in each:
 
 | Category | Lines |
 |---|---|
@@ -4726,77 +4632,27 @@ that answer the same need:
 | Code | Gitlet, GitHub, GitLab |
 | Observability | Datadog |
 
-**Atlassian is listed by product**: it is one connection that serves two needs,
-so Jira sits under work tracking and Confluence under docs, each with its own
-product's state, and both open the one Atlassian page, since it is one key and
-one account per agent. A line stands at the rail's row step (30px) and carries
-its mark, its name (a product's vendor inline after it, in the quiet ink:
-Atlassian after Jira and Confluence, Crewlet after Worklet, Doclet, Chatlet and Gitlet) and its
-state only where it carries one: **In use** or **Not in use** for a
-service, which is Crewlet's own and so never *connected* (none on a node
-running no company, which is "not known yet", never Not in use), and
-for an app the engine's bucket (*Connected*, *Needs attention*, *Setting up*),
-never *Not connected* repeated down the list.
+**Atlassian is listed by product**: Jira under work tracking, Confluence under docs, each with its own state, both opening the one Atlassian page (one key and one account per agent). A line stands at the rail's row step (30px) with its mark, its name (a product's vendor inline after it, in the quiet ink: Atlassian after Jira and Confluence, Crewlet after Worklet, Doclet, Chatlet and Gitlet) and a state only where it has one: **In use** or **Not in use** for a service (never *connected*; none on a node running no company, which is "not known yet"), and for an app the engine's bucket (*Connected*, *Needs attention*, *Setting up*), never *Not connected*.
 
-**The home** (the bare address, nothing chosen) is **what the company has in
-use**, under one fixed description of what the page is for (*The tools your
-agents work with: Crewlet's own services and the apps your company connects
-for them.*), the same for every reader and never a count. Then what needs a
-look (each issue under its app's name, linking to the app's page with the form
-its fix needs already open), or one line saying all is well. Then, under **In
-use** with a quiet count of every card beneath it (`home.ts`, one function and
-one table test), the connected apps (Jira and Confluence as their own
-products) and the Crewlet services in use, each a **compact card** (the kit's
-`CatalogTile` at `density` `compact`: one header line with the mark, the name,
-the state and a figure, the one action at its end, and one line of what it
-gives), two to a row. The action is named for its card to a screen reader
-(`actionName` in `parts.tsx`: "Open Worklet", "Replace key GitLab", the
-spelling the app's own page uses), because a column of cards each saying Open
-is a list of links nobody can tell apart. And, for an Admin while only Crewlet's services are in
-use, one line saying apps connected from the list show there too. Then the
-recent activity (the latest deliveries and each app's last check), and the
-**address apps deliver to**, said once at the foot, cut to fit with the whole
-of it in its title and copied with a press. Services not in use and apps nobody
-connected are the list's alone, and a home with nothing in use says so and
-points at the list. A connected app's figure is its agents (*x of y agents
-ready*) where it gives each agent an account, and otherwise its newest
-delivery. Sections stand one small step apart (the kit's `Section` at
-`spacing` `tight`).
+**The home** (the bare address) is **what the company has in use**, under one fixed description, the same for every reader and never a count (*The tools your agents work with: Crewlet's own services and the apps your company connects for them.*). Then:
 
-**The address is the selection**: `#/company/integrations/{kind}` selects an
-app's key, a surface (`jira`, `confluence`, and the `forge` relay and
-`atlassian` select Jira's line) or a service (`worklet`, `doclet`, `chat`), so
-an address naming any surface of a tool lands on that tool. An arrival's
-`open=` names the form to open (`connect`, `continue`, `rotate`, `settings`,
-`agents`), taken out of the address once read and held for the selection it
-arrived with: a fix followed from the home opens its form on a page that is
-already mounted, and leaving for another selection drops it, so coming back
-through the list opens none.
+1. What needs a look: each issue under its app's name, linking to the app's page with the fix's form already open; or one line saying all is well.
+2. **In use**, with a quiet count of every card beneath (`home.ts`): connected apps (Jira and Confluence as their own products) and Crewlet services in use, each a **compact card** (the kit's `CatalogTile` at `density` `compact`: mark, name, state and a figure on one line, the one action at its end, one line of what it gives), two to a row. The action is named for its card to a screen reader (`actionName` in `parts.tsx`: "Open Worklet", "Replace key GitLab"). For an Admin while only Crewlet's services are in use, one line says apps connected from the list show there too.
+3. Recent activity (latest deliveries, each app's last check).
+4. The **address apps deliver to**, once at the foot, cut to fit with the whole in its title, copied with a press.
 
-**An app's page** is its header (the kit's `ObjectHeader` carrying the vendor's
-own mark, the engine's word for its state, its one-line description, and the
-facts: agents ready and the deliveries this node counted, only when
-`traffic_known`) and four tabs:
+Services not in use and apps nobody connected are the list's alone; a home with nothing in use says so and points at the list. A connected app's figure is its agents (*x of y agents ready*) where it gives each agent an account, else its newest delivery. Sections stand one small step apart (the kit's `Section` at `spacing` `tight`).
 
-- **Overview**: the issues, each its own row with what is wrong, what it is
-  about (its subjects as chips, a long list folded to a count that expands in
-  place), what to do, **who owes the next move** (*Waiting on you*, *Crewlet is
-  on it*, *The app is on it*) and the one control that answers it; the reconcile
-  loop's findings in the engine's words, and the facts a surface's own row
-  states (a secret that did not resolve, an address that moved, deliveries that
-  reach no agent, a pass that failed with nothing to show for it), each said
-  once. A working tool says so, and an advisory (an access wider than asked) is
-  a note, never an issue.
-- **Agents**: each agent with its standing, its tier where the app grades one
-  (the engine's own words, beside the name, weighted by trust only on a scale
-  the engine names), what it reaches, and its own step at the app (*Create app
-  on GitHub*, *Install on GitHub*); and **Check now**, which asks the reconcile
-  loop to look at the tool at once (`POST /setup/integrations/{kind}/check`).
-- **Activity**: the provisioning passes and each surface's deliveries.
+**The address is the selection**: `#/company/integrations/{kind}` selects an app's key, a surface (`jira`, `confluence`; the `forge` relay and `atlassian` select Jira's line) or a service (`worklet`, `doclet`, `chat`), so any surface's address lands on its tool. An arrival's `open=` names the form to open (`connect`, `continue`, `rotate`, `settings`, `agents`); it is taken out of the address once read and held for the selection it arrived with, so a fix from the home opens its form on an already-mounted page and leaving for another selection drops it.
+
+**An app's page** is its header (the kit's `ObjectHeader`: the vendor's mark, the engine's word for its state, a one-line description, and facts: agents ready and the deliveries this node counted, only when `traffic_known`) and four tabs:
+
+- **Overview**: the issues, each a row with what is wrong, its subjects as chips (a long list folded to a count that expands in place), what to do, **who owes the next move** (*Waiting on you*, *Crewlet is on it*, *The app is on it*) and the one control that answers it. It holds the reconcile loop's findings in the engine's words and the facts a surface's row states (a secret that did not resolve, an address that moved, deliveries that reach no agent, a pass that failed with nothing to show), each once. A working tool says so; an advisory (an access wider than asked) is a note, never an issue.
+- **Agents**: each agent with its standing, its tier where the app grades one (the engine's words, beside the name, weighted by trust only on a scale the engine names), what it reaches, and its own step at the app (*Create app on GitHub*, *Install on GitHub*); and **Check now**, which asks the reconcile loop to look at the tool at once (`POST /setup/integrations/{kind}/check`).
+- **Activity**: provisioning passes and each surface's deliveries.
 - **Settings**: what the tool is set to, a credential named and never shown.
 
-The header's one action is exactly one of four, decided by `actionFor` from
-the same inputs as the state:
+The header's one action is exactly one of four, decided by `actionFor` from the same inputs as the state:
 
 | Action | When | What it does |
 |---|---|---|
@@ -4805,460 +4661,131 @@ the same inputs as the state:
 | **Replace key** | a `credential_expiring` or `credential_rejected` finding on a configured surface | opens the same form, headed *Replace the {tool} key*, with the engine's reason first |
 | *(none)* | anything else, including a tool this build answers no form for | the page is the tool's management, or links its docs |
 
-beside **Settings** and **Disconnect** on a connected tool. **The settings form
-opens in the pane** in place of the tabs, with the directory still beside it:
-connecting, finishing setup and replacing a key never leave the page. A tool
-not yet connected shows, in place of the tabs, what connecting gives the
-agents, how each gets in, and what to have ready. **The form's words are
-split by job**, each from the engine (`GET /setup/integrations`): the tool's
-one-sentence summary opens it; the one risk its credential carries, where it
-has one, is a warning callout above the first field; the steps to take at the
-app first (numbered, each vendor link where the engine placed it, the
-permissions to grant there as code) are its **Setup steps**: a neutral box in a
-column beside the form (`AsideLayout`, `fit="pane"`, sticky), level with the
-integration's header, with Cancel and the submit under both columns. The box
-is open while the integration is being connected and put away once it is, and
-a person's own choice holds for the page view: put away, it is one **Setup
-steps** button at the column's top; open, a close button sits in its corner,
-and Escape anywhere in it puts it away, focus going back to that button. Where
-the pane is narrower than the layout's pane split, there is no column: a
-**Setup steps** button in the form's title row opens the same box in a side
-sheet, only when pressed; and each field
-carries one line of hint, under fifteen words, with what a person may want
-once behind a **More** disclosure under it. One renderer draws a field's
-words whatever the row is, an input or the block a minted key's public half
-is copied from, so neither drops a link or a note. A credential the engine
-can check carries **Test key** under its field: one read-only call to the app
-(`POST /setup/integrations/{kind}/verify`), whose answer (*works*, *refused*,
-*unreachable*, or not checked) is one sentence beside the control, with its
-facts (what the key reaches, when it expires, the app's own words) as pairs on a
-line below, and each risk or problem as its own callout saying what to do. None
-of it waits behind a disclosure. It goes when the value is typed over; a
-credential the app
-proves only by using it says how, after its More. Credentials the app checks together
-(`check_with`, Datadog's API key and application key) share one **Test keys**
-control after the last of them: it is disabled, with an accessible reason
-naming the empty fields, until all of them hold a value, shows one verdict
-that names the key that failed, and that verdict goes when any of them is
-typed over. A check the engine turned away (a `${NAME}`
-naming no secret) says why and claims no verdict.
+It sits beside **Settings** and **Disconnect** on a connected tool. **The settings form opens in the pane** in place of the tabs, directory still beside it; connecting, finishing setup and replacing a key never leave the page. A tool not yet connected shows, in place of the tabs, what connecting gives the agents, how each gets in, and what to have ready.
 
-**Crewlet's own services** have pages laid out as an app's and filled only
-with what the engine answers. Worklet counts projects and their open
-tasks, lists the projects, every agent with its open, blocked and overdue
-work, the newest changes, and the `tracker` block's settings; Doclet
-counts spaces and pages, lists the spaces, every agent's own space
-and onboarding pages, the newest edits, and the `knowledge` block's settings.
-An unset key reads *The engine's default* rather than a copy of the engine's
-constant. A service the company runs elsewhere says what does its work instead
-(*Jira does this for your company*, with the way to Jira's page), what running
-it here would give, and that the company document decides it: turning a
-service on or off is not offered, since a switch here that did nothing would
-be a lie. Chatlet counts nothing, since the rooms it answers for are the
-reader's own seat's: in use, its page says what it gives and, to a reader
-holding Chatlet, opens it (a reader without Chatlet is told it needs Chatlet access); on a
-vendor's chat it says which (*Slack does this for your company*, named from the
-`viewer` answer, which tells it to a holder of Chatlet), with the way to that
-app's line. Gitlet counts nothing either, since which repositories a reader
-sees is their own grant's answer: in use, its page says what it gives, opens
-it to a reader holding Gitlet (a reader without Gitlet is told it needs Gitlet
-access), and offers an Admin **Gitlet settings**. Nothing runs in Gitlet's
-place, since a company's repositories on GitHub or GitLab are integrations its
-agents call rather than a host the engine runs instead, so with Gitlet off its
-page says *Crewlet hosts none of your company's code* and what running it here
-would give, never that nothing does this.
+**The form's words are split by job**, each from the engine (`GET /setup/integrations`):
 
-**A reader without Admin** sees the whole directory: the services with their
-states and their pages in full (each count read only where the reader holds
-that service's app), and the apps with no state, each page saying an admin
-connects and manages apps (and offering the sign-in to a reader who is
-nobody). Nothing on it asks a question the engine keeps for Admins: the
-`integrations` question, `/setup` and the `config` answer are read only for an
-Admin, and the address at the foot is the setup listing's, so it is not shown.
+- The tool's one-sentence summary opens it.
+- The one risk its credential carries, if any, is a warning callout above the first field.
+- The steps to take at the app (numbered, vendor links where the engine placed them, permissions to grant as code) are its **Setup steps**: a neutral box in a sticky column beside the form (`AsideLayout`, `fit="pane"`), level with the integration's header, with Cancel and the submit under both columns. It is open while the integration is being connected and put away once it is; a person's choice holds for the page view. Put away, it is one **Setup steps** button at the column's top; open, a close button sits in its corner and Escape anywhere in it puts it away, focus returning to that button. Where the pane is narrower than the layout's pane split there is no column: a **Setup steps** button in the form's title row opens the same box in a side sheet, only when pressed.
+- Each field has one hint line, under fifteen words; more sits behind a **More** disclosure. One renderer draws a field's words whatever the row is (an input, or the block a minted key's public half is copied from), so neither drops a link or note.
 
-On a [managed document](../concepts/configuration.md#managed-configuration),
-for a credential that is not one of its writers, the page leads with a callout
-carrying the managed sentence, and **Connect**, **Finish setup**,
-**Disconnect** and an agent's **Create app on GitHub** are disabled with it
-(they write the document), while **Replace key** and the settings form stay
-open: a rotation seals a value the document already names and changes nothing
-in it, which is the break-glass a managed deployment keeps for a person. The
-directory ends at the tools this build serves: every other tool an agent can
-reach is an MCP server, added on Settings › MCP & tools. See [integration
-reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+A credential the engine can check carries **Test key** under its field: one read-only call to the app (`POST /setup/integrations/{kind}/verify`). The answer (*works*, *refused*, *unreachable*, or not checked) is one sentence beside the control, its facts (what the key reaches, when it expires, the app's own words) as pairs on a line below, each risk or problem its own callout saying what to do; none behind a disclosure. It goes when the value is typed over. A credential the app proves only by using it says how, after its More. Credentials the app checks together (`check_with`, Datadog's API key and application key) share one **Test keys** control after the last: disabled, with an accessible reason naming the empty fields, until all hold a value; one verdict names the key that failed and goes when any is typed over. A check the engine turned away (a `${NAME}` naming no secret) says why and claims no verdict.
 
-**MCP & tools** (`#/settings/mcp-tools`) is every MCP server the company runs
-and the tools the engine runs itself, read from the engine's own answers,
-`mcp_servers_status` and a server's `GET /mcp-servers/{name}`, which every
-member may ask: a member's reading names no launch line, header, failure
-sentence or call, and every action on the page is an admin's. It is kept
-current on a fifteen-second poll while the page is open, when the fleet applies
-a new configuration and when the engine's alarms move. Nothing on the page
-decides a server's state, a tool's risk or level, a failure's class, an
-alarm's fix, who a server reaches or how many tools an agent holds: the engine
-answers each, and the page names it in its words (`words.ts`).
+**Crewlet's own services** have pages laid out as an app's, filled only with what the engine answers.
 
-The page names itself in a header (its title, one plain line, and **Add
-server** for an admin, which opens the wizard below) and its views are
-underline tabs under it (`?view=`), drawn as a server's own tabs are:
-**Servers**, **Agent access** (an admin's) and **Built-in tools**. **Servers** leads, for an admin, with
-**Needs attention**: one row for each server an MCP alarm stands on (the
-engine's `alarms[].entries[]`), its tone, the server's mark, what is wrong in a
-line and its failure's class or the refused names under it, and the one fix
-the engine names in a quiet button: **Restart** (every instance, or the named
-agent's), **See its sign-in** (the server's Connection tab, where its
-integration's Agents tab is linked), **Change its prefix** (the wizard at
-its Connection step, where the tool prefix is) or **Answer it** (the calls the
-server's tools hold for approval, `?flow=approve`, each answerable there).
-The engine's measurement and the remedy open under the row; past three rows
-the rest fold to a summary. A member reads *Read-only. Changes take Admin
-access.* instead. Four figures follow (three for a member): the servers and how
-many are off, how many enabled ones run, the MCP tools and how many are not
-offered, and for an admin **Waiting on you**, the calls held for their answer
-and the servers whose changed tools wait for a review. Then a row per server: its
-mark, title and, for an admin, its host or command (the address whole on hover,
-any credential in it withheld by the engine) or for a member what it is for;
-**Connection** (*Remote* or *Local*, *Company-shared* or *Per agent*);
-**Status** (the engine's state, with *n of m* for a partial one and *n agents*
-for a per-agent one running for several); **Tools** (how many it lists, and how
-many are not offered); **Used by** (the first agent the engine grants it and
-*+n*, from the answer's `agents`, every agent on hover); **Last
-error** (the longest-down node's failure in its class's few words, the agent
-and when under it, the engine's sentence on hover for an admin); and, for an
-admin, a pencil that opens the wizard on the server (shown on hover or focus,
-and always where there is no hover) and the server's menu: **Test**, **Edit**,
-**Restart**, **Disable** or **Enable**, **Remove**.
+- Worklet counts projects and their open tasks, lists the projects, every agent with open, blocked and overdue work, the newest changes, and the `tracker` block's settings.
+- Doclet counts spaces and pages, lists the spaces, every agent's own space and onboarding pages, the newest edits, and the `knowledge` block's settings.
+- An unset key reads *The engine's default*, not a copy of the constant.
+- A service the company runs elsewhere says what does its work instead (*Jira does this for your company*, with the way to Jira's page), what running it here would give, and that the company document decides it. No on/off switch is offered: one that did nothing would be a lie.
+- Chatlet counts nothing (the rooms are the reader's own seat's). In use, its page says what it gives and opens it to a reader holding Chatlet (others are told it needs Chatlet access). On a vendor's chat it says which (*Slack does this for your company*, named from the `viewer` answer, which tells it to a holder of Chatlet), with the way to that app's line.
+- Gitlet counts nothing (which repositories a reader sees is their own grant's answer). In use, its page says what it gives, opens it to a reader holding Gitlet (others are told it needs Gitlet access), and offers an Admin **Gitlet settings**. Nothing runs in its place (repositories on GitHub or GitLab are integrations agents call), so with Gitlet off its page says *Crewlet hosts none of your company's code* and what running it here would give.
 
-A row opens the **server's page** (`servers/{name}`): an object header (its
-mark, title, name, state, connection, tool count and reach, the connection kept
-on one line), **Edit** beside the menu in the page bar for an admin (the menu
-folds into the bar's *More* on a phone, which carries the same actions), and
-five tabs (`?tab=`), **Access** an admin's. **Overview** says a disabled server is off with **Enable**, for an admin each call the
-server's tools hold for approval (the Inbox's held-call row in a card,
-answered in place, its tab marked while one waits), the server's own alarms
-(a waiting call's alarm left to its row), each instance (the agent it runs for or *The company*, its
-node, its state, its tools or what is wrong in a few words, the class's title
-on hover), a line naming any node that did not answer the instance read, when
-it last answered, its last failure and for an admin its latest test (passed or
-failed, by whom, when) with **Test now**, what it reported itself as and its
-protocol, and for an admin the instructions it reports, said not to be the
-agents' (a seat's harness is handed the entry's `description`). **Connection**
-is for an admin the address or the command, then the transport, where it
-runs, its instances, the start and call timeouts with which are the default,
-its tool prefix (from the entry as written), with **Edit**, which opens the
-wizard's Connection step, where the timeouts are changed too (an empty one is
-the engine's default, `MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS` and
-`MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS`); how the engine
-signs in (and an integration's link to its Agents tab); and every header or
-variable it is sent, from the engine's `values`: its name and the `${VAR}` it
-reads (*Set in the configuration* for a value written there, *Each agent's
-own* for a key an integration fills), whether the store holds it, who stored
-it and when, **Replace** or **Set** for each key an integration does not fill,
-and **Edit**; never a value. A member's reading counts no agent's tools, so
-for a member the list draws no **Used by** and a server's page no reach,
-rather than *No agent*. **Tools** lists the names no agent is offered under
-them with the engine's reason, for an admin the server's default level (*By
-each tool's hints*, or one of the three, with **Edit** opening the wizard's
-approvals step), then every tool the fleet lists with its description, the
-engine's risk (*Read only*, *Writes*, *Destructive*, starred where the server
-declared nothing), its calls over the week and its level: for an admin a
-select of *Always allow*, *Needs approval* and *Blocked* (a tool with a level
-of its own marked *Custom*, with the way back to the server's default), for a
-member the level in words; with a search, the risk's chips, *Custom*, and for
-an admin **Set N shown**, which sets every tool shown. Each change is one
-`PUT /mcp-servers/{name}/tools`, by the server's own name for the tool.
-**Access** (with what a team lead's `mcp_limits` hold the server to for each
-agent, as the engine resolved them: off for it, or tools held back, and by
-whose lead; the Tools tab marks such a tool *Held back*) is who gets the
-server: for a server an integration signs in for,
-a note linking the integration's Agents tab; otherwise **Who gets it**, every
-agent or chosen teams and agents (each team listing every agent beneath it,
-an agent of a chosen team left out by unticking it), saved through the entity
-route with **Save access** once it differs; then **What each agent can call**,
-every agent with why the engine says the server reaches it (`reaches`) or that
-it does not, and the tools it may call there. **Activity** is
-the week's calls per tool, every reader's, and for an admin the newest calls
-(when, the agent, the tool, how it ended and how long it took, never its
-arguments or its result) with any data node that did not answer, and the
-calls held for approval with how each was answered while its run holds it.
-Flows are the address (`?flow=test`, `value` with `key`, `restart`,
-`disable`, `remove`, `approve`, `drift`, with `server` and `seat`), so an
-alarm's fix and a menu item open one dialog. **Test** runs on open and on **Test again**, and nothing
-else starts one: on every node that runs the server, or a per-agent one as
-the first agent the engine grants it (another chosen in **Test as**), each
-stage in the kit's step list with its time and what it found, the stages
-never reached said so, and where one failed, its class's title and remedy; it
-never calls a tool. **Replace** (or **Set**) takes a new value write-only and
-sends it to the engine, which tests the server with it before it seals it
-and points the key at it: a value the server refuses is said on the field
-with what the test found under it, and stores nothing; where no node answered
-the test, **Save untested** stores it anyway; a per-agent server's own value
-is stored untested, since it is tested as each agent. Both ask the engine's
-recent step-up, which the dashboard's one ceremony answers and replays.
+**A reader without Admin** sees the whole directory: services with their states and pages in full (each count read only where the reader holds that service's app), and apps with no state, each page saying an admin connects and manages apps (and offering sign-in to a reader who is nobody). Nothing asks a question the engine keeps for Admins: the `integrations` question, `/setup` and the `config` answer are read only for an Admin, and the address at the foot is the setup listing's, so it is not shown.
 
-**Adding and editing** is a wizard, a page of its own in the list's place
-(`?flow=add`, or `?flow=edit&server=` with `step=` for the step an action is
-about): **Source** (the curated catalogue, with what the company already runs
-standing apart as *Added*; an address the engine checks before anything is
-added, saying what answers there, the sign-in it asks for and its tools; a
-pasted `mcpServers`, VS Code `servers` or registry `server.json`, read and
-never run, its values left out; or a community search, sent when asked and
-each result marked *Not reviewed*), **Name**, **Connection** (an address, or a
-command, its arguments and variables), **Sign-in** (the vendor's integration
-where the catalogue names one, a header, or none, with what the address check
-or the catalogue found said above them), **Who gets it** (one connection or
-one per agent, and the grant picker the Access tab draws), **Tool approvals**
-(the default level and each tool's, over the tools a test of the draft lists,
-each at the engine's starting level), **Test** (the draft as it would be
-written, without its levels, run as it opens and again on request) and
-**Review** (who gets it, the tools at each level, a destructive tool left at
-Always allow pointed out, and the engine's dry run of the entry, its problems
-on the fields they name and the steps that hold them marked). An edit has no Source, keeps the server's name, opens at
-the step its action names and writes back every field of the entry it does
-not draw. A value typed in the wizard is never written into the entry: it is
-tested with the draft, sealed across the fleet, and stored write-only after
-the entry is written, each through the same route as **Replace**, which tests
-it with the entry as the fleet's active revision states it; a value the
-server refuses leaves the entry saved and the wizard open on what is left.
-Enter moves on from a single-line field, a choice or a step's heading.
-**Remove** first asks the engine's dry run what names the server (an agent's
-or a team's `mcp_env`, a box's `sandbox.mcp.servers`) and which stored values
-nothing else reads, holds **Remove server** until the reader clears those in
-the same change, offers each value to delete with it, and states the revision
-of the entry it read; **Disable instead** is beside it.
+On a [managed document](../concepts/configuration.md#managed-configuration), for a credential that is not one of its writers, the page leads with a callout carrying the managed sentence, and **Connect**, **Finish setup**, **Disconnect** and an agent's **Create app on GitHub** are disabled (they write the document). **Replace key** and the settings form stay open: a rotation seals a value the document already names and changes nothing in it, the break-glass a managed deployment keeps for a person. The directory ends at the tools this build serves: every other tool an agent can reach is an MCP server, added on Settings › MCP & tools. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
 
-**Agent access** (`?view=agents`, an admin's) is the answer's `agents`: a row
-per agent and a column per server, each cell the tools the agent may call
-there, the server's state where it is not running, or a marked absence where
-it does not reach the server; the agent's total, with *Over 100* where the
-engine flags it (`over_budget`, against `tool_budget`); a callout naming every
-agent over the budget; and a note naming the servers whose agents an
-integration decides. A row opens the agent's tools (`?agent=`): its total
-against the budget, every server it reaches with why and how many of its tools
-sit at each level, and how many of the built-in tools it is offered
-(`builtin_tools`). On a phone a row
-is the agent and its total. While the engine is still counting, the view says
-so rather than drawing zeros.
+**MCP & tools** (`#/settings/mcp-tools`) is every MCP server the company runs and the tools the engine runs itself, read from `mcp_servers_status` and a server's `GET /mcp-servers/{name}`, which every member may ask. A member's reading names no launch line, header, failure sentence or call; every action is an admin's. It polls every fifteen seconds while open, and refreshes when the fleet applies a new configuration and when the engine's alarms move. The page decides nothing (a server's state, a tool's risk or level, a failure's class, an alarm's fix, who a server reaches, how many tools an agent holds): the engine answers and the page names it in its words (`words.ts`).
 
-**A held call** (a run parked on a call to a tool at *Needs approval*) is one
-row wherever it waits on a person, the Inbox and Home as the run's decision
-and a server's Overview in a card: the agent and the work item on its head,
-its title, that its run is parked, and under the row what the call would send
-under **Arguments**. THE TITLE IS IN PRODUCT WORDS, read from the call's own
-arguments where the reader is shown them: *Merge pull request 88 in
-acme/web?* (or *Merge change 42 in web?* for a Gitlet change), *Deploy web to
-production?*, *Run a command on web-1?*. A reader not shown those arguments,
-and any other call its tool asks about every time, reads the engine's own
-question for it, which that tool words, and an MCP tool's call is *Call `tool`
-on Server?*. One function words it for the
-row, the Inbox's list and its pane (`heldCallTitle`), and where the title is
-in product words the call as it was made (its tool and server) is the first
-line under **Arguments**. **Allow once**, **Always allow** and
-**Deny** answer it through `POST /mcp-approvals/{id}`, never the run's own
-answer; Always allow asks the engine's recent step-up first. The row then says
-what the answer did and keeps that line until the list is drawn afresh; an
-answer whose delivery the engine could not confirm says answering again is
-safe and keeps its buttons. The live run's banner and a seat's page, where a
-parked run is answered with **Answer**, offer a held call's run the same three
-answers instead.
+The header holds the title, one plain line, and **Add server** for an admin (opens the wizard below). Views are underline tabs (`?view=`): **Servers**, **Agent access** (an admin's) and **Built-in tools**.
 
-**A call a delegate decides first** ([Delegated decisions](../guides/delegated-decisions.md))
-waits on nobody's decisions until it is escalated: the live Executors board
-draws its status as **with delegate**, and its banner names the delegates and
-the rule ("With delegate Security Engineer (rule 1)") above the same answers,
-which a person who may approve it can still give. **An escalated call reads its
-delegates before the call itself**, in the Inbox's pane and on its row alike
-(`EscalationNote`), as one quiet callout (the kit's `Callout` at
-`appearance="quiet"`: the warning on its glyph and its leading edge, the words
-in the page's own ink). Its heading says who put it to people, under which
-rule and, where one delegate's answer is the escalation, how sure it was
-("Escalated by Security Engineer (rule 1), low confidence", or Crewlet where
-no delegate escalated), so that answer has no line repeating its name, verdict
-or confidence. A panel's answers, or one the engine overruled, each keep a
-line of their own: the delegate, its verdict in its state's tone and its
-confidence. Under them the delegate's reason and its findings in the order
-given (the kit's `FindingList`, compact), then the engine's own sentences
-under **Why it reached you**; the call and its answers follow unchanged. A
-delegate's words are a model's, so all of them are plain text.
+**Servers** leads, for an admin, with **Needs attention**: a row per server an MCP alarm stands on (`alarms[].entries[]`): its tone, mark, what is wrong in a line, its failure's class or the refused names, and the one fix the engine names in a quiet button:
 
-**A held merge or deploy** (`ask_to_merge`, `ask_to_deploy`, `approvers:
-release`) is a fixed call, answered **Review and allow once** or **Deny**. For
-a reader the run's row sends its arguments to (an administrator, the agent's
-lead), the Inbox's pane draws it from them after the delegates' answers, as a
-description list (`ReleaseRequestFacts`): a merge's **Change**, **Head**,
-**Method** and **Reason**, a deploy's **Repository**, **Commit**, **Changes**,
-**Environment**, **Rollback** and **Reason**. Every value the agent wrote is
-plain text kept to its lines, never Markdown and never a link, an address
-included; a commit is its short id in monospace, the whole id on hover and
-copied whole by the kit's `Copyable`. A caption says what Allow once does and
-who may answer: administrators, the agent's leads and the people its rule
-escalates to, at a recent sign-in. A reader sent no arguments (a person the
-rule escalates to) reads the engine's own words for it, as for a command, and
-the same caption. The review dialog (**Review the merge**, **Review the
-deploy**) and a decision row's **Arguments** draw the same list; arguments
-that do not read whole as the tool's (a key it does not take) are drawn as
-sent.
-An answer a delegate gave carries **Decided under delegation, rule N**, off the
-`delegated_rule` its `executor_answered` and `executor_answer_given` record:
-on the turn's rows, the event log, the event's page and the executor's page.
+- **Restart** (every instance, or the named agent's)
+- **See its sign-in** (the server's Connection tab, where its integration's Agents tab is linked)
+- **Change its prefix** (the wizard at its Connection step, where the tool prefix is)
+- **Answer it** (the calls the server's tools hold for approval, `?flow=approve`, each answerable there)
 
-**A changed tool** (`?flow=drift`, opened by the Tools tab's **Review** and the
-alarm's fix) is reviewed in a dialog over the detail's `changes`: the changed
-tools in the kit's rail, one that now claims less risk first and flagged, and
-for the one chosen its title or description as a text diff, its arguments a
-line each and the hints that moved keyed by the hint, its old word removed and
-its new one added, all in `DiffView`
-([Every diff is tinted](#every-diff-is-tinted));
-**Accept change**,
-**Accept the new tool** or **Accept that it went**, and **Keep blocked**, each
-sent by the digest of the definition shown. It says each thing once: its one
-subtitle is how many tools ask for approval until decided, a rail row is the
-tool's name alone (the dialog is wide enough for the rail, which folds into
-its picker only on a narrow window), the chosen tool is not named again over
-its diff, and a part is named by its label alone, one it cannot show saying
-"This part changed" under it. On the Tools tab a changed tool is
-marked *Changed*, *New* or *Removed*, the changes are counted with **Review**,
-**Changed** filters them, a held tool's *Always allow* says it applies once
-its change is reviewed, and the tab is marked while any wait.
+The engine's measurement and remedy open under the row; past three rows the rest fold to a summary. A member reads *Read-only. Changes take Admin access.* instead.
 
-**Built-in tools** is the engine's own tools as its groups file them: a rail of
-the groups with their counts beside the list (folding into a picker under
-44rem of its own width), a search and the capability chips over it, every
-group a band while none is chosen, and a row per tool with its name, its line,
-what it can do (the engine's risk) and who may call it (its `gate`). The
-filters are the address (`q`, `cap`, `group`). A row opens the tool in the
-drawer (`?peek=tool:<name>`): its description, group, who may call it and its
-arguments. A tool's own address (`{tool}`, ONE tail segment, told from a
-server's page by LENGTH since a tool name is a third party's string) opens a
-built-in in that drawer and a server's tool on its server's Tools tab,
-searched for it.
+Then four figures (three for a member): servers and how many are off, how many enabled ones run, MCP tools and how many are not offered, and for an admin **Waiting on you** (calls held for their answer and servers whose changed tools wait for a review). Then a row per server:
 
-**Add server** opens the add form for an admin: a
-name (its example is never a name the company already has; a name the
-configuration carries is refused, and one only a node still runs from an
-earlier revision is free and said beside the field, since the engine's
-create judges the configuration alone), how it runs
-(*Launch a command* or *Connect to an address*), whether
-there is one for the company or one per seat granted it, the command and its
-arguments one per line (or the address), and the environment or headers as
-`NAME: value` rows whose value is a secret field (`$` offers the sealed
-entries), each with its own **may be unset** box: ticked, the row's key is
-sent in the server's `optional_keys`, so a value whose secret has no value is
-left out rather than keeping the server from starting (said once above the
-rows, and refused before the round trip for a row whose value names no secret,
-since nothing in a literal can be unset). Two header rows spelling one header
-apart (`Authorization`, `authorization`) are refused the same way, since HTTP
-and the engine read them as one. Add checks the whole company with the
-server in it (the create-only
-`PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says
-any warning the add introduces (not one the company already carried) and
-places a refusal beside its field; then it stores the revision and opens the
-new server's page.
+- mark, title and, for an admin, its host or command (whole on hover, any credential withheld by the engine), or for a member what it is for;
+- **Connection** (*Remote* or *Local*, *Company-shared* or *Per agent*);
+- **Status** (the engine's state, *n of m* for a partial one, *n agents* for a per-agent one running for several);
+- **Tools** (how many it lists, how many are not offered);
+- **Used by** (the first agent the engine grants it and *+n*, from the answer's `agents`, all on hover);
+- **Last error** (the longest-down node's failure in its class's few words, the agent and when under it, the engine's sentence on hover for an admin);
+- for an admin, a pencil that opens the wizard on the server (on hover or focus, always where there is no hover) and the server's menu: **Test**, **Edit**, **Restart**, **Disable** or **Enable**, **Remove**.
 
-**Models** is every model the company runs and every task an operator does on
-one, read from the engine's own reading, `llm_entries`, which every member may
-ask: a member's names no credential, no account and no vendor sentence, and
-every action on the page is an admin's. It is kept current on a fifteen-second
-poll while the page is open, when the fleet applies a new configuration and
-when a seat's provider limit moves on the live state. Two lenses sit in the
-page bar. **Models** has stat tiles (the models, how many are ready, how many
-sit out or cannot sign in, and the week's tokens), then the model alarms
-the engine raised (`llm_credential_expiring`, `llm_credential_expires_soon`,
-`llm_sign_in_refused`, `llm_limit`, `llm_limit_waiting`), each naming its cause
-and what it stops, grouping the models one credential or one plan holds, its
-vendor's sentence behind **Details**, and offering the one gesture that fixes
-it. A limit that holds seats also offers **Use a different model for these
-seats**: a menu of the models that answer now (never one on the limited plan,
-and for coding only a harness that runs it), or a line saying none can, and **Add a
-model**, each opening the wizard on *Use it for* with every seat's category on
-the limited models added (`?add=`), for Review to show before anything is
-written. The address only preselects: a seat the company no longer has, or
-coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
-from the engine's reading, and when it changes); how it signs in and the secret
-it reads; what it is used for, by category; when it last answered; and its
-menu. The page has no lenses: under that table one card says who runs on
-which model, in two quiet groups, *Helpers* (Ask Crewlet and the Advisor)
-then *Seats*, with no header row. Every row has one anatomy: who on the left
-(a helper's product mark and name, a seat's avatar and name linking to the
-seat) and the model's picker on the right, in one column of one width. Every
-model is named in full on a picker's trigger and each option: its harness's
-mark, its key and, quieter, the model it runs by name ("sub-4 · Claude Opus
-5.5"), read from the entry's model id through the engine's `llm_models`
-answer (the harness's aliases with the version each follows, and the public
-catalogue's names); an id nothing names is said as itself. The list's model
-line, a model's page and the wizard's Review name the model the same way.
-Every picker on the card asks once and then saves in place: a helper's writes
-its one key in a step (the dry run, then the write under the revision it
-read), lists a model no helper can run on disabled beside the engine's reason,
-shows the choice at once while it is saved and then says where the helper runs
-now; a seat's writes the model's uses with that seat's categories added, job by
-job, as Finish and save does, its confirm naming each job that moves, from
-where to where, and any fallback the write drops. A seat on one model shows one picker that
-sets all three categories; *Split by job* in the row's menu shows a picker per
-category under the seat's name (*Coding*, *Reviews*, *Routines*), and *Use
-one model* folds them back; a seat whose jobs differ shows its three, a
-category split by hand naming its models ("sonnet + codex-review"). Each
-option says its model's condition in a word, and a fast model is marked inside
-the Routines picker; nothing is said per row or in a callout. With no model the
-card stays, every row reading *Not set*, and the empty list offers *Add a
-model*. *Use it
-for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
-the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
-on its model, and kept beside seat work by its per-seat switch, which also
-takes it off the model it runs on. A new model preselects only the seats
-with no model today for any job it will do (the *Seats without a model*
-switch, hidden when every seat has one), so adding a model never moves a
-working seat; a seat that has a model is picked by hand, its chip's tip
-saying the model it is on and that picking it replaces that.
+A row opens the **server's page** (`servers/{name}`): an object header (mark, title, name, state, connection on one line, tool count and reach), **Edit** beside the menu in the page bar for an admin (on a phone the menu folds into *More*), and five tabs (`?tab=`), **Access** an admin's.
 
-A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
-by whom it was stored, its expiry, and on a harness login each node's state with the
-command that makes it there), its sit-out with **Retry now** and **Clear
-sit-out** for every model on its plan, its last answer and failure, its usage
-over seven days, its limits and every place that runs on it, grouped by
-category with backups apart and Ask Crewlet and the Advisor named. **Test** runs the harness's
-own checks on the answering node and says each in words. A Codex model signs
-in with a device code: the page shows the address and the code and follows the
-session until it ends. **Remove** says in one line what uses the model ("Used
-by 9 seats, Ask Crewlet, and the Advisor.", or that nothing does) and asks one
-question, where all of it moves: a model that fits every place, or Leave
-unset. It preselects a model only where every place already runs on it (a
-backup in its field, another of the seat's jobs, the other helper's model);
-otherwise it asks, *Choose a model*, and holds the button. *Choose per seat*
-opens a row per place, its name (a seat's jobs in the page's categories) and a
-picker, for the rare split. The list is read (`GET
-/config/llm-providers/{id}/references`), never asked as a refused dry run, and
-each complete set of moves is checked with a dry run as it changes; a
-refusal is said in its own words under the choice. A removal that moves
-everything to another model needs only the button; one that turns Ask Crewlet
-off, runs the Advisor with no model, or leaves seats with no model at all
-(the last model) asks for one tick of a box that says so. The model and every
-move are removed as one revision, and no config path is printed.
+- **Overview**: a disabled server is said off, with **Enable**. For an admin, each call the server's tools hold for approval (the Inbox's held-call row in a card, answered in place, the tab marked while one waits). Then the server's own alarms (a waiting call's alarm left to its row); each instance (the agent it runs for or *The company*, its node, state, tools or what is wrong in a few words, the class's title on hover); a line naming any node that did not answer the instance read; when it last answered; its last failure; for an admin its latest test (passed or failed, by whom, when) with **Test now**; what it reported itself as and its protocol; and for an admin the instructions it reports, said not to be the agents' (a seat's harness is handed the entry's `description`).
+- **Connection**, for an admin: the address or command, transport, where it runs, instances, the start and call timeouts with which are the default, and its tool prefix (from the entry as written), with **Edit**, which opens the wizard's Connection step, where the timeouts are changed too (an empty one is the engine's default, `MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS` and `MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS`). Also how the engine signs in (and an integration's link to its Agents tab), and every header or variable it is sent, from the engine's `values`: its name and the `${VAR}` it reads (*Set in the configuration* for a value written there, *Each agent's own* for a key an integration fills), whether the store holds it, who stored it and when, **Replace** or **Set** for each key an integration does not fill, and **Edit**; never a value. A member's reading counts no agent's tools, so a member's list draws no **Used by** and a server's page no reach, rather than *No agent*.
+- **Tools**: the names no agent is offered, with the engine's reason; for an admin the server's default level (*By each tool's hints*, or one of the three, with **Edit** opening the wizard's approvals step); then every tool the fleet lists with description, the engine's risk (*Read only*, *Writes*, *Destructive*, starred where the server declared nothing), calls over the week and level. An admin's level is a select of *Always allow*, *Needs approval* and *Blocked* (a tool with a level of its own marked *Custom*, with the way back to the server's default); a member's is in words. There is a search, the risk's chips, *Custom*, and for an admin **Set N shown**, which sets every tool shown. Each change is one `PUT /mcp-servers/{name}/tools`, by the server's own name for the tool.
+- **Access**: what a team lead's `mcp_limits` hold the server to for each agent, as the engine resolved them (off for it, or tools held back, and by whose lead; the Tools tab marks such a tool *Held back*). For a server an integration signs in for, a note linking the integration's Agents tab; otherwise **Who gets it**: every agent or chosen teams and agents (each team listing every agent, an agent of a chosen team left out by unticking it), saved through the entity route with **Save access** once it differs. Then **What each agent can call**: every agent with why the engine says the server reaches it (`reaches`) or that it does not, and the tools it may call there.
+- **Activity**: the week's calls per tool, every reader's; for an admin also the newest calls (when, agent, tool, how it ended, how long, never arguments or result) with any data node that did not answer, and calls held for approval with how each was answered while its run holds it.
 
-**Adding and editing a model is one wizard**, a page of its own in place of the
-list: the name and the harness (fixed once the model exists), how it signs
-in, the model (the harness's aliases, each with the version it resolves to on the
-vendor's own service where the engine knows it, and the public catalogue's models,
-or any name as text), where it runs a seat's executor (for a harness with a runner), what it is used for,
-its limits, and a review of exactly what changes, where the test call is run
-with its button and said in one line (the failure's own words, the engine's
-detail on hover). **Finish and save** stands beside
-Continue from the first step where nothing the model needs is missing, so the
-optional steps left keep their defaults; on Review it is the primary action.
-It runs the test call where it has not passed (a new device sign-in has
-nothing to test until it is saved), the engine's check, then the save; a model
-saved after its test passed reads as having answered. A company with no place
-to run coding gets this engine's host, set up by the save of its first coding
-model, as Where it runs and Review say. A reload with something typed asks
-first. A pasted
-credential is tested before anything is stored and sealed before the document
-that names it is written; the document is checked with a dry run against the
-revision it edits and stored with `If-Match`, so a colleague's save in between
-is a conflict to re-read. *Use it for* writes each category's fields as one
-model each, as
-[Managing models from the dashboard](../concepts/llm-backends.md#managing-models-from-the-dashboard)
-lists, and the review names every fallback a write drops.
+Flows are the address (`?flow=test`, `value` with `key`, `restart`, `disable`, `remove`, `approve`, `drift`, with `server` and `seat`), so an alarm's fix and a menu item open one dialog.
 
+- **Test** runs on open and on **Test again**, never otherwise, on every node that runs the server (a per-agent one as the first agent the engine grants it; another chosen in **Test as**). Each stage shows in the kit's step list with its time and what it found, stages never reached said so, a failed one giving its class's title and remedy. It never calls a tool.
+- **Replace** (or **Set**) takes a new value write-only and sends it to the engine, which tests the server with it before sealing it and pointing the key at it. A value the server refuses is said on the field with what the test found, and stores nothing. Where no node answered the test, **Save untested** stores it anyway; a per-agent server's own value is stored untested, since it is tested as each agent. Both ask the engine's recent step-up, which the dashboard's one ceremony answers and replays.
+
+**Adding and editing** is a wizard, a page of its own in the list's place (`?flow=add`, or `?flow=edit&server=` with `step=` for the step an action is about). Steps:
+
+- **Source**: the curated catalogue (what the company already runs apart as *Added*); an address the engine checks before anything is added, saying what answers there, the sign-in it asks for and its tools; a pasted `mcpServers`, VS Code `servers` or registry `server.json`, read and never run, values left out; or a community search, sent when asked, each result marked *Not reviewed*.
+- **Name**
+- **Connection**: an address, or a command, its arguments and variables.
+- **Sign-in**: the vendor's integration where the catalogue names one, a header, or none, with what the address check or catalogue found said above.
+- **Who gets it**: one connection or one per agent, and the Access tab's grant picker.
+- **Tool approvals**: the default level and each tool's, over the tools a test of the draft lists, each at the engine's starting level.
+- **Test**: the draft as it would be written, without its levels, run as it opens and again on request.
+- **Review**: who gets it, the tools at each level, a destructive tool left at Always allow pointed out, and the engine's dry run of the entry, its problems on the fields they name and the steps holding them marked.
+
+An edit has no Source, keeps the server's name, opens at the step its action names and writes back every field of the entry it does not draw. A value typed in the wizard is never written into the entry: it is tested with the draft, sealed across the fleet, and stored write-only after the entry is written, each through the same route as **Replace**, which tests it with the entry as the fleet's active revision states it. A value the server refuses leaves the entry saved and the wizard open on what is left. Enter moves on from a single-line field, a choice or a step's heading.
+
+**Remove** first asks the engine's dry run what names the server (an agent's or a team's `mcp_env`, a box's `sandbox.mcp.servers`) and which stored values nothing else reads. It holds **Remove server** until the reader clears those in the same change, offers each value to delete with it, and states the revision of the entry it read; **Disable instead** is beside it.
+
+**Agent access** (`?view=agents`, an admin's) is the answer's `agents`: a row per agent, a column per server, each cell the tools the agent may call there, the server's state where it is not running, or a marked absence where it does not reach it. It shows the agent's total, with *Over 100* where the engine flags it (`over_budget`, against `tool_budget`); a callout naming every agent over the budget; and a note naming servers whose agents an integration decides. A row opens the agent's tools (`?agent=`): its total against the budget, every server it reaches with why and how many tools sit at each level, and how many built-in tools it is offered (`builtin_tools`). On a phone a row is the agent and its total. While the engine is still counting, the view says so rather than drawing zeros.
+
+**A held call** (a run parked on a call to a tool at *Needs approval*) is one row wherever it waits on a person: the Inbox and Home as the run's decision, a server's Overview in a card. It shows the agent and work item on its head, its title, that its run is parked, and under it what the call would send under **Arguments**. THE TITLE IS IN PRODUCT WORDS, read from the call's own arguments where the reader is shown them: *Merge pull request 88 in acme/web?* (or *Merge change 42 in web?* for a Gitlet change), *Deploy web to production?*, *Run a command on web-1?*. A reader not shown those arguments, and any other call its tool asks about every time, reads the engine's own question, which that tool words; an MCP tool's call is *Call `tool` on Server?*. One function words it for the row, the Inbox's list and its pane (`heldCallTitle`); where the title is in product words, the call as made (tool and server) is the first line under **Arguments**.
+
+**Allow once**, **Always allow** and **Deny** answer it through `POST /mcp-approvals/{id}`, never the run's own answer; Always allow asks the engine's recent step-up first. The row then says what the answer did and keeps that line until the list is drawn afresh; an answer whose delivery the engine could not confirm says answering again is safe and keeps its buttons. The live run's banner and a seat's page, where a parked run is answered with **Answer**, offer the run the same three answers instead.
+
+**A call a delegate decides first** ([Delegated decisions](../guides/delegated-decisions.md)) waits on nobody's decisions until escalated: the live Executors board draws its status as **with delegate**, and its banner names the delegates and the rule ("With delegate Security Engineer (rule 1)") above the same answers, which a person who may approve it can still give. **An escalated call reads its delegates before the call itself**, in the Inbox's pane and on its row alike (`EscalationNote`), as one quiet callout (the kit's `Callout` at `appearance="quiet"`: the warning on its glyph and leading edge, words in the page's own ink).
+
+- Its heading says who put it to people, under which rule and, where one delegate's answer is the escalation, how sure it was ("Escalated by Security Engineer (rule 1), low confidence", or Crewlet where no delegate escalated); that answer has no line repeating its name, verdict or confidence.
+- A panel's answers, or one the engine overruled, each keep a line: the delegate, its verdict in its state's tone, its confidence.
+- Under them: the delegate's reason and findings in the order given (the kit's `FindingList`, compact), then the engine's sentences under **Why it reached you**; the call and its answers follow unchanged.
+- A delegate's words are a model's, so all are plain text.
+
+**A held merge or deploy** (`ask_to_merge`, `ask_to_deploy`, `approvers: release`) is a fixed call, answered **Review and allow once** or **Deny**. For a reader the run's row sends its arguments to (an administrator, the agent's lead), the Inbox's pane draws it from them after the delegates' answers as a description list (`ReleaseRequestFacts`): a merge's **Change**, **Head**, **Method** and **Reason**; a deploy's **Repository**, **Commit**, **Changes**, **Environment**, **Rollback** and **Reason**. Every value the agent wrote is plain text kept to its lines, never Markdown, never a link (an address included); a commit is its short id in monospace, the whole id on hover and copied whole by the kit's `Copyable`. A caption says what Allow once does and who may answer: administrators, the agent's leads and the people its rule escalates to, at a recent sign-in. A reader sent no arguments (a person the rule escalates to) reads the engine's own words, as for a command, and the same caption. The review dialog (**Review the merge**, **Review the deploy**) and a decision row's **Arguments** draw the same list; arguments that do not read whole as the tool's (a key it does not take) are drawn as sent.
+An answer a delegate gave carries **Decided under delegation, rule N**, off the `delegated_rule` its `executor_answered` and `executor_answer_given` record: on the turn's rows, the event log, the event's page and the executor's page.
+
+**A changed tool** (`?flow=drift`, opened by the Tools tab's **Review** and the alarm's fix) is reviewed in a dialog over the detail's `changes`: the changed tools in the kit's rail (one that now claims less risk first and flagged; it folds into a picker only on a narrow window), and for the one chosen its title or description as a text diff, its arguments a line each and the hints that moved keyed by the hint, old word removed and new added, all in `DiffView` ([Every diff is tinted](#every-diff-is-tinted)). Actions are **Accept change**, **Accept the new tool** or **Accept that it went**, and **Keep blocked**, each sent by the digest of the definition shown. Each thing is said once: the one subtitle is how many tools ask for approval until decided, a rail row is the tool's name alone, the chosen tool is not named again over its diff, a part is named by its label alone, one it cannot show saying "This part changed". On the Tools tab a changed tool is marked *Changed*, *New* or *Removed*, the changes are counted with **Review**, **Changed** filters them, a held tool's *Always allow* says it applies once its change is reviewed, and the tab is marked while any wait.
+
+**Built-in tools** is the engine's own tools by its groups: a rail of groups with counts beside the list (a picker under 44rem of its own width), a search and capability chips over it, every group a band while none is chosen, and a row per tool with name, line, what it can do (the engine's risk) and who may call it (its `gate`). The filters are the address (`q`, `cap`, `group`). A row opens the tool in the drawer (`?peek=tool:<name>`): description, group, who may call it, arguments. A tool's own address (`{tool}`, ONE tail segment, told from a server's page by LENGTH since a tool name is a third party's string) opens a built-in in that drawer and a server's tool on its server's Tools tab, searched for it.
+
+**Add server** opens the add form for an admin:
+
+- a name: its example is never a name the company already has; a name the configuration carries is refused; one only a node still runs from an earlier revision is free and said beside the field, since the engine's create judges the configuration alone;
+- how it runs (*Launch a command* or *Connect to an address*), and one for the company or one per seat granted it;
+- the command and its arguments one per line (or the address);
+- the environment or headers as `NAME: value` rows whose value is a secret field (`$` offers the sealed entries), each with a **may be unset** box. Ticked, the row's key is sent in the server's `optional_keys`, so a value whose secret has no value is left out rather than keeping the server from starting (said once above the rows; refused before the round trip for a row whose value names no secret, since a literal cannot be unset). Two header rows spelling one header apart (`Authorization`, `authorization`) are refused the same way, since HTTP and the engine read them as one.
+
+Add checks the whole company with the server in it (the create-only `PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says any warning the add introduces (not one the company already carried), places a refusal beside its field, then stores the revision and opens the new server's page.
+
+**Models** is every model the company runs and every task an operator does on one, read from `llm_entries`, which every member may ask: a member's reading names no credential, account or vendor sentence, and every action is an admin's. It polls every fifteen seconds while open, and refreshes when the fleet applies a new configuration and when a seat's provider limit moves on the live state. The page has no lenses. Above the table: stat tiles (models, how many are ready, how many sit out or cannot sign in, the week's tokens), then the model alarms (`llm_credential_expiring`, `llm_credential_expires_soon`, `llm_sign_in_refused`, `llm_limit`, `llm_limit_waiting`). Each names its cause and what it stops, groups the models one credential or plan holds, keeps its vendor's sentence behind **Details**, and offers the one gesture that fixes it. A limit that holds seats also offers **Use a different model for these seats** (a menu of the models that answer now, never one on the limited plan, for coding only a harness that runs it; or a line saying none can) and **Add a model**. Each opens the wizard on *Use it for* with every seat's category on the limited models added (`?add=`), for Review to show before anything is written. The address only preselects: a seat the company no longer has, or coding on a harness that runs none, is dropped.
+
+Then a row per model: its harness's mark, key and model; status (one word from the engine's reading, and when it changes); how it signs in and the secret it reads; what it is used for, by category; when it last answered; its menu.
+
+Under the table one card says who runs on which model, in two quiet groups, *Helpers* (Ask Crewlet and the Advisor) then *Seats*, with no header row. Every row has one anatomy: who on the left (a helper's product mark and name, a seat's avatar and name linking to the seat) and the model's picker on the right, in one column of one width.
+
+- Every model is named in full on a picker's trigger and each option: harness mark, key and, quieter, the model it runs by name ("sub-4 · Claude Opus 5.5"), read from the entry's model id through the engine's `llm_models` answer (the harness's aliases with the version each follows, and the public catalogue's names); an id nothing names is said as itself. The list's model line, a model's page and the wizard's Review name it the same way.
+- Every picker asks once, then saves in place. A helper's writes its one key in a step (the dry run, then the write under the revision it read), lists a model no helper can run on disabled beside the engine's reason, shows the choice at once while saving and then says where the helper runs now. A seat's writes the model's uses with that seat's categories added, job by job, as Finish and save does; its confirm names each job that moves, from where to where, and any fallback the write drops.
+- A seat on one model shows one picker that sets all three categories. *Split by job* in the row's menu shows a picker per category under the seat's name (*Coding*, *Reviews*, *Routines*); *Use one model* folds them back. A seat whose jobs differ shows its three, a category split by hand naming its models ("sonnet + codex-review").
+- Each option says its model's condition in a word, and a fast model is marked inside the Routines picker; nothing is said per row or in a callout.
+- With no model the card stays, every row reading *Not set*, and the empty list offers *Add a model*.
+
+*Use it for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet. The Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use* on its model, and kept beside seat work by its per-seat switch, which also takes it off the model it runs on. A new model preselects only seats with no model today for any job it will do (the *Seats without a model* switch, hidden when every seat has one), so adding a model never moves a working seat; a seat that has a model is picked by hand, its chip's tip saying the model it is on and that picking it replaces that.
+
+A model's page (`models/{id}`) has its sign-in (the route, the secret, when and by whom stored, its expiry, and on a harness login each node's state with the command that makes it there), its sit-out with **Retry now** and **Clear sit-out** for every model on its plan, its last answer and failure, usage over seven days, limits, and every place that runs on it, grouped by category with backups apart and Ask Crewlet and the Advisor named. **Test** runs the harness's own checks on the answering node and says each in words. A Codex model signs in with a device code: the page shows the address and code and follows the session until it ends.
+
+**Remove** says in one line what uses the model ("Used by 9 seats, Ask Crewlet, and the Advisor.", or that nothing does) and asks one question, where all of it moves: a model that fits every place, or Leave unset. It preselects a model only where every place already runs on it (a backup in its field, another of the seat's jobs, the other helper's model); otherwise it asks, *Choose a model*, and holds the button. *Choose per seat* opens a row per place, its name (a seat's jobs in the page's categories) and a picker, for the rare split. The list is read (`GET /config/llm-providers/{id}/references`), never asked as a refused dry run, and each complete set of moves is checked with a dry run as it changes; a refusal is said in its own words under the choice. A removal that moves everything to another model needs only the button; one that turns Ask Crewlet off, runs the Advisor with no model, or leaves seats with no model at all (the last model) asks for one tick of a box that says so. The model and every move are removed as one revision, and no config path is printed.
+
+**Adding and editing a model is one wizard**, a page of its own in place of the list: the name and harness (fixed once the model exists), how it signs in, the model (the harness's aliases, each with the version it resolves to on the vendor's service where the engine knows it, the public catalogue's models, or any name as text), where it runs a seat's executor (for a harness with a runner), what it is used for, its limits, and a review of exactly what changes, where the test call is run with its button and said in one line (the failure's own words, the engine's detail on hover).
+
+**Finish and save** stands beside Continue from the first step where nothing the model needs is missing, so optional steps keep their defaults; on Review it is the primary action. It runs the test call where it has not passed (a new device sign-in has nothing to test until saved), the engine's check, then the save; a model saved after its test passed reads as having answered. A company with no place to run coding gets this engine's host, set up by the save of its first coding model, as Where it runs and Review say. A reload with something typed asks first. A pasted credential is tested before anything is stored and sealed before the document that names it is written; the document is checked with a dry run against the revision it edits and stored with `If-Match`, so a colleague's save in between is a conflict to re-read. *Use it for* writes each category's fields as one model each, as [Managing models from the dashboard](../concepts/llm-backends.md#managing-models-from-the-dashboard) lists, and the review names every fallback a write drops.
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the CLI's guarded routes. Every row is
 sealed in the fleet's store. **Source is provenance**: the path that last wrote
