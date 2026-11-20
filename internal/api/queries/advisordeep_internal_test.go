@@ -16,14 +16,15 @@ import (
 func TestTheDeepRunAsksAsTheAdvisor(t *testing.T) {
 	t.Parallel()
 	var asked iam.Principal
+	var how iam.Resolution
 	reads := deepReads{ask: func(ctx context.Context, _ string, _ Params) (any, error) {
-		asked, _ = iam.From(ctx)
+		asked, how = iam.From(ctx)
 		return map[string]any{}, nil
 	}}
 	if _, err := reads.Answer(t.Context(), "advisor_snapshot", nil); err != nil {
 		t.Fatal(err)
 	}
-	if asked.Kind != iam.KindEngine || !asked.Can(iam.GrantAdmin) || asked.Seat != "" {
+	if how != iam.Resolved || asked.Kind != iam.KindEngine || !asked.Can(iam.GrantAdmin) || asked.Seat != "" {
 		t.Errorf("asked as %+v, want the engine's Advisor holding an administrator's reads", asked)
 	}
 }
