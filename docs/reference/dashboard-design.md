@@ -2122,7 +2122,7 @@ word or two to a line. The width a list is read at is the package's to set:
 `@crewlethq/ui` sets a list whose options carry a description at a reading
 width (a floor of 22rem and a measure of 28rem, never wider than the window)
 and never over the field it was opened from, so the Agents tab and Settings ›
-Models' seat grid keep no width rule of their own.
+Models' seats keep no width rule of their own.
 
 ### An object's own facts
 
@@ -11861,16 +11861,19 @@ coding on a harness that runs none, is dropped. Then a row per model: its harnes
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
 menu. The page has no lenses: under that table come Ask Crewlet and the
-Advisor, a compact row each (its mark and name, its model's picker, and what it
-does in a few words), whose picker writes the helper's one key in a step (the
-dry run, then the write under the revision it read), lists a model no helper
-can run on disabled beside the engine's reason, shows the choice at once while
-it is saved and then says where the helper runs now; then **Every seat, every
-job**, every agent seat as a row with the model it runs for each category of
-work (*Coding*, *Reviewing and delegations*, *Routines and evaluations*), a
-cell's model's condition in the cell, a split category said job by job, and a
-quiet note where a model under a fixed deadline is not a fast one; a seat's
-pick opens that model's wizard on *Use it for* with the seat's category added. *Use it
+Advisor on one line, each its mark, its name and its model's picker, with no
+caption, whose picker writes the helper's one key in a step (the dry run, then
+the write under the revision it read), lists a model no helper can run on
+disabled beside the engine's reason, shows the choice at once while it is
+saved and then says where the helper runs now; then **Seats**, every agent
+seat as a row with its model. A seat on one model shows one picker that sets
+all three categories; *Split by job* shows a picker per category (*Coding*,
+*Reviews*, *Routines*), and a seat whose jobs differ shows its three, a
+category split by hand reading *Split*. Every model in a picker carries its
+harness's mark on the trigger and each option, with its condition in a word;
+a fast model is marked inside the Routines picker, and nothing is said per row
+or in a callout. A pick opens that model's wizard on *Use it for* with the
+seat's categories added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also

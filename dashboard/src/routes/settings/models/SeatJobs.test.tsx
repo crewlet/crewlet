@@ -1,16 +1,16 @@
 /**
- * Under the list of models: Ask Crewlet's and the Advisor's rows, then every
- * seat's jobs, drawn from the models' own uses. The grid says each model's condition where it is named, and a pick opens
- * that model's wizard rather than writing anything.
+ * Under the list of models: Ask Crewlet and the Advisor on one line, then the
+ * seats, drawn from the models' own uses.
  *
- * The invariants: a cell names the model the engine reports, and a category
- * the document split says which job runs where; a cell on a model that will
- * not answer says so (QA M19); a category with a deadline notes a slow model;
- * coding offers only a harness that can code, and the Assistant only a model that
- * denies web tools; every pick opens the picked model's wizard on Use it for
- * with exactly this seat and category (the deep-link walk); a member reads
- * values, with no picker, in the type an admin's picker draws (QA Nit 7); and
- * each column head is named once (QA Minor 20).
+ * The invariants: a seat on one model shows one picker, which sets all three
+ * categories; "Split by job" shows a picker per category, and a seat whose jobs
+ * differ shows its three, a category split by hand reading "Split"; every
+ * model in a picker carries its harness's mark, on the trigger and each option;
+ * no callout and no sentence repeated per row, a fast model marked inside the
+ * pickers of a category with a deadline alone; coding (and the one picker)
+ * offers only a harness that can code; every pick opens the picked model's
+ * wizard on Use it for with exactly this seat and its categories; a member
+ * reads values with no picker; and the table's heads are short and not sorted.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -123,17 +123,23 @@ function mount(data: ModelsData = company()) {
 }
 
 const seatName = (handle: string) => MODELS_SEATS.find((s) => s.handle === handle)!.name;
+/** A split seat's picker for one category, by its short word. */
 const picker = (category: JobCategory, handle: string) =>
   screen.getByRole("combobox", {
-    name: `${CATEGORY_WORDS[category].label} for ${seatName(handle)}`,
+    name: `${CATEGORY_WORDS[category].short} for ${seatName(handle)}`,
   });
-/** The cell a picker (or a member's value) stands in. */
-const cellOf = (el: HTMLElement) => el.closest<HTMLElement>(".models-jobs__cell")!;
+/** A seat's one picker, for a seat on one model. */
+const one = (handle: string) =>
+  screen.getByRole("combobox", { name: `${seatName(handle)}'s model` });
+const rowOf = (handle: string) =>
+  screen.getAllByRole("row").find((r) => r.textContent?.includes(seatName(handle)))!;
 const optionsOf = (trigger: HTMLElement) => {
   fireEvent.click(trigger);
-  const found = screen.getAllByRole("option");
-  return found;
+  return screen.getAllByRole("option");
 };
+const close = () => fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+const markOf = (el: HTMLElement) =>
+  el.querySelector<HTMLElement>(".models-option-mark")?.dataset.harness ?? null;
 
 beforeEach(() => {
   vi.useFakeTimers({ now: MODELS_NOW, toFake: ["Date"] });
@@ -144,54 +150,84 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test("each cell names the model the engine reports the seat's category runs on", () => {
+// ONE PICKER FOR A SEAT ON ONE MODEL: it sets all three categories, and the
+// write is still per job, through the model's wizard.
+test("a seat on one model shows one picker, which sets all three categories", () => {
+  const onFlow = mount();
+  const trigger = one("backend-engineer");
+  expect(trigger.textContent).toContain("default");
+  expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);
+  const options = optionsOf(trigger);
+  // IT SETS CODING TOO: only a harness that can code is offered.
+  expect(options.some((o) => o.textContent?.startsWith("codex-review"))).toBe(false);
+  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
+  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
+    step: "assign",
+    add: CATEGORY_ORDER.map((job) => ({ job, seat: "backend-engineer" })),
+  });
+});
+
+test("Split by job shows a picker per category, and One model folds them back", () => {
+  const onFlow = mount();
+  const row = rowOf("backend-engineer");
+  fireEvent.click(within(row).getByRole("button", { name: "Split by job" }));
+  for (const category of CATEGORY_ORDER)
+    expect(picker(category, "backend-engineer").textContent).toContain("default");
+  expect(within(row).getByRole("button", { name: "One model" }).getAttribute("aria-expanded")).toBe(
+    "true",
+  );
+  // A PICK IN ONE CATEGORY adds that category alone.
+  const reviews = picker("reviews", "backend-engineer");
+  fireEvent.mouseDown(optionsOf(reviews).find((o) => o.textContent?.startsWith("haiku"))!);
+  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
+    step: "assign",
+    add: [{ job: "reviews", seat: "backend-engineer" }],
+  });
+  fireEvent.click(within(row).getByRole("button", { name: "One model" }));
+  expect(within(row).getAllByRole("combobox")).toHaveLength(1);
+});
+
+test("a seat already split shows its three pickers, and a category split by hand reads Split", () => {
   mount();
   expect(picker("coding", "pm").textContent).toContain("default");
   expect(picker(TIMED, "pm").textContent).toContain("haiku");
   expect(picker("coding", "qa").textContent).toContain("sonnet");
-  // ONE MODEL FOR EVERY JOB is said once, on the seat.
-  const rows = screen.getAllByRole("row");
-  const backend = rows.find((r) => r.textContent?.includes("Backend Engineer"))!;
-  expect(within(backend).getByText("Everything")).toBeDefined();
-  const pm = rows.find((r) => r.textContent?.includes("Product Manager"))!;
-  expect(within(pm).queryByText("Everything")).toBeNull();
+  expect(picker(UNTIMED, "qa").textContent).toContain("Split");
+  // NOTHING TO FOLD: its jobs differ, so there is no one model to show.
+  expect(within(rowOf("pm")).queryByRole("button", { name: /Split by job|One model/ })).toBeNull();
 });
 
-test("a category the document split says which job runs where, and claims no one model", () => {
+test("every model in a picker carries its harness's mark, on the trigger and on each option", () => {
   mount();
-  const split = picker(UNTIMED, "qa");
-  expect(split.textContent).toContain("Split");
-  const words = cellOf(split).querySelector(".models-jobs__notes")!.textContent ?? "";
-  expect(words).toMatch(/on sonnet/);
-  expect(words).toMatch(/on codex-review/);
+  const trigger = one("backend-engineer");
+  expect(markOf(trigger)).toBe("claude-code");
+  for (const option of optionsOf(trigger)) expect(markOf(option)).not.toBeNull();
+  close();
+  const routines = optionsOf(picker(TIMED, "pm"));
+  expect(markOf(routines.find((o) => o.textContent?.startsWith("codex-review"))!)).toBe("codex");
+  close();
+  // ASK CREWLET'S AND THE ADVISOR'S pickers too.
+  const ask = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
+  expect(markOf(ask)).toBe("claude-code");
+  for (const option of optionsOf(ask).filter((o) => !o.textContent?.startsWith("None")))
+    expect(markOf(option)).not.toBeNull();
 });
 
-test("a cell on a model that cannot sign in says so, to the eye and to the picker's description", () => {
+// NOTHING SAID PER ROW: no callout, no sentence a row repeats, seen or hidden.
+// A fast model is marked inside the pickers of a category with a deadline.
+test("no callout and no sentence repeated per row; a fast model is marked in the Routines picker alone", () => {
   mount();
-  const refused = picker("coding", "qa");
-  const notes = cellOf(refused).querySelector<HTMLElement>(".models-jobs__notes")!;
-  expect(notes.textContent).toContain("Sign-in refused");
-  expect(cellOf(refused).classList).toContain("models-jobs__cell--alarm");
-  expect(refused.getAttribute("aria-describedby")).toContain(notes.id);
-  expect(notes.textContent).toMatch(/cannot sign in/);
-  // A READY MODEL'S CELL carries no condition.
-  expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Ready");
-});
-
-test("a category with a deadline notes a slow model, and not a fast one", () => {
-  mount();
-  expect(cellOf(picker(TIMED, "qa")).textContent).toContain("Fast model recommended");
-  // ONE SENTENCE ON THE PAGE, NOT ONE PER SEAT: the callout above says it,
-  // and a cell marks a slow model with a glyph, its words for a screen reader.
-  const visible = [...cellOf(picker(TIMED, "qa")).querySelectorAll("span")].filter(
-    (el) =>
-      el.childElementCount === 0 &&
-      /Fast model recommended/.test(el.textContent ?? "") &&
-      !el.closest(".crewlet-visually-hidden"),
+  expect(document.querySelector(".crewlet-callout")).toBeNull();
+  expect(document.body.textContent).not.toMatch(/fast model is recommended|Fast model recommended/);
+  expect(screen.queryByText("Everything")).toBeNull();
+  const fast = optionsOf(picker(TIMED, "pm"));
+  expect(fast.find((o) => o.textContent?.startsWith("haiku"))!.textContent).toContain("Fast model");
+  expect(fast.find((o) => o.textContent?.startsWith("default"))!.textContent).not.toContain(
+    "Fast model",
   );
-  expect(visible).toEqual([]);
-  expect(cellOf(picker(TIMED, "pm")).textContent).not.toContain("Fast model recommended");
-  expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Fast model recommended");
+  close();
+  for (const option of optionsOf(picker("coding", "pm")))
+    expect(option.textContent).not.toContain("Fast model");
 });
 
 test("each option names the model, its condition in a word and its model id, and coding offers only a harness that can code", () => {
@@ -201,21 +237,22 @@ test("each option names the model, its condition in a word and its model id, and
   const sonnet = coding.find((t) => t.startsWith("sonnet"))!;
   expect(sonnet).toContain("Sign-in refused");
   expect(sonnet).toContain("claude-sonnet-5");
-  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  close();
   const other = optionsOf(picker(TIMED, "pm")).map((o) => o.textContent ?? "");
   expect(other.some((t) => t.startsWith("codex-review"))).toBe(true);
 });
 
 /**
- * THE DEEP-LINK WALK: every cell, picked to another model, opens THAT model's
- * wizard on Use it for with this seat and this category, and the address
- * carries nothing else. Picking the model a cell already runs opens nothing.
+ * THE DEEP-LINK WALK: every category picker of a split seat, picked to another
+ * model, opens THAT model's wizard on Use it for with this seat and this
+ * category, and the address carries nothing else. Picking the model it already
+ * runs opens nothing.
  */
-test("every pick opens the picked model's wizard at Use it for, with only the seat and the category", () => {
+test("every pick opens the picked model's wizard at Use it for, with only the seat and its categories", () => {
   const onFlow = mount();
   const keys = company().models.map((m) => m.key);
   const keyOf = (text: string | null) => keys.find((k) => text?.startsWith(k)) ?? "";
-  for (const seat of MODELS_SEATS) {
+  for (const seat of MODELS_SEATS.filter((s) => s.handle !== "backend-engineer")) {
     for (const category of CATEGORY_ORDER) {
       const trigger = picker(category, seat.handle);
       const current = keys.find((k) => trigger.textContent?.trim() === k) ?? "";
@@ -235,8 +272,9 @@ test("every pick opens the picked model's wizard at Use it for, with only the se
   }
   // THE MODEL ALREADY THERE is no change.
   onFlow.mockClear();
-  const options = optionsOf(picker("coding", "pm"));
-  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+  fireEvent.mouseDown(
+    optionsOf(picker("coding", "pm")).find((o) => o.textContent?.startsWith("default"))!,
+  );
   expect(onFlow).not.toHaveBeenCalled();
 });
 
@@ -300,46 +338,28 @@ test("Ask Crewlet's line names its one model, and is drawn with none", () => {
   expect(screen.getAllByText("Not set")).toHaveLength(2);
 });
 
-test("a member reads every value, in the picker's type, with no picker", () => {
+test("a member reads every value, with its mark, and no picker", () => {
   mount(company({ admin: false }));
   expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: /Split by job/ })).toBeNull();
+  expect(rowOf("backend-engineer").textContent).toContain("default");
+  const qa = rowOf("qa");
+  expect(qa.textContent).toContain("sonnet");
+  expect(markOf(qa)).toBe("claude-code");
   // The value is body text, never the mono a key is set in elsewhere (Nit 7).
-  const values = screen.getAllByText("sonnet", { selector: ".crewlet-text" });
-  expect(values.length).toBeGreaterThan(0);
-  expect(values.every((v) => !v.classList.contains("mono"))).toBe(true);
-  // THE CONDITION reaches a member too: it is why their seat waits.
-  expect(document.body.textContent).toContain("Sign-in refused");
+  expect(qa.querySelector(".mono")).toBeNull();
 });
 
-/**
- * EVERY HEAD HAS A NAME, as a screen reader and a phone's card read it. The
- * source gate trusts a column whose label is the name of a word; this reads
- * what that name holds once drawn, for every category and the seat column.
- */
-test("every column head on the seats' grid has a name to read", () => {
+test("the seats' table has two short heads, each with a name, and no sorting", () => {
   mount();
+  expect(screen.getByText("Seats")).toBeTruthy();
   const heads = screen.getAllByRole("columnheader");
-  expect(heads.length).toBe(CATEGORY_ORDER.length + 1);
-  expect(screen.getAllByRole("columnheader", { name: /\S/ })).toHaveLength(heads.length);
-  for (const category of CATEGORY_ORDER)
-    expect(
-      screen.getByRole("columnheader", { name: new RegExp(CATEGORY_WORDS[category].label) }),
-    ).toBeTruthy();
+  expect(heads.map((h) => h.textContent)).toEqual(["Seat", "Model"]);
+  for (const head of heads) expect(within(head).queryByRole("button")).toBeNull();
 });
 
-test("each category's column head is named once", () => {
-  mount();
-  for (const category of CATEGORY_ORDER) {
-    const label = CATEGORY_WORDS[category].label;
-    const heads = screen.getAllByRole("columnheader").filter((h) => h.textContent?.includes(label));
-    expect(heads).toHaveLength(1);
-    expect(within(heads[0]!).getByRole("button").getAttribute("aria-label")).toBe(label);
-  }
-});
-
-// A COMPACT ROW EACH, in a few words: the tool rule lives in the picker's
-// disabled option, never in a caption, and nothing says it has no seats.
-test("Ask Crewlet and the Advisor are a row each: name, picker and a few words", () => {
+// ONE LINE, NO CAPTION: each helper its mark, its name and its picker.
+test("Ask Crewlet and the Advisor are on one line: name and picker, no caption", () => {
   mount(company());
   const rows = within(
     screen.getByRole("list", { name: "Ask Crewlet and the Advisor" }),
@@ -347,10 +367,9 @@ test("Ask Crewlet and the Advisor are a row each: name, picker and a few words",
   expect(rows).toHaveLength(2);
   expect(rows[0]!.textContent).toContain("Ask Crewlet");
   expect(within(rows[0]!).getByRole("combobox", { name: "Ask Crewlet's model" })).toBeDefined();
-  expect(rows[0]!.textContent).toContain("Answers you in the dashboard.");
   expect(rows[1]!.textContent).toContain("Advisor");
-  expect(rows[1]!.textContent).toContain("Explains what it finds worth changing.");
   const said = document.body.textContent ?? "";
+  expect(said).not.toMatch(/Answers you in the dashboard|Explains what it finds worth changing/);
   expect(said).not.toContain("Company-wide, so it has no seats");
   expect(said).not.toContain("no tools of its own");
 });

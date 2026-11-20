@@ -41,6 +41,7 @@ import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
+import { modelMark } from "./modelPicker.tsx";
 import {
   credentialAction,
   type Flow,
@@ -476,6 +477,7 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
           ? move.to.map((m) => ({
               key: m.key,
               label: m.key,
+              icon: modelMark(m),
               description: m.model,
               onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
             }))
