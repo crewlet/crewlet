@@ -1,15 +1,14 @@
 # Slide Format
 
 A `slides` artifact is a deck: an index and one file per slide, in **Claude's
-slide format** without its `project/` prefix, so a deck moves between the two
-and an agent that writes one writes the other. The engine holds every version
-of a deck to this format when it is published (`internal/artifacts/slideformat`)
-and refuses one outside it, naming the file, the line and the rule broken; the
-dashboard draws, presents and prints the deck from the canonical tree the same
-parser produces, and never parses a slide's markup itself.
+slide format** without its `project/` prefix, so a deck moves between the two.
+The engine checks every published version against this format
+(`internal/artifacts/slideformat`) and refuses one outside it, naming the
+file, line and rule. The dashboard draws, presents and prints from the
+canonical tree the same parser produces and never parses slide markup itself.
 
-Everything below is a closed set. What is not listed is refused, never
-silently dropped: a deck that publishes is a deck that draws.
+Everything below is a closed set: what is not listed is refused, never
+silently dropped.
 
 - [The files](#the-files)
 - [The index](#the-index)
@@ -27,13 +26,12 @@ silently dropped: a deck that publishes is a deck that draws.
 
 | Path | What it is |
 |---|---|
-| `deck.json` | The index, and the version's entry. A deck's kind is told by this path: `crewlet artifacts publish` infers `slides` from a directory holding it |
-| `slides/<id>.html` | One slide. The id is 1 to 64 letters, digits, `_` and `-`, and is the slide's name in the index, the file and its section |
-| Any other path | Images and font files the slides and the index name, by their path from the deck's root (`images/team.png`, `fonts/inter.woff2`) |
+| `deck.json` | The index and the version's entry. This path marks a deck: `crewlet artifacts publish` infers `slides` from a directory holding it |
+| `slides/<id>.html` | One slide. The id is 1 to 64 letters, digits, `_` and `-`; it names the slide in the index, the file and its section |
+| Any other path | Images and font files the slides and index name, by path from the deck's root (`images/team.png`, `fonts/inter.woff2`) |
 
-A deck holds HTML only as its slides: every `slides/<id>.html` is in the
-index's `order`, every id in `order` has its file, and no other `.html` file
-is accepted.
+HTML is accepted only as slides: every `slides/<id>.html` is in `order`, every
+id in `order` has its file, and no other `.html` file is accepted.
 
 ## The index
 
@@ -58,20 +56,19 @@ is accepted.
 | `order` | Required: the slide ids in deck order, each once, 1 to 500 |
 | `cover` | Optional: the slide the gallery draws as the card's cover, else the first |
 | `sections` | Optional: the outline, any key to a run's one sentence (at most 300 bytes) and the slide it starts at. No two start at one slide |
-| `theme` | Optional: the look the deck began in, one of `nightshade`, `ink`, `paper`, `signal`, `studio`, `grove`, or `brand` (the company's adopted brand). Crewlet's own key, written by the starter; the slides hold their own styles, so a deck naming none draws the same. The deck editor adds a slide from that theme's layouts, and duplicates a slide in a deck naming none. See [Themes and layouts](#themes-and-layouts) |
-| `faces` | Optional, at most 4: a typeface keyed by its family lowercased with spaces as `-`, its `family` and the font file of the version it loads from (`src`). See [Images and typefaces](#images-and-typefaces) |
-| `v`, `createdOnFiles`, `lists` | Claude's own bookkeeping: accepted and kept as written, never read. `lists` may only be `css` |
+| `theme` | Optional, Crewlet's own key written by the starter: the look the deck began in, one of `nightshade`, `ink`, `paper`, `signal`, `studio`, `grove`, or `brand` (the company's adopted brand). Slides hold their own styles, so a deck naming none draws the same. The deck editor adds a slide from that theme's layouts, and duplicates a slide in a deck naming none. See [Themes and layouts](#themes-and-layouts) |
+| `faces` | Optional, at most 4: a typeface keyed by its family lowercased with spaces as `-`, with its `family` and the font file it loads from (`src`). See [Images and typefaces](#images-and-typefaces) |
+| `v`, `createdOnFiles`, `lists` | Claude's own bookkeeping: kept as written, never read. `lists` may only be `css` |
 | `designSystems` | Must be empty or absent: a Crewlet deck installs no design system |
 
-Any other key is refused, so a misspelt key is an error rather than a setting
-that does nothing.
+Any other key is refused.
 
 ## A slide
 
-A slide file is exactly one `<section>`, with nothing before or after it but
-whitespace and comments: no doctype, `<html>`, `<head>` or `<body>`. Every
-element is closed explicitly (`<br>`, `<img>` and `<hr>` take no closing tag,
-and inside a drawing an empty element may close itself, `<rect/>`).
+A slide file is exactly one `<section>`, with only whitespace and comments
+around it: no doctype, `<html>`, `<head>` or `<body>`. Every element is closed
+explicitly (`<br>`, `<img>` and `<hr>` take no closing tag; inside a drawing an
+empty element may self-close, `<rect/>`).
 
 ```html
 <section id="plan" data-transition="fade" style="background:#fbfbf8;color:#1a1a1a;font-family:Georgia, serif;padding:128px;display:flex;flex-direction:column;gap:48px">
@@ -86,21 +83,19 @@ and inside a drawing an empty element may close itself, `<rect/>`).
 ```
 
 - **The stage is 1920 by 1080 CSS pixels**, 16:9, laid out at that size and
-  scaled as a whole wherever it is drawn, so a thumbnail, the editor and a
-  projector show the same line breaks.
-- **The section** carries `id` (the slide's id, its file's name), `style`
-  (which must set a `background`, so the slide reads the same in every theme),
-  and optionally `hidden` (Present skips it, Print leaves it out) and
-  `data-transition` (`fade` or `push`: how the slide leaves the stage in
-  Present).
-- **Layout.** A section or `<div>` that names no `display` lays its children
-  out as a column; `display:flex` is a row, `display:grid` a grid. Children
-  flow; `position:absolute` with `left`, `top`, `right`, `bottom`, `width`
-  and `height` pins one to the slide (or to a `position:relative` `<div>`).
-  Later children paint over earlier ones: there is no `z-index`.
-- **Defaults.** `h1`, `h2`, `h3` are 96, 64 and 44px at weight 600; text
-  elsewhere inherits from its container, 32px by default. Set sizes yourself:
-  nothing under 24px reads from the back of a room.
+  scaled whole, so every view shows the same line breaks.
+- **The section** carries `id` (the slide's id), `style` (must set a
+  `background`, so the slide reads the same in every theme), and optionally
+  `hidden` (Present skips it, Print omits it) and `data-transition` (`fade` or
+  `push`: how the slide leaves the stage in Present).
+- **Layout.** A section or `<div>` naming no `display` lays children out as a
+  column; `display:flex` is a row, `display:grid` a grid. Children flow;
+  `position:absolute` with `left`, `top`, `right`, `bottom`, `width` and
+  `height` pins one to the slide (or to a `position:relative` `<div>`). Later
+  children paint over earlier ones: there is no `z-index`.
+- **Defaults.** `h1`, `h2`, `h3` are 96, 64 and 44px at weight 600; other text
+  inherits from its container, 32px by default. Set sizes yourself: nothing
+  under 24px reads from the back of a room.
 - **Speaker notes** are plain text in one `<aside>`, the section's last child,
   at most 4,000 characters. Everyone who can open the deck can read them.
 
@@ -127,9 +122,8 @@ and inside a drawing an empty element may close itself, `<rect/>`).
 | `aside` | plain text | none |
 
 A block is `h1` to `h3`, `p`, `ul`, `ol`, `div`, `img`, `table`, `hr`, `svg`,
-`x-shape` and `x-icon`. Text sits in a text element, never directly in a
+`x-shape` or `x-icon`. Text sits in a text element, never directly in a
 `section` or `div`.
-
 An `x-icon` draws its glyph at half its box, centred, as Claude's format
 does; the rest of the box is padding. A `width:64px; height:64px` icon draws
 a 32px glyph, so size the box at twice the glyph you want: at least 32px, and
@@ -138,10 +132,9 @@ a 32px glyph, so size the box at twice the glyph you want: at least 32px, and
 ## Styles
 
 Every style is inline, in `style`, from the table below, and only on the
-elements its row names. A value is read by its property's grammar and stored
-in one canonical form: a bare number is pixels (`width:480` is `480px`), a
-point size becomes pixels (`36pt` is `48px`), keywords are lowercased and a
-family name is quoted.
+elements its row names. Values are stored canonically: a bare number is pixels
+(`width:480` is `480px`), a point size becomes pixels (`36pt` is `48px`),
+keywords are lowercased, a family name is quoted.
 
 | Grammar | Means |
 |---|---|
@@ -216,8 +209,8 @@ whatever its property.
 
 ## Inline drawings
 
-A chart or a diagram is one `<svg>` with an `aria-label`, at most 52 KB of
-source: `g`, `defs`, `path`, `rect`, `circle`, `ellipse`, `line`,
+A chart or diagram is one `<svg>` with an `aria-label`, at most 52 KB of
+source. Allowed: `g`, `defs`, `path`, `rect`, `circle`, `ellipse`, `line`,
 `polyline`, `polygon`, `text`, `tspan`, `title`, `desc`, `use`, `symbol`,
 `marker`, `pattern`, `clipPath`, `mask`, `linearGradient`, `radialGradient`,
 `stop`, `filter` and the `feGaussianBlur`, `feOffset`, `feBlend`,
@@ -226,38 +219,29 @@ source: `g`, `defs`, `path`, `rect`, `circle`, `ellipse`, `line`,
 (`fill`, `stroke`, `stroke-width`, `opacity`, `transform`, `viewBox` and the
 rest the engine's table lists).
 
-A drawing reaches nothing outside itself: no `<script>`, no event attribute,
-no `<foreignObject>`, no `<style>` element or `style` attribute (use
-presentation attributes), and every reference (`href`, `url(#…)`) is to an id
-the same drawing declares. Ids are a letter then letters, digits, `_`, `.`
-and `-`. A presentation attribute is read as CSS, where an escape or a
-function could reach outside the drawing, so an attribute value carries no
-backslash (an `aria-label` excepted), a parenthesis only in `url(#id)`, a
-transform (`matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`) or a
-colour (`rgb()`, `rgba()`, `hsl()`, `hsla()`), and is otherwise numbers,
-lengths, percentages, hex colours and keywords; a `font-family` list may
-quote its names. A filter, clip or mask is the drawing's own element, named
-by `url(#id)`, never a CSS function such as `blur()` or `inset()`. A drawing
-draws at most 50,000 elements once every `<use>`, marker (at each vertex of a
-path naming it as `marker-mid`) and paint server is expanded, and no reference
-reaches back into what refers to it. The
-dashboard gives each drawn copy of a drawing its own id prefix,
-so a slide drawn twice (its thumbnail and the stage) never resolves the other
-copy's gradients.
+A drawing reaches nothing outside itself:
+
+- No `<script>`, event attribute, `<foreignObject>`, `<style>` element or `style` attribute (use presentation attributes).
+- Every reference (`href`, `url(#…)`) is to an id the same drawing declares. Ids are a letter then letters, digits, `_`, `.` and `-`.
+- A presentation attribute is read as CSS, so its value carries no backslash (an `aria-label` excepted) and a parenthesis only in `url(#id)`, a transform (`matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`) or a colour (`rgb()`, `rgba()`, `hsl()`, `hsla()`); otherwise it is numbers, lengths, percentages, hex colours and keywords. A `font-family` list may quote its names.
+- A filter, clip or mask is the drawing's own element, named by `url(#id)`, never a CSS function such as `blur()` or `inset()`.
+- At most 50,000 elements once every `<use>`, marker (at each vertex of a path naming it as `marker-mid`) and paint server is expanded, and no reference reaches back into what refers to it.
+
+The dashboard gives each drawn copy of a drawing its own id prefix, so a slide
+drawn twice (thumbnail and stage) never resolves the other copy's gradients.
 
 ## Images and typefaces
 
 An image is an `<img>` whose `src` is a PNG, JPEG, GIF, WebP or SVG file of
 the same version, by its path from the deck's root. Never a URL, a `data:`
 address, a path starting with `/` or `./`, or one holding `..`. The dashboard
-reads the file with the viewer's own sign-in and shows it through an object
-URL of its own, so a deck makes no request a slide names.
+reads the file with the viewer's own sign-in and shows it through its own
+object URL, so a deck makes no request a slide names.
 
 A typeface is a `faces` entry whose `src` is a woff2, woff, ttf or otf file of
-the version. The dashboard loads it from the file's bytes; a slide names it in
-`font-family` like any family, and a family that is not declared falls back to
-the next one the slide names, as in any stylesheet. A Google Fonts `href`,
-which Claude's format accepts, is refused here with how to fix it: download
+the version, loaded from the file's bytes. A slide names it in `font-family`;
+an undeclared family falls back to the next one named, as in a stylesheet. A
+Google Fonts `href`, which Claude's format accepts, is refused here: download
 the font file and include it in the version, so the deck draws the same
 wherever it is opened.
 
@@ -296,36 +280,34 @@ A version's own bounds apply too: 511 files, and each file's size by its type.
 A refusal lists every finding at once (up to 50), each as
 `file:line: rule: message`, under the code `slide_format`; an agent's tool
 answer shows the first 20 and counts the rest. A structural fault in
-`deck.json` (an unknown key, a value of the wrong type) is named with the keys
-or the shape the index reads there, every one in the same refusal, and
-`get_artifact_format` with `kind: "slides"` lists every key of `deck.json`.
+`deck.json` (an unknown key, a wrong-typed value) is named with the keys or
+shape the index reads there, all in the same refusal; `get_artifact_format`
+with `kind: "slides"` lists every key of `deck.json`.
 
 ## Themes and layouts
 
 A deck begun in the dashboard is composed by the engine from a **plan**: the
-theme it is drawn in and the slides it opens with, each a layout and its
-title. The engine writes ordinary slides, held to this format like any
-version, and names the theme in the index so a slide added later is drawn
-from the same theme's layouts. `GET /artifacts/starters/slides` answers every
-theme and layout (see [API Endpoints](api-endpoints.md)).
+theme and the slides it opens with, each a layout and its title. The engine
+writes ordinary slides, held to this format, and names the theme in the index
+so a slide added later is drawn from the same theme's layouts.
+`GET /artifacts/starters/slides` answers every theme and layout (see [API Endpoints](api-endpoints.md)).
 
 | Theme | Look |
 |---|---|
-| `nightshade` | Periwinkle on blue-black, set in Inter |
-| `ink` | Navy and paper, set in Georgia (the default) |
-| `paper` | White, quiet and exact, set in Helvetica Neue |
+| `nightshade` | Periwinkle on blue-black, Inter |
+| `ink` | Navy and paper, Georgia (the default) |
+| `paper` | White, quiet and exact, Helvetica Neue |
 | `signal` | Yellow on black, for a big room |
 | `studio` | Warm cream and terracotta, Palatino over Avenir Next |
-| `grove` | Deep green and mint, set in the system face |
-| `brand` | The company's adopted brand: its colours, its typefaces and its logo on the cover. Offered first whenever a brand is adopted, and refused when none is |
+| `grove` | Deep green and mint, the system face |
+| `brand` | The company's adopted brand: its colours, typefaces and logo on the cover. Offered first whenever a brand is adopted, refused when none is |
 
-A deck begun in `brand` is drawn from the brand adopted at that moment, and
-keeps that look: its slides hold their styles inline like any deck's, the
-brand's uploaded typefaces are copied in as font files of the version and
-declared in `faces`, and the cover shows the logo meant for its ground (the
-logo for dark grounds when the cover's ground is dark), copied in as an image
-of the version under `brand/`. A later adoption changes no deck already
-begun; start a new one from the new brand to take it.
+A deck begun in `brand` is drawn from the brand adopted at that moment and
+keeps that look: slides hold their styles inline, the brand's uploaded
+typefaces are copied in as font files of the version and declared in `faces`,
+and the cover shows the logo meant for its ground (the dark-ground logo on a
+dark cover), copied in as an image of the version under `brand/`. A later
+adoption changes no existing deck; start a new one to take it.
 
 | Layout | Holds |
 |---|---|
@@ -338,17 +320,13 @@ begun; start a new one from the new brand to take it.
 | `quote` | A quote, large, and who said it |
 | `closing` | The one decision or ask to end on |
 
-A slide's id is its layout's, numbered from two when a layout is used again
+A slide's id is its layout's, numbered from two when a layout repeats
 (`points`, `points-2`).
 
 ### Changes to the format
 
-- **`theme` in the index.** Added as an optional key, so every deck written
-  before it is still in the format. A deck that names a theme outside the
-  list above is refused, naming the themes there are.
-- **`brand` as a theme.** Added beside the engine's six. A deck naming it is
-  in the format whether or not a brand is adopted now, since the index only
-  records the look the deck began in.
+- **`theme` in the index.** An optional key, so earlier decks stay in the format. A theme outside the list above is refused, naming the themes there are.
+- **`brand` as a theme.** Beside the engine's six. A deck naming it is in the format whether or not a brand is adopted now, since the index only records the look the deck began in.
 
 ## How a deck is drawn
 
@@ -357,30 +335,29 @@ A slide's id is its layout's, numbered from two when a layout is used again
   `GET …/outline` a deck's titles and cover slide for the gallery. An agent
   reads the outline with `get_artifact` and `view: "outline"`, then only the
   slide files it changes.
-- **Edit.** A person with `editor` edits text in place, speaker notes, the
-  order and the deck's title, and deletes slides; Save publishes a version
-  against the one they opened. A title past 120 bytes, a slide's notes past
-  4,000 characters or a version label past its bound is said at its field and
-  holds Save, since the engine refuses the whole publish; nothing typed or
-  pasted is cut to fit. The editor writes each changed slide back in
-  this format's canonical form, every value as the engine stores it, so a
-  slide a person saved reads back to the same tree. A save refused because
-  somebody published since is merged onto their version slide by slide, and
-  what both changed differently is the person's to resolve.
+- **Edit.** An `editor` edits text in place, speaker notes, order and the
+  deck's title, and deletes slides; Save publishes a version against the one
+  opened. A title past 120 bytes, notes past 4,000 characters or a version
+  label past its bound is flagged at its field and holds Save, since the engine
+  refuses the whole publish; nothing typed or pasted is cut to fit. Each
+  changed slide is written back in canonical form, so a saved slide reads back
+  to the same tree. A save refused because somebody published since is merged
+  onto their version slide by slide; what both changed differently is the
+  person's to resolve.
 - **Present.** Present draws the slide as large as fits, full screen on the
-  reader's press, with the keys a clicker sends (Right, Down, Page Down,
-  Space and Enter forward; Left, Up, Page Up and Backspace back; Home and End;
-  Escape out), each slide announced by its number and title. Full screen is
-  a projector's: the slide on black, its controls floating over its foot and
-  put away with the cursor while the pointer rests (a clicker's keys do not
-  bring them back). The Presenter
-  window, the dashboard's own, shows the slide, the next one, the notes and a
-  timer, and moves the room's screen. Anybody in the room can **Follow** the
-  presenter, a phone included, and is moved to the slide they are on.
+  reader's press, with a clicker's keys (Right, Down, Page Down, Space and
+  Enter forward; Left, Up, Page Up and Backspace back; Home and End; Escape
+  out), each slide announced by number and title. Full screen is a projector's:
+  the slide on black, controls floating over its foot and put away with the
+  cursor while the pointer rests (a clicker's keys do not bring them back). The
+  Presenter window shows the slide, the next one, the notes and a timer, and
+  moves the room's screen. Anybody in the room, a phone included, can
+  **Follow** the presenter and is moved to the slide they are on.
 - **Print.** Print draws every shown slide on its own 16:9 page, so the
   browser's Save as PDF is the deck as a PDF.
 - **Compare.** History compares two versions By slide: each slide's two
-  versions side by side under their versions' names, paired by id, with changed, added, removed and moved
-  slides said in words, and unchanged ones folded away.
+  versions side by side under their versions' names, paired by id, with
+  changed, added, removed and moved slides said in words, and unchanged ones
+  folded away.
 - **Start.** New › Deck, or `POST /artifacts` with `"kind": "slides"` and
   `"starter": true`, begins a deck from the engine's starter slides.

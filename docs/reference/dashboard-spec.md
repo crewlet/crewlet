@@ -2,16 +2,15 @@
 
 A `dashboard` artifact is a board of figures over live data. Its version holds
 one spec, `dashboard.json`, and any data files its datasets read. The
-dashboard draws the board natively with its own components: the spec carries
-no author code, and every figure names the dataset it was drawn from and when
-that was true. This page is the whole contract; a spec outside it is refused
-at publish with every finding, each naming the field (and, for a data file,
-the line), never dropped on read.
+dashboard draws it natively: the spec carries no author code, and every figure
+names its dataset and when it was true. This page is the whole contract; a spec
+outside it is refused at publish with every finding, each naming the field (and,
+for a data file, the line).
 
 Every live figure is decided **as its viewer**
 ([ADR-0043](../../adr/0043-a-dashboards-live-data-is-read-as-its-viewer.md)):
-one board shows each person what they themselves may read, so sharing a board
-never shares the data behind it.
+each person sees what they themselves may read, so sharing a board never shares
+the data behind it.
 
 ## The spec
 
@@ -51,10 +50,9 @@ never shares the data behind it.
 | `datasets` | 1 to 32 named sets of rows |
 | `widgets` | 1 to 64 figures, a group's children counted |
 
-An id (a dataset's, a widget's, a filter's key) is a lowercase letter, then
-lowercase letters, digits and `_`, at most 40 characters. A field the format
-does not have is refused naming it, so a misspelt `widgets` is an error rather
-than an empty board.
+An id (dataset, widget, filter key) is a lowercase letter, then lowercase
+letters, digits and `_`, at most 40 characters. An unknown field is refused by
+name, so a misspelt `widgets` is an error, not an empty board.
 
 ## Datasets
 
@@ -63,8 +61,8 @@ its source names.
 
 | `source` | Block | Rows | Kept current |
 |---|---|---|---|
-| `store` | `"store": {"collection": "deals"}` | A collection of the artifact's own datastore, read under the collection's read rule for each viewer | Live: every open board reads it again when the datastore pushes a change |
-| `engine` | `"engine": {"name": "...", "params": {...}}` | A named read from the [catalogue](#the-engine-source-catalogue), answered as the viewer | On the source's change signal, else on the declared `refresh`, else when the board opens or the viewer refreshes |
+| `store` | `"store": {"collection": "deals"}` | A collection of the artifact's own datastore, read under the collection's read rule for each viewer | Live: every open board rereads when the datastore pushes a change |
+| `engine` | `"engine": {"name": "...", "params": {...}}` | A named read from the [catalogue](#the-engine-source-catalogue), answered as the viewer | On the source's change signal, else the declared `refresh`, else when the board opens or the viewer refreshes |
 | `file` | `"file": {"path": "data/targets.csv"}` | A CSV (header first) or JSON array of objects, a file of the version | Fixed with the version |
 | `calc` | `"calc": {"from": "...", "steps": [...]}` | Rows derived from another dataset by [steps](#calculations) | Whenever an input is read again |
 
@@ -73,28 +71,26 @@ A `store` or `file` dataset declares its `columns`, each `{"key", "type",
 or an RFC 3339 instant) or `boolean`, and optionally the `key` column naming a
 row. A text column may name the vocabulary its ids are drawn in (`words`):
 `tracker_status`, `tracker_status_group`, `tracker_priority`, `agent_activity`
-or `seat` (a seat's handle, drawn as the chart names it). The values stay the ids
-(`in_progress`), which a filter or a calculation compares, and a reader sees the
-words the domain's own screens use (In progress). The catalogue's own columns
-already name theirs.
+or `seat` (a seat's handle, drawn as the chart names it). Values stay the ids
+(`in_progress`), which filters and calculations compare; a reader sees the
+domain's own words (In progress). The catalogue's columns already name theirs.
 
-A day is drawn on a chart as that calendar day wherever the reader is, and a
-chart over days labels its axis with dates.
-A store dataset always carries `_id`, the document id, and is keyed by it
-unless it names another key. An engine dataset's columns are the catalogue's
-and a calculation's are its steps', so neither declares any.
+A day is drawn as that calendar day wherever the reader is; a chart over days
+labels its axis with dates. A store dataset always carries `_id` (the document
+id) and is keyed by it unless it names another key. Engine and calc datasets
+declare no columns: they are the catalogue's and the steps'.
 
 A **file** dataset's file is read at publish and held to its columns: every
 declared column must be in the header (or in some object), every value must
-be one of its column's type, a key column holds no value twice, and the file
-is at most 8 MB and 5,000 rows. A column the spec does not declare is not
-read. A value that breaks a column is refused naming the file and the line.
+be of its column's type, a key column holds no value twice, and the file is at
+most 8 MB and 5,000 rows. An undeclared column is not read. A violation is
+refused naming the file and the line.
 
-A **store** dataset reads whatever the collection holds at the time: a value
-that is not one of its column's type is answered as no value, since the rows
-are written after the board is published. Write the collection's schema with
-`set_artifact_schema` and its rows with `write_artifact_data`; integration data
-(GitHub, Jira, Slack) reaches a board this way, written by an agent.
+A **store** dataset reads what the collection holds at the time (rows are
+written after publish); a value not of its column's type is no value. Write the
+schema with `set_artifact_schema` and rows with `write_artifact_data`;
+integration data (GitHub, Jira, Slack) reaches a board this way, written by an
+agent.
 
 An engine dataset may declare `"refresh": {"every_seconds": N}`, 60 to 86,400.
 
@@ -106,8 +102,8 @@ more.
 `list_dashboard_sources`, `crewlet artifacts sources` and
 `GET /artifacts/sources` list it, with each parameter's type and bounds.
 `GET /artifacts/sources/preview/{name}` reads one source's rows as the caller
-before any board exists, which is how the dashboard's New dashboard page draws
-its suggested figures.
+before any board exists; the New dashboard page uses it to draw suggested
+figures.
 
 | Source | Reads | Who may read it | Parameters | Columns | Refreshes on |
 |---|---|---|---|---|---|
@@ -117,29 +113,27 @@ its suggested figures.
 | `spend.daily` | Token spend per company day and band | Everybody the company admits | `days` 1 to 90, default 14; `group`: `seat`, `phase`, `model`, `provider`, `unit`, `worker` | `day`, `band`, `total_tokens` | Every spend push |
 | `agents.status` | Every agent seat and what it is doing | Everybody the company admits | none | `handle`, `name`, `activity`, `phase`, `paused`, `last_turn_at`, `last_outcome` | Every agents push |
 
-**Each source is the question the dashboard's own screens ask.**
-`tracker.items` is the board's `work_items`, `tracker.workload` is
-`work_workload`, `spend.seats` is `tokens`, `spend.daily` is `token_series`,
-and `agents.status` is `GET /agents`, each asked on the viewer's own request.
-A viewer the source refuses sees the figure say so, with the permission that
-would open it; the rest of the board draws.
+**Each source is a question the dashboard's own screens ask**, as the viewer: `tracker.items` is the board's `work_items`,
+`tracker.workload` is `work_workload`, `spend.seats` is `tokens`,
+`spend.daily` is `token_series`, `agents.status` is `GET /agents`. A viewer the
+source refuses sees the figure say so, with the permission that would open it;
+the rest of the board draws.
 
 **The spend sources read a window of company days**, and the catalogue marks
-them `windowed`. A figure over a windowed source that answered no rows says
-"Nothing in this window"; a figure over any other source says "Nothing to
-show", because open work and the agents are read as they stand now.
+them `windowed`. A figure over a windowed source with no rows says "Nothing in
+this window"; over any other source, "Nothing to show" (open work and agents are
+read as they stand now).
 
-**A count or a sum of no rows is 0.** The source answered, and a total of
-nothing is a measured nought, so a stat with `agg: count` or `agg: sum` over
-an empty answer draws 0, as a calculated dataset's group does. A fold that
-picks or averages a value (`first`, `last`, `min`, `max`, `avg`) over no
-rows, and any fold over rows none of which holds a value, draws the empty
-mark: there is no value to show, which is not the same as a value of 0.
+**A count or a sum of no rows is 0**: a total of nothing is a measured nought.
+A stat with `agg: count` or `agg: sum` over an empty answer draws 0, as a
+calculated dataset's group does. A fold that picks or averages (`first`,
+`last`, `min`, `max`, `avg`) over no rows, and any fold over rows none of which
+holds a value, draws the empty mark: no value is not 0.
 
 A parameter is a literal (`"scope": "mine"`, `"limit": 50`) or bound to a
-filter (`"scope": {"param": "scope"}`), in which case every choice of that
-filter must be a value the parameter takes; a choice whose value is empty
-reads the parameter's default.
+filter (`"scope": {"param": "scope"}`); a bound filter's every choice must be a
+value the parameter takes, and a choice whose value is empty reads the
+parameter's default.
 
 ## Filters
 
@@ -149,17 +143,16 @@ reads the parameter's default.
 ```
 
 A filter is a closed set of 1 to 50 choices, and its `default` is one of them.
-A viewer picks among the choices; a value the filter does not offer, or a key
-the board has no filter for, is refused before any source is read, so nothing
-a viewer types reaches a read the author did not write.
+A value the filter does not offer, or a key the board has no filter for, is
+refused before any source is read, so nothing a viewer types reaches a read the
+author did not write.
 
 ## Calculations
 
-A `calc` dataset reads its `from` dataset and applies 1 to 16 steps, each one
-of a closed set, never a program. It may stand on at most 4 other
-calculations, and never on itself. Every step reads columns its input has and
-says which it answers, so a widget over a calculation is held to them at
-publish.
+A `calc` dataset reads its `from` dataset and applies 1 to 16 steps from a
+closed set, never a program. It may stand on at most 4 other calculations,
+never itself. Every step reads columns its input has and says which it
+answers, so a widget over a calculation is held to them at publish.
 
 | `op` | Fields | Does |
 |---|---|---|
@@ -171,10 +164,9 @@ publish.
 | `limit` | `count` | Keeps the first rows |
 | `select` | `columns` | Keeps the named columns, in order |
 
-A calculation is **deterministic**: it reads no clock or locale, a group and a
-sort order totally, a sum adds in row order, so one input answers one table on
-every node. A calculation over an input its viewer may not read is refused
-whole, never answered in part.
+A calculation is **deterministic** (no clock or locale, total group and sort
+order, sums added in row order): one input answers one table on every node. One
+over an input its viewer may not read is refused whole.
 
 ## Widgets
 
@@ -198,30 +190,27 @@ any other is refused.
 
 `format` is `number` (grouped, up to two decimals), `integer`, `percent` (a
 ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes. A stat's
-or a meter's number is read at a glance, so it is `compact` unless `format`
-says otherwise; a chart's scale is shortened from a thousand (`7.5k`), without
-the unit, and its tooltip reads each value in the widget's format and unit. A
-meter is drawn as the number, what it is out of, and a bar against the maximum
-that turns to the warning hue from three quarters of it and to the danger hue
-at it.
+or meter's number is `compact` unless `format` says otherwise; a chart's scale
+is shortened from a thousand (`7.5k`) without the unit, and its tooltip reads
+each value in the widget's format and unit. A meter draws the number, what it
+is out of, and a bar against the maximum that turns to the warning hue from
+three quarters of it and to the danger hue at it.
 
-A chart tells four series apart by hue and draws a fifth in the residual grey.
-Past five, the first four keep their hues and the rest are summed into one
-series named Other: the `y` columns in the order written, a `by` split's values
-the biggest over the window first, and a `share`'s parts in the order its rows
-come. The dataset's rows are untouched, so its CSV and preview carry every
-series. A chart of no rows says so in a sentence in its place.
+A chart gives four series a hue and a fifth residual grey. Past five, the
+first four keep their hues and the rest sum into one series named Other: `y`
+columns in written order, a `by` split's values biggest over the window first,
+a `share`'s parts in row order. CSV and preview still carry every series. A
+chart of no rows says so in a sentence.
 
-A `table` draws its rows in the order its dataset answers them, and a reader
-does not re-sort them: sort and cut the rows in the dataset (a calculation's
-`sort` and `limit`), since sorting the first eight rows by another column would
-read as an order over every row. Each column is as wide as what it holds; the
-one column of free text in words, the longest such (a title), takes the room
-the others leave and ends in an ellipsis when there is less. On a narrow widget
-the last columns give way first, and the table's foot says which. A date is
-written as a reader writes one (`Sep 1`, the year only when it is not this one,
-and an instant with its time, unless it falls on a midnight where the reader is,
-as an all-day due date does, which reads as that day), a boolean as Yes or No.
+A `table` draws rows in the dataset's order and a reader cannot re-sort them
+(sorting the first eight rows would read as an order over all): sort and cut in
+the dataset (a calculation's `sort` and `limit`). Columns fit their content;
+the longest free-text column (a title) takes the remaining room and ends in an
+ellipsis when short. On a narrow widget the last columns give way first, and
+the foot says which. A date reads as a reader writes it (`Sep 1`, the year only
+when not this one, an instant with its time unless it is a midnight where the
+reader is, as an all-day due date, which reads as that day); a boolean is Yes
+or No.
 
 ## Reading a board
 
@@ -235,10 +224,9 @@ as an all-day due date does, which reads as that day), a boolean as Yes or No.
   and widgets, never a figure.
 
 The gallery's cover for a dashboard shows its first stats' labels and their
-datasets' titles; a figure is always the viewer's, so no number is drawn on a
-card from anybody else's data. The board's figures are exported in the
-browser: a widget's rows as CSV (a text cell a spreadsheet would run as a
-formula is written as text), and a chart as PNG.
+datasets' titles, never a number: a figure is always the viewer's. Figures are
+exported in the browser: a widget's rows as CSV (a text cell a spreadsheet
+would run as a formula is written as text), a chart as PNG.
 
 ## Comments and presence
 
