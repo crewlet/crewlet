@@ -174,6 +174,25 @@ test("a change is said in the ink of whether it is the one wanted, a share in po
   expect(figure(1, "items")).toEqual({ value: "1", unit: "item" });
 });
 
+// A FIGURE AND ITS PARTS AGREE: the tile says its hours as its detail line
+// says their parts (whole from ten, else to a tenth), and a change from
+// nothing says its unit.
+test("a figure is whole from ten, as its parts are, and a change from nothing says its unit", () => {
+  const s = { key: "k", label: "l", unit: "hours" as const, better: "down" as const };
+  expect(figure(134.2, "hours")).toEqual({ value: "134", unit: "h" });
+  expect(figure(4.25, "hours")).toEqual({ value: "4.3", unit: "h" });
+  expect(figure(62.4, "percent")).toEqual({ value: "62%" });
+  expect(deltaOf({ ...s, value: 134.2, was: 0 })).toEqual({ value: "+134 h", polarity: "bad" });
+  expect(deltaOf({ ...s, unit: "minutes", value: 12, was: 0 })).toEqual({
+    value: "+12 min",
+    polarity: "bad",
+  });
+  expect(deltaOf({ ...s, unit: "percent", value: 62.44, was: 50 })).toEqual({
+    value: "+12 pts",
+    polarity: "bad",
+  });
+});
+
 // ROUTING STAYS IN THE DASHBOARD: the engine names a page or a setting,
 // never a link, and the page builds the address.
 test("each press is routed by its kind, and one this page does not route is left out", () => {

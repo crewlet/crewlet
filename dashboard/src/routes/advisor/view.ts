@@ -70,16 +70,24 @@ const FLOW_PARTS = [
 const round = (n: number) => Math.round(n * 10) / 10;
 
 /**
- * A stat's number in a few characters, as a detail line says it: whole from
- * ten up, so three parts fit one line beside a figure ("29 h waiting · 85 h
- * held · 15 h blocked").
+ * A number as the page says it: whole from ten up, else to a tenth, so a
+ * figure and the parts beside it agree ("134 h" over "30 h waiting · 89 h
+ * held · 15 h blocked") and three parts fit one line.
  */
-function said(s: AdvisorStat): string {
-  const n = Math.abs(s.value) >= 10 ? Math.round(s.value) : round(s.value);
-  if (s.unit === "hours") return `${fmtCount(n)} h`;
-  if (s.unit === "minutes") return `${fmtCount(n)} min`;
-  return fmtCount(n);
+export function amount(n: number): number {
+  return Math.abs(n) >= 10 ? Math.round(n) : round(n);
 }
+
+/** A number in its unit, in a few characters: "134 h", "12 min", "62%". */
+export function amountWords(n: number, unit: StatUnit): string {
+  const said = fmtCount(amount(n));
+  if (unit === "hours") return `${said} h`;
+  if (unit === "minutes") return `${said} min`;
+  if (unit === "percent") return `${said}%`;
+  return said;
+}
+
+const said = (s: AdvisorStat) => amountWords(s.value, s.unit);
 
 /** The strip's figures, from the snapshot's stats. */
 export function stripOf(snapshot: AdvisorSnapshot | null): ViewStat[] {

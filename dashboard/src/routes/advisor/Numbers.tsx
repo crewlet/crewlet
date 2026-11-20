@@ -36,6 +36,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
 import {
   RANGES,
+  amount,
+  amountWords,
   explainer,
   snapshotView,
   type RangeDays,
@@ -80,21 +82,22 @@ export const SNAPSHOT_POLL_MS = 60_000;
 
 /** A figure in its unit, as its tile draws it: the number and the word after it. */
 export function figure(value: number, unit: StatUnit): { value: string; unit?: string } {
+  const said = fmtCount(amount(value));
   switch (unit) {
     case "percent":
-      return { value: `${value}%` };
+      return { value: `${said}%` };
     case "hours":
-      return { value: fmtCount(value), unit: "h" };
+      return { value: said, unit: "h" };
     case "minutes":
-      return { value: fmtCount(value), unit: "min" };
+      return { value: said, unit: "min" };
     case "tokens":
-      return { value: fmtCount(value), unit: "tokens" };
+      return { value: said, unit: "tokens" };
     case "items":
-      return { value: fmtCount(value), unit: value === 1 ? "item" : "items" };
+      return { value: said, unit: value === 1 ? "item" : "items" };
     case "turns":
-      return { value: fmtCount(value), unit: value === 1 ? "turn" : "turns" };
+      return { value: said, unit: value === 1 ? "turn" : "turns" };
     default:
-      return { value: fmtCount(value) };
+      return { value: said };
   }
 }
 
@@ -109,13 +112,14 @@ export function deltaOf(stat: ViewStat): StatCardDelta | undefined {
         ? "good"
         : "bad";
   const sign = diff > 0 ? "+" : diff < 0 ? "−" : "±";
-  // A SHARE MOVES IN POINTS, and a count by how much of itself.
+  // A SHARE MOVES IN POINTS, a count by how much of itself, and a change
+  // from nothing by itself in its unit.
   const said =
     stat.unit === "percent"
-      ? `${sign}${Math.abs(diff)} pts`
+      ? `${sign}${fmtCount(amount(Math.abs(diff)))} pts`
       : stat.was > 0
         ? `${sign}${Math.round((Math.abs(diff) / stat.was) * 100)}%`
-        : `${sign}${fmtCount(Math.abs(diff))}`;
+        : `${sign}${amountWords(Math.abs(diff), stat.unit)}`;
   return { value: said, polarity };
 }
 
@@ -204,8 +208,7 @@ const dayWords = (at: number) =>
   dateTimeFormat(undefined, zone(), { month: "short", day: "numeric" }).format(at);
 
 /** A chart's value in its unit, in a few characters. */
-const valueWords = (unit: StatUnit) => (v: number) =>
-  unit === "percent" ? `${v}%` : unit === "hours" ? `${fmtCount(v)} h` : fmtCount(v);
+const valueWords = (unit: StatUnit) => (v: number) => amountWords(v, unit);
 
 /** One chart, by its kind, headed by its figure where the snapshot has one by its id. */
 export function ChartCard({
