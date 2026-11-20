@@ -405,6 +405,7 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 	}{
 		{"a password's key across an escaped break after a BEGIN", begin + `\n` + "password: \n", true},
 		{"a password's key on the line after a BEGIN", begin + "\npassword: \n", true},
+		{"a password's key on the line after a BEGIN, the run three lines below", begin + "\npassword: \n\n\n\n", true},
 		{"a password's key across an escaped break before a BEGIN on its line", "password:\\n\t\"hunter2x9 " + begin + "\\n\t\"" + testKeyLine + "\\n\n", true},
 		{"a password's key, its value's line and an END under a gutter", "7\u2192pwd=\n7\u2192" + testKeyLine + "\n7\u2192" + end + "\n", true},
 		{"a closed armour, then a password's key", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n" + end + "\npassword: \n", false},
