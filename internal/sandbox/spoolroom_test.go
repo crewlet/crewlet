@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -283,18 +284,27 @@ func stampedBegun(t *testing.T, rig *coordRig, run PendingRun) {
 	}
 }
 
-// A FINAL TAKE WAITS FOR ROOM ONLY ONCE ITS ARCHIVE IS GIVEN: never while it
-// holds the node's one pack slot, which a save takes only after its room, so
-// a take waiting for room never holds what a save holding room waits for.
+// A FINAL TAKE WAITS FOR ROOM BEFORE IT HOLDS ANYTHING A SAVE WAITS FOR: a
+// save holding room waits for the node's pack slot and then for the take's own
+// slots (the executor's take and large-read slots, held from its TakeSession
+// to its scrub's end), so a final take waiting for room holds neither the pack
+// slot nor a take of its box. Its room, taken at the sealed bound, is shrunk to
+// its archive's counted size before it streams.
 //
-// Mutation: wait for the room while holding the pack slot, and the slot is
-// found held below.
-func TestAFinalTakesRoomOnlyAfterItsArchiveIsGiven(t *testing.T) {
+// Mutation: wait for the room after the pack slot is taken or after the box's
+// session is taken, or keep the bound's room while streaming, and a check
+// below goes red.
+func TestAFinalTakeWaitsForRoomBeforeItHoldsWhatASaveWaitsFor(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
 		full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
+		var streamingHeld int64
+		rig.runner.mu.Lock()
+		counted := countedFor(rig.runner.Session.Archive.Size)
+		rig.runner.Session.Streaming = func(context.Context) { streamingHeld = roomInUse(rig.coordinator) }
+		rig.runner.mu.Unlock()
 		var spooled *spooledCapture
 		taken := make(chan *SessionKept, 1)
 		go func() {
@@ -309,9 +319,19 @@ func TestAFinalTakesRoomOnlyAfterItsArchiveIsGiven(t *testing.T) {
 		default:
 			t.Error("a take waiting for room held the node's pack slot")
 		}
+		rig.runner.mu.Lock()
+		takes := len(rig.runner.takes)
+		rig.runner.mu.Unlock()
+		if takes != 0 {
+			t.Errorf("a take waiting for room had taken its box's session %d times, want none", takes)
+		}
 		full.release()
 		if kept := <-taken; kept == nil || kept.NotKept != "" {
 			t.Errorf("the take came to %+v once the room was back, want its session taken", kept)
+		}
+		if streamingHeld != counted {
+			t.Errorf("the take streamed holding %d bytes of the room, want its archive's counted %d",
+				streamingHeld, counted)
 		}
 		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()

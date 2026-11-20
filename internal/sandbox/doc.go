@@ -147,9 +147,9 @@
 //
 // The disk holds what the spools hold, so one room bounds them all
 // (spoolroom.go): saves take room at the sealed bound before their pack slot
-// and never wait, leaving a final take its room; a take waits a minute after
-// its pack slot, never while holding it, then keeps nothing; a seal is refused
-// before it writes past its room.
+// and never wait, leaving a final take its room; a take waits a minute for
+// room at the bound before its pack slot and its scrub's slots, a save's
+// order, then keeps nothing; a seal is refused before it writes past its room.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //

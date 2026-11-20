@@ -24,12 +24,10 @@ import (
 var spoolRoomBytes = int64(maxConcurrentSaves+1) * executorkeep.SealedMaxBytes
 
 // spoolRoomWait is the longest a take waits for room in its spool before it
-// keeps nothing: room comes back as uploads end, seconds for a session at its
-// bound on a working store, so a minute without it is a store near its floor
-// pace, which no read should hold its seat for. Within the take's own budget:
-// this minute, the box's two readings at the bound (96 s) and the scrub's
-// measured worst (238 s) end in 394 s, inside its seven minutes
-// ([SessionScrubWait]).
+// keeps nothing: room comes back as other takes' packs and uploads end,
+// seconds for a session at its bound on a working store, so a minute without
+// it is a store near its floor pace, which no read should hold its seat for.
+// Counted in the scrub's seven minutes ([SessionScrubWait]).
 const spoolRoomWait = time.Minute
 
 // errSpoolPastHold is a seal refused before it wrote past the room its spool
