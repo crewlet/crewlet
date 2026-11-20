@@ -322,6 +322,15 @@ type Inputs struct {
 
 // Read is every finding the company document and its integrations raise.
 func Read(in Inputs) Answer {
+	answer := readEach(in)
+	answer.Findings = groupCauses(in.Company, answer.Findings)
+	sortFindings(answer.Findings)
+	return answer
+}
+
+// readEach is [Read] before its causes are grouped: one finding per warning,
+// which the evidence's schedule judgement reads schedule by schedule.
+func readEach(in Inputs) Answer {
 	findings := []Finding{}
 	for _, w := range in.Company.Warnings() {
 		findings = append(findings, fromWarning(in.Company, w))

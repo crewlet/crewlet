@@ -313,7 +313,7 @@ func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 
 // ReadWithEvidence is [Read] with the findings ev raises beside the document's.
 func ReadWithEvidence(in Inputs, ev Evidence) Answer {
-	answer := Read(in)
+	answer := readEach(in)
 	c := in.Company
 	kinds := map[string]SeatKind{}
 	for role := range c.EachRole() {
@@ -339,7 +339,7 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			}
 		}
 	}
-	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
+	answer.Findings = groupCauses(c, scheduleEvidence(c, ev, append(answer.Findings, found...)))
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)

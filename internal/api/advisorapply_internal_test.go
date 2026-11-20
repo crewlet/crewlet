@@ -349,3 +349,60 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// seatsConfig answers each seat's entity by handle.
+type seatsConfig struct{ entities map[string]map[string]any }
+
+func (c *seatsConfig) EntityAndTag(_ context.Context, kind, id string) (any, string, error) {
+	e, ok := c.entities[id]
+	if kind != advisor.EntityRoles || !ok {
+		return nil, "", configapi.ErrNoSuchEntity
+	}
+	raw, _ := json.Marshal(e)
+	return e, `"roles-` + id + `-` + string(raw[:min(len(raw), 12)]) + `"`, nil
+}
+func (c *seatsConfig) CheckEntity(context.Context, string, string, []byte, bool, iam.Actor) (*config.Company, error) {
+	return nil, nil
+}
+
+// ONE CAUSE ON MANY SEATS IS SENT AS ONE ACTION OF SEVERAL CHANGES: the
+// re-check answers every seat's request in order, its preview naming whose
+// field each row is, and the finding is applied only once every change holds.
+// Mutation: send the first change alone, or mark it applied on the first
+// seat's change, and the other seats are never changed.
+func TestOneCauseOnManySeatsIsSentAsOneActionOfSeveralChanges(t *testing.T) {
+	t.Parallel()
+	capped := func(seat string) advisor.Change {
+		return advisor.Change{Entity: advisor.EntityRoles, ID: seat, Set: map[string]any{},
+			Merge: map[string]any{"sandbox": map[string]any{"max_turns": 60}}, Summary: "raise " + seat + "'s cap"}
+	}
+	f := capFinding(60)
+	f.Fix.Options = []advisor.Option{{Label: "Raise the caps (all 2)", Change: capped("dev"),
+		Also: []advisor.Change{capped("qa")}}}
+	log := newApplyLog(t, f)
+	cfg := &seatsConfig{entities: map[string]map[string]any{
+		"dev": {"handle": "dev", "sandbox": map[string]any{"max_turns": 30}},
+		"qa":  {"handle": "qa", "sandbox": map[string]any{"max_turns": 30}}}}
+	rc := rechecker{log: log, read: applyReader{observed: []advisor.Observation{observedNow(f)}}, config: cfg,
+		now: func() time.Time { return applyAt },
+		finding: func(_ context.Context, id string) (queries.AdvisorFinding, error) {
+			return queries.AdvisorFinding{ID: id, State: advisor.State(log.row.State)}, nil
+		}}
+	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	if err != nil || len(out.Sends) != 2 || out.Send == nil || out.Send.Path != "/config/roles/dev" ||
+		out.Sends[1].Path != "/config/roles/qa" {
+		t.Fatalf("re-check = %+v (%v), want dev's request then qa's", out, err)
+	}
+	if len(out.Preview.Rows) != 2 || out.Preview.Rows[0].Field != "dev: sandbox.max_turns" ||
+		out.Preview.Rows[1].Field != "qa: sandbox.max_turns" {
+		t.Errorf("preview = %+v, want each seat's row named", out.Preview.Rows)
+	}
+	cfg.entities["dev"] = out.Sends[0].Body.(map[string]any)
+	if err := rc.applied(t.Context(), "f-1", out.Digest, person); !errors.Is(err, errRecheckAgain) {
+		t.Errorf("a report with qa's change unsent answered %v, want a re-check", err)
+	}
+	cfg.entities["qa"] = out.Sends[1].Body.(map[string]any)
+	if err := rc.applied(t.Context(), "f-1", out.Digest, person); err != nil {
+		t.Fatalf("a report with both sent: %v", err)
+	}
+}

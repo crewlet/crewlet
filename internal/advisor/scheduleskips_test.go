@@ -25,8 +25,10 @@ func TestAScheduleWhoseRunsWereSkippedIsTheOwners(t *testing.T) {
 	paused := advisor.ScheduleSkip{Seat: "dev", Name: "standup", Target: "dev", Paused: true}
 	missed := advisor.ScheduleSkip{Seat: "dev", Name: "standup", Target: "dev"}
 	found := stalls(t, doc, advisor.Evidence{Skips: []advisor.ScheduleSkip{paused, paused, missed}}, advisor.ClassScheduleOverdue)
-	if len(found) != 1 || found[0].Subject.Schedule != "standup" || found[0].Subject.Seat != "dev" {
-		t.Fatalf("raised %+v, want Dev's standup", found)
+	if len(found) != 1 || found[0].Subject.Kind != advisor.SubjectCompany || len(found[0].Seats) != 1 ||
+		found[0].Seats[0].Seat != "dev" || found[0].Seats[0].Value != 3 ||
+		found[0].Headline != "3 scheduled runs were skipped this week across 1 schedule." {
+		t.Fatalf("raised %+v, want one finding with Dev's standup inside", found)
 	}
 	if f := found[0]; f.Item != "standup (3 runs skipped: 2 while paused, 1 missed)" || f.Fix.Kind != advisor.FixOpenPage ||
 		f.Fix.Page != advisor.PageSeat || f.Fix.Target != "dev" {
