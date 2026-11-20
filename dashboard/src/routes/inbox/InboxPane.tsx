@@ -775,7 +775,7 @@ function AskPane({
         <Conversation
           item={frame.address}
           itemKey={frame.itemKey}
-          of={{ kind: "ask", comment: ask.comment, options }}
+          of={{ kind: "ask", comment: ask.comment }}
           label="Replies to this question"
           to={frame.name}
           replyTo={inWords && !answer ? null : ask.comment}
@@ -955,7 +955,7 @@ function AskFollowThrough({
       <Conversation
         item={frame.address}
         itemKey={frame.itemKey}
-        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+        of={{ kind: "ask", comment: ask.comment }}
         label="Replies to this question"
         to={frame.name}
         replyTo={ask.comment}

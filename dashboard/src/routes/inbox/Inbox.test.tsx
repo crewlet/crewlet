@@ -1546,6 +1546,40 @@ describe("the pane", () => {
     expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
   });
 
+  // AN ANSWER THAT CHOSE IS READ IN ITS OWN WORDS, which the engine opens with
+  // the option's label, so the thread says the choice once: a caption naming
+  // it again beside those words said it twice.
+  test("an answer that chose reads in its own words, its choice said once", async () => {
+    location.hash = "#/inbox/ask/c-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        work_comments: {
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          comments: [
+            {
+              id: "c-20",
+              task: "t-12",
+              author: "maya",
+              author_kind: "human",
+              body: "Chose \u201cHold release\u201d: tell **support** first.",
+              answers: "c-12",
+              choice: "hold",
+              created_at: new Date().toISOString(),
+            },
+          ],
+        },
+      },
+    });
+    await settle();
+    const thread = screen.getByRole("region", { name: "Replies to this question" });
+    expect(thread.textContent).toContain("Chose \u201cHold release\u201d: tell support first.");
+    expect(thread.textContent?.split("Hold release")).toHaveLength(2);
+    expect(within(thread).getByText("support").closest("strong")).not.toBeNull();
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox/ask/c-12";
     mount({
@@ -3752,7 +3786,7 @@ function answeredItem(extra: Record<string, unknown> = {}) {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       comment: "c-21",
       choice: "ship",
-      body: "Ship anyway",
+      body: "Chose \u201cShip anyway\u201d",
     },
     ...extra,
   };
@@ -3828,7 +3862,12 @@ describe("what was answered", () => {
   test("a row answered here moves under Answered, never in Needs you as well", async () => {
     const mine = answeredItem({
       ask: { ...askItem().ask, open: false },
-      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+      answer: {
+        by: "jane",
+        at: new Date().toISOString(),
+        choice: "hold",
+        body: "Chose \u201cHold release\u201d",
+      },
     });
     let answeredYet = false;
     location.hash = "#/inbox/ask/c-12";
@@ -3898,7 +3937,12 @@ describe("what was answered", () => {
     };
     const mine = answeredItem({
       ask: { ...askItem().ask, open: false },
-      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+      answer: {
+        by: "jane",
+        at: new Date().toISOString(),
+        choice: "hold",
+        body: "Chose \u201cHold release\u201d",
+      },
     });
     let answeredYet = false;
     location.hash = "#/inbox/ask/c-12";

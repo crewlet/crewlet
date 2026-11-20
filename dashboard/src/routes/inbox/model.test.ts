@@ -987,7 +987,12 @@ describe("what was answered", () => {
   const answered = (extra: Partial<AnsweredWorkAsk> = {}): AnsweredWorkAsk => ({
     at: "2026-09-30T11:00:00Z",
     ask: ask as AnsweredWorkAsk["ask"],
-    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    answer: {
+      by: "jane",
+      at: "2026-09-30T11:00:00Z",
+      choice: "hold",
+      body: "Chose \u201cHold release\u201d",
+    },
     ...extra,
   });
   const index = indexOrg(
@@ -1057,19 +1062,20 @@ describe("what was answered", () => {
     });
   });
 
-  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
-  // person's words where they wrote any beside the option, and the option's
-  // label only where they did not. Read as the label alone, the words were
-  // dropped from the row and the pane.
+  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body states the
+  // choice and then the person's words (`worklet.ChoiceWords`), and the note
+  // is those words alone. Read as the label alone, the words were dropped from
+  // the row and the pane; read whole, the choice was said twice.
   //
-  // Mutation: drop `note`, or fill it with the label, and this fails.
+  // Mutation: drop `note`, fill it with the label, or keep the stated choice
+  // in it, and this fails.
   test("a choice keeps the words written beside it", () => {
     const withWords = answered({
       answer: {
         by: "jane",
         at: "2026-09-30T11:00:00Z",
         choice: "hold",
-        body: "Tell support before Thursday.",
+        body: "Chose \u201cHold release\u201d: Tell support before Thursday.",
       },
     });
     expect(answerWords(withWords, "jane", index)).toMatchObject({
