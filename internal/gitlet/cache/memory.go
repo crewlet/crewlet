@@ -87,6 +87,19 @@ func (c *Cache) initMemory(pool *gitproc.Pool) {
 	c.maint.setBudget(maintenanceBudget(m.Bytes, c.memReserve))
 }
 
+// warnShort is Open's: a node whose memory is short of what it keeps
+// (memoryReserve: the executor's pools, its transfers and its serving share)
+// says so once, at boot, with the shortfall. It is not refused: a small or
+// development node runs seats beside Gitlet on 2 GiB, and serves while it is
+// not at every worst case at once (docs/concepts/gitlet.md, "The budget").
+func (c *Cache) warnShort(pool *gitproc.Pool) {
+	if short := c.memReserve - c.memory.Bytes; short > 0 {
+		c.log.Warn("code_cache_memory_short", "memory", c.memory.Bytes, "memory_from", c.memory.From,
+			"pools", pool.Reserved(), "transfer_slots", pool.Slots(gitproc.ClassTransfer),
+			"memory_reserved", c.memReserve, "shortfall", short)
+	}
+}
+
 // rereadMemory is each maintainer pass's first step: a container's limit can
 // change in place (Kubernetes resizes a pod's memory without a restart), and a
 // budget read once would admit runs past a lowered limit. A change is logged

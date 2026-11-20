@@ -2233,7 +2233,9 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | 16 GiB, eight cores | yes | 1 980 | 28 | 6 302 | 1 830 |
 
 A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
-186 MiB more than its memory: give such a node 4 GiB or more.
+186 MiB more than its memory. It still boots and serves, as small and
+development installs run there, and logs `code_cache_memory_short` once at
+boot with the figures; give a node running seats beside Gitlet 4 GiB or more.
 
 The budget does not bound the clones themselves, which take the node's git
 transfer slots, four a core and no more than one for each 512 MiB of the memory the
@@ -4972,6 +4974,7 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 | `code_cache_map_count_unread` | `WARN` | `/proc/sys/vm/max_map_count` could not be read (`error`), so mapped runs are bounded as if the count were Linux's default (`assumed`, 65 530). A sandboxed kernel hiding `/proc/sys`; nothing to do unless the host lowered the count below default, which lowers what every process on it may map. |
 | `code_cache_memory_changed` | `INFO` | The node's memory read differently (a container resized in place) and `maintenance_budget` moved with it; `was` is the earlier reading. The git lanes keep their boot sizes until a restart. |
 | `code_cache_memory_unreadable` | `WARN` | Memory could not be read again; the last reading and budget stand until a read succeeds. Once until then. |
+| `code_cache_memory_short` | `WARN` | At boot, what the node keeps for everything but background work (`memory_reserved`: the executor's `pools`, 224 MiB for each of its `transfer_slots`, and the serving share) is past its `memory` by `shortfall`: with every pool and transfer at its worst at once, the node is out of memory. It still boots and serves. Give it memory past `memory_reserved` (4 GiB or more where it runs seats beside Gitlet, [The budget](#the-cache-on-a-gitlet-node)) or, where `gitlet.max_transfers` is set, fewer transfers. Once a boot. |
 | `code_cache_trashed` | `WARN` | At boot, something in the cache that is not a repository's current copy was moved aside to be removed: a copy an interrupted rebuild left, a stray, or a copy in another build's format (`why` says which). Nothing is lost: the rows and object store bring the repository back at its next fetch. |
 | `code_cache_state_unreadable` | `WARN` | A copy has no readable record of what it holds. It is kept; its next fetch reads the repository whole, reusing every pack held. Recurring, it is the disk. |
 | `code_cache_evicted` | `INFO` | A copy was evicted to bring the cache under its byte budget, least recently used first; `idle_for` is how long it was unused. Its next fetch is a cold sync. Frequent, the budget is too small for the repositories served. |

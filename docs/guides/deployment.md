@@ -2672,8 +2672,9 @@ keeps them first and sizes Gitlet by what is left
 transcript reads its API answers and 1 980 MiB where it runs seats too, so
 give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
-([Replica count](#replica-count)), and keeps its one transfer past its memory
-on 2 GiB.
+([Replica count](#replica-count)). On 2 GiB such a node keeps its one transfer
+past its memory: it still boots and serves, logging `code_cache_memory_short`
+once, but give a node running seats beside Gitlet 4 GiB or more.
 
 The node that publishes also holds:
 
