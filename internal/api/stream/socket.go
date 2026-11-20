@@ -265,7 +265,9 @@ type Query func(ctx context.Context, what string, params map[string]any) (any, e
 
 // request is one client-to-server frame.
 type request struct {
-	Kind   string         `json:"kind"`
+	Kind string `json:"kind"`
+	// ID is a `query` frame's own, which its answer echoes, and what a
+	// `query_cancel` frame names the question it gives up on by.
 	ID     int64          `json:"id"`
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
@@ -675,6 +677,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 	slots := make(chan struct{}, MaxInFlightQueries)
 	var running sync.WaitGroup
 	defer running.Wait()
+	questions := askedQuestions{byID: map[int64]*askedQuestion{}}
 
 	for {
 		_, raw, err := conn.Read(ctx)
@@ -709,6 +712,12 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			if rooms.presence.take(seats.now()) {
 				rooms.queue(ctx, req)
 			}
+		case "query_cancel":
+			// A QUESTION ITS CLIENT GAVE UP ON STOPS NOW, not once its wait has
+			// passed: a screen left behind a transcript page's read held this
+			// socket's slot and the node's for minutes, for nobody. Nothing is
+			// answered for it, as for one whose wait passed.
+			questions.cancel(req.ID)
 		case "query":
 			// A DEGRADED NODE REFUSES rather than answers: its copy of the company is
 			// wrong rather than behind, and "there is no such work item" out of it is
@@ -739,11 +748,13 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// rather than a paused reader. The client's wait starts as
 			// the frame is read, before the slot, as its own clock does.
 			asked, stop := req.waited(ctx)
+			mine := questions.add(req.ID, stop)
 			running.Add(1)
 			slots <- struct{}{}
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
+				defer questions.done(req.ID, mine)
 				defer stop()
 				defer containPanic(asked, req.What, func() {
 					if asked.Err() == nil {
@@ -759,6 +770,45 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// Unknown kinds are ignored, which is what makes new ones
 			// additive on both ends.
 		}
+	}
+}
+
+// askedQuestions is one socket's questions in flight, by the id each `query`
+// frame named, so a `query_cancel` frame stops the one its client gave up on.
+type askedQuestions struct {
+	mu   sync.Mutex
+	byID map[int64]*askedQuestion
+}
+
+// askedQuestion is one question in flight: what stops it.
+type askedQuestion struct{ stop context.CancelFunc }
+
+// add holds id's question, stopped by stop, until [askedQuestions.done]. An id
+// a client names twice cancels the latest question it named.
+func (q *askedQuestions) add(id int64, stop context.CancelFunc) *askedQuestion {
+	one := &askedQuestion{stop: stop}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.byID[id] = one
+	return one
+}
+
+// done lets go of id's question, one, unless a later one took its id.
+func (q *askedQuestions) done(id int64, one *askedQuestion) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.byID[id] == one {
+		delete(q.byID, id)
+	}
+}
+
+// cancel stops id's question, where one is in flight.
+func (q *askedQuestions) cancel(id int64) {
+	q.mu.Lock()
+	one := q.byID[id]
+	q.mu.Unlock()
+	if one != nil {
+		one.stop()
 	}
 }
 

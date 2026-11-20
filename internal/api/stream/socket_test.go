@@ -992,6 +992,50 @@ func TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot(t *testing.T) {
 	}
 }
 
+// A QUESTION ITS CLIENT CANCELS STOPS AT ONCE, AND FREES ITS SLOT: a
+// `query_cancel` frame naming a question in flight ends it with no answer sent,
+// though its wait is minutes off, so the socket's slots and the engine's (a
+// transcript read's) are free for the next question; one naming no question in
+// flight changes nothing.
+//
+// Mutation: ignore the frame, and the cancelled questions hold every slot until
+// their wait passes.
+func TestAQueryItsClientCancelsStopsAtOnceAndFreesItsSlot(t *testing.T) {
+	t.Parallel()
+	ended := make(chan error, stream.MaxInFlightQueries)
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		if what == "events" {
+			return "answered", nil
+		}
+		<-ctx.Done()
+		ended <- context.Cause(ctx)
+		return nil, ctx.Err()
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "executor_session", "wait_ms": 600_000})
+	}
+	write(t, conn, map[string]any{"kind": "query_cancel", "id": 99})
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query_cancel", "id": i})
+	}
+	for range stream.MaxInFlightQueries {
+		if cause := <-ended; !errors.Is(cause, context.Canceled) {
+			t.Fatalf("a cancelled question ended %v, want cancelled", cause)
+		}
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
+	if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(100) {
+		t.Fatalf("the frame after the cancelled questions = %v, want the next question's answer and none of "+
+			"theirs", got)
+	}
+}
+
 // A QUESTION THAT PANICS IS ANSWERED AS FAILED, AND THE SOCKET AND THE PROCESS
 // GO ON, as net/http answers a request whose handler panicked: [panics] hears
 // the panic once, in [panics.ScopeAPI], the question is answered
