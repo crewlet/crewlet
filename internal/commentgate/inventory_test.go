@@ -56,7 +56,7 @@ var rowInventory = map[string]int{
 	"issuereport":     2565,
 	"jsonscan":        2766,
 	"kept":            2343,
-	"logging, secrets, provision, envref, envfile, redact, workkey, backoff, cron, period":                                                     6140,
+	"logging, secrets, provision, envref, envfile, redact, workkey, backoff, cron, period":                                                     6128,
 	"mattermost, slack, gitlab, github, jira, confluence, datadog, cloudflare, expo, digitalocean, scaleway, googlecloud, atlassian, aws, ssh": 10536,
 	"mcpreview":                              827,
 	"modelcatalog":                           817,

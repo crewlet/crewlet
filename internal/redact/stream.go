@@ -124,8 +124,8 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // the writer it was made with, in one pass and bounded memory, or refuses it.
 // However the text is cut into writes, it holds its stages' windows (and a
 // live stream what is not settled, [unsettledBytes] at most), whether it
-// refuses depends on the text alone (a flush can only spare it), and where
-// Close answers nil it wrote exactly [Secrets]. Its writes cut at any byte.
+// refuses depends on the text and its flushes alone ([Stream.Flush]), and
+// where Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
@@ -289,7 +289,9 @@ func (s *Stream) settle() {
 // more ([unsettledBytes]). After an error it answers the counts it last had.
 //
 // Each stage is handed only settled text, and decides all it holds as it does
-// at the text's end ([pipeline.decideHeld]): the redaction composes there.
+// at the text's end ([pipeline.decideHeld]): the redaction composes there. So
+// later windows fall elsewhere, and only in a layout that can refuse
+// ([ErrDecidedEarly]) can a flush spare a refusal, make one, or move its byte.
 func (s *Stream) Flush() (final int64, held int, err error) {
 	l := s.live
 	switch {

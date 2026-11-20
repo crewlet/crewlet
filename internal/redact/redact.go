@@ -27,16 +27,16 @@
 //
 // # Text that is still being written
 //
-// Every rule here was written for text that is whole, and a live view shows
-// text still being written. [Settled] is how much of a growing text has a
-// redaction nothing written after it can change, so a reader is never shown
-// a key's body that its END line, arriving a moment later, would have
-// redacted. A rule added here that can reach across a line break is a rule
-// Settled has to learn about; its test feeds every shape here through text
-// that arrives a line at a time. A stream from [NewLiveStream] hands its
-// stages only what Settled settles, and [Stream.Flush] decides each stage to
-// there as at the text's end: where it is flushed changes nothing it writes,
-// and it refuses only where a [NewStream] does.
+// Every rule here was written for whole text; a live view shows text still
+// being written. [Settled] is how much of a growing text has a redaction
+// nothing written after it can change, so a reader is never shown a key's body
+// that its END line, arriving later, would have redacted. A rule added here
+// that can reach across a line break is one Settled has to learn about; its
+// test feeds every shape here through text that arrives a line at a time. A
+// stream from [NewLiveStream] hands its stages only what Settled settles, and
+// [Stream.Flush] decides each stage there as at the text's end. Unflushed, it
+// answers as a [NewStream] does; flushed, it writes Secrets where Close answers
+// nil, and refuses otherwise only in a layout named below.
 //
 // # How far a rule reads
 //
@@ -87,7 +87,7 @@
 //
 // [Stream] redacts a text written to it in pieces and writes, put together,
 // exactly what [Secrets] returns for the whole, without holding it, or
-// refuses the text (below): a whole PDF's base64 on one line of a transcript
+// refuses it (below): a whole PDF's base64 on one line of a transcript
 // is redacted in what a few hundred KiB a pass hold. It runs the passes
 // Secrets makes, the keys' blocks and then each rule in order, as STAGES, each
 // reading what the one before it wrote, and each deciding with the code
@@ -97,8 +97,8 @@
 // of that at the last marker it holds (below), and by exactly that window
 // however much more it holds. The stages are handed the text a piece at a
 // time at its own offsets, so what each holds when it steps is the text's
-// alone, and how the text is cut into writes changes nothing. Secrets
-// reads its text whole at any length, since its caller holds it already.
+// alone, and how it is cut into writes changes nothing. Secrets reads its
+// text whole at any length: its caller holds it.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
 // [keyReading]) and trusts a decision only where the window holds all it read.
@@ -157,8 +157,8 @@
 // the claims, and a claim that then comes, or ends, otherwise over it stops
 // the stream: what it wrote is not Secrets of the text and may hold what
 // Secrets redacts, so its caller neither keeps nor shows it. A text gets that
-// only where a key's block is read beside such a claim, with a run longer
-// than the lag after it: a password's key on a line that ends in a key's END,
+// only where a key's block is read beside such a claim, with a run of
+// about the lag after it: a password's key on a line that ends in a key's END,
 // the run straight after its value's line; a password's key on a key's BEGIN
 // line or the line after it, the run as its value's line or a few lines
 // below; a password's key, its value's line and a key's END on three lines
