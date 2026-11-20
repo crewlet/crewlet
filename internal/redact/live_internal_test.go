@@ -124,6 +124,9 @@ func TestAFlushWritesTheRedactionAsFarAsTheTextIsSettled(t *testing.T) {
 		if err := s.Close(); err != nil || out.String() != Secrets(text) {
 			t.Errorf("%s: Close answered %v, and wrote Secrets of the text: %v", name, err, out.String() == Secrets(text))
 		}
+		if final, held, err := s.Flush(); err != nil || final != int64(out.Len()) || held != 0 {
+			t.Errorf("%s: a flush after Close answered %d final, %d held and %v, where the stream wrote %d", name, final, held, err, out.Len())
+		}
 		t.Logf("%s: %d bytes, %d flushes", name, len(text), flushes)
 	}
 }
@@ -282,4 +285,42 @@ func TestALiveStreamPastItsUnsettledBoundTrailsAsAStreamDoes(t *testing.T) {
 		t.Errorf("%d MiB of lines none longer than %d KiB, written with no flush, held %d KiB unsettled; settling stopped: %v", len(lines)>>20, 3*stageAdvance>>10, most>>10, s.live.stopped)
 	}
 	_ = s.Close()
+}
+
+// ALL A CLOSED STREAM WROTE IS FINAL: after Close answers nil, a flush
+// answers every byte the stream wrote final, whether the head's redaction
+// was written by Close, by a flush, or by the stages, live or not.
+//
+// Mutation: leave out of the count what the stream writes of its head itself
+// ([Stream.emit]), and a short text's flush after Close answers too little.
+func TestAFlushAfterCloseCountsAllTheStreamWrote(t *testing.T) {
+	t.Parallel()
+	short := "step 3\ntoken sk-" + strings.Repeat("q", 40) + "\nok\n"
+	long := strings.Repeat(short, wholeBytes/len(short)+100)
+	for _, c := range []struct {
+		name       string
+		text       string
+		liveStream bool
+		flush      bool
+	}{
+		{"a short text", short, false, false},
+		{"a long text", long, false, false},
+		{"a short text, live, never flushed", short, true, false},
+		{"a short text, live, flushed", short, true, true},
+		{"a long text, live, flushed", long, true, true},
+	} {
+		var out bytes.Buffer
+		s := NewStreamHolding(&out, holdBytes(), c.liveStream)
+		_, _ = s.Write([]byte(c.text[:len(c.text)/2]))
+		if c.flush {
+			_, _, _ = s.Flush()
+		}
+		_, _ = s.Write([]byte(c.text[len(c.text)/2:]))
+		if err := s.Close(); err != nil || out.String() != Secrets(c.text) {
+			t.Fatalf("%s: Close answered %v, and wrote Secrets of the text: %v", c.name, err, out.String() == Secrets(c.text))
+		}
+		if final, held, err := s.Flush(); err != nil || final != int64(out.Len()) || held != 0 {
+			t.Errorf("%s: a flush after Close answered %d final, %d held and %v, where the stream wrote %d", c.name, final, held, err, out.Len())
+		}
+	}
 }

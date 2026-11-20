@@ -151,19 +151,19 @@ type Stream struct {
 	hold int
 	// live is a live stream's ([NewLiveStream]), nil in any other. final
 	// and held are what Flush answered last, kept for after the stream
-	// stops.
-	live  *live
-	final int64
-	held  int
+	// stops, and emitted how much the stream wrote of its head itself.
+	live    *live
+	final   int64
+	held    int
+	emitted int64
 }
 
 // live is what a live stream keeps beside its stages: the text past the
 // settled point, which its stages have not been handed.
 type live struct {
 	// settled is the settled point in head while the text is held whole,
-	// and pre how much Flush wrote of head's redaction up to it.
+	// up to which Flush wrote head's redaction.
 	settled int
-	pre     int64
 	// raw is the text past the settled point once the stages run, and due
 	// the length at which a write asks [Settled] again ([settleEvery]).
 	raw []byte
@@ -227,7 +227,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		if l := s.live; l != nil {
 			// What Flush wrote of the head is the start of what the
 			// stages write ([Settled]), so the end drops it.
-			s.end.skip = l.pre
+			s.end.skip = s.emitted
 			s.p.feed(s.head[:l.settled])
 			l.raw = append(l.raw, s.head[l.settled:]...)
 			s.head = nil
@@ -299,9 +299,7 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 		return s.written(), 0, nil
 	case s.p == nil && l != nil:
 		if n := Settled(string(s.head[l.settled:])); n > 0 {
-			text := Secrets(string(s.head[l.settled : l.settled+n]))
-			s.emit(text)
-			l.pre += int64(len(text))
+			s.emit(Secrets(string(s.head[l.settled : l.settled+n])))
 			l.settled += n
 		}
 	case s.p != nil && l != nil && !l.stopped:
@@ -324,26 +322,18 @@ func (s *Stream) counts() (final int64, held int) {
 	l := s.live
 	switch {
 	case s.p == nil && l != nil:
-		return l.pre, len(s.head) - l.settled
+		return s.emitted, len(s.head) - l.settled
 	case s.p == nil:
 		return 0, len(s.head)
 	case l != nil && !l.stopped:
 		return s.written(), len(l.raw)
 	}
-	return s.pre() + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
-}
-
-// pre is how many bytes a live stream's Flush wrote of its head's redaction.
-func (s *Stream) pre() int64 {
-	if s.live == nil {
-		return 0
-	}
-	return s.live.pre
+	return s.emitted + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
 }
 
 // written is how many bytes the stream has written.
 func (s *Stream) written() int64 {
-	n := s.pre()
+	n := s.emitted
 	if s.end != nil {
 		n += s.end.n
 	}
@@ -360,7 +350,7 @@ func (s *Stream) stopOnMiss() {
 		if s.err == nil {
 			s.err = s.p.keys.missed
 		}
-		s.final = s.pre() + s.p.keys.finalWritten()
+		s.final = s.emitted + s.p.keys.finalWritten()
 		s.p = nil
 	}
 }
@@ -404,12 +394,14 @@ func (s *Stream) endErr() {
 	}
 }
 
-// emit writes text to the stream's writer.
+// emit writes text to the stream's writer, counted in what it wrote.
 func (s *Stream) emit(text string) {
 	if s.err != nil || text == "" {
 		return
 	}
-	_, s.err = io.WriteString(s.w, text)
+	n, err := io.WriteString(s.w, text)
+	s.emitted += int64(n)
+	s.err = err
 }
 
 // pipeline is the stages a text is redacted by: the claims (every rule but the
