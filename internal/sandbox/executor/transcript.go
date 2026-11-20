@@ -390,10 +390,10 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
 // [TranscriptReadHeldBytes] live, so two hold 58 MiB (116 MiB at the default
 // GOGC the engine runs at, which sets no GOMEMLIMIT), each one core's work for
-// up to [TranscriptReadWorst]; one slot would queue every reader behind the
-// longest archive, and more would take more of a node's cores than a page is
-// worth. A seat's read takes the seats' one slot ([SeatTranscriptReadsAtOnce]);
-// a reading has its own ([HoldingsReadsAtOnce]).
+// up to [PersonTranscriptReadWorst] (a seat's for words 56 s); one slot would
+// queue every reader behind the longest archive, and more would take more of a
+// node's cores than a page is worth. A seat's read takes the seats' one slot
+// ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
 // TranscriptReadHeldBytes is the most one read holds at its bounds, measured
@@ -405,20 +405,24 @@ const TranscriptReadsAtOnce = 2
 // at the default GOGC, every credential shape streamed to the read budget.
 const TranscriptReadHeldBytes = 29 << 20
 
-// TranscriptReadWorst is the longest one read takes at its bounds, measured
-// likewise: one value of `pwd=x` lines joined by escaped breaks (a password's
-// value every seven bytes, as a JSON string holds them) streamed to the read
-// budget for a seat's words, 150 to 156 s for 240 MiB, 167 s at the budget; a
-// person's read of it 118 s, of `pwd=x` lines 90 s, of `password:` lines 42 s.
-const TranscriptReadWorst = 167 * time.Second
+// PersonTranscriptReadWorst is the longest a person's read takes at its
+// bounds, of what harnesses and ordinary tools write, measured likewise: one
+// value of `password:` lines streamed to the read budget, 41.5 to 42.0 s for
+// 240 MiB, 45 s at the budget (dense tokens 42 s, every credential shape 33, a
+// kept session 16). A value of `pwd=x` lines, a password's value every six
+// bytes the budget long, which no harness or tool writes, takes 98 s (129
+// escaped in a JSON string): it sets no wait, and a read of it fails closed
+// ([TranscriptAnsweredWithin]).
+const PersonTranscriptReadWorst = 45 * time.Second
 
 // TranscriptAnsweredWithin is how long a person's read of a transcript can
-// take to answer: the slowest read ([TranscriptReadWorst]) and before it one
-// slot's wait. A read queued behind [TranscriptReadsAtOnce] others holding
-// every slot waits for the first of them to end, at most one slowest read
-// whatever the slot count. A client that gives up sooner (the dashboard's
-// TRANSCRIPT_QUERY_TIMEOUT_MS, held to this) abandons a read it would be shown.
-const TranscriptAnsweredWithin = 2 * TranscriptReadWorst
+// take to answer: [PersonTranscriptReadWorst] and before it one slot's wait. A
+// read queued behind [TranscriptReadsAtOnce] others waits for the first of them
+// to end, a person's at most, since seats hold at most
+// [SeatTranscriptReadsAtOnce] of the slots. The dashboard waits this long
+// (TRANSCRIPT_QUERY_TIMEOUT_MS, held to it), and the socket ends the read there
+// (the frame's `wait_ms`): a read past it fails closed, answered nothing.
+const TranscriptAnsweredWithin = 2 * PersonTranscriptReadWorst
 
 // transcriptReads holds a slot for each transcript this process is reading,
 // at most [TranscriptReadsAtOnce]: taken before a read opens the session's
@@ -430,9 +434,10 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // one of these, and then one of the process's.
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
-// what reads hold at their worst: a seat's read costs what a person's does (up
-// to [TranscriptReadHeldBytes] and [TranscriptReadWorst], a read for words the
-// slowest), and one slot is always a person's while a seat reads.
+// what reads hold at their worst: a seat's read holds what a person's does (up
+// to [TranscriptReadHeldBytes]), for words a little longer (56 s at the budget
+// against [PersonTranscriptReadWorst]), and one slot is always a person's
+// while a seat reads.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

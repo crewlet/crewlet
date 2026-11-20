@@ -193,8 +193,9 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 // THE DASHBOARD NEVER ABANDONS A READ THE ENGINE MAY STILL ANSWER: a transcript
 // page's query waits at least as long as a person's read of a session can take
 // to answer at its bounds ([executor.TranscriptAnsweredWithin]), the slowest
-// read behind one slot's wait. A screen that gave up first showed a long
-// session as failed, and its frame's wait ended the read the engine was making.
+// read of what harnesses write behind one slot's wait; a read past it fails
+// closed. A screen that gave up first showed a session a harness wrote as
+// failed, and its frame's wait ended the read the engine was making.
 //
 // Mutation: wait QUERY_TIMEOUT_MS for a transcript, or raise the engine's
 // figure past the dashboard's, and this goes red.

@@ -2216,17 +2216,26 @@ message, only a value to 2 MiB, which a longer one streams past: at most 29 MiB
 measured, a value streamed at any length or one held just within the bound,
 where holding costs no more than streaming (held, a value is redacted whole,
 which holds about thirteen times a value of `pwd=x` lines, whose redaction
-lengthens most). Its time is the redaction's: one value of `pwd=x` lines joined
-by escaped breaks, a password's value every seven bytes, streamed to the 256 MiB
-budget takes about 167 seconds on two cores for a seat's words, the slowest
-read, and about 126 for a person; one of a kept session's text about 16. A node
+lengthens most). Its time is the redaction's, and what harnesses and ordinary
+tools write sets the waits: of that, one value of `password:` lines streamed to
+the 256 MiB budget is the slowest, about 45 seconds on two cores for a person
+and 56 for a seat's words; dense tokens about 42, every credential shape 33, a
+kept session's text 16. A value no harness or tool writes at that density, a
+password's value every six or seven bytes the whole budget long (`pwd=x`
+lines), takes 98 to 129 seconds for a person and about 163 for a seat's words,
+sets no wait, and fails closed. A node
 answers every dashboard tab open on it and every REST caller, each with a read
 of its own, so each node decodes at most two transcripts at once
 (`TranscriptReadsAtOnce`), 58 MiB live at their worst, whichever socket or route
 asks; the engine sets no `GOMEMLIMIT` and runs at Go's default `GOGC`, at which
-two peak at about 116 MiB. A seat's read of its own session has two minutes, so
-its read of such a session, alone or queued behind another, runs past them and
-is answered unavailable, never as a session that holds nothing. A relaunch's reading of a
+two peak at about 116 MiB. A person's read is answered within 90 seconds
+(`TranscriptAnsweredWithin`: the slowest read and one slot's wait), which the
+dashboard waits; past it the socket ends the read, and the dashboard shows
+nothing of the session and says it could not be read in time. A seat's read of
+its own session has two minutes (`SessionReadWithin`, set by the object store's
+pace): a read at the bounds of what harnesses write fits it alone; one queued
+behind other such reads, or of a value none writes, can run past it and is
+answered unavailable, never as a session that holds nothing. A relaunch's reading of a
 kept session for the calls it holds is none of them: one runs at a time, in a
 slot of its own (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode
 session's at most 2 MiB, however long one of its messages runs), so the two

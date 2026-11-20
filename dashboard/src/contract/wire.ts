@@ -142,15 +142,16 @@ export const QUERY_TIMEOUT_MS = 10_000;
  * once sent: the engine's `executor.TranscriptAnsweredWithin`, held there by
  * `internal/api/queries`'s `TestTheDashboardWaitsPastAPersonsReadOfASession`.
  *
- * THE SLOWEST READ PLUS ONE SLOT'S WAIT: a read at its bounds takes up to the
- * measured worst, and one queued behind every slot the engine reads with waits
- * at most one such read more, for the first of them to end. A screen that gave
- * up sooner showed a long session as failed while the engine went on reading
- * it. The frame carries the wait, so a read stops once it has passed, and a
- * screen that stops waiting sooner (left, or another session chosen) cancels
- * the read (`query_cancel`), which stops it then.
+ * THE SLOWEST READ OF WHAT HARNESSES WRITE PLUS ONE SLOT'S WAIT: a person's
+ * read at its bounds takes up to 45 s (`password:` lines to the read budget),
+ * and one queued behind every slot waits at most one such read more. A value
+ * no harness writes at that density (a password every few bytes) takes
+ * minutes, sets no wait, and FAILS CLOSED: the frame carries the wait, so the
+ * engine ends the read once it passes, and the screen says it could not be
+ * read in time. A screen that stops waiting sooner (left, or another session
+ * chosen) cancels the read (`query_cancel`), which stops it then.
  */
-export const TRANSCRIPT_QUERY_TIMEOUT_MS = 334_000;
+export const TRANSCRIPT_QUERY_TIMEOUT_MS = 90_000;
 
 /**
  * How many queries one socket runs at once.
