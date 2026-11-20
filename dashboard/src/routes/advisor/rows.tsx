@@ -1,7 +1,7 @@
 /**
  * One finding as a row of the Advisor's lists: its headline, one line of why,
  * the numbers behind it, ONE press that says what it does ("Let Agent SWE
- * watch the engine's health", "Take a backup", "Add a model entry"), and a
+ * watch the engine's health", "Take a backup", "Open ENG-12"), and a
  * menu with the rest (the fix's other changes, Snooze, Dismiss with a reason,
  * Ask Crewlet). Everything else is behind Details: the model's explanation,
  * the records, when it was found and checked (`view.ts` reads the row off
