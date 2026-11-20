@@ -88,15 +88,25 @@ const wholeBytes = stageStep
 const settleEvery = 4 * MaxReach
 
 // unsettledBytes is the most text a live stream holds unsettled. Past it the
-// stream hands that text to its stages and settles no more for the rest of
-// its life, trailing its text as a [NewStream] does. [Settled] finds a
-// settled point only reading on from the last one, no longer held, and a
-// window read alone finds none: what a line's last password's key takes as
-// its value turns on every key before it on the line. Settled holds back
-// complete lines only while a key's block or a password's value may still be
-// read across them ([MaxKeyBlockBytes], [MaxReach]), so only a line longer
-// than this, unfinished or held whole by Settled, gets here.
+// stream hands that text to its stages and trails its text as a [NewStream]
+// does until a line ends, then holds the text after it again and settles
+// once [resumeAfter] allows. Settled holds back complete lines only while a
+// key's block or a password's value may still be read across them
+// ([MaxKeyBlockBytes], [MaxReach]), so only a line longer than this,
+// unfinished or held whole by Settled, gets here.
 const unsettledBytes = 1 << 20
+
+// resumeAfter is how much of the text after a line too long to hold [Settled]
+// must settle, read from that line's end, before a live stream's stages
+// decide there again: what a line's last password's key takes as its value
+// turns on every key before it on the line, which a read from its end does
+// not see. What came before the line's end bears on the text after it for two
+// reaches at most (a key's block or an END's read back across it,
+// [MaxKeyBlockBytes], then a value read below a key, [MaxReach]), and a hold
+// that begins there is decided within one more, so a point Settled settles
+// four reaches on, read from the line's end, is one it settles read from the
+// whole text: three reaches, and one to spare.
+const resumeAfter = 4 * MaxReach
 
 // ErrDecidedEarly is what a [Stream] answers, wrapped with the first byte of
 // the text from which what it wrote may differ from [Secrets], once it finds
@@ -170,9 +180,18 @@ type live struct {
 	// the length at which a write asks [Settled] again ([settleEvery]).
 	raw []byte
 	due int
-	// stopped is whether raw ran past [unsettledBytes], after which the
-	// stream settles nothing.
+	// stopped is whether raw ran past [unsettledBytes] in a line that has
+	// not ended, the stages handed all of it; least is how far Settled must
+	// settle raw before the stages decide there ([resumeAfter]), and 0 once
+	// they hold a settled point.
 	stopped bool
+	least   int
+}
+
+// resume holds the text from a line end on again, once the stages hold all
+// before it, settling there once [resumeAfter] allows.
+func (l *live) resume() {
+	l.stopped, l.least, l.raw, l.due = false, resumeAfter, l.raw[:0], settleEvery
 }
 
 // NewStream is a Stream that writes what it redacts to w.
@@ -205,7 +224,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, errStreamClosed
 	case s.err != nil:
 		return 0, s.err
-	case s.p != nil && s.live != nil && !s.live.stopped:
+	case s.p != nil && s.live != nil:
 		s.settleIn(p)
 		return len(p), s.err
 	case s.p != nil:
@@ -247,10 +266,22 @@ func (s *Stream) Write(p []byte) (int, error) {
 
 // settleIn takes p as the next of a live stream's text: held unsettled, the
 // stages handed what [Settled] settles each time [settleEvery] more of it has
-// arrived, and all of it once it runs past [unsettledBytes].
+// arrived, and all of it once it runs past [unsettledBytes], up to the end of
+// the line it is in, after which it is held again ([live.resume]).
 func (s *Stream) settleIn(p []byte) {
 	l := s.live
-	for s.p != nil && !l.stopped {
+	for s.p != nil && len(p) > 0 {
+		if l.stopped {
+			k := bytes.IndexByte(p, '\n') + 1
+			if k == 0 {
+				s.p.feed(p)
+				break
+			}
+			s.p.feed(p[:k])
+			p = p[k:]
+			l.resume()
+			continue
+		}
 		k := min(len(p), l.due-len(l.raw))
 		l.raw = append(l.raw, p[:k]...)
 		p = p[k:]
@@ -259,23 +290,30 @@ func (s *Stream) settleIn(p []byte) {
 		}
 		s.settle()
 	}
-	if s.p != nil && len(p) > 0 {
-		s.p.feed(p)
-	}
 	s.endErr()
 	s.stopOnMiss()
 }
 
 // settle hands a live stream's stages the text [Settled] settles past the
-// settled point, or, past [unsettledBytes], all of it, settling no more.
+// settled point, none short of [resumeAfter] after a line too long to hold,
+// or, past [unsettledBytes], all of it, held again after its line ends.
 func (s *Stream) settle() {
 	l := s.live
 	n := Settled(string(l.raw))
+	if n < l.least {
+		n = 0
+	} else {
+		l.least = 0
+	}
 	s.p.feed(l.raw[:n])
 	l.raw = l.raw[:copy(l.raw, l.raw[n:])]
 	if len(l.raw) > unsettledBytes {
 		s.p.feed(l.raw)
+		ended := l.raw[len(l.raw)-1] == '\n'
 		l.raw, l.stopped = nil, true
+		if ended {
+			l.resume()
+		}
 	}
 	l.due = min(len(l.raw)+settleEvery, unsettledBytes+1)
 	s.endErr()
@@ -287,8 +325,8 @@ func (s *Stream) settle() {
 // of the text whatever is written after it or the stream answers later) and
 // how many bytes of the text are not yet in what it wrote. On a Stream from
 // NewStream it writes nothing and counts only what no window decided early
-// waits on, and held is a lower bound, as it is once a live stream settles no
-// more ([unsettledBytes]). After an error it answers the counts it last had.
+// waits on, and held is a lower bound, as it is while a live stream trails
+// past [unsettledBytes]. After an error it answers the counts it last had.
 //
 // Each stage is handed only settled text, and decides all it holds as it does
 // at the text's end ([pipeline.decideHeld]): the redaction composes there. So
@@ -307,9 +345,9 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 			l.settled += n
 		}
 	case s.p != nil && l != nil && !l.stopped:
-		// Settling that stops hands the stages unsettled text, which no
-		// stage may decide as at an end ([unsettledBytes]).
-		if s.settle(); s.p != nil && !l.stopped {
+		// Settling that stops, or has not resumed, leaves the stages text
+		// no stage may decide as at an end ([unsettledBytes]).
+		if s.settle(); s.p != nil && !l.stopped && l.least == 0 {
 			s.p.decideHeld()
 			s.endErr()
 			s.stopOnMiss()
@@ -330,10 +368,14 @@ func (s *Stream) counts() (final int64, held int) {
 		return s.emitted, len(s.head) - l.settled
 	case s.p == nil:
 		return 0, len(s.head)
-	case l != nil && !l.stopped:
+	case l != nil && !l.stopped && l.least == 0:
 		return s.written(), len(l.raw)
 	}
-	return s.emitted + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
+	held = s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
+	if l != nil {
+		held += len(l.raw)
+	}
+	return s.emitted + s.p.keys.finalWritten(), held
 }
 
 // written is how many bytes the stream has written.

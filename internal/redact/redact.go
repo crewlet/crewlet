@@ -27,16 +27,16 @@
 //
 // # Text that is still being written
 //
-// Every rule here was written for whole text; a live view shows text still
-// being written. [Settled] is how much of a growing text has a redaction
-// nothing written after it can change, so a reader is never shown a key's body
-// that its END line, arriving later, would have redacted. A rule added here
-// that can reach across a line break is one Settled has to learn about; its
-// test feeds every shape here through text that arrives a line at a time. A
-// stream from [NewLiveStream] hands its stages only what Settled settles, and
-// [Stream.Flush] decides each stage there as at the text's end. Unflushed, it
-// answers as a [NewStream] does; flushed, it writes Secrets where Close answers
-// nil, and refuses otherwise only in a layout named below.
+// Every rule here reads whole text; a live view shows a growing one. [Settled]
+// is how much of it has a redaction nothing written after it can change, so a
+// reader never sees a key's body that its END line, arriving later, redacts. A
+// rule that can reach across a line break is one Settled has to learn; its test
+// feeds it every shape here a line at a time. A stream from [NewLiveStream]
+// hands its stages only what Settled settles, but for a line too long to hold,
+// until a little after it ends ([unsettledBytes]), and [Stream.Flush] decides
+// each stage there as at the text's end. Unflushed, it answers as a [NewStream]
+// does; flushed, it writes Secrets where Close answers nil, and refuses
+// otherwise only in a layout named below.
 //
 // # How far a rule reads
 //

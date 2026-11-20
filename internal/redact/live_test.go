@@ -56,27 +56,37 @@ type liveText struct {
 	canRefuse  bool
 }
 
-// liveTexts is a text of each kind the package's tests draw, at each length
-// a live stream reads apart: a transcript of every shape the keys' reader
-// tells apart, below wholeBytes, across it and past it; the keys in every
-// wrapping; and every shape a stage carries across its window, all shorter
-// than the hold they are read at. Then texts a stream decides early: a shape
-// of each hold at 256 KiB, an armour beside a run, an AWS secret's blanks or
-// a Google token's dots in no layout that refuses there; and at the stream's
-// own hold, after 600 KiB of lines, each layout the package doc names, and
-// its neighbours, beside a run past the lag.
+// liveTexts is a text of each kind the package's tests draw, at each length a
+// live stream reads apart: a transcript of every shape the keys' reader tells
+// apart, below wholeBytes, across it and past it; the keys in every wrapping;
+// every shape a stage carries across its window; and lines too long to hold
+// among them, all shorter than the hold they are read at. Then texts a stream
+// decides early: a shape of each hold at 256 KiB, an armour beside a run, an
+// AWS secret's blanks or a Google token's dots in no layout that refuses there;
+// and at the stream's own hold, after 600 KiB of lines, each layout the package
+// doc names, and its neighbours, beside a run past the lag.
 func liveTexts(r *rand.Rand) (texts []liveText) {
 	add := func(name, text string, h int, canRefuse bool) {
 		texts = append(texts, liveText{name, text, h, canRefuse})
 	}
-	for _, size := range []int{redact.WholeBytes / 3, redact.WholeBytes - 100, redact.WholeBytes + 1000, 3 * redact.WholeBytes} {
+	transcript := func(size int) string {
 		var b strings.Builder
 		for b.Len() < size {
 			b.WriteString(transcriptLines[r.IntN(len(transcriptLines))])
 			b.WriteByte('\n')
 		}
-		add(fmt.Sprintf("a transcript of %d bytes", b.Len()), b.String(), redact.HoldBytes(), false)
+		return b.String()
 	}
+	for _, size := range []int{redact.WholeBytes / 3, redact.WholeBytes - 100, redact.WholeBytes + 1000, 3 * redact.WholeBytes} {
+		text := transcript(size)
+		add(fmt.Sprintf("a transcript of %d bytes", len(text)), text, redact.HoldBytes(), false)
+	}
+	// A line too long to hold (a base64 dump; password's keys, the last
+	// taking the line after it as its value) between transcripts.
+	b64 := strings.Repeat("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9Q", 3<<14)
+	add("a base64 line of 3 MiB in a transcript", transcript(redact.WholeBytes)+"data: "+b64+"\n"+transcript(512<<10), redact.HoldBytes(), false)
+	keys := "x " + strings.Repeat("password: ", 209715) + "\nhunter2secretvalue9\n"
+	add("a line of password's keys in a transcript", transcript(redact.WholeBytes)+keys+transcript(512<<10), redact.HoldBytes(), false)
 	for name, text := range streamCorpus(r) {
 		add("the keys of "+name+" in every wrapping", text, redact.HoldBytes(), false)
 	}

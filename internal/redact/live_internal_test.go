@@ -252,9 +252,9 @@ func TestAFlushCountsNothingAWindowDecidedEarlyWaitsOn(t *testing.T) {
 }
 
 // A LIVE STREAM PAST ITS UNSETTLED BOUND TRAILS AS A STREAM DOES: a line
-// longer than [unsettledBytes] that never ends stops its settling for good,
-// what it writes is still Secrets of the text, and the held count it answers
-// is a lower bound. A text whose lines end never gets there, flushed or not.
+// longer than [unsettledBytes] that never ends stops its settling while it
+// goes on, what it writes is still Secrets of the text, and the held count it
+// answers is a lower bound. A text whose lines end never gets there.
 //
 // Mutation: hold the unsettled text whatever its length ([Stream.settle]),
 // and the stream holds the whole line; settle only on a flush
@@ -360,6 +360,67 @@ func TestWindowsMergedPastTheLimitKeepTheEarliestWrite(t *testing.T) {
 	}
 	if last := k.decided[len(k.decided)-1]; last.written != int64(999+3*earlyWindows) {
 		t.Errorf("the newest window waiting wrote %d, not its own %d", last.written, 999+3*earlyWindows)
+	}
+}
+
+// A LIVE STREAM SETTLES AGAIN AFTER A LINE TOO LONG TO HOLD: it trails as a
+// [NewStream] does while the line goes on, and once the line has ended and
+// [resumeAfter] more is settled, a flush leaves nothing of a text of plain
+// lines unwritten; the stream writes Secrets of the text.
+//
+// Mutation: hold nothing again once the line ends ([live.resume]), and the
+// stream trails the rest of its text by its stages' windows.
+func TestALiveStreamSettlesAgainAfterALongLine(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1666, 6))
+	lines := func(n int) string {
+		return strings.Repeat("2026-11-19T10:00:00Z INFO build step 12 of 40 passed in 0.412s\n", n/64+1)
+	}
+	text := lines(wholeBytes+pieceBytes) + "data: " + testRun(r, testB64, 3<<20) + "\n" + lines(1<<20)
+	var out bytes.Buffer
+	s := NewLiveStream(&out)
+	stopped := false
+	for at := 0; at < len(text); at += 16 << 10 {
+		_, _ = s.Write([]byte(text[at:min(len(text), at+16<<10)]))
+		stopped = stopped || s.live.stopped
+		if (at+16<<10)%(64<<10) == 0 {
+			_, _, _ = s.Flush()
+		}
+	}
+	final, held, err := s.Flush()
+	want := Secrets(text)
+	if !stopped || err != nil || held != 0 || final != int64(len(want)) || out.String() != want {
+		t.Errorf("a line of 3 MiB, then 1 MiB of lines: settling stopped in the line: %v; the last flush answered %d final, %d held and %v, where Secrets is %d bytes; the stream wrote Secrets: %v", stopped, final, held, err, len(want), out.String() == want)
+	}
+}
+
+// A LIVE STREAM RESUMES ONLY WHERE THE WHOLE TEXT SETTLES: after a line too
+// long to hold whose last password's key takes the line after it as its
+// value, which a read from the line's end does not see, a flush at the line's
+// end decides nothing, and the stream writes Secrets of the text.
+//
+// Mutation: decide the stages as soon as the line ends ([live.resume]), and
+// the key's value is written as it is.
+func TestALiveStreamResumesOnlyWhereTheWholeTextSettles(t *testing.T) {
+	t.Parallel()
+	head := strings.Repeat("ok\n", wholeBytes/3+1) + "x " + strings.Repeat("password: ", 209715)
+	text := head + "\n" + "hunter2secretvalue9\n" + strings.Repeat("ok\n", 100<<10)
+	want := Secrets(text)
+	if strings.Contains(want, "hunter2secretvalue9") {
+		t.Fatalf("Secrets of the text leaves the last key's value: the text no longer holds a key whose value is on the next line")
+	}
+	var out bytes.Buffer
+	s := NewLiveStream(&out)
+	for at := 0; at < len(head)+1; at += 64 << 10 {
+		_, _ = s.Write([]byte(text[at:min(len(head)+1, at+64<<10)]))
+	}
+	final, _, err := s.Flush()
+	if got := out.String(); err != nil || final > int64(len(got)) || got[:final] != want[:final] {
+		t.Fatalf("a flush at the long line's end answered %d final and %v, not a prefix of Secrets", final, err)
+	}
+	_, _ = s.Write([]byte(text[len(head)+1:]))
+	if err := s.Close(); err != nil || out.String() != want {
+		t.Errorf("Close answered %v, and the stream wrote another text than Secrets %s", err, parted(out.String(), want))
 	}
 }
 
