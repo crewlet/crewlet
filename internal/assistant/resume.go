@@ -139,6 +139,9 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	page, fresh := s.resumedPage(ctx, keep, r)
 	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
+	if history, historyErr := s.transcripts.Transcript(ctx, person.ID, r.Conversation); historyErr == nil {
+		t.seePerson(history.Messages, "", page)
+	}
 	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
 		Identity: []string{r.Turn.String(), r.Proposal.String()}}
 	if provenance.Boundary(keep.Boundary).Valid() {
@@ -276,7 +279,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			r.Failure.Refusal.Code)
 	}
 	if r.Receipt != nil && !r.ClientReported {
-		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary))
+		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary.Text()))
 	}
 	if len(r.Answer) > 0 {
 		answer := redact.Secrets(string(r.Answer))
@@ -291,7 +294,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			answer))
 	}
 	if r.ClientReported && r.Receipt != nil {
-		out.WriteString("\n" + pageReport(b, r.Receipt.Summary, read))
+		out.WriteString("\n" + pageReport(b, r.Receipt.Summary.Text(), read))
 	}
 	return out.String()
 }

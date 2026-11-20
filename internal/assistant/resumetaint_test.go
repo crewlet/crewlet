@@ -41,9 +41,9 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 		first, second bool
 	}{
 		{name: "after outside text the first segment read",
-			tools: []string{"list_executors", "create_task"},
+			tools: []string{catalog.ReadAPITool, "create_task"},
 			propose: []evals.Round{
-				evals.Call("r1", "list_executors", map[string]any{}),
+				evals.Call("r1", catalog.ReadAPITool, map[string]any{"route": "GET /executors"}),
 				evals.Call("c1", "create_task", map[string]any{"title": "Follow it up"})},
 			answer: `{"key":"ENG-7","title":"Follow it up"}`, first: true, second: true},
 		{name: "after an executor's question the decision carried",
@@ -66,7 +66,10 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 				acts  []string
 			)
 			for _, name := range tc.tools {
-				tool := assistanttest.Tool(t, name)
+				tool := assistanttest.ReadAPI(t, "GET /executors")
+				if name != catalog.ReadAPITool {
+					tool = assistanttest.Tool(t, name)
+				}
 				tools = append(tools, tool)
 				if tool.Act != "" {
 					acts = append(acts, tool.Act)
@@ -101,7 +104,7 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 			resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 				Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 				Read: f.Grant("approve"), State: wire.ProposalApplied,
-				Receipt: &wire.Receipt{Summary: "Done."}, Answer: []byte(tc.answer),
+				Receipt: &wire.Receipt{Summary: wire.Plain("Done.")}, Answer: []byte(tc.answer),
 				Card: cardAt(p, wire.ProposalApplied)})
 			if err != nil {
 				t.Fatal(err)

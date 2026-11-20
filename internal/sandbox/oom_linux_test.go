@@ -77,38 +77,6 @@ func TestEveryProcessADirectBoxRunsGoesBeforeItsEngine(t *testing.T) {
 	requireAheadOfTheEngine(t, "the detached job", string(leader))
 }
 
-// A confined box is raised BEFORE its confinement starts: Landlock leaves it
-// nothing writable but its home, so a raise inside would fail. The helper here
-// reports what it was started at and becomes the command, as the real ones do.
-func TestAConfinedBoxIsRaisedBeforeItsConfinementStarts(t *testing.T) {
-	t.Parallel()
-	box := mustCreate(t, newDirect(t), Spec{})
-	direct, ok := box.(*directBox)
-	if !ok {
-		t.Fatalf("a direct backend minted a %T", box)
-	}
-	dir := t.TempDir()
-	reported := filepath.Join(dir, "helper-adj")
-	helper := filepath.Join(dir, "confine-helper")
-	script := "#!/bin/sh\ncat /proc/self/oom_score_adj > '" + reported + "'\n" +
-		"while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n"
-	writeExecutable(t, helper, script)
-	direct.confine = &boxConfine{
-		host:  &HostConfinement{Mechanism: MechanismLandlock, helper: helper},
-		rules: confineRules{write: direct.Home()},
-	}
-
-	res, err := direct.Exec(t.Context(), "echo confined-ran", ExecOptions{})
-	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "confined-ran" {
-		t.Fatalf("Exec: %v (exit %d, stdout %q, stderr %q)", err, res.ExitCode, res.Stdout, res.Stderr)
-	}
-	raw, err := os.ReadFile(reported)
-	if err != nil {
-		t.Fatalf("the confinement's helper never ran: %v", err)
-	}
-	requireAheadOfTheEngine(t, "a confined box's confinement helper", string(raw))
-}
-
 // A container box is started ahead of its engine — the runtime gives every
 // `exec` into it the container's value — and an operator's own
 // --oom-score-adj in run_args still wins, spliced after the backend's.

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // OPEN WORK NOW: who holds the company's open items, and which open items
@@ -28,6 +31,23 @@ type OpenWork struct {
 	// first, at most [MaxBlockers], and every item a person holds that agent
 	// work with no question of its own waits on, at most as many again.
 	Blockers []WaitedOn `json:"blockers"`
+	// Unheld are the open items blocked on nothing anyone holds, at most
+	// [MaxBlockers], the longest unchanged first.
+	Unheld []UnheldWait `json:"unheld"`
+}
+
+// UnheldWait is an open item blocked only on what nothing anyone holds will
+// clear: an item nobody holds, an item removed, or a change the engine found
+// nothing moving. No seat's turn ends the wait, and the item's own record
+// says nothing more about why it waits.
+type UnheldWait struct {
+	Key    string `json:"key"`
+	Holder string `json:"holder"`
+	// Since is when the item last changed.
+	Since time.Time `json:"since"`
+	// On is what it waits on, at most five: an item's key, or a change's
+	// address.
+	On []string `json:"on"`
 }
 
 // HeldOpen is one holder's open items.
@@ -38,6 +58,11 @@ type HeldOpen struct {
 	Pressing int `json:"pressing"`
 	// Keys are at most five of them, the highest priority first.
 	Keys []string `json:"keys"`
+	// NotStarted counts the ones nobody has started, and NotStartedKeys
+	// names at most five of them, the highest priority first: work another
+	// seat could take without taking it from under a turn.
+	NotStarted     int      `json:"not_started"`
+	NotStartedKeys []string `json:"not_started_keys"`
 }
 
 // WaitedOn is an open item other open items wait on, directly or through
@@ -73,7 +98,7 @@ func (w WaitedOn) HeldByPerson(person func(string) bool) bool {
 // pressing of each holder's first.
 func openHoldersStatement() (string, []any) {
 	open := openGroups()
-	return `SELECT t.assignee, t.key, t.priority FROM tracker_tasks t
+	return `SELECT t.assignee, t.key, t.priority, t.status_group FROM tracker_tasks t
 		WHERE t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> ''
 		  AND t.status_group IN (` + placeholders(len(open)) + `)
 		ORDER BY t.assignee, t.prio_rank DESC, t.id LIMIT ?`, open
@@ -105,6 +130,20 @@ func openQuestionsStatement() (string, []any) {
 		ORDER BY c.task_id, c.created_at, c.id LIMIT ?`, open
 }
 
+// openWaitsStatement is every open wait of an open item, with the item and,
+// where it waits on an item, that item as the tracker keeps it.
+func openWaitsStatement() (string, []any) {
+	open := openGroups()
+	return `SELECT u.id, u.key, u.assignee, u.updated_at, d.blocker_id, d.dead_head,
+		  COALESCE(b.key, ''), COALESCE(b.assignee, ''), b.id IS NOT NULL, b.removed_at IS NOT NULL
+		FROM tracker_task_deps d
+		JOIN tracker_tasks u ON u.id = d.task_id
+		LEFT JOIN tracker_tasks b ON b.id = d.blocker_id
+		WHERE d.blocker_open = 1 AND u.removed_at IS NULL AND u.archived = 0
+		  AND u.status_group IN (` + placeholders(len(open)) + `)
+		ORDER BY d.task_id LIMIT ?`, open
+}
+
 // openNode is one open item in the graph.
 type openNode struct {
 	key, holder, status string
@@ -127,7 +166,71 @@ func readOpenWork(ctx context.Context, tx *sql.Tx, agents, people []string, out 
 		return err
 	}
 	out.Blockers = blockersOf(nodes, agents, people)
-	return nil
+	out.Unheld, err = readUnheldWaits(ctx, tx)
+	return err
+}
+
+// readUnheldWaits is every open item whose every open wait is on what nothing
+// anyone holds will clear, the longest unchanged first, at most [MaxBlockers].
+func readUnheldWaits(ctx context.Context, tx *sql.Tx) ([]UnheldWait, error) {
+	type waits struct {
+		item UnheldWait
+		// held says one of its waits is on work a seat holds, or on a change
+		// still moving: a wait something will end.
+		held bool
+	}
+	byItem := map[string]*waits{}
+	var order []string
+	statement, args := openWaitsStatement()
+	rows, err := tx.QueryContext(ctx, statement, append(args, MaxOpenRows+1)...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the open waits by item: %w", err)
+	}
+	read := 0
+	for rows.Next() {
+		var id, key, holder, blocker, dead, bKey, bHolder string
+		var updated, isItem, removed int64
+		if err := rows.Scan(&id, &key, &holder, &updated, &blocker, &dead, &bKey, &bHolder, &isItem,
+			&removed); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("worklet: scan an open wait: %w", err)
+		}
+		if read++; read > MaxOpenRows {
+			_ = rows.Close()
+			return nil, fmt.Errorf("worklet: the company's open work holds more than %d waits", MaxOpenRows)
+		}
+		w := byItem[id]
+		if w == nil {
+			w = &waits{item: UnheldWait{Key: key, Holder: holder, Since: store.DecodeTime(updated), On: []string{}}}
+			byItem[id] = w
+			order = append(order, id)
+		}
+		on := bKey
+		switch {
+		case isItem == 0:
+			on = blocker
+			w.held = w.held || dead == ""
+		case removed == 0 && bHolder != "":
+			w.held = true
+		}
+		if len(w.item.On) < MaxPatternExamples {
+			w.item.On = append(w.item.On, on)
+		}
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, fmt.Errorf("worklet: read the open waits by item: %w", err)
+	}
+	out := []UnheldWait{}
+	for _, id := range order {
+		if w := byItem[id]; !w.held {
+			out = append(out, w.item)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b UnheldWait) int { return cmp.Or(a.Since.Compare(b.Since), cmp.Compare(a.Key, b.Key)) })
+	if len(out) > MaxBlockers {
+		out = out[:MaxBlockers]
+	}
+	return out, nil
 }
 
 func readOpenHolders(ctx context.Context, tx *sql.Tx) ([]HeldOpen, error) {
@@ -139,8 +242,8 @@ func readOpenHolders(ctx context.Context, tx *sql.Tx) ([]HeldOpen, error) {
 	byHandle := map[string]*HeldOpen{}
 	read := 0
 	for rows.Next() {
-		var handle, key, priority string
-		if err := rows.Scan(&handle, &key, &priority); err != nil {
+		var handle, key, priority, group string
+		if err := rows.Scan(&handle, &key, &priority, &group); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("worklet: scan an open item: %w", err)
 		}
@@ -150,7 +253,7 @@ func readOpenHolders(ctx context.Context, tx *sql.Tx) ([]HeldOpen, error) {
 		}
 		h := byHandle[handle]
 		if h == nil {
-			h = &HeldOpen{Handle: handle, Keys: []string{}}
+			h = &HeldOpen{Handle: handle, Keys: []string{}, NotStartedKeys: []string{}}
 			byHandle[handle] = h
 		}
 		h.Open++
@@ -159,6 +262,11 @@ func readOpenHolders(ctx context.Context, tx *sql.Tx) ([]HeldOpen, error) {
 		}
 		if len(h.Keys) < MaxPatternExamples {
 			h.Keys = append(h.Keys, key)
+		}
+		if StatusGroup(group) == GroupNotStarted {
+			if h.NotStarted++; len(h.NotStartedKeys) < MaxPatternExamples {
+				h.NotStartedKeys = append(h.NotStartedKeys, key)
+			}
 		}
 	}
 	if err := closeRows(rows); err != nil {

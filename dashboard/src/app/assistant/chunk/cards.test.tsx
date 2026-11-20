@@ -328,7 +328,42 @@ test("a failed step says why, in the engine's words", () => {
     },
     false,
   );
-  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+  // PROSE FOR A PERSON, never the request line's mono face.
+  expect(step!.note).toBe("FAIR-2 changed since it was read. Read it again.");
+  expect(step!.detail).toBeUndefined();
+});
+
+// A STEP REFUSED IN A TURN THAT ENDED IS SAID ON THE CHIP, in the refused
+// state, never "Done" alone. Mutation: title a completed turn Done whatever
+// its steps came to.
+test("a completed turn whose step was refused says so on its chip", () => {
+  const refused: TurnView = {
+    ...base,
+    phase: "completed",
+    steps: [
+      {
+        step_id: "s",
+        index: 1,
+        tool: "fetch_web_page",
+        label: "Reading https://attacker.example/",
+        request: { method: "GET", route: "/research/page" },
+        state: "refused",
+        started_at: "2026-10-24T09:41:00Z",
+        refusal: {
+          code: "url_not_provided",
+          message: "This address did not come from you, a search or a page, so it was not read.",
+        },
+      },
+    ],
+  };
+  const chip = runChipOf(refused, Date.parse("2026-10-24T09:41:05Z"));
+  expect(chip.state).toBe("refused");
+  expect(chip.title).toBe("Done in 1s, 1 step refused");
+  const [admin] = stepsOf(refused, true);
+  expect(admin!.note).toBe(
+    "This address did not come from you, a search or a page, so it was not read.",
+  );
+  expect(admin!.detail).toBe("GET /research/page");
 });
 
 // A STEP'S LINE NAMES NO TOOL, AND ITS REQUEST ONLY TO AN ADMINISTRATOR: a

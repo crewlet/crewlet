@@ -351,6 +351,48 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	}
 }
 
+// AN ERROR STREAM OF WHOSE END NOTHING IS SHOWN IS SAID, NOT SHOWN: the end a
+// failure reads is one line begun before the read, of which nothing is shown,
+// or blank lines after it or alone, so the transcript and the failure say the
+// stream by its size and why none of it is there.
+//
+// Mutation: leave the note out, or decide it on the end before it is trimmed,
+// and the run says nothing of its error stream.
+func TestAnErrorStreamOfWhoseEndNothingIsShownIsSaid(t *testing.T) {
+	t.Parallel()
+	long := "starting\n" + strings.Repeat("e", testFailureBound+2*executor.RedactContext)
+	const continues = "continues what was written before it)"
+	const blank = "opens only blank lines)"
+	for _, c := range []struct{ name, stderr, why string }{
+		{"one line begun before the read", long + "FATAL: the last line", continues},
+		{"that line, ended", long + "\n", continues},
+		{"that line, then a blank line", long + "\n\n", blank},
+		{"that line, then a line of spaces", long + "\n \n", blank},
+		{"blank lines alone", "starting\n" + strings.Repeat("\n", testFailureBound+2*executor.RedactContext), blank},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes)
+			b := box(t, runner)
+			p := paths(b)
+			b.Put(p.Err(), c.stderr)
+			b.Put(p.ExitCode(), "1")
+
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			said := fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s",
+				executor.HumanSize(int64(len(c.stderr))), c.why)
+			for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
+				if !strings.HasSuffix(got, said) || strings.Contains(got, "eeee") || strings.Contains(got, "FATAL") {
+					t.Errorf("the %s ends …%q; want %q, none of the stream shown", name, tailOf(got, 160), said)
+				}
+			}
+		})
+	}
+}
+
 // A REPORT PAST THE CAP DEGRADES ONLY ITSELF: it is described by its size and
 // the run reads as not succeeded for it, but the run's tokens, refs and
 // transcript are still collected, to be charged and published.

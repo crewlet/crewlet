@@ -5,11 +5,9 @@ import (
 	"testing"
 )
 
-// A SEAT'S SESSION IS BYTE-IDENTICAL ON THE WIRE whatever else the bridge
-// serves: its handshake, its advertised tools with their hints, a call's
-// answer, a failure's answer and who each call is decided as are pinned here
-// as the box reads them. The bridge serving a second kind of caller (the
-// assistant's deep work, ADR-0054) must leave every byte of this alone.
+// A SEAT'S SESSION IS BYTE-IDENTICAL ON THE WIRE: its handshake, its
+// advertised tools with their hints, a call's answer, a failure's answer and
+// who each call is decided as are pinned here as the box reads them.
 func TestASeatSessionIsByteIdenticalOnTheWire(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "read_page", "post_message", "whoami")
@@ -34,6 +32,5 @@ func TestASeatSessionIsByteIdenticalOnTheWire(t *testing.T) {
 	}
 }
 
-// seatWire is the seat session's wire as it stood before the bridge served
-// any other caller.
+// seatWire is the seat session's wire as a box reads it.
 const seatWire = `{"call":{"content":[{"type":"text","text":"read_page ok"}]},"failed":{"content":[{"type":"text","text":"post_message ok"}],"isError":true},"server":{"name":"crewlet","title":"Engineer (dev)","version":"1"},"tools":[{"annotations":{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false},"description":"post_message does a thing","inputSchema":{"properties":{"id":{"type":"integer"},"text":{"type":"string"}},"type":"object"},"name":"post_message"},{"annotations":{"idempotentHint":true,"readOnlyHint":true},"description":"read_page does a thing","inputSchema":{"properties":{"id":{"type":"integer"},"text":{"type":"string"}},"type":"object"},"name":"read_page"},{"description":"says who this call acts as","inputSchema":{"properties":{},"type":"object"},"name":"whoami"}],"whoami":{"content":[{"type":"text","text":"resolved seat seat=dev login="}]}}`

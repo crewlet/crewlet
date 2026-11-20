@@ -15,10 +15,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   CHANGES_FILL_PAGES,
   IMMUTABLE_KEPT,
+  WINDOW_SPREAD_MS,
   codeRest,
   codeSearch,
   useCodeQuery,
+  type CodeParams,
+  type CodeWindow,
 } from "./useCodeQuery.ts";
+import { edgeAt } from "./range.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
@@ -152,6 +156,143 @@ describe("a write to the code log is read back at its floor", () => {
     );
     expect(url.searchParams.get("read_level")).toBe("linearizable");
     expect(url.searchParams.getAll("min_position")).toEqual([]);
+  });
+});
+
+describe("a window the clock moves is one question", () => {
+  // ITS NAME IS THE QUESTION AND ITS EDGES ARE READ AT EACH ASK: an edge the
+  // clock moved keeps the answer on screen, and the answer says which edges it
+  // was read at; a window of another name is a new question. Mutation: put the
+  // edges in the key, or send the edges the hook was first given, or carry the
+  // edges of the latest render rather than the ask's, and a case below fails.
+  const edge = (iso: string) => edgeAt(Date.parse(iso));
+  const windowed = (since: string, pollMs?: number, name = "1d") =>
+    renderHook(
+      (p: { since: string; name: string }) =>
+        useCodeQuery(
+          "code_pushes",
+          { name: "web" },
+          { pollMs, window: { name: p.name, edges: { since: edge(p.since) } } },
+        ),
+      { initialProps: { since, name } },
+    );
+
+  test("a moved edge keeps the answer, and the next ask sends it", async () => {
+    const sent = stub(() => json(pushesPage(["p1"])));
+    const { result, rerender } = windowed("2026-11-17T13:00:00.000Z", 60_000);
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(result.current.edges).toEqual({ since: "2026-11-17T13:00:00.000Z" });
+
+    rerender({ since: "2026-11-17T14:00:00.000Z", name: "1d" });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data?.pushes).toHaveLength(1);
+    // THE ANSWER ON SCREEN WAS READ AT THE OLD EDGE, and says so until the next ask lands.
+    expect(result.current.edges).toEqual({ since: "2026-11-17T13:00:00.000Z" });
+    await settled(() => sent.length);
+    expect(sent).toHaveLength(1);
+
+    // THE ASK A POLL MAKES: the same quiet read.
+    act(() => result.current.refetch());
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent.map((s) => s.url.searchParams.get("since"))).toEqual([
+      "2026-11-17T13:00:00.000Z",
+      "2026-11-17T14:00:00.000Z",
+    ]);
+    await waitFor(() =>
+      expect(result.current.edges).toEqual({ since: "2026-11-17T14:00:00.000Z" }),
+    );
+    expect(result.current.data?.pushes).toHaveLength(1);
+  });
+
+  test("a window of another name is a new question", async () => {
+    const sent = stub(() => json(pushesPage(["p1"])));
+    const { result, rerender } = windowed("2026-11-17T13:00:00.000Z", 60_000);
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+
+    rerender({ since: "2026-11-11T00:00:00.000Z", name: "7d" });
+    expect(result.current.data).toBeNull();
+    expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]!.url.searchParams.get("since")).toBe("2026-11-11T00:00:00.000Z");
+  });
+
+  // A SCREEN THAT DOES NOT POLL ASKS AGAIN, QUIETLY, WITHIN THE SPREAD: at a
+  // random moment in it, never on the instant every tab's window moves, and a
+  // later move starts the wait again. Mutation: ask at once, or never, or let a
+  // second move keep the first wait, and a case below fails.
+  test("a moved edge on a screen that does not poll is asked again within the spread", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const sent = stub(() => json(pushesPage(["p1"])));
+      const { result, rerender } = windowed("2026-11-16T23:00:00.000Z");
+      await settled(() => sent.length);
+      expect(result.current.data).not.toBeNull();
+
+      rerender({ since: "2026-11-17T23:00:00.000Z", name: "1d" });
+      await act(async () => void vi.advanceTimersByTime(WINDOW_SPREAD_MS / 2 - 1));
+      expect(sent).toHaveLength(1);
+      // A LATER MOVE STARTS THE WAIT AGAIN, and the ask sends the latest edge.
+      rerender({ since: "2026-11-18T23:00:00.000Z", name: "1d" });
+      await act(async () => void vi.advanceTimersByTime(WINDOW_SPREAD_MS / 2 - 1));
+      expect(sent).toHaveLength(1);
+      expect(result.current.loading).toBe(false);
+      await act(async () => void vi.advanceTimersByTime(1));
+      await settled(() => sent.length);
+      expect(sent.map((s) => s.url.searchParams.get("since"))).toEqual([
+        "2026-11-16T23:00:00.000Z",
+        "2026-11-18T23:00:00.000Z",
+      ]);
+      expect(result.current.edges).toEqual({ since: "2026-11-18T23:00:00.000Z" });
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("a new question ends the wait a moved edge started", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const sent = stub(() => json(pushesPage(["p1"])));
+      const { rerender } = windowed("2026-11-16T23:00:00.000Z");
+      await settled(() => sent.length);
+      rerender({ since: "2026-11-17T23:00:00.000Z", name: "1d" });
+      rerender({ since: "2026-11-11T23:00:00.000Z", name: "7d" });
+      await settled(() => sent.length);
+      expect(sent).toHaveLength(2);
+      await act(async () => void vi.advanceTimersByTime(WINDOW_SPREAD_MS));
+      await settled(() => sent.length);
+      expect(sent).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  // AN EDGE IN THE KEY IS REFUSED BY TYPE: a question's parameters take no
+  // ClockEdge, so a screen that keys its question on the clock does not
+  // compile. Mutation: drop the brand from `CodeParams`, and the expected
+  // error below is unused, which `tsc` refuses.
+  test("a clock edge is refused in a question's parameters, and taken as a window's edge", () => {
+    const since = edgeAt(Date.parse("2026-11-17T00:00:00.000Z"));
+    // @ts-expect-error -- an edge in the key would be a new question each time the clock moves.
+    const keyed: CodeParams = { name: "web", since };
+    // @ts-expect-error -- and so would several, sent as one key repeated.
+    const repeated: CodeParams = { name: "web", day: [since] };
+    const plain: CodeParams = { name: "web", since: "2026-11-17T00:00:00.000Z" };
+    const span: CodeWindow = { name: "7d", edges: { since } };
+    expect([keyed, repeated, plain, span]).toHaveLength(4);
+  });
+
+  // A LATER PAGE OF A WINDOWED QUESTION carries the window's edges beside its
+  // cursor. Mutation: drop them, and a later page reads another window.
+  test("a later page is asked at the window's edges", async () => {
+    const sent = stub(() => json(pushesPage(["p2"])));
+    const since = edgeAt(Date.parse("2026-11-10T23:00:00.000Z"));
+    await codeRest.query("code_pushes", { name: "web", cursor: "c1" }, undefined, { since });
+    expect(sent[0]!.url.searchParams.get("since")).toBe("2026-11-10T23:00:00.000Z");
+    expect(sent[0]!.url.searchParams.get("cursor")).toBe("c1");
   });
 });
 

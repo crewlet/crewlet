@@ -22,8 +22,7 @@ const modulePath = "github.com/crewlet/crewlet"
 // modelInputs are the types a model is handed its prompt in, by the import
 // path of the package that declares them: a provider's request
 // (internal/providers/llm), and every request a harness's run is launched or
-// continued from. Every seat's executor is such a run (ADR-0066), as is the
-// Dashboard Assistant's deep work.
+// continued from. Every seat's executor is such a run (ADR-0066).
 //
 // AND WHAT A RUN IS HANDED TO REMEMBER: a continued session is a model's
 // context before it reads its brief, so the type naming the restored session
@@ -35,7 +34,6 @@ var modelInputs = map[string][]string{
 		"ExactTelling"},
 	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
 		"ExactTelling", "CarriedSession"},
-	modulePath + "/internal/assistant": {"DeepRun"},
 }
 
 // modelCall says, for one function that builds a model's input (one of
@@ -255,6 +253,13 @@ var modelCalls = map[string]modelCall{
 	"internal/engine/providerpark.go:providerProbe": {
 		none: "the probe asks a fixed prompt the engine wrote, and reads nothing of " +
 			"its answer but whether one came"},
+	// A web search: the run is handed the query alone, with no tool but the
+	// vendor's search, and what it answers is the addresses its search tool
+	// returned, never the run's prose.
+	"internal/providers/llm/harness/search.go:Search": {tests: []string{
+		"internal/providers/llm/harness.TestTheSearchRunHasNoToolButTheVendorsSearch",
+		"internal/providers/llm/harness.TestASearchResultsURLIsTakenFromTheToolResultNotTheProse",
+	}},
 	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},

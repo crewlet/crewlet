@@ -726,7 +726,8 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 // build does not know read as written. Mutation: drop the check and the brief
 // reads with no about line, which the dashboard draws empty; replace an
 // unknown kind too and a newer peer's card is lost; drop the log or the count
-// and the case goes red.
+// and the case goes red. A body that does not even decode (a proposal whose
+// values were strings before they were phrases) is the same case.
 func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -761,13 +762,18 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 			t.Fatalf("store card %s: %v", id, err)
 		}
 	}
-	earlier, today, newer := record(1), record(2), record(3)
+	earlier, today, newer, undecodable := record(1), record(2), record(3), record(4)
 	store(earlier, wire.CardBrief, `{"type":"brief","brief":{"scope":{"screen":"inbox",`+
 		`"title":"Inbox"},"summary":"Product Manager asks whether to move ENG-20.",`+
 		`"needs":[{"ref":{"kind":"task","id":"ENG-20"},"text":"ENG-20 waits on you",`+
 		`"tone":"neutral"}],"recommended":{"text":"Open ENG-20"},"follow_ups":["a","b","c"],`+
 		`"as_of":"2026-10-27T08:03:17Z"}}`)
 	store(newer, "timeline", `{"type":"timeline","timeline":{"events":[]}}`)
+	store(undecodable, wire.CardProposal, `{"type":"proposal","proposal":{"proposal_id":`+
+		`"`+uuid.NewString()+`","scope":"server","tool":"create_task","title":"Create task",`+
+		`"changes":[{"kind":"fact","field":"project","label":"Project","to":"ENG"}],`+
+		`"note":"Product Manager is assigned the new task.","digest":"sha256:`+hex64("d")+`",`+
+		`"expires_at":"2026-10-27T08:18:17Z","state":"proposed","approve_label":"Approve"}}`)
 
 	want := assistantdomain.UnshownCardNotice()
 	got, err := n.reader.Transcript(t.Context(), ada, conversation)
@@ -791,6 +797,10 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	if card := cards[newer]; card.Type != "timeline" || card.Card.Type != "timeline" {
 		t.Errorf("a newer peer's card reads as %+v, want it as written", card.Card)
 	}
+	if card := cards[undecodable]; card.Type != wire.CardNotice || card.Card.Proposal != nil ||
+		card.Card.Notice == nil || *card.Card.Notice != *want.Notice {
+		t.Errorf("a proposal of an earlier contract reads as %+v, want the notice", card.Card)
+	}
 	one, err := n.reader.Card(t.Context(), ada, earlier)
 	if err != nil || one.Type != wire.CardNotice || one.Card.Notice == nil {
 		t.Errorf("the earlier brief read alone is %+v, %v, want the notice", one.Card, err)
@@ -806,6 +816,9 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 			t.Errorf("the log does not carry %s: %s", want, logged)
 		}
 	}
+	if !strings.Contains(logged, `"card":"`+undecodable.String()+`"`) {
+		t.Errorf("the log does not name the undecodable proposal: %s", logged)
+	}
 	for _, said := range []string{"ENG-20", "Product Manager", today.String(), newer.String()} {
 		if strings.Contains(logged, said) {
 			t.Errorf("the log carries %q, which is a card's body or a card that was shown: %s",
@@ -813,12 +826,14 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 		}
 	}
 	adds := n.counts.read()
-	if len(adds) != 2 {
-		t.Fatalf("counted %+v, want the earlier brief once per read", adds)
-	}
+	types := map[string]int{}
 	for _, a := range adds {
-		if a.name != metrics.AssistantCardsShownAsNotice || a.n != 1 || a.attrs["type"] != "brief" {
-			t.Errorf("counted %+v, want one %s of type brief", a, metrics.AssistantCardsShownAsNotice)
+		if a.name != metrics.AssistantCardsShownAsNotice || a.n != 1 {
+			t.Errorf("counted %+v, want one %s", a, metrics.AssistantCardsShownAsNotice)
 		}
+		types[a.attrs["type"]]++
+	}
+	if types["brief"] != 2 || types["proposal"] != 1 || len(adds) != 3 {
+		t.Fatalf("counted %+v, want the earlier brief once per read and the proposal once", adds)
 	}
 }

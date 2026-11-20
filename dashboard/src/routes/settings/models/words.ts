@@ -119,9 +119,10 @@ export const ALARM_TONE: Record<ModelAlarmKind, "danger" | "warning"> = {
   llm_limit_waiting: "warning",
 };
 
-/** A category's words: its name, what it covers, and the verb a summary uses. */
+/** A category's words: its name, its one-word name over a seat's picker, what it covers, and the verb a summary uses. */
 interface CategoryWords {
   label: string;
+  short: string;
   hint: string;
   verb: string;
 }
@@ -132,23 +133,26 @@ type Worded<T> = { [K in keyof T]: { [F in keyof T[K]]: T[K][F] extends "" ? nev
 const WORDS = {
   coding: {
     label: "Coding",
+    short: "Coding",
     hint: "The seat's own work: writing code, running tools, and its onboarding pass.",
     verb: "code",
   },
   reviews: {
     label: "Reviewing and delegations",
+    short: "Reviews",
     hint: "Checks a turn's result and runs the smaller jobs a seat hands off.",
     verb: "review work and run delegated tasks",
   },
   routines: {
     label: "Routines and evaluations",
+    short: "Routines",
     hint: "Background memory and summaries, and the checks that decide when onboarding is done.",
     verb: "run routines and evaluations",
   },
 } as const satisfies Record<JobCategory, CategoryWords>;
 
 /**
- * What a model is for, by category. Each label is a column's head on By job
+ * What a model is for, by category. Each label is a column's head on the seats' grid
  * and names it on a phone's card, so AN EMPTY WORD FAILS THE TYPECHECK here
  * (`Worded`) rather than drawing a column nothing names.
  */
@@ -164,14 +168,20 @@ export const ASSISTANT_USE = {
   label: "Ask Crewlet",
   hint: "Answers you in the dashboard.",
   tip: "Sets assistant.model. Ask Crewlet is the company's, so no seats are picked.",
-  rule: "Ask Crewlet runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
+} as const;
+
+/** The Advisor: the model it explains its findings and writes its weekly summary with. */
+export const ADVISOR_USE = {
+  label: "Advisor",
+  hint: "Explains what it finds worth changing in the company.",
+  tip: "Sets advisor.model. The Advisor is the company's, so no seats are picked; its checks run without a model too, with no explanations.",
 } as const;
 
 /** Every seat job at once. */
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet is separate: choose it on its own.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet and the Advisor are separate: choose each on its own.",
 } as const;
 
 /**
@@ -183,8 +193,7 @@ export const EVERYTHING = {
  * does less, it does not stall a turn.
  */
 export const FAST_NOTE: Partial<Record<JobCategory, string>> = {
-  routines:
-    "Evaluations run under a 30 s limit and routines under 30 s and 60 s limits; a fast model is recommended.",
+  routines: "These run on a deadline (30 to 60 s), so pick a fast model.",
 };
 
 /** Whether a model name reads as a vendor's fast tier. */

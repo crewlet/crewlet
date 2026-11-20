@@ -35,7 +35,7 @@
 //
 // # A Claude Code thread is read a line at a time, holding what its readers read
 //
-// A person's transcript (transcript.go) shows a session as well as it can,
+// A person's transcript (claudetranscript.go) shows a session as it can,
 // and a line it cannot read is an entry saying so. A reader that DECIDES
 // something from what a session recorded (that a hook's note reached the
 // model, that a call's result is held) cannot: one record it misreads is a
@@ -170,17 +170,14 @@
 // call the log cannot state may be of it. Which of two identical calls a part
 // is is never decided: a class is held whole or told whole.
 //
-// ONE WALK, TWO VISITORS. The person reader's export walk
-// ([walkOpenCodeExport]) reads the document one value at a time through a
-// jsontext decoder behind [heldValue], every value in place in the decoder's
-// buffer, and hands each to a visitor ([openCodeVisitor]): a person's
-// transcript, or the reading. Each message is decoded once
-// ([decodeOpenCodeMessage]), each item once ([decodeOpenCodeItem]), each by
-// [eachKeyInPlace], which keeps every member as the sub-slice it is and
-// records the key facts ([openCodeKeys]): the names met, one met twice, one
-// outside the decode's set. The person reader reads none of them, and its
-// pages are pinned byte for byte to the walk before it read in place
-// (TestLiftingTheExportWalkChangesNoPersonsTranscript).
+// ONE WALK, THREE VISITORS. The reading is a visitor of the one export walk
+// ([scanExport]), as the take's meter and a person's transcript are, on the
+// scanner, holding no value whole: it asks each member by a means
+// ([openCodeHoldingsWalk] lists them), an answer's text and a failure's
+// message by their digest ([textDigest]). A VALUE PAST ITS CAPTURE OR ITS WORD
+// IS THERE, of its kind, and equal to no word: an `executed` past the bound
+// passes its part, and a `type` past the word is a shape not read. The decode
+// walk the reading and a person read by before is their oracle.
 //
 // WHAT IS READ, as the measured releases write it, the reading ending at
 // anything else: `info` once, an object, its id the session's; `messages`
@@ -197,7 +194,7 @@
 // A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool
 // by, `executed` absent or false, its names within OpenCode's six and its
 // `time`'s within `created`, `ran` and `completed`, each once; its `state`,
-// read in one pass whatever its key order ([openCodePartState]), exactly
+// read whatever its key order ([openCodeHoldingsWalk.stateEnd]), exactly
 // `status`, `input`, `content`, `metadata` for a completed call, with
 // `metadata` exactly `{"truncated": false}` and one text item, or exactly
 // `status`, `input`, `error` for a failed one, `error` a `tool.execution` and
@@ -205,9 +202,9 @@
 // [sandbox.MaxSubmissionArgsBytes]. Anything else passes the part, which only
 // lowers its class's parts, and so can only tell a call.
 //
-// THE OUTCOME: the text (a failure's message) is decoded only where its span
-// could hold a candidate class's size, a third to six times it
-// ([textMayBe]), and once. A whole output is matched every byte; a cut one by
+// THE OUTCOME: the text (a failure's message) is matched by its digest
+// ([matchedClass]): its size first, never a class's of size zero. A whole
+// output is matched every byte; a cut one by
 // its size and all the opening the log kept, never where the text holds the
 // scrub's marker, since the scrub may have rewritten what the log did not
 // keep. A completed part's empty or blank text never counts (an empty answer
@@ -242,23 +239,16 @@
 // it can make of a reading, among them two messages given one id, of which the
 // import keeps one, since no message's id is read but the start's.
 //
-// THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), a value at
-// [maxLineBytes] (a message past it is no reading, every call told), the ask at
-// [sandbox.MaxBridgeCalls], its unlisted calls at the log's own bounds. What
-// it keeps: whether `info` matched, the start, the step, and per class at most
-// Calls+1 step numbers; never a message, an item or a text past its visit.
-// MEASURED (BenchmarkAnOpenCodeReadingAtItsBounds, two cores, GOGC=10): a
-// message at the bound holding one answer the reading decodes holds 97 MiB
-// live in 0.3 s, a person's read of it 97 MiB, the two at once (two readings
-// never running at once) 161 to 193 MiB; a step of minimal items at the bound
-// 96 MiB in 1.9 s; 255 MiB of ordinary steps 2 MiB in 7.9 s. Each read is
-// within the about 133 MiB a transcript slot is held to, as a Claude Code
-// thread's line is (above), the reading's in the seats' slot
-// ([SeatTranscriptReadsAtOnce]), and the two at once within the two slots'
-// 266 MiB. What one read holds is the walk's buffer, which grows by doubling
-// to about twice the message it holds, and one decoded text: no member of a
-// message is copied out of it, and an answer of one part is its text, never
-// built again ([toolAnswer]).
+// THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), no message
+// or value held whole (a step's `completed` past the capture is no reading,
+// toward telling), the ask at [sandbox.MaxBridgeCalls], its unlisted calls at
+// the log's own bounds. What it keeps: whether `info` matched, the start, the
+// step, per class at most Calls+1 step numbers and the parts the message it is
+// in counts. It reads in a slot of its own ([HoldingsReadsAtOnce]). MEASURED
+// (BenchmarkAnOpenCodeReadingAtItsBounds): at most 2 MiB live, its heap at
+// most 5 MiB, whatever a message's length; the slowest, one step of 255 MiB of
+// `0` items, 10.7 to 11.0 s; beside a person's read of the 64 MiB export the
+// two hold 18 to 19 MiB, the read's.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
@@ -362,45 +352,45 @@
 // 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
-// flight at once: one per seat collecting on this node and up to the box
-// host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
-// worst, 341 MiB, and one per take. A take at its base holds at most 13 MiB,
-// its scrub's base and its meter's at once, each measured apart (one case a
-// process on a dedicated two-core slot, read as above, the most of nine runs)
-// and summed, each with its benchmark's own heap, so the sum over-counts. The
+// flight at once: one per seat collecting on this node and up to the box host's
+// boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its worst,
+// 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
+// scrub's base and its meter's at once, each measured apart (one case a process
+// on a dedicated two-core slot, in bytes, the most of nine runs) and
+// summed, each with its benchmark's own heap, so the sum over-counts. The
 // scrub, streaming each text through redact's stages, each holding its window,
-// 9 to 10 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string
-// and a text file each at [scrubPieceBaseBytes], the line's and the string's
-// of bytes the decode triples, both readings, its meter beside it; 0.23 s,
-// its heap peaking at 21 to 22 MiB at the default GOGC). The meter, 3 MiB
+// 8.2 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
+// a text file each at [scrubPieceBaseBytes], the line's and the string's of
+// bytes the decode triples, each ending in a key both readings redact, its
+// meter beside it; 0.11 s). The meter, 3.3 MiB
 // (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
 // verbatim, so a string decodes to three bytes a byte, its facts at the base
 // and the strings a charge covers decoded beside them; 2 MiB on a record line,
-// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past
-// the scrub's base, so the two never meet on one line, but the scrub may read
-// on at its base while the meter is still on it. So every take holds one of
-// [SessionTakesAtOnce] (26), a pool of its own sized so the takes at their
-// base hold 338 MiB at most, within those 341.
+// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past the
+// scrub's base, so the two never meet on one line, but the scrub may read on at
+// its base while the meter is still on it. So every take holds one of
+// [SessionTakesAtOnce] (29), a pool of its own sized so the takes at their base
+// hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 31 to 48 MiB over twelve runs, the most as the build
-// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base, each piece
-// of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
-// 7.1 to 7.5 s loaded, its heap peaking at 65 to 87 MiB at the default GOGC,
-// 146 MiB loaded, against the pass's 62 MiB). Shared with
+// under the same slot, 32 to 34 MiB over five runs
+// (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
+// bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to about 22 s each and spends internal/sandbox's
-// MainThreadReadWait (27 s), so a person paging a transcript would decide how a
-// turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 133 + 48 = 314 MiB beside the
-// base tier. One waiter behind a pass over ordinary lines at the bound (2.6 to
-// 2.8 s with the count and the next request's estimate, 5.7 s loaded) is
-// through in 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded,
-// it is not: a pass keeping more than [collectionBaseRecords] records holds the
-// slot to its end whatever its lines, so a collection whose chain keeps the
-// records of 2^20 short lines of blocks of an empty kind, at the bound (18.3 to
-// 19.7 s with the count alone, 20.7 to 21.6 s with the next request's estimate,
+// transcript reads of up to 58 s each and spends internal/sandbox's
+// MainThreadReadWait (27 s), so a person paging a transcript would decide how
+// a relaunch is told; apart, never. One slot, not two: the process's thread
+// readers hold at most 2 x 29 + 43 + 43 = 144 MiB (the reads peak at 2 x 58)
+// beside the base tier, a reading's 43 apart ([HoldingsReadsAtOnce]).
+// One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
+// the count and the next request's estimate, 5.7 s loaded) is through in
+// 11.4 s, within the 27 s.
+// Behind the slot's slowest holder, loaded, it is not: a pass keeping more than
+// [collectionBaseRecords] records holds the slot to its end whatever its lines,
+// so a collection whose chain keeps the records of 2^20 short lines of blocks
+// of an empty kind, at the bound (18.3 to 19.7 s with the count alone, 20.7 to
+// 21.6 s with the next request's estimate,
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
@@ -582,8 +572,8 @@
 // ([threadChain]) alone, 43 MiB held, peaking at 62 MiB: that line as the
 // record that fills both, read while End decides, holds 41 MiB at most, its
 // heap peaking at 55 MiB, since its results replace calls of longer ids
-// (BenchmarkAThreadChainAtItsBounds); within the about 133 MiB a seat's read
-// for words holds in the same transcript slot ([SeatTranscriptReadsAtOnce]).
+// (BenchmarkAThreadChainAtItsBounds); the most a reading holds, in its own
+// slot ([HoldingsReadsAtOnce]).
 // Lines cost a reading time, not memory, about 2.5 µs a line at the least: tiny
 // lines to [threadLinesMax] read in 2.5 to 2.8 s, a line of blocks of an empty
 // kind to [threadPlainMax] in 17.7 to 18.0 s, and the slowest measured, a
@@ -606,8 +596,8 @@
 // which never estimates, in 23.5 to 25.3 s against the 21.4 to 22.6 above, so
 // it ran about a tenth slower than when those were taken. The take's meter,
 // which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds,
-// likewise): 1.64 to 1.70 s against 10.4 to 10.7 s on ordinary lines, 2.02 to
-// 2.16 s against 26.7 to 28.1 s on results of text blocks.
+// likewise): 1.61 to 1.75 s against 10.7 to 10.8 s on ordinary lines, 2.19 to
+// 2.22 s against 26.1 to 27.0 s on results of text blocks.
 //
 // # A run's harness session, carried between boxes
 //
@@ -759,13 +749,8 @@
 // `oauth_provider`); an ID token's `id` is read only as a word of its own,
 // since `paid_tokens` spells it. The rule has ONE implementation,
 // [keyReading], handed a key's decoded text a piece at a time, cut anywhere,
-// a rune's bytes included; [credentialKey] is a keyReading handed the whole
-// key. Its state does not grow with the key, since a box's code can write a key
-// a gibibyte long: a rune's cut bytes, the key lowered while it is no longer
-// than the longest whole key, and windows over its last runes twice the most
-// a password's key spans and twice the longest name, each cut back to one
-// fewer than its span when it fills, so a key the window has not yet seen
-// whole is still in it.
+// its state never growing with the key; [credentialKey] is a keyReading handed
+// the whole key.
 //
 // # The scrub holds no value whole
 //
@@ -780,64 +765,71 @@
 // its stages' windows ([textScrub]); and a transcript's line is never held to
 // learn what it is ([measureLines]).
 //
-// A [valueStream] writes, put together, what strings.Replacer writes of the
-// whole text ([scrubber.apply]), however the text is cut: a place at a time
-// from the text's start, the longest value that begins at a place taken out
-// and the reading going on after it, else the place's byte kept, so a value
-// is taken out leftmost, and longest where values begin at the same place, as
-// the replacer takes the first of its pairs, which [newScrubber] orders
-// longest first. It HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece
-// to the next: a place is decided once the longest value's length of text
-// from it is read, or the text has ended, and a value taken out lies whole
-// within the bytes its place is decided on, so nothing else is carried.
+// A [valueStream] writes what strings.Replacer writes of the whole text
+// ([scrubber.apply]), however it is cut: a value taken out leftmost, and
+// longest first at one place, as [newScrubber] orders the replacer's pairs.
+// It HOLDS FEWER BYTES THAN THE LONGEST VALUE between pieces: a place is
+// decided once that many bytes past it are read, or the text has ended, and a
+// value taken out lies within them.
 //
 // TWO READINGS. What a line, or a `.json` file, is, JSON or text, is known only
 // at its end, and what a transcript's line loses of its loaded tool
 // definitions only once its last key is read; and a tar names each file's size
 // before its bytes. So a tar is read TWICE: the first reading reads each line
-// and each `.json` file both ways at once, counting what each would write, and
-// keeps a PLAN; the second writes what the first counted. Every rewrite here
-// is a pure function of what it reads, so the second reading writes what the
-// first counted, and a member that comes out another length is a member that
-// changed between the two, which fails the take. A `.json` file's two ways
-// are read ON THE SCRUB'S OWN GOROUTINE ([measureFile]): the document's
-// rewrite reads through a reader that hands every byte to the text's scrub as
-// well ([teeRead]), as a transcript's line is read ([lineReader]), so every
-// byte is rewritten and redacted where the take's containment of a panic sees
-// it. A goroutine for each way, fed through pipes, would put the rewrite and
-// the redaction of every `.json` file a box wrote outside that containment, so
-// a panic there would end the engine, and a panic in the copy beside them
-// would leave both blocked on their pipes for good.
+// and each `.json` file as JSON alone, counting what it would write, and keeps
+// a PLAN; the second writes what the first counted. The first that is no JSON
+// ends it; the next goes on from it, reading it and every later one both ways
+// ([tarPlan.unitAhead]). Every rewrite here is a pure function of what it
+// reads, so the second reading writes what the first counted, and a member
+// that comes out another length changed between the two, which fails the
+// take. Both ways run on the scrub's own goroutine, where the take contains a
+// panic ([measureFile]).
 //
-// THE PLAN ([tarPlan]) is three streams of bits, each written by the first
+// THE PLAN ([tarPlan]) is four streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
-// order, and nothing else, whatever the tar holds: for each member its kind,
-// and for a regular file its size as rewritten, whether it is kept as text,
-// and how many line bits its transcript took; for each line of two bytes or
-// more, whether it is kept as text (a shorter line is one byte or none, which
-// no pass changes, so both readings write it as text); and for each line that
-// loses a definition, how far it lies from the cut before it, which list it
-// loses them from, how many elements that list holds and a bit each, set for
-// one cut. So the plan is AT MOST A SIXTEENTH OF THE PLAINTEXT, a bit for
-// every two of its bytes, beside a block of each stream being filled: a
-// member's header is 512 bytes against a few dozen bits, a line with a bit is
-// two bytes or more, and a list's element, a byte and its comma, takes one bit,
-// its cut a few dozen more, which the record it is cut out of, some seventy
-// bytes, pays for. A list or a record of its own for each member, line or cut
-// would cost a block or some dozen bytes a line, and let a box's archive of a
-// mebibyte, a transcript of short lines each losing a definition, hold the
-// engine host to gibibytes between the two readings.
+// order, whatever the tar holds: for each member its kind, and for a regular
+// file its size as rewritten, whether it is kept as text, and how many line
+// bits its transcript took; for each line of two bytes or more, whether it is
+// kept as text (a shorter line no pass changes); for each line that loses a
+// definition, how far it lies from the cut before it, which list it loses them
+// from, how many elements that list holds and a bit each, set for one cut; and
+// each text the redaction left unchanged (below). So it is AT MOST A SIXTEENTH
+// OF THE PLAINTEXT, and the texts' digests a 2,048th: a member's header is 512
+// bytes against a few dozen bits, a line with a bit two bytes or more, a
+// list's element, a byte and its comma, one bit, and its cut a few dozen more,
+// which the record it is cut out of pays for. A record of its own for each
+// member, line or cut would let a box's archive of a mebibyte hold the engine
+// host to gibibytes between the two readings.
 //
-// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]),
-// because a reading refuses a document only once it has read it: one that is
-// no one JSON value, one past the plaintext a reading reads, or text the
-// redaction could not redact. Read once, the bytes rewritten before the
-// refusal would reach the take's pipe, its uploader, its checksum and its
-// context meter before the pipe ended in the error, a published key among
-// them where the redaction is what refused. The second reading writes what the
-// first read; one that comes out another length, or that the scanner refuses
-// where the first read one value whole, is an export that changed between the
-// two, and one refused for another reason says that reason.
+// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]): a
+// reading refuses a document only once it has read it, and read once, what it
+// rewrote before a refusal, a published key among it where the redaction
+// refused, would reach the take's pipe, uploader, checksum and meter. A second
+// reading that comes out another length, or that the scanner refuses, is an
+// export that changed between the two.
+//
+// A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
+// scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
+// read, its base64 twice, cost 4.3 s a take. So the first
+// reading plans each text of [scrubPieceBaseBytes] or more (a line read as
+// text, a name or string, a file) it finds the redaction leaves unchanged, by
+// its place and the SHA-256 digest of each chunk of that length
+// ([firstPieces]); the second writes such a text a chunk at a time, each once
+// it matches its digest, and redacts every other ([secondPieces]). And the
+// process remembers what its own full scrubs found unchanged ([scrubMemo]): a
+// text's length and the digest of its digests, under its first chunk's digest
+// and the take's agent, never the text. A first reading writes a text whose
+// first chunk the memo knows as it is, and checks the whole at its end; one
+// the memo does not know whole reads the archive again without that chunk's
+// answer ([firstReadings]). Every digest is of the by-value pass's output under
+// the take's own values. SOUND because the redaction's answer for a text is
+// the text's alone (redact.Stream; its rules are the build's): each text has a
+// redaction of its own, a key's credential is judged on its raw name, and a
+// credential's value never reaches it. In memory alone: a restart, a deploy or
+// a seat's move to another node costs one take at most what it costs without.
+// On two cores of the build machine, two runs each
+// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 4.3 s with no
+// memo, 2.8 s as a process's first and 1.2 s as its second.
 //
 // # The scrub's bounds, and what it holds
 //
@@ -860,27 +852,28 @@
 // panics.ScopeSessionTake.
 //
 // AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
-// text scrubs at once (a line's or a `.json` file's two readings side by side,
-// each redacting one text), each its redaction's stages (redact.Stream's own
-// figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
-// each its scanner, its read buffer and a frame a container open; the readers
-// and writers of the archive's gzip and tar; and the plan, a sixteenth of the
-// plaintext at most. About 115 MiB at the archive's bound, 16 MiB of it the
-// plan, which a real session leaves nearly empty. A test holds the figure at a
+// text scrubs at once (a line or a `.json` file read both ways), each its
+// redaction's stages (redact.Stream's own figure) beside its stage's chunk, a
+// [valueStream] and a string's encoder;
+// two JSON rewrites, each its scanner, its read buffer and a frame a container
+// open; the readers and writers of the archive's gzip and tar; and the plan, a
+// sixteenth of the plaintext at most and a 512th for its texts' digests. About
+// 116 MiB at the archive's bound, 16.5 MiB of it the plan, which a real
+// session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
-// On two efficiency cores of a laptop shared with other work:
+// On two cores of the build machine, two runs:
 //
-//	one string to the bound:   40.6 s a scrub, held 18.6 MiB (256 MiB from 28 MiB)
-//	a million short lines:     19.9 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          21.7 s a scrub, held 25.5 MiB (256 MiB from 0.5 MiB)
+//	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
+//	a million short lines:     33.9 s a scrub, held 1.5 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          29.8 to 30.8 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
 //
 // Against SessionScrubWait, two minutes for the whole take's scrub with the
 // archive's two readings out of a box at its floor pace of a mebibyte a second
 // among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
 // for the scrub's own work where the two do not overlap), each arm fits, the
-// string the closest, since its first reading redacts it twice (as JSON and as
-// text, side by side) and its second once.
+// short lines the closest; the string redacts each byte once, as JSON in its
+// first reading, and its second copies it as checked.
 //
 // # A definition the scrub renamed is cut out of its line
 //
@@ -1162,12 +1155,20 @@
 // what that provider reported, and a continuation on another provider's
 // model is not held to it.
 //
-// ONE WALK of the export, on the scanner (internal/jsonscan), which never
-// holds a string: each message's small values are captured at
-// [exportValueMaxBytes], its content is walked for the spans of its tool
-// results and the files it names, and every other value is passed over, its
-// bytes checked and none held. The floor's last-request figure
-// ([measuredPrompt]) is read in the same walk.
+// ONE WALK of the export ([scanExport]), on the scanner (internal/jsonscan),
+// which never holds a string. It owns the export's grammar, names and frames
+// and hands each member to its visitor by the means the visitor asks
+// ([exportAsks]): passed, read as a word, captured within
+// [exportValueMaxBytes], or walked as a frame; a value past its word or
+// capture is there, of its kind. The meter ([exportMeter]) asks what the walk
+// it read by before read, its oracle (TestTheMeterReadsAnExportAsItsWalkDid):
+// each message's small values captured, its content walked for the spans of
+// its tool results and the files it names, the rest passed unheld. The
+// floor's last-request figure ([measuredPrompt]) is read in the same walk. The
+// take's pipe waits on the meter, so the walk keeps up with its oracle
+// (BenchmarkTheMeterAtItsBounds, 255 MiB of plaintext a case): within 10% on
+// every case, `{}` messages in 7.8 to 8.2 s against 27.9 to 31.3, holding at
+// most 2 MiB live.
 //
 // # The OpenCode releases the count reads
 //

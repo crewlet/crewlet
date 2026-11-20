@@ -135,7 +135,32 @@ test("the Dashboard Assistant is a use, for an admin and a member alike", () => 
     mount(company({ admin }));
     const uses = row("assistant").querySelector(".models-uses");
     expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Ask Crewlet");
-    expect(tile("Models")).toContain("1 not used by any seat or Ask Crewlet");
+    expect(tile("Models")).toContain("1 not used by any seat, Ask Crewlet or the Advisor");
+    cleanup();
+  }
+});
+
+// THE ADVISOR IS A USE LIKE ASK CREWLET: the model it explains with reads as
+// used by it, and is not counted among those nothing runs on.
+test("the Advisor's model is a use, for an admin and a member alike", () => {
+  for (const admin of [true, false]) {
+    const data = company({ admin });
+    const advised: ModelsData = {
+      ...data,
+      models: data.models.map((m) =>
+        m.key === "spare"
+          ? {
+              ...m,
+              uses: { ...m.uses, advisor: true },
+              entry: { ...m.entry, used_by: [{ advisor: "findings", position: 0 }] },
+            }
+          : m,
+      ),
+    };
+    mount(advised);
+    const uses = row("spare").querySelector(".models-uses");
+    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Advisor");
+    expect(tile("Models")).toContain("every one in use");
     cleanup();
   }
 });
@@ -144,8 +169,10 @@ test("the figures say how many are not ready and why, and the card does not coun
   mount();
   expect(tile("Models")).toContain("5");
   expect(tile("Ready")).toMatch(/2\s*of 5/);
-  expect(tile("Ready")).toContain("3 models not ready");
-  expect(tile("Sitting out or refused")).toContain("1 sitting out and 1 cannot sign in");
+  // M-006: A MODEL NOBODY HAS CALLED YET is not tested, never "not ready".
+  expect(tile("Ready")).toContain("2 models not ready and 1 not tested yet");
+  // The third tile's title covers what it counts.
+  expect(tile("Sitting out or cannot sign in")).toContain("1 sitting out and 1 cannot sign in");
   // TOKENS, NEVER MONEY (dashboard-design rule 19).
   expect(tile("Tokens, 7 days")).toContain("900");
   expect(tile("Tokens, 7 days")).toContain("over 40 calls");
@@ -240,20 +267,42 @@ test("a member reads the list without a credential, a cost or an action", () => 
   expect(document.body.textContent).not.toContain("ANTHROPIC_API_KEY");
 });
 
-test("with no model, the list says so and the page's one Add model adds one", () => {
+// M-009: WHAT A MODEL DOES in the page's short words (Coding, Reviews,
+// Routines), as the seats name them, never a long label cut in its column.
+test("Used by says a model's work in the page's short words", () => {
+  mount();
+  const uses = row("sonnet").querySelector(".models-uses__label")?.textContent;
+  expect(uses).toBe("Reviews");
+  expect(document.body.textContent).not.toMatch(
+    /Reviewing and delegations|Routines and evaluations/,
+  );
+});
+
+// M-008: WITH NO MODEL, the empty list offers the way out itself, and the
+// helpers and seats stay on the page, each reading Not set, so a company sees
+// which seats wait for a model.
+test("with no model, the list offers Add a model and every seat and helper reads Not set", () => {
   const onFlow = mount(modelsData({ entries: [] }));
   expect(screen.getByText("No model yet")).toBeDefined();
-  const buttons = screen.getAllByRole("button", { name: "Add model" });
-  expect(buttons).toHaveLength(1);
-  fireEvent.click(buttons[0]!);
+  // THE PAGE'S OWN Add model, and the empty list's.
+  expect(screen.getAllByRole("button", { name: "Add model" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
   expect(onFlow).toHaveBeenCalledWith("add");
+  const seats = within(screen.getByRole("list", { name: "Seats" })).getAllByRole("listitem");
+  expect(seats.length).toBeGreaterThan(0);
+  for (const row of seats) expect(row.textContent).toContain("Not set");
+  const helpers = within(screen.getByRole("list", { name: "Helpers" })).getAllByRole("listitem");
+  for (const row of helpers) expect(row.textContent).toContain("Not set");
+  // NOTHING TO PICK with no model.
+  expect(screen.queryAllByRole("combobox")).toHaveLength(0);
 });
 
 // THE ORDER IN FORCE IS ON A HEAD, as on every list: the models are in key
 // order, so the Model head says so; Status sorts worst first.
 test("the list says its order on the Model head, and Status sorts the worst condition first", () => {
   mount();
-  const grid = screen.getByRole("table");
+  // THE MODELS' TABLE, the first on the page; every seat's jobs is another under it.
+  const grid = screen.getAllByRole("table")[0]!;
   const head = within(grid).getByRole("columnheader", { name: /^Model/ });
   expect(head.getAttribute("aria-sort")).toBe("ascending");
   const keys = () =>

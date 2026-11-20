@@ -50,6 +50,7 @@ import { ASSISTANT_ACTION_CONTEXT_INVALIDATE } from "~/contract/assistant.ts";
 import type { AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import type { StreamState } from "~/protocol/assistant.ts";
 import type { ActionLocal } from "./pageActions.ts";
+import { plainPhrase } from "./phrase.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 
 /** The page a message was sent with, as its chip shows it. */
@@ -183,6 +184,19 @@ export interface TurnView {
 /** Why the conversation's stream stopped for good, as the drawer says it. */
 export type ConversationFault = "protocol_mismatch" | "malformed" | "refused" | null;
 
+/**
+ * A conversation this tab is opening, or could not open: drawn in place of the
+ * conversation, so one still on its way is never an empty new one.
+ */
+export interface Opening {
+  /** The conversation asked for. */
+  id: string;
+  /** `reading` while on its way, `missing` on a 404, `failed` on any other failure. */
+  state: "reading" | "missing" | "failed";
+  /** Why it could not be read, in the engine's words where it gave them. */
+  sentence: string | null;
+}
+
 /** One administrator's compliance read of the conversation (D06). */
 export type AuditRead = AssistantTranscript["audit_reads"][number];
 
@@ -198,6 +212,10 @@ export interface ConversationView {
   /** When the current outage began (ms), while reconnecting. */
   reconnectingSince: number | null;
   fault: ConversationFault;
+  /** The conversation being opened in place of this one, or that could not be. */
+  opening: Opening | null;
+  /** The conversation was deleted while open here (in another tab, or found gone on a send). */
+  deleted: boolean;
 }
 
 /** A conversation nobody has started: the drawer's home. */
@@ -209,6 +227,8 @@ export const EMPTY: ConversationView = {
   stream: "closed",
   reconnectingSince: null,
   fault: null,
+  opening: null,
+  deleted: false,
 };
 
 /** Every way a conversation moves. */
@@ -242,6 +262,10 @@ export type TurnEvent =
   | { type: "page_moved"; revision: string; revisions: Readonly<Record<string, string>> }
   | { type: "action_local"; actionId: string; local: ActionLocal }
   | { type: "transcript"; transcript: AssistantTranscript }
+  | { type: "opening"; id: string }
+  | { type: "open_failed"; id: string; missing: boolean; sentence: string | null }
+  | { type: "renamed"; id: string; title: string }
+  | { type: "deleted"; id: string }
   | { type: "reset" };
 
 /** The phase a turn's wire state names. */
@@ -655,7 +679,30 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
         stream: "closed",
         reconnectingSince: null,
         fault: null,
+        opening: null,
+        deleted: false,
       };
+    case "opening":
+      // NOTHING OF THE CONVERSATION LEFT is drawn under the one asked for.
+      return { ...EMPTY, opening: { id: event.id, state: "reading", sentence: null } };
+    case "open_failed":
+      return view.opening?.id === event.id
+        ? {
+            ...view,
+            opening: {
+              id: event.id,
+              state: event.missing ? "missing" : "failed",
+              sentence: event.sentence,
+            },
+          }
+        : view;
+    case "renamed":
+      return view.id === event.id ? { ...view, title: event.title } : view;
+    case "deleted":
+      if (view.opening?.id === event.id) {
+        return { ...view, opening: { id: event.id, state: "missing", sentence: null } };
+      }
+      return view.id === event.id ? { ...view, deleted: true } : view;
   }
 }
 
@@ -690,7 +737,8 @@ function actionSettled(turn: TurnView, actionId: string, local: ActionLocal): Tu
       cards: next.cards.map((card) => {
         const proposal = proposalOf(card);
         if (proposal?.proposal_id !== proposalId) return card;
-        const receipt = after === "applied" ? { summary: local.words } : proposal.receipt;
+        const receipt =
+          after === "applied" ? { summary: plainPhrase(local.words) } : proposal.receipt;
         return {
           ...card,
           card: {

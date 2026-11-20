@@ -92,7 +92,7 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
-		Receipt: &wire.Receipt{Summary: "Created ENG-7."},
+		Receipt: &wire.Receipt{Summary: wire.Plain("Created ENG-7.")},
 		Answer:  []byte(`{"key":"ENG-7","title":"Rotate keys"}`),
 		Card:    cardAt(p, wire.ProposalApplied)})
 	if err != nil {

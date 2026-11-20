@@ -24,6 +24,7 @@ import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { usesOf, type Uses } from "~/lib/modelUses.ts";
+import { nameKey, useModelNames } from "./modelNames.ts";
 import type { AgentRow, CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/types.ts";
 import type {
   MemberModelEntry,
@@ -44,11 +45,17 @@ export const MODELS_POLL_MS = 15_000;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** No name for any model: each is said by its id. */
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+const NO_ENTRIES: readonly ModelEntriesAnswer["entries"][number][] = [];
+
 /** One model as the page draws it: the engine's reading, and for an admin the document's entry. */
 export interface ModelView {
   key: string;
   harness: string;
   model: string;
+  /** Its model as a person reads it ("Claude Opus 5.5"), or its id where nothing names it (`modelNames.ts`). */
+  modelName: string;
   /** Whether its harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
@@ -85,6 +92,8 @@ export interface ModelsData {
   node: string;
   /** The model Ask Crewlet runs on, or null where none is assigned and Ask Crewlet is off. */
   assistant: { key: string | null };
+  /** The model the Advisor explains its findings with, or null where it has none and runs its checks alone. */
+  advisor: { key: string | null };
   loading: boolean;
   error: string | null;
   /**
@@ -119,10 +128,31 @@ export function assistantOf(
   return { key: reported?.key ?? null };
 }
 
+/**
+ * The Advisor's model, from the document an admin reads or, for a member who
+ * reads none, the place the engine reports its findings at (`used_by`).
+ */
+export function advisorOf(
+  doc: CompanyDocument | null,
+  models: readonly Pick<ModelView, "key" | "entry">[],
+): ModelsData["advisor"] {
+  if (doc) {
+    const advisor = isRecord((doc as Record<string, unknown>).advisor)
+      ? ((doc as Record<string, unknown>).advisor as Record<string, unknown>)
+      : null;
+    return {
+      key: typeof advisor?.model === "string" && advisor.model !== "" ? advisor.model : null,
+    };
+  }
+  const reported = models.find((m) => m.entry.used_by.some((u) => u.advisor === "findings"));
+  return { key: reported?.key ?? null };
+}
+
 /** The models, joined: the engine's reading in its order, each with its document entry. */
 export function modelViews(
   answer: ModelEntriesAnswer | null,
   doc: CompanyDocument | null,
+  names: ReadonlyMap<string, string> = NO_NAMES,
 ): ModelView[] {
   const llm =
     doc && isRecord(doc.providers) && isRecord(doc.providers.llm)
@@ -136,6 +166,7 @@ export function modelViews(
       key: entry.key,
       harness: entry.harness,
       model: entry.model,
+      modelName: names.get(nameKey(entry.harness, entry.model)) ?? entry.model,
       executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
@@ -193,8 +224,10 @@ export function useModelsData(): ModelsData {
   const seats = useMemo(() => indexOrg(org).seats.filter((s) => s.kind !== "human"), [org]);
   const doc = admin ? ((config.data as CompanyDocument | null) ?? null) : null;
   const answer = entries.data;
-  const models = useMemo(() => modelViews(answer, doc), [answer, doc]);
+  const names = useModelNames(answer?.entries ?? NO_ENTRIES, admin);
+  const models = useMemo(() => modelViews(answer, doc, names), [answer, doc, names]);
   const assistant = useMemo(() => assistantOf(doc, models), [doc, models]);
+  const advisor = useMemo(() => advisorOf(doc, models), [doc, models]);
   const reload = useCallback(() => {
     refetchEntries();
     if (admin) refetchConfig();
@@ -209,6 +242,7 @@ export function useModelsData(): ModelsData {
     nodes: answer?.nodes ?? [],
     node: answer?.node ?? "",
     assistant,
+    advisor,
     loading: (entries.loading && !entries.data) || (admin && config.loading && !config.data),
     error: entries.error
       ? (entries.detail ?? entries.error)

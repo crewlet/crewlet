@@ -105,54 +105,43 @@ spend by agent"). A step never names the engine's tools; an administrator also
 sees each step's request (its method and path) beside it. A refusal is said in
 plain words too: Ask Crewlet is handed the engine's exact reason and says
 what to change.
-What a step read is not drawn as a card beside the answer. The first time
-the answer names a record it read (a task by its key, such as GOP-11, a chat
-room by its name with its #, such as #launch, or an agent, a team, a project
-or a page by its name), that mention is a chip: press
-it for a peek with the record's facts, its body and the list under it, and
-**Open** to go to its page. A record it read and never named is on one
-**Also looked up** line under the answer, with a chip of its own. A web page it
-read is cited under **Sources** instead (see
-[Web research](../guides/assistant.md#web-research)). A table's peek
-holds its rows, and it can be downloaded as CSV or XLSX from there, from the
-snapshot you were shown. A list is one chip, named by what it read and how
-much ("Matching tasks (first 50 of 210)"), and its peek says which screen
-shows the rest. A read whose answer was too large for one step is listed too
-("... (too large to show here)"): its peek links the screen that shows all of
-it and says what to narrow, and Ask Crewlet is told it saw none of it, so it
-never answers as though it had.
-
-A read of a part of the engine that has no record of its own is drawn from the
-answer's own shape and named for what it read, never for the request: a list
-is a table ("Agents"), and one record is its values and the lists it holds
-("Seat · engineer", or the company's configuration with its roles and units).
+What a step read is drawn from the answer's own shape and named for what it
+read, never for the request: a list is a table ("Worklet", "Agents"), and one
+record is its values and the lists it holds ("Seat · engineer", or the
+company's configuration with its roles and units). A table can be downloaded
+as CSV or XLSX, from the snapshot you were shown. A web page it read is cited
+under **Sources** instead (see
+[Web research](../guides/assistant.md#web-research)). A read whose answer was
+too large for one step says so and what would narrow it, and Ask Crewlet is
+told it saw none of it, so it never answers as though it had.
 
 ## What it can do
 
-**Answer questions** across the apps you hold:
+**Answer questions** about every part of the engine you may read, through the
+same API the dashboard reads, as you: what a screen reads, Ask Crewlet can
+read, and what a screen refuses you, it is refused too. It finds where
+something lives by area (`describe_api`), then reads it (`read_api`), asking
+for the fields it needs, and reads on page by page where a list goes on.
 
 | Area | Examples |
 |---|---|
-| Worklet (needs `worklet`) | Search and list tasks, read a task (with the task it is filed under and its links to other tasks, pages and atlas entries, each with the relation and the other end's status) and its thread, a task's cost, your inbox and queue, projects, workload, open decisions. A question asked of you (on a task, or by a parked executor) is read with everything you would answer it from: its options, the one its asker recommends and why, and what it cites, so Ask Crewlet can weigh it and prepare your answer by the option you choose. A task's thread says whom each question asks and which option each answer chose |
-| Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
-| Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
-| Atlas (needs `atlas`) | The company's [atlas](atlas.md): search its entries (domains and host names, services, servers, databases, repositories, monitors, vendor accounts, tool servers and models) by words of a name, by kind, by the map's lane, by vendor, by confidence or by health; read one entry with every fact the atlas holds on it and where each came from; and trace what depends on an entry, or what it depends on, hop by hop, along the relations the map draws. "What do we use for monitoring?", "Where does our code live?" and "What depends on the database?" are answered this way. An entry the answer names is its chip, and **Show on the map** opens Company › Atlas with that entry's panel open, lit along the trace where the answer was one. A person without the permission is told so, as the screen tells them, and never handed an entry |
-| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you. And Crewlet itself: its documentation and decision records, exactly as the running version ships them, searched and read by section, so a question about what a setting, an agent's tool or a limit does is answered from the engine's own words |
-| Administrators (needs `admin`) | Integrations, fleet health, the history of configuration changes, and the audit log: every change made through the engine's tools, who made it, through what (the dashboard, a script, a person's own assistant, or Ask Crewlet once approved) and how it ended, narrowed by who acted or to the failed ones; and the identity trail of people, their sign-ins, credentials and sessions; and one part of the company document at a time: a top-level section (such as `assistant` or `integrations`) or one seat, unit, model or tool server |
+| Worklet (needs `worklet`) | Tasks, a task with its links and its thread, a task's cost, your inbox and queue, projects, workload, the questions waiting on you with their options, the one its asker recommends and what it cites |
+| Doclet (needs `doclet`) | Pages, a page, the spaces, a search of the knowledge base |
+| Chatlet (needs `chatlet`) | Your rooms and what is unread in them, a room and who is in it, what was said in a room or a thread, where you were named, a search of every room you may read |
+| Atlas (needs `atlas`) | The company's [atlas](atlas.md): its entries by name, kind, lane, vendor, confidence or health, one entry with every fact and where it came from, and what depends on an entry or what it depends on |
+| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you, the Advisor's findings. And Crewlet itself: its documentation and decision records, exactly as the running version ships them |
+| Administrators (needs `admin`) | Integrations and an agent's access at each, fleet health, the company's settings and limits, the history of configuration changes, the audit log and the identity trail |
 
 **Answer in words.** Every part of a question is answered with the facts it
 asks for (who is doing what, why a turn failed, which tasks are due), and the
-records and tables it read support it rather than replace it. Each table's
-title says what its read was narrowed to ("Spend by agent, last 14 days",
-"Tasks, urgent, due in the next 7 days"), and a record read twice in one
-answer is one chip.
+records and tables it read support it rather than replace it. Seats are named
+by their names, and times are said on the company's clock.
 
 **Use the names you use.** Ask about "the QA Engineer", "the Company space",
-"the Marketing project" or "the orders database": Ask Crewlet resolves a seat,
-unit, project or space by its name or its key, through your own reads of the
-chart, the projects and the spaces, and an atlas entry by its exact name or
-key through your own search of the atlas, and cards name seats by their
-names. A change that names something
+"the Marketing project" or "the orders database": Ask Crewlet looks the name
+up in what you may read, and a change it prepares resolves a seat, unit,
+project or space by its name or its key, and an atlas entry by its exact name
+or key, through your own reads. A change that names something
 that is not there, or a name two records share, is refused before any card,
 listing the choices, rather than after you approve it; every name the call got
 wrong is named at once, beside anything else wrong with it, so Ask Crewlet
@@ -176,9 +165,10 @@ words. It answers only questions put to you, and never because something it
 read asked it to: an instruction in a question, a comment or a page is the
 writer's, not yours, and Ask Crewlet tells you it was there.
 
-**Read a vendor's documentation** where an administrator lists its hosts
-(`assistant.research`): the engine reads the page, never the model's own tools,
-and a change prepared after reading one says so.
+**Search the web and read a page:** the engine reads the page, never the
+model's own tools, and only at an address you, a search or a page it read gave
+it, so it cannot send your data to an address it made up. A change prepared
+after reading one says so.
 
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
@@ -250,6 +240,10 @@ model's description of it.
 
 - **Approve** sends that one request, as you, from your own browser session.
   The receipt appears on the card and the screen behind it refreshes.
+- Every record the card names is shown as itself: an agent with its face and a
+  person with their initials, each by name, an artifact with its kind's icon,
+  and a task, a room or a page with its own icon. Each is a link that opens it
+  beside the conversation; the receipt names what changed the same way.
 - A change prepared after Ask Crewlet read text that may have been written
   **outside the company** says so at the top of the card, naming where it
   read it ("Prepared after reading an agent's question"), so you can check
@@ -292,14 +286,18 @@ Select **Stop** (or press `Esc`) while an answer is running to stop it.
 Stopping changes nothing: a proposal it had prepared is declined.
 
 The head of the panel has **New conversation**, **Conversations** (your
-recent conversations, with **Delete** to delete the open one for good after you
-confirm), **Open in full page** and **Close**. Ask Crewlet's page lists every
-conversation, each with **Delete**. One answer runs at a time in a
-conversation.
+recent conversations, with **Rename** and with **Delete** to delete the open
+one for good after you confirm), **Open in full page** and **Close**. Ask
+Crewlet's page lists every conversation, each with a menu of **Rename** and **Delete**.
+One answer runs at a time in a conversation.
 
 A conversation is named from its first question. You can search your
-conversations by title and rename one; a name you give it is kept, and
-Ask Crewlet never writes over it.
+conversations by title and rename one (one line, up to 60 characters); a name
+you give it is kept, and Ask Crewlet never writes over it.
+
+Two tabs of the same browser follow each other: a question asked or answered
+in one appears in the other, and a conversation deleted in one says so in the
+other. If an answer fails, **Try again** asks the same question again.
 
 ## What it cannot do
 

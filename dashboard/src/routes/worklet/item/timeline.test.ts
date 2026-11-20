@@ -8,7 +8,12 @@
  */
 
 import { expect, test } from "vitest";
-import type { WorkActivityRecord, WorkComment, WorkItemTurn } from "~/protocol/index.ts";
+import type {
+  WorkActivityRecord,
+  WorkComment,
+  WorkFlowEntry,
+  WorkItemTurn,
+} from "~/protocol/index.ts";
 import { timeline } from "./timeline.ts";
 
 const change = (id: string, at: string, over: Partial<WorkActivityRecord> = {}) =>
@@ -95,4 +100,48 @@ test("an unread history with more holds the list back", () => {
   });
   expect(got.entries).toEqual([]);
   expect(got.earlier).toEqual(["comments"]);
+});
+
+const flowRecord = (id: string, at: string, log_seq: number, backfilled = false) =>
+  ({
+    id,
+    task: "t-1",
+    state: "stuck",
+    cause: "",
+    since: null,
+    until: null,
+    seat: "swe",
+    notice: "",
+    told: "",
+    backfilled,
+    at,
+    log_seq,
+  }) as WorkFlowEntry;
+
+// THE RECORDED FLOW IS DRAWN WITH THE CHANGES (ADR-0162), by its instant and
+// then its log position: a backfilled record lands in the log after the past
+// it records, so its position alone would draw it last.
+test("the recorded flow is drawn with the changes, by its instant", () => {
+  const loaded = {
+    changes: { items: [change("c-5", "2031-04-05T00:00:00Z")], more: false },
+    comments: { items: [comment("m-6", "2031-04-06T00:00:00Z")], more: false },
+    turns: { items: [], more: false },
+    flow: [
+      flowRecord("f-new", "2031-04-07T00:00:00Z", 90),
+      flowRecord("f-old", "2031-04-04T00:00:00Z", 95, true),
+      flowRecord("f-tie", "2031-04-07T00:00:00Z", 12),
+    ],
+  };
+  const ids = (tab: "all" | "changes" | "comments" | "turns") =>
+    timeline(tab, loaded).entries.map((e) => e.id.replace(/^flow:\d+:/, "flow:"));
+  expect(ids("all")).toEqual([
+    "flow:f-old",
+    "change:c-5",
+    "comment:m-6",
+    "flow:f-tie",
+    "flow:f-new",
+  ]);
+  expect(ids("changes")).toEqual(["flow:f-old", "change:c-5", "flow:f-tie", "flow:f-new"]);
+  expect(ids("comments")).toEqual(["comment:m-6"]);
+  expect(ids("turns")).toEqual([]);
 });

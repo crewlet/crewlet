@@ -181,16 +181,16 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	}
 	switch {
 	case req.Method == http.MethodDelete && before == nil:
-		d.c.fact("removes", "Deletes", capitalised(said.Object))
+		d.c.factOf("removes", "Deletes", capitalisedOf(said.Object))
 	case req.Method == http.MethodDelete:
 		d.leaves("", before, proposal.Removed)
 	case route.Effect == authz.EffectCalls:
 		// A CALL'S ARGUMENTS travel in `args`, which labels none of them.
-		d.sent(after, "args.", req.Query, "")
+		d.sent(after, "args.", req.Query, nil)
 	case req.Method == http.MethodPost && acts(route.Effect):
-		d.sent(after, "", req.Query, capitalised(said.Object))
+		d.sent(after, "", req.Query, capitalisedOf(said.Object))
 	case before == nil:
-		d.leaves("", after, func(field, label, v string) wire.Change {
+		d.leaves("", after, func(field, label string, v wire.Phrase) wire.Change {
 			return proposal.Added(field, label, v, false)
 		})
 		if req.Method == http.MethodPut && !creates {
@@ -471,6 +471,25 @@ type differ struct {
 	l labeller
 }
 
+// ChangeRows are the rows of a change from before to after, two JSON
+// documents (before null for one that creates), each field labelled and
+// valued as a person reads it. THE ONE RULE a change is shown by wherever a
+// person approves one: a proposal's card here, and an Advisor fix's preview
+// (internal/api's re-check), which labelled its rows by their raw keys.
+func ChangeRows(before, after []byte) ([]wire.Change, error) {
+	b, err := cards.Decode(before)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document before the change: %w", err)
+	}
+	a, err := cards.Decode(after)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document after the change: %w", err)
+	}
+	d := differ{l: newLabeller(b, a)}
+	d.diff("", b, a)
+	return d.c.rows(), nil
+}
+
 // diff appends the rows for what moves from before to after at field.
 func (d *differ) diff(field string, before, after any) {
 	switch b := before.(type) {
@@ -593,7 +612,7 @@ func find(list []entry, id string) *entry {
 // addedLeaves appends a row for every value v holds, as added under field;
 // onRecord marks a field added to a record that already exists.
 func (d *differ) addedLeaves(field string, v any, onRecord bool) {
-	d.leaves(field, v, func(f, label, value string) wire.Change {
+	d.leaves(field, v, func(f, label string, value wire.Phrase) wire.Change {
 		return proposal.Added(f, label, value, onRecord)
 	})
 }
@@ -609,17 +628,17 @@ func (d *differ) removedLeaves(field string, v any) {
 // labelled by its own name, below wrapper (a call's `args`). A request sending
 // nothing names what it acts on in one row (object), or says it sends nothing,
 // so the card still shows what the person approves.
-func (d *differ) sent(body any, wrapper string, query url.Values, object string) {
+func (d *differ) sent(body any, wrapper string, query url.Values, object wire.Phrase) {
 	n := len(d.c)
-	d.leaves("", body, func(field, _, value string) wire.Change {
+	d.leaves("", body, func(field, _ string, value wire.Phrase) wire.Change {
 		return proposal.Fact(field, d.l.label(strings.TrimPrefix(field, wrapper)), value)
 	})
 	d.cleared("", body)
 	d.queried(query)
 	switch {
 	case len(d.c) > n:
-	case object != "":
-		d.c.fact("object", "Applies to", object)
+	case len(object) > 0:
+		d.c.factOf("object", "Applies to", object)
 	default:
 		d.c.fact("sent", "Details", "None")
 	}
@@ -717,7 +736,7 @@ func actedOn(path string) string {
 
 // leaves appends row(field, label, value) for every scalar v holds beneath
 // field, a list of plain values as one value.
-func (d *differ) leaves(field string, v any, row func(field, label, value string) wire.Change) {
+func (d *differ) leaves(field string, v any, row func(field, label string, value wire.Phrase) wire.Change) {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(t)) {
@@ -738,15 +757,16 @@ func (d *differ) leaves(field string, v any, row func(field, label, value string
 			return
 		}
 	}
-	items, isItems := plainItems(v)
-	value := scalar(v)
+	plain, isItems := plainItems(v)
+	var items []wire.Phrase
+	var value wire.Phrase
 	if isItems {
-		items = d.l.items(field, items)
-		value = strings.Join(items, ", ")
+		items = d.l.items(field, plain)
+		value = wire.Join(items, ", ")
 	} else {
-		value = d.l.value(field, value)
+		value = d.l.value(field, scalar(v))
 	}
-	if value == "" || field == "" {
+	if len(value) == 0 || field == "" {
 		return
 	}
 	line := row(field, d.l.label(field), value)
@@ -786,10 +806,13 @@ func (d *differ) valueRow(field string, before, after any) (wire.Change, bool) {
 	was, wasList := plainItems(before)
 	is, isList := plainItems(after)
 	if (wasList || before == nil) && (isList || after == nil) && (wasList || isList) {
-		return proposal.List(field, label, d.l.items(field, was), d.l.items(field, is))
+		return proposal.ListOf(field, label, d.l.items(field, was), d.l.items(field, is))
 	}
-	return proposal.Value(field, label, d.l.value(field, scalar(before)),
-		d.l.value(field, scalar(after)))
+	if slices.Contains(refFields, lastKey(field)) {
+		return proposal.ValueOf(field, label, d.l.value(field, scalar(before)),
+			d.l.value(field, scalar(after)))
+	}
+	return proposal.Value(field, label, scalar(before), scalar(after))
 }
 
 // removalLabels are removal paths as the card names them: a member by its
@@ -821,12 +844,18 @@ func join(field, key string) string {
 	return field + "." + key
 }
 
-// scalar is a value as one line of a card: a string as it is, a number or a
-// truth as written, a list of plain values joined, and anything else as JSON.
+// scalar is a value as one line of a card: a string as it is, a number as
+// written, a truth as Yes or No (a switch read "true" beside its label), a
+// list of plain values joined, and anything else as JSON.
 func scalar(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
+	case bool:
+		if t {
+			return "Yes"
+		}
+		return "No"
 	case string:
 		return redact.Secrets(t)
 	case []any:

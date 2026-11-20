@@ -80,9 +80,9 @@ func TestAnAtlasChangeTheToolWouldRefuseIsNeverACard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.StepUp || p.Risk != wire.RiskDestructive || !strings.Contains(p.Note, "undoes") {
+	if !p.StepUp || p.Risk != wire.RiskDestructive || !strings.Contains(p.Note.Text(), "undoes") {
 		t.Errorf("the purge previews step-up %v, risk %q, note %q; want a fresh sign-in and no undo",
-			p.StepUp, p.Risk, p.Note)
+			p.StepUp, p.Risk, p.Note.Text())
 	}
 }
 
@@ -97,5 +97,79 @@ func TestAnAtlasPurgeProposesAnEntryNeverAValue(t *testing.T) {
 	props, _ := purge.Parameters["properties"].(map[string]any)
 	if _, takes := props["value"]; takes || props["atlas_entry"] == nil {
 		t.Errorf("purge_atlas_entry takes %v, want an entry and never a value", props)
+	}
+}
+
+// soleRef is the one record a phrase names, failing the test on none or several.
+func soleRef(t *testing.T, p wire.Phrase) wire.Ref {
+	t.Helper()
+	refs := p.Refs()
+	if len(refs) != 1 {
+		t.Fatalf("%q names %d records, want one", p.Text(), len(refs))
+	}
+	return refs[0]
+}
+
+// AN ATLAS CARD NAMES ITS ENTRIES AND OWNERS AS RECORDS: each entry by its id
+// and name, each owner a seat by its name, never its handle.
+// Mutation: name the entry fact with plain words and the first case fails.
+func TestAnAtlasCardNamesItsEntriesAndOwnersAsRecords(t *testing.T) {
+	t.Parallel()
+	world := assistanttest.World()
+	preview := func(tool string) map[string]wire.Change {
+		t.Helper()
+		got, err := mustTool(t, tool).Preview(t.Context(), reader(world), wednesday,
+			assistanttest.ProposalArgs[tool])
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		return rows(got)
+	}
+	entry := func(tool, field string, p wire.Phrase, id, name, words string) {
+		t.Helper()
+		r := soleRef(t, p)
+		if r.Kind != wire.ResourceAtlasEntry || r.ID != id || r.Name != name || r.Open == nil ||
+			!strings.Contains(r.Open.Href, id) {
+			t.Errorf("%s's %s names %+v, want the entry %s by its name, opened on the map", tool,
+				field, r, id)
+		}
+		if p.Text() != words {
+			t.Errorf("%s's %s reads %q, want %q", tool, field, p.Text(), words)
+		}
+	}
+	for _, tool := range []string{"correct_atlas_fact", "confirm_atlas_entry", "relate_atlas_entries",
+		"unrelate_atlas_entries", "set_atlas_owner", "retire_atlas_entry", "merge_atlas_entries"} {
+		entry(tool, "entry", preview(tool)["entry"].To, assistanttest.AtlasServiceID, "Checkout API",
+			"Checkout API (service)")
+	}
+	entry("relate_atlas_entries", "relation", preview("relate_atlas_entries")["relation"].To,
+		assistanttest.AtlasTwinID, "checkout", "checkout (service)")
+	entry("unrelate_atlas_entries", "relation", preview("unrelate_atlas_entries")["relation"].From,
+		assistanttest.AtlasHostID, "web-2", "web-2 (host)")
+	entry("merge_atlas_entries", "other", preview("merge_atlas_entries")["other"].To,
+		assistanttest.AtlasTwinID, "checkout", "checkout (service)")
+
+	owner := preview("set_atlas_owner")["owner"]
+	for side, c := range map[string]struct {
+		p        wire.Phrase
+		id, name string
+	}{"from": {owner.From, "pm", "Product manager"}, "to": {owner.To, "qa", "QA Engineer"}} {
+		r := soleRef(t, c.p)
+		if r.Kind != wire.ResourceSeat || r.ID != c.id || r.Name != c.name || r.Open == nil ||
+			r.Open.Screen != "seat" || c.p.Text() != c.name {
+			t.Errorf("the owner %s names %+v as %q, want the seat %s by its name", side, r,
+				c.p.Text(), c.id)
+		}
+	}
+
+	purge, err := mustTool(t, "purge_atlas_entry").Preview(t.Context(), reader(world), wednesday,
+		assistanttest.ProposalArgs["purge_atlas_entry"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := soleRef(t, purge.Summary); r.Kind != wire.ResourceAtlasEntry || r.ID != assistanttest.AtlasTwinID ||
+		!strings.HasPrefix(purge.Summary.Text(), "Erases checkout (service) and everything") {
+		t.Errorf("the purge says %q naming %+v, want the entry it erases as a record",
+			purge.Summary.Text(), r)
 	}
 }

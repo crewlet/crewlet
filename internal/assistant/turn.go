@@ -67,6 +67,11 @@ type turn struct {
 	done   chan struct{}
 
 	mu sync.Mutex
+	// seenAddresses are the addresses a page read may go to ([turn.see]).
+	seenAddresses map[string]bool
+	// meter is the running segment's budget meter, which a web search's
+	// tokens are charged to.
+	meter toolloop.BudgetMeter
 	// steps, cards and messages count what the turn has written across its
 	// segments, so a resumed segment's ids continue its first one's.
 	steps, cards, messages int
@@ -600,6 +605,9 @@ func (t *turn) run(r loopRun) {
 		attribute.String("prompt_version", t.promptVersion()))
 	defer span.End()
 
+	t.mu.Lock()
+	t.meter = r.meter
+	t.mu.Unlock()
 	surface := newSurface(t, r.tools)
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{

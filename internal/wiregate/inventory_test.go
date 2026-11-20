@@ -234,7 +234,7 @@ var omittedInventory = map[string][]string{
 		"MetaPeer.leader", "MetaPeer.offline", "MetaPeer.self",
 	},
 	"internal/research": {
-		"Page.next", "Results.dropped",
+		"Page.next",
 	},
 	"internal/sandbox": {
 		"BridgeCall.abandoned", "BridgeCall.appended", "BridgeCall.approved",

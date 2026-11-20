@@ -114,6 +114,13 @@ const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
   ...over,
 });
 
+/** ENG-42 as the engine reads it while swe's turn is on it (ADR-0162). */
+const WORKED = detail({
+  task: task({ assignee: "swe" }),
+  flow: { state: "working", cause: "turn", since: null, until: null, reason: "" },
+  flow_live: true,
+});
+
 const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
   stuck_after_hours: 8,
   stuck_after_hours_set: false,
@@ -394,36 +401,93 @@ test("a value whose declaration was archived is marked as such", async () => {
   expect(screen.getByText("archived")).toBeTruthy();
 });
 
-// AN ITEM SET ASIDE UNTIL A DATE SAYS WHY, beside the date, as whoever set the
-// wait said it, and once the date came, what it waited for; an item that
-// waits for nothing has no such row.
-test("an item that waits until a date says what it waits for, and once it came, what it waited for", async () => {
+// AN ITEM SET ASIDE UNTIL A DATE SAYS WHY, as whoever set the wait said it,
+// and whether it still waits is the ENGINE's flow (ADR-0162), never the
+// browser's clock: each start below is on the other side of now from what its
+// flow says, and the label follows the flow.
+test("an item's wait is labelled by the engine's flow, never by the browser's clock", async () => {
+  const reason = "The vendor's window opens Monday";
+  const flow = (state: string, cause: string, until: string | null) => ({
+    state,
+    cause,
+    since: null,
+    until,
+    reason: cause === "start" ? reason : "",
+  });
   rail(
     detail({
-      task: task({
-        start_at: "2999-04-20T00:00:00Z",
-        wait_reason: "The vendor's window opens Monday",
-      }),
+      task: task({ start_at: "2001-04-20T00:00:00Z", wait_reason: reason }),
+      flow: flow("waiting", "start", "2001-04-20T00:00:00Z"),
     }),
   );
   await settle();
-  expect(rowValue("Waits for").textContent).toBe("The vendor's window opens Monday");
+  expect(rowValue("Waits for").textContent).toBe(reason);
+  expect(rowValue("Flow").textContent).toContain("Waiting");
   cleanup();
   rail(
     detail({
-      task: task({
-        start_at: "2001-04-20T00:00:00Z",
-        wait_reason: "The vendor's window opens Monday",
-      }),
+      task: task({ start_at: "2999-04-20T00:00:00Z", wait_reason: reason }),
+      flow: flow("due", "", null),
     }),
   );
   await settle();
   expect(screen.queryByText("Waits for")).toBeNull();
-  expect(rowValue("Waited for").textContent).toBe("The vendor's window opens Monday");
+  expect(rowValue("Waited for").textContent).toBe(reason);
+  expect(rowValue("Flow").textContent).toContain("Start passed");
+  cleanup();
+  rail(
+    detail({
+      task: task({ status: "todo", start_at: "2999-04-20T00:00:00Z", wait_reason: reason }),
+    }),
+  );
+  await settle();
+  expect(rowValue("Wait reason").textContent).toBe(reason);
+  expect(screen.queryByText("Flow")).toBeNull();
   cleanup();
   rail(detail({ task: task({ start_at: "2999-04-20T00:00:00Z" }) }));
   await settle();
   expect(screen.queryByText("Waits for")).toBeNull();
+});
+
+// A HOLD SAYS WHERE IT IS LIFTED, beside why it holds: the seat's own page
+// for a paused seat (its pause and Resume), the models for a model limit, and
+// a hand-off for an item nobody holds.
+test("a held item's flow row links where its hold is lifted", async () => {
+  const held = (cause: string, assignee: string) =>
+    detail({
+      task: task({ assignee }),
+      flow: { state: "held", cause, since: null, until: null, reason: "" },
+    });
+  rail(held("paused", "swe"));
+  await settle();
+  const seat = within(rowValue("Flow")).getByRole("link", { name: "Open swe" });
+  expect(seat.getAttribute("href")).toBe(href(["company", "org", "seats", "swe"]));
+  cleanup();
+  rail(held("limit", "swe"));
+  await settle();
+  expect(
+    within(rowValue("Flow")).getByRole("link", { name: "Open the models" }).getAttribute("href"),
+  ).toBe(href(["settings", "models"]));
+  cleanup();
+  rail(held("nobody", ""));
+  await settle();
+  expect(within(rowValue("Flow")).getByRole("button", { name: /^Assign/ })).toBeTruthy();
+});
+
+// AN ITEM IN PROGRESS SAYS WHY IT IS NOT MOVING above its title, with the
+// seat's reset where the engine knows it; the ordinary `moving` says nothing.
+test("an item held by its seat's model limit says so, and until when", () => {
+  const held = detail({
+    flow: { state: "held", cause: "limit", since: null, until: "2031-04-16T13:00:00Z", reason: "" },
+  });
+  render(<>{itemFlags(held)}</>);
+  const tag = screen.getByText(/^Held · until /);
+  expect(tag.closest("[title]")?.getAttribute("title")).toMatch(
+    /^Held until .+: its assignee is out of its model limit$/,
+  );
+  cleanup();
+  const moving = { state: "moving", cause: "", since: null, until: null, reason: "" };
+  expect(itemFlags(detail({ flow: moving }))).toBeUndefined();
 });
 
 // AN ABSENT VALUE IS A MARKED ABSENCE, never a zero: zero is a measurement,
@@ -1277,10 +1341,11 @@ test("a failed turn marks the phase it broke in", async () => {
   expect(within(meta as HTMLElement).getByText("Trace")).toBeTruthy();
 });
 
-// THE LIVE ROW IS THE TURN RUNNING ON *THIS* TASK: joined on the item the
-// engine charges the turn to, and only while the seat is working. A seat
-// working on another task, or one stopped mid-turn on this one, draws nothing.
-test("the live row appears only for a turn on this item", async () => {
+// THE LIVE ROW IS THE TURN RUNNING ON *THIS* TASK, as the engine reads its
+// flow: its assignee's turn while the flow says working and the seat is
+// working. A turn the push charges to the task while the flow does not say
+// working draws nothing: no turn is matched to the task here.
+test("the live row appears only where the engine reads the item working", async () => {
   const on = (key: string, activity = "working") => ({
     handle: "swe",
     activity,
@@ -1300,14 +1365,14 @@ test("the live row appears only for a turn on this item", async () => {
       versions: ZERO_VERSIONS,
     },
   });
-  expect(liveOn([on("ENG-9")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
-  expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
-  expect(liveOn([on("ENG-42")] as never, { id: "t-1", key: "ENG-42" })?.handle).toBe("swe");
+  expect(liveOn([on("ENG-42")] as never, detail({ task: task({ assignee: "swe" }) }))).toBeNull();
+  expect(liveOn([on("ENG-42", "stopped")] as never, WORKED)).toBeNull();
+  expect(liveOn([on("ENG-42")] as never, WORKED)?.handle).toBe("swe");
 
   mount(<WorkItemPage id="ENG-42" />, {
     agents: [on("ENG-42")],
     answers: {
-      work_item: detail({ task: task({ spend: { turns: 2 } }) }),
+      work_item: { ...WORKED, task: task({ assignee: "swe", spend: { turns: 2 } }) },
       work_item_turns: {
         item: "t-1",
         key: "ENG-42",
@@ -1317,9 +1382,11 @@ test("the live row appears only for a turn on this item", async () => {
     },
   });
   await settle();
-  const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
-  expect(live.textContent).toContain("SWE is on turn 3");
-  expect(live.textContent).toContain("executing · round 7 of 25");
+  // NAMED BY WHAT IT SHOWS, in order (WCAG 2.5.3): no label that leaves out
+  // the words a voice-control reader would say.
+  const live = screen.getByRole("link", { name: /^SWE is on turn 3 executing · round 7 of 25/ });
+  expect(live.getAttribute("aria-label")).toBeNull();
+  expect(live.textContent).toContain("Watch live");
   // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
   // where a settled turn's "Trace" is the record, on the Timeline.
   expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"], { tab: "transcript" }));
@@ -1329,7 +1396,10 @@ test("the live row appears only for a turn on this item", async () => {
   );
 
   cleanup();
-  mount(<WorkItemPage id="ENG-42" />, { agents: [on("ENG-9")] });
+  mount(<WorkItemPage id="ENG-42" />, {
+    agents: [on("ENG-42")],
+    answers: { work_item: detail({ task: task({ assignee: "swe" }) }) },
+  });
   await settle();
   expect(screen.queryByRole("link", { name: /is on turn/ })).toBeNull();
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
@@ -1354,9 +1424,12 @@ test("the live row counts rounds from one and names the phase running", async ()
   });
   const liveText = async (live_call: Record<string, unknown>) => {
     cleanup();
-    mount(<WorkItemPage id="ENG-42" />, { agents: [working(live_call)] });
+    mount(<WorkItemPage id="ENG-42" />, {
+      agents: [working(live_call)],
+      answers: { work_item: WORKED },
+    });
     await settle();
-    return screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+    return screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   };
   // The first round, in flight before any has come back.
   expect(await liveText({ phase: "execute", round_num: 0, rounds_used: 0 })).toContain(
@@ -1395,13 +1468,14 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
         },
       },
     ] as never,
+    answers: { work_item: WORKED },
   });
   await settle();
   // THE PAGE'S CLOCK re-reads (the mocked) `Date.now` when the tab is shown.
   act(() => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const live = screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  const live = screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   expect(live).toContain("for 30s");
   expect(live).not.toContain("0m");
 });

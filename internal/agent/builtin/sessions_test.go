@@ -1192,3 +1192,35 @@ func TestAFilteredReadSaysWhatItCouldNotRead(t *testing.T) {
 		}
 	}
 }
+
+// A READ CUT AT ITS OWN BOUNDS NAMES BOTH: a seat's read that stopped where the
+// session ran past what one read frames (an export of more items than
+// [executor.TranscriptReadLines]) says where it stopped, naming the budget one
+// read inflates ([executor.TranscriptReadBytes]) and the lines and parts it
+// frames, and that no entry after it can be read.
+//
+// Mutation: name the read budget alone, or a figure other than the bounds',
+// and the note goes red.
+func TestAReadCutAtItsBoundsNamesBoth(t *testing.T) {
+	t.Parallel()
+	k := newKeptSessions(t)
+	turn, _ := readerTurn(t)
+	row := k.sealedExport(t, "agent-cto", uuid.NewString(), `{"info":{"id":"ses_0123456789abcdef0123456789abcdef"},`+
+		`"messages":[{"id":"msg_0","type":"assistant","content":[`+
+		strings.Repeat(`{},`, executor.TranscriptReadLines)+`{}]}]}`)
+	row.ConversationKey = "chat:room"
+	k.mu.Lock()
+	k.rows["agent-cto"] = append(k.rows["agent-cto"], row)
+	k.mu.Unlock()
+	read := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ReadSessionTool)
+	answer := sessionAnswer(t, callFor(t, read, turn, map[string]any{"turn_id": row.Turn}))
+	note, _ := answer["note"].(string)
+	for _, says := range []string{"The read stopped at entry ",
+		fmt.Sprintf("what one read inflates (%d MiB)", executor.TranscriptReadBytes>>20),
+		fmt.Sprintf("what one read frames (%d)", executor.TranscriptReadLines),
+		"no entry after it can be read"} {
+		if !strings.Contains(note, says) {
+			t.Errorf("a read cut at its lines bound noted %q, want it to say %q", note, says)
+		}
+	}
+}

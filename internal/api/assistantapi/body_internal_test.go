@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
 // A BODY THAT DOES NOT DECODE IS TOLD IN WORDS, as every other surface that
@@ -18,15 +21,16 @@ import (
 func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
 	t.Parallel()
 	const remedy = " Send one JSON object of the route's own fields."
+	version := strconv.Itoa(wire.ProtocolVersion)
 	for name, tc := range map[string]struct{ body, says string }{
-		"a field the route does not take": {`{"protocol_version": 2, "bogus": 1}`,
+		"a field the route does not take": {`{"protocol_version": ` + version + `, "bogus": 1}`,
 			`In the body, "bogus" isn't a field this takes.` + remedy},
 		"a value of the wrong kind": {`{"protocol_version": "one"}`,
 			`In the body, "protocol_version" holds text where a whole number belongs.` +
 				remedy},
 		"a document that is not JSON": {`{"protocol_version": `,
 			"The body isn't valid JSON: it ends too soon." + remedy},
-		"something after the object": {`{"protocol_version": 2} {}`,
+		"something after the object": {`{"protocol_version": ` + version + `} {}`,
 			"The body has more after its JSON value, which is all it may hold."},
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/assistant/conversations",

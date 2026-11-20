@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
-	"github.com/crewlet/crewlet/internal/assistant/catalog"
 )
 
 // THE WALK THAT HOLDS A READ'S CARD TO ITS ROUTE'S REAL ANSWER.
@@ -20,8 +19,8 @@ import (
 // A card spec is a set of dotted paths (cards.Spec.Paths) the compiler cannot
 // hold to anything, and the model reads a tool's result from its card, so a
 // path naming a key the answer does not hold is a tool that tells the person
-// nothing exists: list_artifacts read its rows from `items` while GET
-// /artifacts answers `contents`. The walk here takes an answer a route's own
+// nothing exists: a spec reading rows from `items` while GET /artifacts
+// answers `contents`. The walk here takes an answer a route's own
 // handler gave and fails every path that is not in it. A suite that can serve
 // a route (internal/api, internal/api/iamapi) asks it and hands the answer
 // here, so no fixture typed beside the spec can repeat the spec's mistake.
@@ -370,43 +369,6 @@ func jsonMember(t reflect.Type, name string) (reflect.Type, bool) {
 func encoded(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
-}
-
-// CardVariants are example arguments that reach each of tool's card variants:
-// [ExampleArgs], each with one of its arguments left out, and each with one
-// enum argument set to each of its values; the first to reach a variant is
-// kept.
-func CardVariants(t testing.TB, tool catalog.Tool) map[string]map[string]any {
-	t.Helper()
-	base := ExampleArgs(t, tool.Parameters)
-	out := map[string]map[string]any{}
-	try := func(args map[string]any) {
-		if _, err := tool.Request(args); err != nil {
-			return
-		}
-		variant := ""
-		if tool.Variant != nil {
-			variant = tool.Variant(args)
-		}
-		if _, ok := out[variant]; !ok {
-			out[variant] = args
-		}
-	}
-	try(base)
-	props, _ := tool.Parameters["properties"].(map[string]any)
-	for _, name := range slices.Sorted(maps.Keys(props)) {
-		less := maps.Clone(base)
-		delete(less, name)
-		try(less)
-		prop, _ := props[name].(map[string]any)
-		enum, _ := prop["enum"].([]string)
-		for _, value := range enum {
-			with := maps.Clone(base)
-			with[name] = value
-			try(with)
-		}
-	}
-	return out
 }
 
 // Filled is a T with every exported field set, for a source a suite stands in

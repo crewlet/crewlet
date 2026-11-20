@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -139,8 +140,9 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	for _, pr := range t.Proposals {
 		proposals[pr.ID] = pr
 	}
+	now := s.now()
 	for _, c := range t.Cards {
-		out.Cards = append(out.Cards, shown(c, reader, proposals))
+		out.Cards = append(out.Cards, shown(c, reader, proposals, now))
 	}
 	for _, a := range t.AuditReads {
 		out.AuditReads = append(out.AuditReads, a.Wire())
@@ -172,9 +174,10 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 
 // shown is a stored card as reader is shown it now: a notice in its place
 // when they no longer hold every app it was built from ([cards.Visible]), and a
-// proposal card at its proposal's state now.
+// proposal card at its proposal's state at now ([proposal.StateNow]), so one
+// past its approval wait reads expired whether or not its expiry is recorded.
 func shown(c assistantdomain.Card, reader iam.Principal,
-	proposals map[uuid.UUID]assistantdomain.Proposal) wire.CardEvent {
+	proposals map[uuid.UUID]assistantdomain.Proposal, now time.Time) wire.CardEvent {
 
 	ev := c.Event()
 	visible, ok := cards.Visible(c.Apps, ev.Card, reader)
@@ -184,9 +187,9 @@ func shown(c assistantdomain.Card, reader iam.Principal,
 	}
 	if ev.Card.Type == wire.CardProposal && ev.Card.Proposal != nil {
 		if pr, ok := proposals[ev.Card.Proposal.ProposalID]; ok {
-			proposal := *ev.Card.Proposal
-			proposal.State, proposal.Receipt, proposal.Failure = pr.State, pr.Receipt, pr.Failure
-			ev.Card.Proposal = &proposal
+			pc := *ev.Card.Proposal
+			pc.State, pc.Receipt, pc.Failure = proposal.StateNow(pr, now), pr.Receipt, pr.Failure
+			ev.Card.Proposal = &pc
 		}
 	}
 	return ev

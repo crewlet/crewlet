@@ -94,3 +94,28 @@ func TestOpenWorkIsReadByHolderAndByWhatWaitsOnWhat(t *testing.T) {
 			"held by the question c-gate to owner", gate)
 	}
 }
+
+// WORK BLOCKED ON NOTHING ANYONE HOLDS IS NAMED, and work blocked on what a seat holds is not:
+// stray waits on loose, an item nobody holds; mixed waits on loose and on held, which dev holds,
+// so dev's turn ends its wait. Every item dev holds is still to start.
+// Mutation: count a wait on an item nobody holds as held, and stray is not named.
+func TestOpenWorkNamesWhatIsBlockedOnNothingAnyoneHolds(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, it := range [][2]string{{"stray", "qa"}, {"loose", ""}, {"mixed", "qa"}, {"held", "dev"}} {
+		hold(t, r, it[0], it[1], worklet.PriorityNormal)
+	}
+	for _, w := range [][2]string{{"stray", "loose"}, {"mixed", "loose"}, {"mixed", "held"}} {
+		waitsOn(t, r, w[0], w[1])
+	}
+	got := r.openWork(t, []string{"dev", "qa"}, nil)
+	if len(got.Unheld) != 1 || got.Unheld[0].Key != "ENG-1" || got.Unheld[0].Holder != "qa" ||
+		!slices.Equal(got.Unheld[0].On, []string{"ENG-2"}) || got.Unheld[0].Since.IsZero() {
+		t.Errorf("unheld = %+v, want stray (ENG-1) alone, held by qa, waiting on loose (ENG-2)", got.Unheld)
+	}
+	for _, h := range got.Holders {
+		if h.Handle == "dev" && (h.NotStarted != 1 || !slices.Equal(h.NotStartedKeys, []string{"ENG-4"})) {
+			t.Errorf("dev = %+v, want its one item still to start", h)
+		}
+	}
+}

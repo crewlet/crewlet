@@ -24,6 +24,7 @@ import {
   flowPoints,
   mergePages,
   rangeOf,
+  rangeSince,
   scheduleVerb,
   sentenceText,
   statusSentence,
@@ -260,12 +261,13 @@ describe("the figures", () => {
     expect(troubleParts({ blocked: 2, overdue: 0 })).toEqual(["2 blocked"]);
     expect(troubleParts({ blocked: 0, overdue: 0 })).toEqual([]);
     // THE PARTS ARE WHOLE FACTS, so a narrow tile breaks between them.
-    expect(inProgressParts(true, ["2 blocked", "1 overdue"])).toEqual([
-      "vs last week",
+    expect(inProgressParts(rangeOf("7d"), ["2 blocked", "1 overdue"])).toEqual([
+      "vs 7 days ago",
       "2 blocked",
       "1 overdue",
     ]);
-    expect(inProgressParts(false, [])).toEqual([]);
+    expect(inProgressParts(rangeOf("30d"), [])).toEqual(["vs 30 days ago"]);
+    expect(inProgressParts(null, [])).toEqual([]);
   });
 
   test("the budget caption is the week's and says when it resets", () => {
@@ -429,4 +431,20 @@ describe("the feed", () => {
     expect(rows[1]!.at).toBe("2026-09-22T09:50:00Z");
     expect(rows[2]!.schedule?.target).toBe("cto");
   });
+});
+
+// HOME'S WINDOW OPENS ON A COMPANY MIDNIGHT: today's for Today, and the
+// range's length less one day before it otherwise, the days the day series'
+// last points count.
+test("Home's window opens on the company's midnight of its first day", () => {
+  const now = Date.parse("2026-09-22T09:00:00Z"); // 11:00 in Berlin
+  expect(new Date(rangeSince(rangeOf("today"), now, "Europe/Berlin")).toISOString()).toBe(
+    "2026-09-21T22:00:00.000Z",
+  );
+  expect(new Date(rangeSince(rangeOf("7d"), now, "Europe/Berlin")).toISOString()).toBe(
+    "2026-09-15T22:00:00.000Z",
+  );
+  expect(new Date(rangeSince(rangeOf("30d"), now, "")).toISOString()).toBe(
+    "2026-08-24T00:00:00.000Z",
+  );
 });

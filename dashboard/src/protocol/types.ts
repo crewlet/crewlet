@@ -34,6 +34,7 @@ import type {
   AdvisorReport,
   AdvisorReportList,
   AdvisorRunSummary,
+  AdvisorSnapshot,
 } from "./advisorFindings.ts";
 import type {
   ModelCheck,
@@ -8440,6 +8441,7 @@ export interface QueryMap {
   advisor_notices: AdvisorNoticesAnswer;
   advisor_reports: AdvisorReportList;
   advisor_report: AdvisorReport;
+  advisor_snapshot: AdvisorSnapshot;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;

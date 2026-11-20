@@ -265,13 +265,14 @@ const MANAGED_FIELDS = new Set([
  * it to one line wherever it is printed beside a model id.
  */
 export const KEY_MAX = 40;
+/** The one rule a new name keeps, said by its field and by its problem alike. */
+export const KEY_RULE = `Lowercase letters, digits, dots, hyphens and underscores, up to ${KEY_MAX} characters.`;
 /** The engine's grammar for a model's name (`config.ProviderKeyPattern`, held as `MODEL_KEY_PATTERN`). */
 const KEY_PATTERN = new RegExp(MODEL_KEY_PATTERN);
 
-/** The steps a draft walks; Where it runs only for a harness that runs coding. */
-/** The steps for the draft: Where it runs only for a harness that codes, Review only for an edit. */
-export function stepsFor(d: Pick<Draft, "harness">, editing: boolean): WizardStep[] {
-  return WIZARD_STEPS.filter((s) => (s !== "runs" || canExecute(d)) && (editing || s !== "review"));
+/** The steps a draft walks, ending on Review: Where it runs only for a harness that runs coding. */
+export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
+  return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
@@ -281,7 +282,6 @@ export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
   runs: "Where it runs",
   assign: "Use it for",
   limits: "Limits",
-  test: "Test call",
   review: "Review",
 };
 
@@ -663,6 +663,12 @@ export function nextDocument(
     unknown
   >;
   llm[d.key] = entityOf(d, editing?.base);
+  // A COMPANY WITH NO PLACE TO RUN CODING gets this host, as the engine's own
+  // remedy says: every agent seat's executor runs in a box `providers.sandbox`
+  // configures, so a first coding model was refused, with nothing on the page
+  // to set one up. `local: {}` with `default_run_in: direct` runs it on this
+  // host as the engine's user; Where it runs and Review say so before a save.
+  if (canExecute(d) && !hasSandbox(doc)) providers.sandbox = { ...HOST_SANDBOX };
   // A NEW MODEL GOES LAST in the company's order, written out whole, rather
   // than wherever its name sorts among the keys `llm_order` leaves out: the
   // first in order is the fallback for seats that name none, and a new model
@@ -673,6 +679,25 @@ export function nextDocument(
       d.key,
     ];
   return applyUses(next as CompanyDocument, d.key, editing?.was ?? noUses(), d.uses);
+}
+
+/** The place to run coding a save sets up where the company has none: this engine's host. */
+const HOST_SANDBOX = { local: {}, default_run_in: "direct" } as const;
+
+/** The document with this engine's host set up to run coding, as the engine's own remedy says. */
+export function withHostSandbox(doc: CompanyDocument): CompanyDocument {
+  const next = structuredClone(doc) as Record<string, unknown>;
+  const providers = (isRecord(next.providers) ? next.providers : (next.providers = {})) as Record<
+    string,
+    unknown
+  >;
+  providers.sandbox = { ...HOST_SANDBOX };
+  return next as CompanyDocument;
+}
+
+/** Whether the company document configures a place to run a seat's executor (`providers.sandbox`). */
+export function hasSandbox(doc: CompanyDocument | null): boolean {
+  return !!doc && isRecord(doc.providers) && isRecord(doc.providers.sandbox);
 }
 
 /** A problem the form finds itself, in the engine's shape so both are drawn the same way. */
@@ -686,6 +711,20 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
 }
 
 /**
+ * The harness program a problem says is missing from the engine host, or "":
+ * the doctor's "not on this host's PATH". No step of the wizard installs a
+ * program, so such a problem is said plainly and offers no step to fix it in.
+ */
+export function notInstalled(p: Pick<ConfigProblem, "message">): string {
+  return /"([^"]+)" is not on this host's PATH/.exec(p.message)?.[1] ?? "";
+}
+
+/** Whether a step of the wizard can fix a problem: not a program missing from the host. */
+export function fixable(p: Pick<ConfigProblem, "message">): boolean {
+  return !notInstalled(p);
+}
+
+/**
  * The step a problem belongs to, by its field: a value the credential route
  * tested is the Method's, a field of the entry is the step that sets it, and
  * anything in the seats or the assistant is Use it for.
@@ -693,8 +732,11 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
   if (s[0] === "key") return "harness";
-  if (s[0] === "test") return "test";
+  // THE TEST CALL IS RUN ON REVIEW, where its result is said.
+  if (s[0] === "test") return "review";
   if (s[0] === "values" || s[0] === "variable") return "signin";
+  // WHERE CODING RUNS is the company's sandbox block: Where it runs says it.
+  if (s[0] === "providers" && s[1] === "sandbox") return "runs";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     switch (s[3]) {
       case "model":
@@ -738,6 +780,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
     return words[String(s[3])] ?? STEP_LABELS[stepOf(p, key)];
   }
   if (s[0] === "assistant") return "Ask Crewlet";
+  if (s[0] === "advisor") return "Advisor";
   return STEP_LABELS[stepOf(p, key)];
 }
 
@@ -747,9 +790,11 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
  * person reads the sentence and the field it belongs to is said beside it.
  */
 export function messageOf(p: Pick<ConfigProblem, "path" | "message">): string {
+  const missing = notInstalled(p);
+  if (missing) return `Install ${missing} on the engine host: the harness runs there.`;
   let message = p.message.trim();
   if (p.path && message.startsWith(`${p.path}: `)) message = message.slice(p.path.length + 2);
-  else message = message.replace(/^(providers|roles|units|assistant)\.[^\s:]*: /, "");
+  else message = message.replace(/^(providers|roles|units|assistant|advisor)\.[^\s:]*: /, "");
   return message.charAt(0).toUpperCase() + message.slice(1);
 }
 
@@ -789,21 +834,24 @@ export function draftProblems(
   d: Draft,
   existing: readonly string[],
   kept: Kept = { credential: false, cloud: {} },
+  /**
+   * Whether the draft edits a model that exists. ITS NAME IS NOT ASKED AGAIN:
+   * the engine accepted it (up to 63 characters), the edit shows it read-only,
+   * and the wizard's own cap of 40 refused every edit of a longer one.
+   */
+  editing = false,
 ): ConfigProblem[] {
   const out: ConfigProblem[] = [];
   const at = (field: string, message: string, kind?: string) =>
     problem(["providers", "llm", d.key, ...field.split(".")], message, kind);
-  if (!d.key) {
+  if (editing) {
+    // The name is the model's identity, read-only here.
+  } else if (!d.key) {
     out.push(problem(["key"], "Name the model. Seats and Ask Crewlet name it.", "missing"));
   } else if (d.key.length > KEY_MAX) {
     out.push(problem(["key"], `Keep the name to ${KEY_MAX} characters or fewer.`, "out_of_range"));
   } else if (!KEY_PATTERN.test(d.key)) {
-    out.push(
-      problem(
-        ["key"],
-        "Use lowercase letters, digits, dots, hyphens and underscores, starting with a letter or a digit, such as sonnet-key.",
-      ),
-    );
+    out.push(problem(["key"], `${KEY_RULE} It starts with a letter or a digit.`));
   } else if (existing.includes(d.key)) {
     out.push(problem(["key"], `There is already a model called ${d.key}.`, "conflict"));
   }

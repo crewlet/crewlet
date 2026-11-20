@@ -502,10 +502,12 @@ func (d *claudeEvents) lost(line string) {
 
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.
-func (d *claudeEvents) Entries() []string { return d.transcript.take() }
+func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end) }
 
 func (d *claudeEvents) Result() sandbox.Result {
-	return sandbox.Result{Transcript: d.transcript.String()}
+	var r sandbox.Result
+	r.Transcript, r.TranscriptElidedLines, r.TranscriptElidedBytes = d.transcript.result()
+	return r
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
@@ -547,6 +549,12 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
+	return claudeSteerContent(content)
+}
+
+// claudeSteerContent is [claudeSteerSaid] of an informational record's content,
+// decoded.
+func claudeSteerContent(content string) (string, bool) {
 	loc := claudeSteerPrefix.FindStringIndex(content)
 	if loc == nil {
 		return "", false
@@ -624,9 +632,9 @@ const claudeImagePlaceholder = "[an image]"
 // toolAnswer is a tool's answer as text, from list, its parts: what said makes
 // of each part by its `type`, `text` and `mime` (each its string, or "" where of
 // another kind or the part is no object), a line apart, in order, skipping a
-// part said passes over. "" for a list that does not decode to its end. ONE
-// READING for both harnesses: Claude Code's result blocks ([claudeResultText])
-// and OpenCode's tool content ([openCodeAnswer]).
+// part said passes over. "" for a list that does not decode to its end:
+// Claude Code's result blocks ([claudeResultText]), which an OpenCode call's
+// answer is joined as, a part at a time ([callResult]).
 //
 // A PART AT A TIME ([eachElement]), by exact key names ([threadDecoding]) and
 // loosely by type, each read in place ([eachKeyInPlace]), never the whole list

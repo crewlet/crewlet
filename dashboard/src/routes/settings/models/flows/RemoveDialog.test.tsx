@@ -1,27 +1,41 @@
 /**
  * Removing a model draws every place that names it from the engine's own
- * refusal, says each place in words (a seat by its name and a job by its
- * category's words, never a handle or a path outside the list of changes),
- * checks each choice as it is made, names where each place goes before the
- * removal is confirmed, and removes against the entry's own tag with an audit
- * summary. An engine that answered with an error is never said not to have
- * answered.
+ * refusal and asks one question: where all of it moves. One line says what
+ * uses the model, by counts and names; "Choose per seat" opens a row per
+ * place, each just its name and a picker; no handle, field or config key is
+ * printed; each set of moves is checked by a dry run as it changes; and a
+ * confirm is asked only where the removal leaves something with no model.
+ * The removal states the entry's own tag and an audit summary, and an engine
+ * that answered with an error is never said not to have answered.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelReference } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
-import { defaultChoice, RemoveDialog } from "./RemoveDialog.tsx";
+import {
+  apiKeyEntry,
+  modelsData,
+  modelsDoc,
+  runs,
+  seat,
+} from "~/routes/settings/models/fixtures.ts";
+import {
+  defaultChoice,
+  leftWithNoModel,
+  placeNames,
+  refId,
+  RemoveDialog,
+  summaryOf,
+} from "./RemoveDialog.tsx";
 
 const removeModel = vi.hoisted(() => vi.fn());
-vi.mock("../api.ts", () => ({ removeModel }));
+// WHAT NAMES THE MODEL IS READ (`GET .../references`), never asked as a refused dry run.
+const modelReferences = vi.hoisted(() => vi.fn());
+vi.mock("../api.ts", () => ({ removeModel, modelReferences }));
 // THE DOCUMENT'S TAG IS NOT THE ENTRY'S: a removal sent the document's and was
-// refused 412 for every model. Both are answered here, apart, so a case
-// reads which one the dialog sent.
+// refused 412 for every model. The entry's is the one answered here.
 vi.mock("~/protocol/configWrite.ts", () => ({
-  getConfig: () => Promise.resolve({ kind: "document", document: {}, etag: '"rev-1"' }),
   getEntity: () => Promise.resolve({ kind: "entity", entity: {}, etag: '"llm-providers-sonnet"' }),
 }));
 
@@ -49,6 +63,7 @@ const valid = {
 };
 
 beforeEach(() => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: REFS }));
   removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
     Promise.resolve(removal.repoint.length === 0 ? refusal : valid),
   );
@@ -60,7 +75,12 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-/** The dialog on `sonnet`, Ask Crewlet's model, with `big` one a helper can run on or not. */
+/**
+ * The dialog on `sonnet`, Ask Crewlet's model, with `big` one a helper can run
+ * on or not. Every place already runs on `big` somewhere: the Backend Engineer
+ * reviews on it, QA delegates on it, and the Advisor explains with it, so it is
+ * the one model a removal may move all of them to unasked.
+ */
 function open(bigRunsAHelper: boolean) {
   const data = modelsData({
     entries: [
@@ -68,6 +88,11 @@ function open(bigRunsAHelper: boolean) {
       apiKeyEntry({
         key: "big",
         helper_problem: bigRunsAHelper ? null : "Its tool runs with tools Crewlet cannot turn off.",
+        used_by: [
+          ...runs("backend-engineer", "review"),
+          ...runs("qa", "subagent"),
+          { advisor: "findings", position: 0 },
+        ],
       }),
       apiKeyEntry({
         key: "default",
@@ -75,7 +100,7 @@ function open(bigRunsAHelper: boolean) {
         helper_problem: "Its tool runs with tools Crewlet cannot turn off.",
       }),
     ],
-    doc: modelsDoc({}),
+    doc: { ...modelsDoc({}), advisor: { model: "big" } } as ReturnType<typeof modelsDoc>,
     seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],
     assistant: { key: "sonnet" },
   });
@@ -101,116 +126,293 @@ const onRemoved = vi.fn();
 
 const settle = () => act(async () => {});
 
-test("each place is named in words, a backup said apart, and no handle or path in the prose", async () => {
+const button = () => screen.getByRole("button", { name: "Remove model" }) as HTMLButtonElement;
+
+/** An option's key: what stands before the model's name. */
+const keyOf = (text: string | null) => (text ?? "").split(" · ")[0];
+
+/** Picks an option of a kit Select: the list opens on a click, and an option commits on its press. */
+async function pick(picker: HTMLElement, option: RegExp | string) {
+  fireEvent.click(picker);
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
+  await settle();
+}
+
+const ADVISOR_REF: ModelReference = {
+  at: { advisor: "findings" },
+  segments: ["advisor", "model"],
+  chain: ["sonnet"],
+};
+
+test("one line says what uses the model, and no handle, field or config key is printed", async () => {
   open(true);
-  const list = await screen.findByRole("list", { name: "Where sonnet is named" });
-  // ONE GROUP PER SEAT, under the seat's name on its own line, and each row
-  // named by its job alone: a long seat name can no longer cut off the job
-  // that tells two rows apart.
-  const groups = within(list).getAllByRole("group");
-  expect(groups.map((g) => g.querySelector(".models-repoint__who")?.textContent)).toEqual([
-    "Backend Engineer",
-    "QA",
-    "Ask Crewlet",
-  ]);
-  const rowsOf = (g: HTMLElement) =>
-    within(g)
-      .getAllByRole("listitem")
-      .map((li) => li.querySelector(".models-repoint__place")?.textContent);
-  expect(rowsOf(groups[0]!)).toEqual(["Coding"]);
-  expect(rowsOf(groups[1]!)).toEqual(["Reviewing (backup)"]);
-  expect(rowsOf(groups[2]!)).toEqual(["Chat"]);
-  expect(within(list).getByRole("group", { name: "QA" })).toBe(groups[1]);
-  // The picker still says the whole place.
-  expect(
-    screen.getByRole("combobox", { name: "Where QA, reviewing (backup) moves" }),
-  ).toBeDefined();
-  expect(list.textContent).not.toMatch(/backend-engineer|llm_review|roles\[/);
-  // The first ask carried no repoints: the engine's refusal drew the list.
-  expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [] });
+  expect(await screen.findByText("Used by 2 seats and Ask Crewlet.")).toBeDefined();
+  await settle();
+  const said = document.body.textContent ?? "";
+  expect(said).not.toMatch(
+    /backend-engineer|llm_review|roles\[|assistant\.model|providers\.llm|Ready to remove|Every change in the revision/,
+  );
+  // NO PER-PLACE ROWS until they are asked for, and no caption under any.
+  expect(screen.queryByRole("list", { name: "Each place" })).toBeNull();
+  expect(said).not.toContain("runs the model with no tools of its own");
+  // The first ask carried no repoints: the engine's refusal drew the places.
+  // M-021: THE LIST IS READ, never asked as a dry run with no moves, which the
+  // engine refuses 422 and every browser logs as a failed request.
+  expect(modelReferences).toHaveBeenCalledWith("sonnet", expect.anything());
+  expect(removeModel.mock.calls.every((c) => c[1].repoint.length > 0)).toBe(true);
 });
 
-test("every choice is checked by a dry run as it is made, and summarised in words", async () => {
+test("the one choice moves every place, and each set of moves is checked by a dry run", async () => {
   open(true);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
+  const choice = await screen.findByRole("combobox", { name: "Move them to" });
   await settle();
-  // Defaults: coding moves to a model that can code (codex cannot), the backup
-  // to the model already ahead of it in its field, Ask Crewlet to one a helper
-  // can run on.
+  // big fits every place (codex's default cannot run Ask Crewlet), so all of it moves there.
+  expect(choice.textContent).toContain("big");
   const checked = removeModel.mock.calls.at(-1)!;
-  expect(checked[1]).toEqual({
+  expect(checked[1]).toEqual({ repoint: REFS.map((r) => ({ at: r.at, to: "big" })) });
+  expect(checked[2]).toMatchObject({ etag: '"llm-providers-sonnet"', dryRun: true });
+
+  // ONLY WHAT FITS EVERY PLACE is offered, then Leave unset.
+  fireEvent.click(choice);
+  // EACH MODEL NAMED IN FULL, its key first: "big · claude-sonnet-5".
+  expect(screen.getAllByRole("option").map((o) => keyOf(o.textContent))).toEqual([
+    "big",
+    "Leave unset",
+  ]);
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Leave unset" }));
+  await settle();
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: REFS.map((r) => ({ at: r.at, to: null })),
+  });
+});
+
+test("Choose per seat opens a row per place, just its name and a picker, and a row overrides the one choice", async () => {
+  open(true);
+  const toggle = await screen.findByRole("button", { name: "Choose per seat" });
+  await settle();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  const list = screen.getByRole("list", { name: "Each place" });
+  // A SEAT WITH ONE JOB ON THE MODEL IS ITS NAME ALONE: no "Coding" under it.
+  expect(
+    within(list)
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector(".models-repoint__name")?.textContent),
+  ).toEqual(["Backend Engineer", "QA", "Ask Crewlet"]);
+  expect(list.textContent).not.toMatch(/Coding|Reviewing|Chat|no tools of its own/);
+
+  await pick(screen.getByRole("combobox", { name: "Where QA moves" }), /^default/);
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
     repoint: [
       { at: REFS[0]!.at, to: "big" },
       { at: REFS[1]!.at, to: "default" },
       { at: REFS[2]!.at, to: "big" },
     ],
   });
-  expect(checked[2]).toMatchObject({ etag: '"llm-providers-sonnet"', dryRun: true });
-  expect(
-    screen.getByText("Removes the model sonnet, moves 2 uses to big, and moves 1 use to default."),
-  ).toBeDefined();
-
-  const asked = removeModel.mock.calls.length;
-  fireEvent.click(screen.getByRole("combobox", { name: "Where Backend Engineer, coding moves" }));
-  fireEvent.mouseDown(screen.getByRole("option", { name: /Leave it unset/ }));
-  await settle();
-  expect(removeModel.mock.calls.length).toBe(asked + 1);
-  expect(
-    screen.getByText(
-      "Removes the model sonnet, moves 1 use to default, moves 1 use to big, and leaves 1 unset.",
-    ),
-  ).toBeDefined();
+  // A SPLIT READS AS ONE: the one choice no longer names a model.
+  expect(screen.getByRole("combobox", { name: "Move them to" }).textContent).toContain(
+    "Different for each",
+  );
+  // …and choosing it again moves every place once more.
+  await pick(screen.getByRole("combobox", { name: "Move them to" }), /^big/);
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: REFS.map((r) => ({ at: r.at, to: "big" })),
+  });
 });
 
-// ASK CREWLET'S MODEL POINTED AT NONE TURNS IT OFF: the engine reads the
-// repoint itself, so the body carries nothing else.
-test("with no other model a helper can run on, Ask Crewlet's model is repointed to none, which turns it off", async () => {
-  open(false);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
-  await settle();
-  const removal = removeModel.mock.calls.at(-1)![1];
-  expect(Object.keys(removal)).toEqual(["repoint"]);
-  expect(removal.repoint[2]).toEqual({ at: { assistant: "chat" }, to: null });
-  expect(screen.getByText(/turns Ask Crewlet off/)).toBeDefined();
+// M-021: A SEAT'S JOBS IN THE PAGE'S OWN CATEGORIES (Coding, Reviews,
+// Routines), the engine's job beside one only where two share a category.
+test("a seat that runs on the model for more than one job is told apart by the page's categories", () => {
+  const refs: ModelReference[] = [
+    { at: { seat: "qa", job: "executor" }, segments: ["roles", 1, "llm"], chain: ["sonnet"] },
+    { at: { seat: "qa", job: "review" }, segments: ["roles", 1, "llm_review"], chain: ["sonnet"] },
+    { at: { seat: "pm", job: "review" }, segments: ["roles", 2, "llm_review"], chain: ["sonnet"] },
+    { at: { seat: "ds", job: "judge" }, segments: ["roles", 3, "llm_judge"], chain: ["sonnet"] },
+    { at: { seat: "ds", job: "executor" }, segments: ["roles", 3, "llm"], chain: ["sonnet"] },
+    {
+      at: { seat: "ops", job: "auxiliary" },
+      segments: ["roles", 4, "llm_auxiliary"],
+      chain: ["sonnet"],
+    },
+    { at: { seat: "ops", job: "judge" }, segments: ["roles", 4, "llm_judge"], chain: ["sonnet"] },
+    REFS[2]!,
+    ADVISOR_REF,
+  ];
+  const names = placeNames(refs, [
+    seat("qa", "QA"),
+    seat("pm", "Product Manager"),
+    seat("ds", "Design Systems"),
+    seat("ops", "Ops"),
+  ]);
+  expect(refs.map((r) => names.get(refId(r)))).toEqual([
+    "QA, coding",
+    "QA, reviews",
+    "Product Manager",
+    // NEVER "evaluations" where the page says Routines.
+    "Design Systems, routines",
+    "Design Systems, coding",
+    "Ops, routines (memory and summaries)",
+    "Ops, routines (onboarding checks)",
+    "Ask Crewlet",
+    "The Advisor",
+  ]);
 });
 
-test("the removal waits for the typed name, then states the revision it read and a summary", async () => {
+test("when everything moves to another model, the button alone removes it, with the entry's tag and a summary", async () => {
   const onDone = open(true);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await screen.findByRole("combobox", { name: "Move them to" });
   await settle();
-  const button = screen.getByRole("button", { name: "Remove model" }) as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
-  expect(button.disabled).toBe(false);
+  // NO TYPED NAME, NO BOX TO TICK: nothing is left with no model.
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(button().disabled).toBe(false);
   removeModel.mockResolvedValueOnce({
     outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
     references: [],
   });
   await act(async () => {
-    fireEvent.click(button);
+    fireEvent.click(button());
   });
   const sent = removeModel.mock.calls.at(-1)!;
+  expect(sent[1]).toEqual({ repoint: REFS.map((r) => ({ at: r.at, to: "big" })) });
   expect(sent[2]).toEqual({
     etag: '"llm-providers-sonnet"',
     dryRun: false,
-    summary: "Remove the model sonnet, move 2 uses to big, and move 1 use to default",
+    summary: "Remove the model sonnet and move 3 uses to big",
   });
   expect(onDone).toHaveBeenCalled();
   expect(onRemoved).toHaveBeenCalledTimes(1);
 });
 
+test("leaving something with no model asks for one confirm, which names what is lost", async () => {
+  open(true);
+  await pick(await screen.findByRole("combobox", { name: "Move them to" }), "Leave unset");
+  // SEATS LEFT UNSET FALL BACK on the company's other models; Ask Crewlet is off.
+  const confirm = screen.getByRole("checkbox", { name: "Turn Ask Crewlet off" });
+  expect(button().disabled).toBe(true);
+  fireEvent.click(confirm);
+  expect(button().disabled).toBe(false);
+  // A DIFFERENT LOSS ASKS AGAIN: moving Ask Crewlet back clears the confirm.
+  await pick(screen.getByRole("combobox", { name: "Move them to" }), /^big/);
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(button().disabled).toBe(false);
+});
+
+// NO MODEL FITS EVERY PLACE: each place opens on a model it already runs on,
+// and a place with none waits for the person's choice, which holds Remove.
+test("where no model fits every place, each place opens on a model it already runs on, or waits", async () => {
+  open(false);
+  const list = await screen.findByRole("list", { name: "Each place" });
+  await settle();
+  // ASK CREWLET HAS NO MODEL IT CAN RUN ON ALREADY: it waits, and nothing is checked yet.
+  expect(
+    within(list).getByRole("combobox", { name: "Where Ask Crewlet moves" }).textContent,
+  ).toContain("Choose a model");
+  expect(removeModel).not.toHaveBeenCalled();
+  expect(button().disabled).toBe(true);
+  await pick(
+    within(list).getByRole("combobox", { name: "Where Ask Crewlet moves" }),
+    "Leave unset",
+  );
+  // Coding to the model the seat already reviews on, the backup to the model
+  // ahead of it, and Ask Crewlet, by the person's choice, to none.
+  expect(removeModel.mock.calls.at(-1)![1].repoint).toEqual([
+    { at: REFS[0]!.at, to: "big" },
+    { at: REFS[1]!.at, to: "default" },
+    { at: { assistant: "chat" }, to: null },
+  ]);
+  expect(screen.getByRole("checkbox", { name: "Turn Ask Crewlet off" })).toBeDefined();
+  expect(button().disabled).toBe(true);
+});
+
+// M-013: NO SILENT MOVE TO A MODEL NOBODY CHOSE. With nothing these places
+// already run on, the dialog asks; the healthiest model is no reason alone.
+test("with no model the places already use, the removal asks for one and holds the button", async () => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [REFS[0]!] }));
+  const data = modelsData({
+    entries: [
+      apiKeyEntry({ key: "sonnet" }),
+      apiKeyEntry({ key: "healthy" }),
+      apiKeyEntry({ key: "other" }),
+    ],
+    doc: modelsDoc({}),
+    seats: [seat("backend-engineer", "Backend Engineer")],
+  });
+  view = render(
+    <Router>
+      <RemoveDialog
+        model={data.models[0]!}
+        data={data}
+        onClose={() => {}}
+        onDone={() => {}}
+        onRemoved={onRemoved}
+      />
+    </Router>,
+  );
+  const choice = await screen.findByRole("combobox", { name: "Move it to" });
+  await settle();
+  expect(choice.textContent).toContain("Choose a model");
+  expect(removeModel).not.toHaveBeenCalled();
+  expect(button().disabled).toBe(true);
+  await pick(choice, /^healthy/);
+  expect(removeModel.mock.calls.at(-1)![1]).toEqual({
+    repoint: [{ at: REFS[0]!.at, to: "healthy" }],
+  });
+  expect(button().disabled).toBe(false);
+});
+
+test("a model nothing uses says so in one line, and the button removes it", async () => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [] }));
+  removeModel.mockImplementation(() => Promise.resolve(valid));
+  open(true);
+  expect(await screen.findByText("Nothing uses this model.")).toBeDefined();
+  await settle();
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(button().disabled).toBe(false);
+});
+
+test("a set of moves the engine refuses is said inline in its words, and nothing can be removed", async () => {
+  removeModel.mockImplementation((_key, removal: { repoint: { to: string | null }[] }) =>
+    Promise.resolve(
+      removal.repoint.length === 0
+        ? refusal
+        : removal.repoint.some((r) => r.to === null)
+          ? {
+              outcome: {
+                kind: "problems",
+                problems: [{ path: "", message: "QA still needs a model to review with." }],
+                derived: null,
+                code: "validation_error",
+                hint: "",
+              },
+              references: [],
+            }
+          : valid,
+    ),
+  );
+  open(true);
+  await pick(await screen.findByRole("combobox", { name: "Move them to" }), "Leave unset");
+  const title = screen.getByText("This cannot be removed as it stands");
+  expect(title.closest(".crewlet-callout")?.textContent).toContain(
+    "QA still needs a model to review with.",
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "Turn Ask Crewlet off" }));
+  expect(button().disabled).toBe(true);
+});
+
 test("a removal that has started finishes after the dialog closed, and moves nothing on screen", async () => {
   const onDone = open(true);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await screen.findByRole("combobox", { name: "Move them to" });
   await settle();
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
   let answer!: (value: unknown) => void;
   let sent: unknown = "unset";
   removeModel.mockImplementationOnce((_k, _r, _o, signal?: AbortSignal) => {
     sent = signal;
     return new Promise((resolve) => (answer = resolve));
   });
-  fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
+  fireEvent.click(button());
   window.location.hash = "#/somewhere-else";
   view.unmount();
   // NO SIGNAL: closing the dialog cannot stop a removal part way.
@@ -228,24 +430,10 @@ test("a removal that has started finishes after the dialog closed, and moves not
 
 test("every request of a removal carries the entry's own tag, never the document's", async () => {
   open(true);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await screen.findByRole("combobox", { name: "Move them to" });
   await settle();
   expect(removeModel.mock.calls.length).toBeGreaterThan(0);
   for (const call of removeModel.mock.calls) expect(call[2].etag).toBe('"llm-providers-sonnet"');
-});
-
-test("before it is confirmed, the removal says where each seat and job goes, by name", async () => {
-  open(true);
-  await screen.findByRole("list", { name: "Where sonnet is named" });
-  await settle();
-  const moves = await screen.findByRole("list", { name: "Where each moves" });
-  const lines = within(moves)
-    .getAllByRole("listitem")
-    .map((li) => li.textContent);
-  expect(lines.length).toBe(REFS.length);
-  for (const line of lines) expect(line).toMatch(/^.+: (sonnet → \S+|turned off)/);
-  expect(lines.join(" ")).toContain("Backend Engineer");
-  expect(lines.join(" ")).not.toMatch(/backend-engineer|roles\./);
 });
 
 /**
@@ -265,10 +453,8 @@ const UNSETTLED = [
 test.each(UNSETTLED)(
   "a check answered with status %i (by the engine: %s) says what happened, and that nothing was removed",
   async (status, answered, detail, said) => {
-    removeModel.mockReset();
-    removeModel.mockResolvedValue({
-      outcome: { kind: "unsettled", answered, status, detail },
-      references: [],
+    modelReferences.mockResolvedValue({
+      refused: { kind: "unsettled", answered, status, detail },
     });
     const words = new RegExp(`^${said.replace(/[.()]/g, "\\$&")} Nothing was removed\\.$`);
     open(true);
@@ -283,9 +469,8 @@ test.each(UNSETTLED)(
   "a removal answered with status %i (by the engine: %s) says what happened, and that it may have landed",
   async (status, answered, detail, said) => {
     open(true);
-    await screen.findByRole("list", { name: "Where sonnet is named" });
+    await screen.findByRole("combobox", { name: "Move them to" });
     await settle();
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
     removeModel.mockResolvedValueOnce({
       outcome: { kind: "unsettled", answered, status, detail },
       references: [],
@@ -307,7 +492,7 @@ test.each(UNSETTLED)(
 // A DEFAULT IS A RECOMMENDATION: it never sends a seat's job to a model that
 // cannot answer while one that can is eligible, and it keeps the job on the
 // removed model's harness where it can.
-test("a place's default is a model that answers, on the same harness where one does", () => {
+test("a place's default is a model it already runs on, the one likeliest to answer, or none", () => {
   const data = modelsData({
     entries: [
       apiKeyEntry({ key: "sonnet" }),
@@ -324,9 +509,69 @@ test("a place's default is a model that answers, on the same harness where one d
     segments: ["roles", 0, "llm_review"],
     chain: ["sonnet"],
   };
-  expect(defaultChoice(ref, "sonnet", data.models)).toEqual({ to: "d-ready" });
+  // NOTHING IT RUNS ON ALREADY: no default, the person chooses.
+  expect(defaultChoice(ref, "sonnet", data.models)).toBeUndefined();
+  // Among models it already runs on, the one likeliest to answer.
+  const used = () => new Set(["a-refused", "d-ready"]);
+  expect(defaultChoice(ref, "sonnet", data.models, used)).toEqual({ to: "d-ready" });
   // Its own backup still wins, whatever the list order.
   expect(defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models)).toEqual({
     to: "c-codex",
   });
+});
+
+// THE ADVISOR'S MODEL IS MOVED LIKE ASK CREWLET'S: named in the one line, a
+// row of its own, and running with no model the one confirm names.
+test("the Advisor's model moves with the rest, or runs with no model once confirmed", async () => {
+  modelReferences.mockImplementation(() => Promise.resolve({ references: [...REFS, ADVISOR_REF] }));
+  open(true);
+  expect(await screen.findByText("Used by 2 seats, Ask Crewlet, and the Advisor.")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Choose per seat" }));
+  const picker = screen.getByRole("combobox", { name: "Where The Advisor moves" });
+  fireEvent.click(picker);
+  // EACH MODEL NAMED IN FULL, its key first: "big · claude-sonnet-5".
+  expect(screen.getAllByRole("option").map((o) => keyOf(o.textContent))).toEqual([
+    "big",
+    "Leave unset",
+  ]);
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Leave unset" }));
+  await settle();
+  expect(screen.getByRole("checkbox", { name: "Run the Advisor with no model" })).toBeDefined();
+  await pick(screen.getByRole("combobox", { name: "Move them to" }), "Leave unset");
+  expect(
+    screen.getByRole("checkbox", {
+      name: "Turn Ask Crewlet off and run the Advisor with no model",
+    }),
+  ).toBeDefined();
+});
+
+test("seats stop only where no model is left to fall back on", () => {
+  const two = (models: string[]) =>
+    modelsData({
+      entries: models.map((key) => apiKeyEntry({ key })),
+      doc: modelsDoc({}),
+      seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],
+    }).models;
+  const none = Object.fromEntries(REFS.map((r) => [refId(r), { to: null }]));
+  // ANOTHER MODEL IS LEFT: the seats run on the company's fallback, Ask Crewlet is off.
+  expect(leftWithNoModel(REFS, none, "sonnet", two(["sonnet", "big"]))).toBe(
+    "Turn Ask Crewlet off",
+  );
+  // THE LAST MODEL: the seats have nothing to run on.
+  expect(leftWithNoModel(REFS, none, "sonnet", two(["sonnet"]))).toBe(
+    "Turn Ask Crewlet off and leave 2 seats with no model until one is added",
+  );
+  expect(leftWithNoModel(REFS.slice(0, 2), none, "sonnet", two(["sonnet", "big"]))).toBeNull();
+});
+
+test("the audit summary says each move once, and Ask Crewlet turned off", () => {
+  expect(
+    summaryOf("sonnet", {
+      repoint: [
+        { at: REFS[0]!.at, to: "big" },
+        { at: REFS[1]!.at, to: null },
+        { at: REFS[2]!.at, to: null },
+      ],
+    }),
+  ).toBe("Remove the model sonnet, move 1 use to big, leave 1 unset, and turn Ask Crewlet off");
 });

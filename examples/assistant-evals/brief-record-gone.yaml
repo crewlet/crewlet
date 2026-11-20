@@ -27,14 +27,15 @@ answers:
     body:
       error: {code: not_found, message: No such task.}
 script:
-  - call: list_decisions
+  - call: read_api
+    args: {route: GET /worklet/decisions}
   - call: answer_brief
     args:
       about: The Product Manager asks whether to roll ENG-50 out today.
       needs:
         - {ref_kind: task, ref_id: ENG-50, do: "Answer ENG-50: roll it out today?", tone: warning, action: open}
 expect:
-  calls: [list_decisions, answer_brief]
+  calls: [read_api, answer_brief]
   proposals: 0
   state: completed
   brief:

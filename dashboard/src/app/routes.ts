@@ -338,8 +338,11 @@ export type SignInScreen =
   | { screen: "invite"; link: string }
   | { screen: "reset"; link: string };
 
-/** The Advisor page's tabs: what is open now, and what closed. */
-export const ADVISOR_SECTIONS = ["findings", "history"] as const;
+/** The Advisor page's tabs: what is open now, the weekly reports, and what closed. */
+export const ADVISOR_SECTIONS = ["findings", "reports", "history"] as const;
+
+/** An ISO week as the Advisor names a report: `2026-W47`. */
+const WEEK_SHAPE = /^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/;
 export type AdvisorSection = (typeof ADVISOR_SECTIONS)[number];
 
 /** Every screen the frame draws, with what its path names. */
@@ -354,6 +357,8 @@ export type FramedScreen =
   | { screen: "advisor"; section: AdvisorSection }
   /** One finding, by its episode's id. */
   | { screen: "advisor-finding"; id: string }
+  /** One weekly report, by its ISO week. */
+  | { screen: "advisor-report"; week: string }
   | { screen: "worklet-projects" }
   | { screen: "worklet-tasks" }
   | { screen: "worklet-views"; id?: string }
@@ -517,8 +522,11 @@ export function resolve(path: string[]): Route {
     case "advisor": {
       const [first, second] = rest;
       if (first === undefined) return screen({ screen: "advisor", section: "findings" });
-      if (rest.length === 1 && first === "history") {
+      if (rest.length === 1 && (first === "reports" || first === "history")) {
         return screen({ screen: "advisor", section: first });
+      }
+      if (rest.length === 2 && first === "reports" && second && WEEK_SHAPE.test(second)) {
+        return screen({ screen: "advisor-report", week: second });
       }
       if (rest.length === 2 && first === "findings" && second && ID_SHAPE.test(second)) {
         return screen({ screen: "advisor-finding", id: second });

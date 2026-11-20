@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -120,6 +121,213 @@ func TestAStreamWritesWhatSecretsDoesHoweverTheTextIsCut(t *testing.T) {
 	}
 }
 
+// A WINDOW LIVES ONLY FOR THE STEP THAT READS IT: a stage reads its input in
+// place, a view of one buffer that later input slides down or replaces, so
+// nothing a step keeps may be a view of it. With every stage's buffer replaced
+// after each take and the old one filled with bytes no text holds
+// ([redact.NewPoisonedStream]), a stream still writes what Secrets does: over
+// the corpus, a value of escaped breaks across several windows at each of its
+// alignments, and an AWS secret's key whose separator's spaces run to a
+// stage's first window's end at every byte of the key, the spaces and past.
+//
+// Mutation: keep a view of the window as the key a separator's spaces wait on
+// (ruleStage.openSeparator's head), and that key reads other bytes.
+func TestAWindowLivesOnlyForTheStepThatReadsIt(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 70))
+	texts := streamCorpus(r)
+	unit := `ab\r\n`
+	for i := range len(unit) {
+		texts[fmt.Sprintf("a value of escaped breaks, %d bytes in", i)] = "pwd=" + unit[i:] +
+			strings.Repeat(unit, 4*redact.StageAdvance/len(unit)) + " \n" + redact.StreamText(r, redact.MaxReach)
+	}
+	filler := strings.Repeat("the build passed ok\n", 2*redact.StageAdvance/20)
+	b64 := strings.Repeat("Ab3+", 10)
+	for _, key := range []string{"SessionToken\"", "aws_secret_access_key"} {
+		shape := key + "      = " + b64 + " "
+		for k := 1; k <= len(shape)-len(b64); k++ {
+			texts[fmt.Sprintf("%s, a window's end %d bytes in", key, k)] = filler[:redact.StageAdvance-k] + shape + filler
+		}
+	}
+	// The stages take the same pieces however the text is cut, so one cut
+	// of each text is all of them.
+	for name, text := range texts {
+		var out bytes.Buffer
+		s := redact.NewPoisonedStream(&out)
+		for at := 0; at < len(text); {
+			n := 1 + r.IntN(64<<10)
+			_, _ = s.Write([]byte(text[at:min(len(text), at+n)]))
+			at += n
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got, want := out.String(), redact.Secrets(text); got != want {
+			t.Fatalf("%s (%d bytes): %s", name, len(text), streamParted(got, want))
+		}
+	}
+}
+
+// A STREAM ALLOCATES ITS BUFFERS, NOT ITS TEXT: past the buffers its stages
+// read from, allocated once a stream, it allocates at most a quarter of a byte
+// a byte of the text, measured as what streaming 16 MiB allocates more than
+// 4 MiB of the same text in 64 KiB writes: a kept session, one base64 line (a
+// PDF's Read), and 200-byte tokens back to back, each a marker, written to a
+// writer with no WriteString of its own. Counted from the heap profile, less
+// what package regexp allocates ([outsideRegexp]). Not parallel: the profile
+// is the process's.
+//
+// Mutation: hand the stages each piece as a string ([pipeline.feed]), have the
+// keys' stage build each piece it writes ([keyStage.write]), or write the end
+// through io.WriteString ([endSink]), and a text allocates a byte a byte.
+func TestAStreamAllocatesItsBuffersNotItsText(t *testing.T) {
+	rate := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = rate }()
+	allocated := func(text []byte) (uint64, map[string]int64) {
+		w := struct{ io.Writer }{io.Discard}
+		var err error
+		n, by := outsideRegexp(func() {
+			s := redact.NewStream(w)
+			for at := 0; at < len(text); at += 64 << 10 {
+				_, _ = s.Write(text[at:min(len(text), at+64<<10)])
+			}
+			err = s.Close()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, by
+	}
+	for _, c := range []struct {
+		name string
+		text func(int) []byte
+	}{
+		{"a kept session", keptSession},
+		{"a base64 line", base64Line},
+		{"dense tokens", denseTokens},
+	} {
+		small, large := c.text(4<<20), c.text(16<<20)
+		a, byA := allocated(small)
+		b, byB := allocated(large)
+		perByte := (float64(b) - float64(a)) / float64(len(large)-len(small))
+		if perByte > 0.25 {
+			top, most := "", int64(0)
+			for fn, n := range byB {
+				if n-byA[fn] > most {
+					top, most = fn, n-byA[fn]
+				}
+			}
+			t.Errorf("%s: streaming %d MiB allocated %d KiB, %d KiB more than %d MiB of it: %.2f bytes a byte, past a quarter; %d KiB more in %s",
+				c.name, len(large)>>20, b>>10, (int64(b)-int64(a))>>10, len(small)>>20, perByte, most>>10, top)
+		}
+		t.Logf("%s: %d KiB for %d MiB, %d KiB for %d MiB: %.3f bytes a byte", c.name, a>>10, len(small)>>20, b>>10, len(large)>>20, perByte)
+	}
+}
+
+// A STREAM THAT NEVER WAITS ON ITS CLAIMS NEVER ALLOCATES THE HOLD: its keys'
+// stage reads from a buffer doubled no further than its own bytes
+// ([redact.KeysBytes]), and its stages allocate no more to read from than
+// [redact.StreamBuffers] derives, over a kept session of a base take's 256 KiB
+// and of 4 MiB, and a base64 line of 4 MiB: the pool of takes is sized on it.
+// Not parallel: the heap profile is the process's ([outsideRegexp]).
+//
+// Mutation: allocate the keys' stage's buffer at its bound, the hold in it
+// ([feed.reserve]), and the stream holds and allocates the hold at once.
+func TestAStreamThatNeverWaitsOnItsClaimsNeverAllocatesTheHold(t *testing.T) {
+	rate := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = rate }()
+	for _, c := range []struct {
+		name string
+		text []byte
+	}{
+		{"a kept session of 256 KiB", keptSession(256 << 10)},
+		{"a kept session of 4 MiB", keptSession(4 << 20)},
+		{"a base64 line of 4 MiB", base64Line(4 << 20)},
+	} {
+		var keys int
+		allocated, by := outsideRegexp(func() { keys = redact.KeysBufferMost(c.text) })
+		buffers := by["github.com/crewlet/crewlet/internal/redact.(*feed).reserve"]
+		if keys > redact.KeysBytes {
+			t.Errorf("%s: the keys' stage read from a buffer of %d KiB, past its own %d KiB", c.name, keys>>10, redact.KeysBytes>>10)
+		}
+		if buffers == 0 || buffers > int64(redact.StreamBuffers()) {
+			t.Errorf("%s: the stages allocated %d KiB to read from, where %d KiB is derived", c.name, buffers>>10,
+				redact.StreamBuffers()>>10)
+		}
+		t.Logf("%s: the keys' stage read from a buffer of %d KiB; the stages allocated %d KiB to read from of the %d KiB derived, %d KiB in all",
+			c.name, keys>>10, buffers>>10, redact.StreamBuffers()>>10, allocated>>10)
+	}
+}
+
+// outsideRegexp is what f allocates, in bytes, from the heap profile, which
+// MemProfileRate 1 makes whole, less what package regexp allocates: the
+// matches its searches return, and its machines, which a sync.Pool keeps
+// under `go test` and the race detector's pool drops at random, so that under
+// `-race` a search allocates a machine now and then. And the rest by the
+// function that allocated it.
+func outsideRegexp(f func()) (uint64, map[string]int64) {
+	profile := func() map[[32]uintptr]int64 {
+		runtime.GC()
+		runtime.GC()
+		var records []runtime.MemProfileRecord
+		n, _ := runtime.MemProfile(nil, true)
+		for {
+			records = make([]runtime.MemProfileRecord, n+64)
+			var ok bool
+			if n, ok = runtime.MemProfile(records, true); ok {
+				break
+			}
+		}
+		sum := map[[32]uintptr]int64{}
+		for _, r := range records[:n] {
+			sum[r.Stack0] += r.AllocBytes
+		}
+		return sum
+	}
+	before := profile()
+	f()
+	after := profile()
+	var total uint64
+	by := map[string]int64{}
+	for stack, n := range after {
+		n -= before[stack]
+		if n <= 0 {
+			continue
+		}
+		frames := runtime.CallersFrames(stack[:])
+		first, inRegexp := "", false
+		for {
+			frame, more := frames.Next()
+			if first == "" && !strings.HasPrefix(frame.Function, "runtime.") {
+				first = frame.Function
+			}
+			inRegexp = inRegexp || strings.HasPrefix(frame.Function, "regexp.")
+			if !more {
+				break
+			}
+		}
+		if inRegexp {
+			continue
+		}
+		total += uint64(n)
+		by[first] += n
+	}
+	return total, by
+}
+
+// base64Line is n bytes of one line of base64, as a PDF a tool read is kept.
+func base64Line(n int) []byte {
+	r := rand.New(rand.NewPCG(1, 3))
+	const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	b := append(make([]byte, 0, n), `{"type":"document","source":{"data":"`...)
+	for len(b) < n {
+		b = append(b, b64[r.IntN(64)])
+	}
+	return b
+}
+
 // WHAT A STREAM WRITES IS REDACTED ALREADY: redacting it again changes
 // nothing, as redacting a whole text twice changes nothing ([redact.Secrets]),
 // whether the text is short enough to be redacted whole or runs through the
@@ -188,14 +396,13 @@ func TestAStreamAnswersItsWritersErrorAndRefusesAWriteOnceClosed(t *testing.T) {
 // in 64 KiB writes, the most the take's scrub reads of an archive at once: the
 // plaintext bound of one reading (internal/sandbox/executor's scrubExpansion
 // times the archive's), which SessionScrubWait reads twice within its two
-// minutes. Two texts: a kept session (JSON lines, credentials, base64 images),
-// and a key's armour then 200-byte tokens, collapsed into markers the later
-// claims stages step at. Recorded on two shared cores, 2026-11-16: the kept
-// session at 19.0 MB/s,
-// 14.1 s a reading, under a quarter of the minute each of the scrub's two
-// readings has; the dense tokens at 10.0 MB/s, 26.8 s, under half of it.
-// Secrets, which reads a text whole, ran at about 95 MB/s, the stages with no
-// armour to read at about 43.
+// minutes. Three texts: a kept session (JSON lines, credentials, base64
+// images); a key's armour then 200-byte tokens, which the later claims stages
+// step at as markers; a password's value every seven bytes. Two runs on two
+// cores of the build machine: the kept session at 17.6 MB/s, 15.3 s a reading,
+// a quarter of each reading's minute, allocating its 18 MB of buffers; the
+// dense tokens at 6.9 to 7.0 MB/s, 38 to 39 s; the dense passwords at 1.9 MB/s,
+// 142 s, past it. Secrets, which reads a text whole, ran 4.3 times as fast.
 func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	for _, c := range []struct {
 		name string
@@ -203,6 +410,7 @@ func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	}{
 		{"kept session", keptSession},
 		{"dense tokens", denseTokens},
+		{"dense passwords", densePasswords},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			text := c.text(256 << 20)
@@ -234,6 +442,12 @@ func denseTokens(n int) []byte {
 		b = append(b, ' ')
 	}
 	return b[:n]
+}
+
+// densePasswords is n bytes of a file's `pwd=x` lines as a JSON string holds
+// them, joined by escaped breaks: a password's value every seven bytes.
+func densePasswords(n int) []byte {
+	return []byte(strings.Repeat(`pwd=x\n`, n/7+1)[:n])
 }
 
 // keptSession is n bytes of what a kept session holds: JSON lines of prose and
@@ -301,5 +515,39 @@ func TestAnOrdinaryTextNeverDecidesEarly(t *testing.T) {
 		if n, err := redact.EarlyWindows(text); n > 0 || err != nil {
 			t.Errorf("%s (%d KiB): %d windows decided early, Close answered %v", name, len(text)>>10, n, err)
 		}
+	}
+}
+
+// A STREAM WRITES WHAT SECRETS WRITES ON THE CORPUS TEXT THAT CRASHED IT: in
+// the fourth 8 MiB text of this seed the keys' stage places a password key's
+// value one past its window, inside a key's block, and claims.readsAValue
+// sliced past the window: Write panicked in every piecing, while Secrets of
+// the text did not. TestAKeyWhoseBlanksRunToTheEndNamesNoValue holds the least
+// such text; this one holds the shape as the generator writes it, in 64 KiB
+// writes.
+//
+// Mutation: drop readsAValue's guard of a start past the text, and Write panics.
+func TestAStreamWritesWhatSecretsWritesOnTheTextThatCrashedIt(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 110))
+	var text string
+	for range 4 {
+		text = redact.StreamText(r, 8<<20)
+	}
+	// The span around that window: the whole text streams in 44 s under the
+	// race detector, this in 6, most of it the generator's.
+	text = text[4_730_880:5_398_528]
+	var out bytes.Buffer
+	s := redact.NewStream(&out)
+	for piece := range slices.Chunk([]byte(text), 64<<10) {
+		if _, err := s.Write(piece); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if want := redact.Secrets(text); out.String() != want {
+		t.Fatalf("the stream (%d bytes) wrote %s", len(text), streamParted(out.String(), want))
 	}
 }

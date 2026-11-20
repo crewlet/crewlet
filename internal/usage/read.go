@@ -123,6 +123,12 @@ type SeatDay struct {
 	// day finished; zero when none did.
 	LastEndedAt time.Time
 
+	// Busy is the sum of the day's turn durations on this node, exact; and
+	// BusyMeasured false where the day was published by a build that did
+	// not measure it, so its busy time is unknown rather than none.
+	Busy         time.Duration
+	BusyMeasured bool
+
 	// Tokens is the day's `total` over every spend cell of the seat on this
 	// node — input plus output, the cache counts being a breakdown of input.
 	Tokens int64
@@ -152,12 +158,14 @@ func scanSeatDay(rows *sql.Rows, day string) (SeatDay, error) {
 	r := SeatDay{Day: day}
 	var hist string
 	var lastEnded int64
+	var busy sql.NullInt64
 	if err := rows.Scan(&r.Node, &r.AgentID, &r.Handle, &r.Role,
 		&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
 		&hist, &lastEnded, &r.Code.ChangesOpened, &r.Code.ReviewsGiven, &r.Code.FindingsReceived,
-		&r.Code.ChecksFailed, &r.Code.Ejections); err != nil {
+		&r.Code.ChecksFailed, &r.Code.Ejections, &busy); err != nil {
 		return r, err
 	}
+	r.Busy, r.BusyMeasured = time.Duration(busy.Int64)*time.Millisecond, busy.Valid
 	if err := r.Durations.UnmarshalJSON([]byte(hist)); err != nil {
 		return r, fmt.Errorf("the histogram of %s/%s/%s: %w", r.Day, r.Node, r.AgentID, err)
 	}

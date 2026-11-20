@@ -11,6 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisordomain"
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ADVISOR'S WEEKLY REPORTS, as the duty wrote them on the Monday after
@@ -117,12 +120,26 @@ func reportOf(row advisordomain.ReportRow) (AdvisorReport, error) {
 }
 
 // Week reads the week [from, to) a report is written for, from the records the
-// detectors read over it: the turn ledger, the runs and the budget refusals.
-// A source that fails is named, never counted as nothing.
-func (o advisorObserver) Week(ctx context.Context, _, to time.Time) ([]advisor.Metric, []string, error) {
+// detectors read over it: the flow record, the turn ledger, the runs and the
+// budget refusals. A source that fails is named, never counted as nothing. A
+// week the company's documents do not reach back over the start of is
+// [advisor.ErrWeekUnmeasured]: the company began within it or after it.
+func (o advisorObserver) Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
+	if o.s.Config != nil {
+		switch _, err := o.s.Config.CompaniesActiveSince(ctx, from); {
+		case errors.Is(err, configapi.ErrHistoryShort):
+			return nil, nil, advisor.ErrWeekUnmeasured
+		case err != nil:
+			return nil, nil, fmt.Errorf("queries: the documents active since %s: %w", from, err)
+		}
+	}
 	until := to.Add(-time.Nanosecond)
 	ev := advisor.Evidence{Until: until}
-	var err error
+	flow, err := o.s.weekFlow(ctx, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_report_flow_unreadable", "error", err.Error())
+		ev.FlowUnread = true
+	}
 	if ev.Ledger, err = o.s.advisorLedger(ctx, until); err != nil {
 		log.WarnContext(ctx, "advisor_report_ledger_unreadable", "error", err.Error())
 		ev.LedgerUnread = true
@@ -135,6 +152,27 @@ func (o advisorObserver) Week(ctx context.Context, _, to time.Time) ([]advisor.M
 		log.WarnContext(ctx, "advisor_report_budget_stops_unreadable", "error", err.Error())
 		ev.StopsUnread = true
 	}
-	metrics, unread := advisor.WeekMetrics(ev)
+	metrics, unread := advisor.WeekMetrics(ev, flow)
 	return metrics, unread, nil
+}
+
+// weekFlow is the flow record's numbers of [from, to), nil for a company whose
+// tracker keeps no flow record.
+func (s Sources) weekFlow(ctx context.Context, from, to time.Time) (*advisor.WeekFlow, error) {
+	switch kept, err := keptHere(s.Work); {
+	case err != nil:
+		return nil, err
+	case !kept:
+		return nil, nil
+	}
+	q := worklet.FlowHoursQuery{Since: from, Until: to, Level: statelog.ReadStale}
+	hours, err := s.Work.FlowHours(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	pickups, err := s.Work.FlowPickups(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return &advisor.WeekFlow{Hours: hours, Pickups: pickups}, nil
 }

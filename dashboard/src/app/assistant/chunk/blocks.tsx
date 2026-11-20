@@ -69,7 +69,9 @@ import { openInApp, type InAppTarget } from "./openInApp.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
-import { drawValue } from "./changeValue.tsx";
+import { drawPhrase, drawValue } from "./changeValue.tsx";
+import { phraseText } from "./phrase.ts";
+import { Phrase, Phrases } from "./refs.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { cautionOf } from "./taint.ts";
 import { recordWord } from "../brief.ts";
@@ -223,14 +225,21 @@ export function runChipOf(
       return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
       return { state, title: "Waiting for your approval", meta: stepMeta(taken) };
-    case "completed":
+    case "completed": {
       // A TURN READ BACK FROM ITS TRANSCRIPT carries no duration; the time
       // since it was asked is not how long it ran, so it says Done alone.
-      return {
-        state,
-        title: turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done",
-        meta: stepMeta(taken),
-      };
+      const done = turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done";
+      // A REFUSED STEP IS SAID ON THE CHIP, never only behind it.
+      const refused = turn.steps.filter((s) => s.state === "refused").length;
+      if (refused > 0) {
+        return {
+          state: RUN_STATE.refused,
+          title: `${done}, ${refused === 1 ? "1 step" : `${refused} steps`} refused`,
+          meta: stepMeta(taken),
+        };
+      }
+      return { state, title: done, meta: stepMeta(taken) };
+    }
     case "stopped":
     case "expired": {
       const done = turn.steps.filter((s) => s.state === "done").length;
@@ -273,19 +282,18 @@ const BUSY: ReadonlySet<TurnPhase> = new Set(["sending", "thinking", "working"])
  * drawn: only while the assistant itself is busy on the turn, never while it
  * waits on the person or applies an approved change, which their cards say.
  *
- * THE STATUS IS WHAT IS HAPPENING NOW: "Stopping" once a stop is on its way,
- * the running step's own sentence while a tool runs, and "Thinking" while
- * nothing of the answer is written yet. Once the answer's words are arriving
- * the mark stands alone after them, with no words of its own, as a caret
- * would have but never inside the text.
+ * WHAT IS HAPPENING NOW, AND FOR HOW LONG: "Stopping", the running step's
+ * sentence (the run chip counts its time), or "Thinking" then "Answering" with
+ * the time since the question, so a long answer never reads as stalled.
  */
-export function thinkingOf(turn: TurnView): { status: string | undefined } | null {
+export function thinkingOf(turn: TurnView, now: number): { status: string } | null {
   if (!BUSY.has(turn.phase)) return null;
   if (turn.stopping) return { status: "Stopping" };
   const running = turn.steps.filter((step) => step.state === "running").at(-1);
   if (running) return { status: running.label };
   const writing = (turn.replies.at(-1)?.text.trim() ?? "") !== "";
-  return { status: writing ? undefined : "Thinking" };
+  const elapsed = fmtElapsed(Math.max(0, now - Date.parse(turn.askedAt)));
+  return { status: `${writing ? "Answering" : "Thinking"}, ${elapsed}` };
 }
 
 /**
@@ -307,7 +315,7 @@ export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
 
 /**
  * Steps as `StepList` draws them: the engine's sentence for each, its time,
- * and what its line says under it ([stepDetail]).
+ * why it failed or was refused as prose ([stepNote]), and the request under it.
  */
 export function stepListOf(
   steps: readonly AssistantStepEvent[],
@@ -315,35 +323,35 @@ export function stepListOf(
 ): StepListStep[] {
   return steps.map((step) => {
     const duration = stepDuration(step.duration_ms);
+    const note = stepNote(step);
     const detail = stepDetail(step, technical);
     return {
       id: step.step_id,
       label: step.label,
       state: STEP_STATE[step.state],
       ...(duration === undefined ? {} : { duration }),
+      ...(note === "" ? {} : { note }),
       ...(detail === "" ? {} : { detail }),
     };
   });
 }
 
-/**
- * What a step's line says under its sentence: for a step that failed or was
- * refused, why, in the engine's sentence for a person.
- *
- * NO TOOL NAME, EVER, AND THE REQUEST ONLY FOR AN ADMINISTRATOR. A step's
- * sentence ("Listing tasks") is what it did; "list_tasks · GET /worklet" is
- * how the engine spells it, which a person does not read. The request, in
- * mono, is the administrator's: the same technical detail a proposal keeps
- * behind its disclosure.
- */
-export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
-  const request = technical && step.request ? `${step.request.method} ${step.request.route}` : "";
-  if (step.state !== "failed" && step.state !== "refused") return request;
-  const why = step.refusal
+/** Why a step failed or was refused, in the engine's sentence for a person; empty for any other. */
+export function stepNote(step: TurnView["steps"][number]): string {
+  if (step.state !== "failed" && step.state !== "refused") return "";
+  return step.refusal
     ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
     : (step.summary ?? "");
-  if (why === "") return request;
-  return request === "" ? why : `${why} (${request})`;
+}
+
+/**
+ * The request a step made, in mono under its sentence, for an administrator.
+ *
+ * NO TOOL NAME, EVER: "Listing tasks" is what it did; "list_tasks · GET
+ * /worklet" is how the engine spells it, which a person does not read.
+ */
+export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
+  return technical && step.request ? `${step.request.method} ${step.request.route}` : "";
 }
 
 /**
@@ -366,6 +374,9 @@ export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: bo
  * `prose md` is the class pair the dashboard's Markdown rhythm is written for,
  * as every other rendered body here carries it, so the reply's paragraphs are
  * spaced. An answer whose mentions are chips (`reads.tsx`) is drawn by it too.
+ *
+ * ITS WORDS READ AT A MEASURE, ITS TABLES AND CODE AT THE THREAD'S WIDTH
+ * (`ask-answer`): a measure on the whole block cut a table to a column.
  */
 export function ProseBlock({
   children,
@@ -375,7 +386,7 @@ export function ProseBlock({
   dimmed?: boolean;
 }) {
   return (
-    <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
+    <Prose as="div" measure="none" dimmed={dimmed} className="prose md ask-answer">
       {children}
     </Prose>
   );
@@ -384,14 +395,18 @@ export function ProseBlock({
 /**
  * A proposal's change rows in `ChangeList`'s grammar (D10): the facts first,
  * then WHO WILL SEE THE RESULT where its visibility changes (a share, a
- * comment others are told of, D09), as one more fact, then the changes.
+ * comment others are told of, D09), as one more fact, then the changes. A
+ * record a row names is drawn as itself, opened with `open`.
  */
-export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
+export function changeRowsOf(
+  proposal: AssistantProposalCard,
+  open: (target: InAppTarget) => void,
+): ChangeListRow[] {
   const rows = proposal.changes.map((change): ChangeListRow => {
     const note = change.note;
     const base = note === undefined ? { label: change.label } : { label: change.label, note };
-    const to = drawValue(change.to ?? "", change.items);
-    const from = drawValue(change.from ?? "", change.from_items);
+    const to = drawPhrase(change.to, change.items, open);
+    const from = drawPhrase(change.from, change.from_items, open);
     switch (CHANGE_KIND[change.kind]) {
       case "fact": {
         const value = change.to === undefined && change.from !== undefined ? from : to;
@@ -414,8 +429,8 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         // a line diff the way the page's own History draws it: a word diff
         // ran its headings and bullets into one paragraph and read a line
         // break as a word removed and added again.
-        const before = change.from ?? "";
-        const after = change.to ?? "";
+        const before = phraseText(change.from);
+        const after = phraseText(change.to);
         if (before.includes("\n") || after.includes("\n")) {
           return {
             ...base,
@@ -458,7 +473,11 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
   const at = facts < 0 ? rows.length : facts;
   return [
     ...rows.slice(0, at),
-    { kind: "fact", label: "Who will see it", value: audience.join(", ") },
+    {
+      kind: "fact",
+      label: "Who will see it",
+      value: <Phrases phrases={audience} sep=", " open={open} />,
+    },
     ...rows.slice(at),
   ];
 }
@@ -576,8 +595,9 @@ function Proposal({
 }: {
   proposal: AssistantProposalCard;
   local: ProposalLocal | undefined;
-  on: ProposalHandlers;
+  on: CardHandlers;
 }) {
+  const open = on.openHere;
   // THE PAGE UNDER THE DRAWER IS READ AGAIN AS IT MOVES, so the card's rows
   // and its gate are the screen's as it is now.
   usePageSnapshot();
@@ -603,9 +623,9 @@ function Proposal({
       // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
       // what a destructive change takes away (ADR-0055), never only a
       // struck-through row among the others.
-      summary={proposal.summary}
-      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
-      note={proposal.note}
+      summary={proposal.summary ? <Phrase phrase={proposal.summary} open={open} /> : undefined}
+      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal, open)}
+      note={proposal.note ? <Phrase phrase={proposal.note} open={open} /> : undefined}
       // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
       // presses anything; the page checks it again when it applies the change.
       approveBlocked={screen?.blocked ?? undefined}
@@ -621,7 +641,9 @@ function Proposal({
         state === "expired" || state === "stale" ? () => on.prepareAgain(proposal) : undefined
       }
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
-      receipt={proposal.receipt?.summary}
+      receipt={
+        proposal.receipt ? <Phrase phrase={proposal.receipt.summary} open={open} /> : undefined
+      }
       failure={failure}
       failureOutcome={unknown ? "unknown" : undefined}
       // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the

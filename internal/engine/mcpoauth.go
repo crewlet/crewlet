@@ -697,23 +697,35 @@ func instantOrNil(t time.Time) *time.Time {
 }
 
 // vendorSaid is a vendor's error code and description as a page or record may
-// hold them: one line, bounded, redacted.
+// hold them: one line, redacted, bounded.
 func vendorSaid(code, description string) string {
 	said := strings.Join(strings.Fields(code), " ")
 	if d := strings.Join(strings.Fields(description), " "); d != "" {
 		said += ": " + d
 	}
-	return redact.Secrets(textcut.Bytes(said, 512))
+	return redactedOpening(said)
 }
 
 // oauthWords is an OAuth error as a record or a page holds it: the vendor's
-// own words for a refusal, else the error, bounded.
+// own words for a refusal, else the error, redacted and bounded.
 func oauthWords(err error) string {
 	var refused *oauth.Error
 	if errors.As(err, &refused) {
 		return vendorSaid(cmpOr(refused.Code, fmt.Sprintf("HTTP %d", refused.Status)), refused.Description)
 	}
-	return redact.Secrets(textcut.Bytes(err.Error(), 512))
+	return redactedOpening(err.Error())
+}
+
+// oauthWordsBytes bounds what a record or a page keeps of an OAuth error: the
+// bound the oauth package keeps a vendor's own words to.
+const oauthWordsBytes = 512
+
+// redactedOpening is the first [oauthWordsBytes] of said's whole redaction:
+// redacted first and cut after, reading one byte past the bound
+// ([redact.Prefix]).
+func redactedOpening(said string) string {
+	opening, _ := redact.Prefix(said, oauthWordsBytes+1)
+	return textcut.Bytes(opening, oauthWordsBytes)
 }
 
 // reloadForGrant re-activates the revision so every node reads the server's

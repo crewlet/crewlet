@@ -1,29 +1,27 @@
 /**
- * Remove a model: every place that names it is listed first, each moved to
- * another model or left unset (Ask Crewlet's model left unset turns Ask
- * Crewlet off), and the removal and every move land as one revision.
- * Nothing is left pointing at a model that is gone, which the engine would
- * refuse anyway.
+ * Remove a model, in as few words as the removal needs: one line saying what
+ * uses it, one choice of where all of it moves, and a confirm only where the
+ * removal leaves something with no model.
  *
  * THE ENGINE DRAWS THE LIST. A dry run with no repoints is refused with every
- * written reference (`references`, by a seat's handle and job or the
- * assistant's chat or deep work), so the page never works out on its own which
- * fields name the model. Each choice is checked by another dry run as it
- * changes (design QA M18), and the real removal states the revision it was
- * built on (`If-Match`).
+ * written reference (`references`, by a seat's handle and job, Ask Crewlet's
+ * chat or the Advisor's findings), so the page never works out on its own
+ * which fields name the model. The one choice fills a move for every one of
+ * them; "Choose per seat" opens a row per place for the rare split. Each set
+ * of moves is checked by another dry run as it changes, and the removal and
+ * every move land as one revision under the entry's own tag (`If-Match`).
  *
- * WORDS, NOT PATHS (design QA M8). A place reads "Backend Engineer, coding";
- * the fields the revision writes are listed only under "Every change in the
- * revision".
+ * NOTHING SAID TWICE, NO PATH (design QA M8). The dialog names what uses the
+ * model and asks one question; it never lists the fields the revision writes
+ * nor reads the choices back.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
-  ConfirmField,
-  Disclosure,
-  NoticeList,
+  Checkbox,
+  FormField,
   Select,
   type SelectOption,
   Skeleton,
@@ -36,14 +34,15 @@ import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
-import type { ConfigWarning } from "~/protocol/types.ts";
 import type { ModelReference } from "~/protocol/models.ts";
-import { removeModel, type Removal } from "../api.ts";
+import { CATEGORY_OF, SEAT_JOBS, type SeatJob } from "~/lib/modelUses.ts";
+import { modelReferences, removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
-import { JOB_WORDS, placeWords, seatName } from "../places.ts";
-import { HEALTH } from "../words.ts";
+import { seatName } from "../places.ts";
+import { modelLabel, modelMark } from "../modelPicker.tsx";
+import { CATEGORY_WORDS, HEALTH } from "../words.ts";
 
-/** What one place becomes: another model, or none (for Ask Crewlet's model, Ask Crewlet turned off). */
+/** What one place becomes: another model, or none (Ask Crewlet turned off, or the Advisor run with no model). */
 export type Choice = { to: string } | { to: null };
 
 const UNSET = "__unset__";
@@ -51,53 +50,72 @@ const UNSET = "__unset__";
 /** Whether a reference is Ask Crewlet's model, which pointing at nothing turns off. */
 const askCrewlets = (ref: Pick<ModelReference, "at">) => ref.at.assistant === "chat";
 
+/** Whether a reference is the Advisor's model, which pointing at nothing leaves its checks with no model. */
+const advisors = (ref: Pick<ModelReference, "at">) => ref.at.advisor === "findings";
+
+/** Whether a reference is a helper's (Ask Crewlet's or the Advisor's), company-wide and no seat's. */
+const helpers = (ref: Pick<ModelReference, "at">) => askCrewlets(ref) || advisors(ref);
+
 /** One reference's identity, as the choices are keyed. */
 export const refId = (ref: Pick<ModelReference, "at">) =>
-  JSON.stringify([ref.at.seat ?? "", ref.at.job ?? "", ref.at.assistant ?? ""]);
-
-/** A written field as a path a person can find in the document: `roles[2].llm_review`. */
-function pathOf(segments: readonly (string | number)[]): string {
-  return segments
-    .map((s, i) => (typeof s === "number" ? `[${s}]` : i === 0 ? s : `.${s}`))
-    .join("");
-}
+  JSON.stringify([
+    ref.at.seat ?? "",
+    ref.at.job ?? "",
+    ref.at.assistant ?? "",
+    ref.at.advisor ?? "",
+  ]);
 
 /**
- * The models a reference may move to: a seat's executor needs a harness that
- * can run one, and Ask Crewlet a model a helper can run on, as the engine says
- * of each (`helper_problem`).
+ * Whether a place may move to a model: a seat's executor needs a harness that
+ * can run one, and Ask Crewlet and the Advisor a model a helper can run on, as
+ * the engine says of each (`helper_problem`).
  */
-export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
-  return models.filter(
-    (m) =>
-      m.key !== removing &&
-      (ref.at.job !== "executor" || m.executor) &&
-      (!ref.at.assistant || (m.admin !== null && m.admin.helper_problem === null)),
+function fits(ref: ModelReference, m: ModelView, removing: string): boolean {
+  return (
+    m.key !== removing &&
+    (ref.at.job !== "executor" || m.executor) &&
+    (!helpers(ref) || (m.admin !== null && m.admin.helper_problem === null))
   );
 }
 
-/** Whether a reference may be left with no model: one whose field names nothing else, and Ask Crewlet's, which is then off. */
-function unsetAllowed(ref: ModelReference, removing: string): boolean {
-  return askCrewlets(ref) || !ref.chain.some((k) => k !== removing);
+/** The models one place may move to. */
+export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
+  return models.filter((m) => fits(ref, m, removing));
 }
 
-/** The choices a place offers, in the one phrasing every row uses. */
+/** The models every place may move to: the one choice offers only these. */
+export function commonTargets(
+  refs: readonly ModelReference[],
+  removing: string,
+  models: readonly ModelView[],
+): ModelView[] {
+  return models.filter((m) => m.key !== removing && refs.every((ref) => fits(ref, m, removing)));
+}
+
+/**
+ * Leaving a place unset drops the model from its field: a field that names
+ * another keeps it, and one left empty is unset, so every place offers it.
+ */
+const LEAVE_UNSET: SelectOption = { value: UNSET, label: "Leave unset" };
+
+/** Models as options: the key, and its health where it is not ready. */
+function modelOptions(models: readonly ModelView[]): SelectOption[] {
+  return models.map((m) => ({
+    value: m.key,
+    label: modelLabel(m),
+    text: m.key,
+    leading: modelMark(m),
+    ...(m.entry.health !== "ready" ? { hint: HEALTH[m.entry.health].label } : {}),
+  }));
+}
+
+/** The choices one place offers in the per-seat list. */
 export function optionsFor(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
 ): SelectOption[] {
-  const targets = targetsFor(ref, removing, models);
-  return [
-    ...targets.map((m) => ({
-      value: m.key,
-      label: `Move to ${m.key}`,
-      ...(m.entry.health !== "ready" ? { hint: HEALTH[m.entry.health].label } : {}),
-    })),
-    ...(unsetAllowed(ref, removing)
-      ? [{ value: UNSET, label: askCrewlets(ref) ? "Turn Ask Crewlet off" : "Leave it unset" }]
-      : []),
-  ];
+  return [...modelOptions(targetsFor(ref, removing, models)), LEAVE_UNSET];
 }
 
 /** How sure a model is to answer: ready first, a refused or sitting-out one last. */
@@ -110,28 +128,92 @@ const HEALTH_RANK: Record<ModelView["entry"]["health"], number> = {
   no_sign_in: 4,
 };
 
+/** The model likeliest to answer, on the removed model's harness where one is as likely. */
+function likeliest(
+  eligible: readonly ModelView[],
+  removing: string,
+  models: readonly ModelView[],
+): ModelView | undefined {
+  const harness = models.find((m) => m.key === removing)?.harness;
+  const rank = (m: ModelView) => HEALTH_RANK[m.entry.health] * 2 + (m.harness === harness ? 0 : 1);
+  return [...eligible].sort((a, b) => rank(a) - rank(b))[0];
+}
+
 /**
- * The first choice a place gets: its own backup where it can take the job,
- * else the eligible model likeliest to answer, on the removed model's harness
- * where one is as likely, else none.
+ * The models a place already runs on besides the one removed: its own backups,
+ * the seat's other jobs' models, and for a helper the other helper's. A
+ * removal only moves a place to one of these unasked.
+ */
+export type AlreadyUsed = (ref: ModelReference) => ReadonlySet<string>;
+
+/** What each place already runs on, from the engine's uses and the helpers' models. */
+export function alreadyUsedIn(
+  data: Pick<ModelsData, "models" | "assistant" | "advisor">,
+  removing: string,
+): AlreadyUsed {
+  return (ref) => {
+    const out = new Set(ref.chain.filter((k) => k !== removing));
+    if (askCrewlets(ref) && data.advisor.key) out.add(data.advisor.key);
+    else if (advisors(ref) && data.assistant.key) out.add(data.assistant.key);
+    else if (ref.at.seat)
+      for (const m of data.models)
+        for (const job of SEAT_JOBS) if (m.uses.jobs[job].includes(ref.at.seat)) out.add(m.key);
+    out.delete(removing);
+    return out;
+  };
+}
+
+/**
+ * One place's own first choice: its backup where it can take the job, else a
+ * model it already runs on that can, else none: the person chooses.
  */
 export function defaultChoice(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
-): Choice {
+  used: AlreadyUsed = () => new Set(),
+): Choice | undefined {
   const eligible = targetsFor(ref, removing, models);
-  const targets = eligible.map((m) => m.key);
-  const backup = ref.chain.find((k) => k !== removing && targets.includes(k));
+  const backup = ref.chain.find((k) => k !== removing && eligible.some((m) => m.key === k));
   if (backup) return { to: backup };
-  const harness = models.find((m) => m.key === removing)?.harness;
-  const rank = (m: ModelView) => HEALTH_RANK[m.entry.health] * 2 + (m.harness === harness ? 0 : 1);
-  const best = [...eligible].sort((a, b) => rank(a) - rank(b))[0];
-  if (best) return { to: best.key };
-  return { to: null };
+  const known = used(ref);
+  const best = likeliest(
+    eligible.filter((m) => known.has(m.key)),
+    removing,
+    models,
+  );
+  return best ? { to: best.key } : undefined;
 }
 
-const valueOf = (c: Choice) => (c.to === null ? UNSET : c.to);
+/**
+ * The choices a removal opens with. NO SILENT MOVE: every place goes to one
+ * model only where each of them already runs on it; else each place to its
+ * own backup or a model it already runs on, and the rest wait for the
+ * person's choice. Picking the healthiest model for all moved twelve seats to
+ * a model only the Advisor used.
+ */
+export function firstChoices(
+  refs: readonly ModelReference[],
+  removing: string,
+  models: readonly ModelView[],
+  used: AlreadyUsed = () => new Set(),
+): Record<string, Choice> {
+  const one = likeliest(
+    commonTargets(refs, removing, models).filter((m) => refs.every((r) => used(r).has(m.key))),
+    removing,
+    models,
+  );
+  const out: Record<string, Choice> = {};
+  for (const ref of refs) {
+    const choice = one ? { to: one.key } : defaultChoice(ref, removing, models, used);
+    if (choice) out[refId(ref)] = choice;
+  }
+  return out;
+}
+
+/** A choice as its picker holds it: undefined while the person has not chosen. */
+const valueOf = (c: Choice | undefined) =>
+  c === undefined ? undefined : c.to === null ? UNSET : c.to;
 const choiceOf = (value: string): Choice => (value === UNSET ? { to: null } : { to: value });
 
 /** The request every choice makes. */
@@ -145,51 +227,116 @@ export function removalOf(
 }
 
 /**
- * What a removal does, in words: "Removes sonnet, moves 3 uses to default,
- * and leaves 1 unset." for the reader, and the same as an instruction ("Remove
- * sonnet, move ...") for the revision's audit summary.
+ * What a removal does, as the revision's audit summary: "Remove the model
+ * sonnet, move 3 uses to default, and turn Ask Crewlet off".
  */
-export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" = "says"): string {
-  const verb = (base: string) => (mood === "says" ? `${base}s` : base);
+export function summaryOf(key: string, removal: Removal): string {
   const moves = new Map<string, number>();
   let unset = 0;
   for (const r of removal.repoint) {
     if (r.to) moves.set(r.to, (moves.get(r.to) ?? 0) + 1);
-    else if (!askCrewlets(r)) unset += 1;
+    else if (!helpers(r)) unset += 1;
   }
-  const parts = [
-    `${verb("remove")} the model ${key}`,
-    ...[...moves].map(([to, n]) => `${verb("move")} ${plural(n, "use")} to ${to}`),
-    ...(unset ? [`${verb("leave")} ${unset} unset`] : []),
+  const sentence = listed([
+    `remove the model ${key}`,
+    ...[...moves].map(([to, n]) => `move ${plural(n, "use")} to ${to}`),
+    ...(unset ? [`leave ${unset} unset`] : []),
     ...(removal.repoint.some((r) => askCrewlets(r) && r.to === null)
-      ? [`${verb("turn")} Ask Crewlet off`]
+      ? ["turn Ask Crewlet off"]
       : []),
-  ];
-  const sentence = listed(parts);
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${mood === "says" ? "." : ""}`;
+    ...(removal.repoint.some((r) => advisors(r) && r.to === null)
+      ? ["run the Advisor with no model"]
+      : []),
+  ]);
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
+}
+
+/** "Used by 9 seats, Ask Crewlet, and the Advisor.": counts and names only for what uses it. */
+export function usedByWords(refs: readonly ModelReference[]): string {
+  const seats = new Set(refs.filter((r) => !helpers(r)).map((r) => r.at.seat ?? "")).size;
+  return `Used by ${listed([
+    ...(seats > 0 ? [plural(seats, "seat")] : []),
+    ...(refs.some(askCrewlets) ? ["Ask Crewlet"] : []),
+    ...(refs.some(advisors) ? ["the Advisor"] : []),
+  ])}.`;
 }
 
 /**
- * Where each place that ran on the model goes, one line each, by the seat's
- * name: "Product Manager, coding: default-host → default". Said before the
- * removal is confirmed, so no seat moves unannounced.
+ * Each place's name in the per-seat list: a seat by its name alone, its job
+ * added only where the seat runs on the model for more than one, and Ask
+ * Crewlet and the Advisor by theirs.
  */
-export function movesOf(key: string, removal: Removal, seats: ModelsData["seats"]): string[] {
-  return removal.repoint.map((r) => {
-    const where = placeWords(seats, r.at);
-    if (askCrewlets(r) && r.to === null) return `${where}: turned off`;
-    return `${where}: ${key} → ${r.to ?? "left unset"}`;
-  });
+export function placeNames(
+  refs: readonly ModelReference[],
+  seats: ModelsData["seats"],
+): Map<string, string> {
+  const jobs = new Map<string, number>();
+  for (const r of refs)
+    if (!helpers(r)) jobs.set(r.at.seat ?? "", (jobs.get(r.at.seat ?? "") ?? 0) + 1);
+  return new Map(
+    refs.map((r) => {
+      if (askCrewlets(r)) return [refId(r), "Ask Crewlet"];
+      if (advisors(r)) return [refId(r), "The Advisor"];
+      const name = seatName(seats, r.at.seat ?? "");
+      const several = (jobs.get(r.at.seat ?? "") ?? 0) > 1 && r.at.job;
+      return [refId(r), several ? `${name}, ${jobName(refs, r)}` : name];
+    }),
+  );
 }
 
-/** A field's chain after the removal, as the revision writes it. */
-function chainAfter(ref: ModelReference, removing: string, to: string | null): string[] {
-  const out: string[] = [];
-  for (const k of ref.chain) {
-    const next = k === removing ? to : k;
-    if (next && !out.includes(next)) out.push(next);
-  }
-  return out;
+/**
+ * A seat's job in the page's own categories ("routines"), the engine's job
+ * beside it only where the seat has two of one category on the model.
+ */
+function jobName(refs: readonly ModelReference[], r: ModelReference): string {
+  const job = r.at.job as SeatJob;
+  const category = CATEGORY_OF[job];
+  const word = CATEGORY_WORDS[category].short.toLowerCase();
+  const twice =
+    refs.filter(
+      (o) => o.at.seat === r.at.seat && o.at.job && CATEGORY_OF[o.at.job as SeatJob] === category,
+    ).length > 1;
+  return twice ? `${word} (${JOB_DETAIL[job]})` : word;
+}
+
+/** What tells two jobs of one category apart, in the page's words. */
+const JOB_DETAIL: Record<SeatJob, string> = {
+  executor: "coding",
+  review: "reviewing",
+  subagent: "delegations",
+  auxiliary: "memory and summaries",
+  judge: "onboarding checks",
+};
+
+/**
+ * What the removal leaves with no model, as the one thing the person confirms:
+ * Ask Crewlet left unset is off, the Advisor runs with no model, and a seat
+ * stops only where no model is left for it to fall back on. A seat left unset
+ * while the company has another model runs on the company's fallback, so it
+ * is no loss to confirm. Null where nothing is left with no model.
+ */
+export function leftWithNoModel(
+  refs: readonly ModelReference[],
+  choices: Record<string, Choice>,
+  removing: string,
+  models: readonly ModelView[],
+): string | null {
+  // A PLACE NOT YET CHOSEN is no loss to confirm: it is not left unset yet.
+  const left = refs.filter(
+    (r) => choices[refId(r)] !== undefined && choices[refId(r)]!.to === null,
+  );
+  const nothingLeft = !models.some((m) => m.key !== removing);
+  const seats = nothingLeft
+    ? new Set(left.filter((r) => !helpers(r)).map((r) => r.at.seat ?? "")).size
+    : 0;
+  const parts = [
+    ...(left.some(askCrewlets) ? ["turn Ask Crewlet off"] : []),
+    ...(left.some(advisors) ? ["run the Advisor with no model"] : []),
+    ...(seats > 0 ? [`leave ${plural(seats, "seat")} with no model until one is added`] : []),
+  ];
+  if (parts.length === 0) return null;
+  const sentence = listed(parts);
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
 }
 
 /**
@@ -215,7 +362,7 @@ function refusalWords(
     case "conflict":
       return refusal.reason === "no_active_revision"
         ? "No company is configured any more, so there is no model to remove."
-        : `The configuration changed while this was open, so nothing was stored. The list is current again: check each choice and remove ${key} again.`;
+        : `The configuration changed while this was open, so nothing was stored. Choose again and remove ${key} again.`;
     case "draining":
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
@@ -233,52 +380,6 @@ function refusalWords(
   }
 }
 
-/** Where a warning lands, in words: a seat's job that ran on the removed model by default moves. */
-function warningWords(w: ConfigWarning, data: ModelsData): string {
-  if (w.kind === "resolution_moved" && w.seat && w.ref in JOB_WORDS) {
-    const job = JOB_WORDS[w.ref as keyof typeof JOB_WORDS];
-    return w.to === "nothing"
-      ? `${seatName(data.seats, w.seat)}'s ${job} will run on no model.`
-      : `${seatName(data.seats, w.seat)}'s ${job} will run on ${w.to}.`;
-  }
-  return w.message;
-}
-
-/** One seat's places (or Ask Crewlet's), in the order the engine listed them. */
-interface SeatPlaces {
-  key: string;
-  name: string;
-  refs: ModelReference[];
-}
-
-/**
- * The places grouped by who runs there: a seat by its name, the assistant as
- * Ask Crewlet. A seat's every job then sits under one name, said once.
- */
-export function placesBySeat(
-  refs: readonly ModelReference[],
-  seats: ModelsData["seats"],
-): SeatPlaces[] {
-  const groups = new Map<string, SeatPlaces>();
-  for (const ref of refs) {
-    const key = ref.at.assistant ? "" : (ref.at.seat ?? "");
-    const group = groups.get(key) ?? {
-      key: key || "assistant",
-      name: key ? seatName(seats, key) : "Ask Crewlet",
-      refs: [],
-    };
-    group.refs.push(ref);
-    groups.set(key, group);
-  }
-  return [...groups.values()];
-}
-
-/** A place's own row label under its seat: the job, capitalised ("Coding", "Chat"). */
-function jobLabel(ref: ModelReference): string {
-  const words = ref.at.assistant === "chat" ? "chat" : ref.at.job ? JOB_WORDS[ref.at.job] : "";
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
 type Load =
   | { kind: "loading" }
   | { kind: "failed"; message: string }
@@ -286,8 +387,16 @@ type Load =
 
 type Check =
   | { kind: "checking" }
-  | { kind: "valid"; warnings: readonly ConfigWarning[] }
+  /** A place still waits for the person's choice: nothing to check yet. */
+  | { kind: "choosing" }
+  | { kind: "valid" }
   | { kind: "refused"; message: string };
+
+/** The check of a removal: valid, or the engine's refusal in words. */
+export function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
+  if (outcome.kind === "valid" || outcome.kind === "saved") return { kind: "valid" };
+  return { kind: "refused", message: refusalWords(outcome, key, "check") };
+}
 
 export function RemoveDialog({
   model,
@@ -309,8 +418,11 @@ export function RemoveDialog({
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [reads, setReads] = useState(0);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
+  /** Whether the per-seat list is open. */
+  const [each, setEach] = useState(false);
+  /** The consequence the person confirmed, so a different one asks again. */
+  const [agreed, setAgreed] = useState<string | null>(null);
   const [check, setCheck] = useState<Check>({ kind: "checking" });
-  const [confirm, setConfirm] = useState("");
   const [removing, setRemoving] = useState(false);
   /**
    * What the last removal came to, where it did not remove: its title says
@@ -321,11 +433,13 @@ export function RemoveDialog({
     null,
   );
   const models = data.models;
-  const idBase = useId();
+  const listId = useId();
   const modelsRef = useRef(models);
   modelsRef.current = models;
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
-  // READ THE REVISION, THEN ASK THE ENGINE WHAT NAMES THE MODEL: a dry run
+  // READ THE ENTRY, THEN ASK THE ENGINE WHAT NAMES THE MODEL: a dry run
   // with no repoints answers every reference, or is valid when none does.
   useEffect(() => {
     const abort = new AbortController();
@@ -343,21 +457,21 @@ export function RemoveDialog({
         });
         return;
       }
-      const answer = await removeModel(
-        key,
-        { repoint: [] },
-        { etag: read.etag, summary: "", dryRun: true },
-        abort.signal,
-      );
-      if (answer.outcome.kind !== "valid" && answer.references.length === 0) {
-        setLoad({ kind: "failed", message: refusalWords(answer.outcome, key, "check") });
+      // READ, NOT REFUSED: the list comes from a read, so opening the dialog
+      // logs no failed request; the moves are checked once chosen.
+      const listed = await modelReferences(key, abort.signal);
+      if ("refused" in listed) {
+        setLoad({ kind: "failed", message: refusalWords(listed.refused, key, "check") });
         return;
       }
-      const refs = answer.references;
-      setChoices(
-        Object.fromEntries(
-          refs.map((ref) => [refId(ref), defaultChoice(ref, key, modelsRef.current)]),
-        ),
+      const refs = listed.references;
+      const current = modelsRef.current;
+      setChoices(firstChoices(refs, key, current, alreadyUsedIn(dataRef.current, key)));
+      // NO MODEL FITS THEM ALL: the list opens, since the one choice can only leave them unset.
+      setEach(
+        refs.length > 1 &&
+          commonTargets(refs, key, current).length === 0 &&
+          refs.some((ref) => targetsFor(ref, key, current).length > 0),
       );
       setLoad({ kind: "ready", etag: read.etag, refs });
     })().catch(() => {
@@ -371,10 +485,15 @@ export function RemoveDialog({
   const removalKey = JSON.stringify(removal);
   const etag = load.kind === "ready" ? load.etag : null;
 
-  // EVERY CHOICE IS CHECKED AS IT CHANGES, so the button below always removes
-  // what the engine just accepted.
+  // EVERY SET OF MOVES IS CHECKED AS IT CHANGES, so the button below always
+  // removes what the engine just accepted.
+  const complete = refs.every((ref) => choices[refId(ref)] !== undefined);
   useEffect(() => {
     if (!etag) return;
+    if (!complete) {
+      setCheck({ kind: "choosing" });
+      return;
+    }
     const abort = new AbortController();
     setCheck({ kind: "checking" });
     removeModel(key, removal, { etag, summary: "", dryRun: true }, abort.signal).then(
@@ -386,13 +505,13 @@ export function RemoveDialog({
     return () => abort.abort();
     // The removal's content is the dependency, not its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, etag, removalKey]);
+  }, [key, etag, removalKey, complete]);
 
   async function remove() {
     if (!etag) return;
     setRemoving(true);
     setNotice(null);
-    const summary = summaryOf(key, removal, "audit");
+    const summary = summaryOf(key, removal);
     // A REMOVAL THAT HAS STARTED FINISHES: it takes no signal, so closing
     // the dialog or leaving the page never leaves the person unsure whether
     // it happened. What the dialog does with the answer is what its lifetime
@@ -416,6 +535,14 @@ export function RemoveDialog({
     if (answer.outcome.kind === "conflict") setReads((n) => n + 1);
   }
 
+  const common = useMemo(() => commonTargets(refs, key, models), [refs, key, models]);
+  const names = useMemo(() => placeNames(refs, data.seats), [refs, data.seats]);
+  const values = refs.map((ref) => valueOf(choices[refId(ref)]));
+  // ONE VALUE WHILE EVERY PLACE SHARES IT; a split made in the list reads as one.
+  const shared = values.length > 0 && values.every((v) => v === values[0]) ? values[0] : undefined;
+  const unchosen = values.every((v) => v === undefined);
+  const consequence = leftWithNoModel(refs, choices, key, models);
+  const confirmed = consequence === null || agreed === consequence;
   const ready = load.kind === "ready" && check.kind === "valid";
 
   return (
@@ -423,7 +550,6 @@ export function RemoveDialog({
       open
       onClose={onClose}
       title={`Remove ${key}`}
-      size="lg"
       dismissable={!removing}
       footer={
         <>
@@ -433,7 +559,7 @@ export function RemoveDialog({
           <Button
             variant="danger"
             onClick={() => void remove()}
-            disabled={!ready || confirm !== key}
+            disabled={!ready || !confirmed}
             loading={removing}
           >
             Remove model
@@ -442,7 +568,7 @@ export function RemoveDialog({
       }
     >
       {load.kind === "loading" ? (
-        <Skeleton variant="text" rows={4} label={`Finding what names ${key}`} />
+        <Skeleton variant="text" rows={2} label={`Finding what uses ${key}`} />
       ) : load.kind === "failed" ? (
         <Callout variant="danger" title="The removal could not be prepared">
           {load.message}
@@ -451,146 +577,90 @@ export function RemoveDialog({
         <div className="models-stack">
           {refs.length === 0 ? (
             <Text as="p" variant="body">
-              Nothing names the model <span className="mono">{key}</span>. Removing it changes no
-              seat.
+              Nothing uses this model.
             </Text>
           ) : (
             <>
               <Text as="p" variant="body">
-                The model <span className="mono">{key}</span> is named in{" "}
-                {plural(refs.length, "place")}. Choose where each one moves; the removal and these
-                moves are made together.
+                {usedByWords(refs)}
               </Text>
-              <ul className="models-repoint" aria-label={`Where ${key} is named`}>
-                {placesBySeat(refs, data.seats).map((group) => (
-                  <li
-                    key={group.key}
-                    className="models-repoint__seat"
-                    role="group"
-                    aria-labelledby={`${idBase}-${group.key}`}
-                  >
-                    <span id={`${idBase}-${group.key}`} className="models-repoint__who">
-                      {group.name}
-                    </span>
-                    <ul className="models-repoint__jobs">
-                      {group.refs.map((ref) => {
-                        const id = refId(ref);
-                        const backup = ref.chain.indexOf(key) > 0;
-                        const place = placeWords(data.seats, ref.at);
-                        const label = backup ? `${place} (backup)` : place;
-                        const job = jobLabel(ref);
-                        const choice = choices[id] ?? defaultChoice(ref, key, models);
-                        return (
-                          <li key={id} className="models-repoint__row">
-                            <span className="col">
-                              <span className="models-repoint__place">
-                                {backup ? `${job} (backup)` : job}
-                              </span>
-                              {ref.at.assistant ? (
-                                <Text as="span" variant="caption" tone="tertiary">
-                                  Only models that deny the harness's web tools can run Ask Crewlet.
-                                </Text>
-                              ) : null}
-                            </span>
-                            <Select
-                              ariaLabel={`Where ${label} moves`}
-                              value={valueOf(choice)}
-                              options={optionsFor(ref, key, models)}
-                              disabled={removing}
-                              onChange={(next) =>
-                                setChoices((c) => ({ ...c, [id]: choiceOf(String(next)) }))
-                              }
-                            />
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </li>
-                ))}
-              </ul>
+              <FormField
+                label={refs.length === 1 ? "Move it to" : "Move them to"}
+                labelAction={
+                  refs.length > 1 ? (
+                    <Button
+                      variant="ghost"
+                      size="small"
+                      aria-expanded={each}
+                      aria-controls={listId}
+                      onClick={() => setEach((open) => !open)}
+                    >
+                      {refs.some((r) => !helpers(r)) ? "Choose per seat" : "Choose for each"}
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {(field) => (
+                  <Select
+                    id={field.id}
+                    value={shared}
+                    placeholder={unchosen ? "Choose a model" : "Different for each"}
+                    options={[...modelOptions(common), LEAVE_UNSET]}
+                    disabled={removing}
+                    onChange={(next) =>
+                      setChoices(
+                        Object.fromEntries(refs.map((ref) => [refId(ref), choiceOf(String(next))])),
+                      )
+                    }
+                  />
+                )}
+              </FormField>
+              {each ? (
+                <ul id={listId} className="models-repoint" aria-label="Each place">
+                  {refs.map((ref) => {
+                    const id = refId(ref);
+                    const name = names.get(id) ?? "";
+                    return (
+                      <li key={id} className="models-repoint__row">
+                        <span className="models-repoint__name">{name}</span>
+                        <Select
+                          ariaLabel={`Where ${name} moves`}
+                          value={valueOf(choices[id])}
+                          placeholder="Choose a model"
+                          options={optionsFor(ref, key, models)}
+                          disabled={removing}
+                          onChange={(next) =>
+                            setChoices((c) => ({ ...c, [id]: choiceOf(String(next)) }))
+                          }
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+              {consequence ? (
+                <Checkbox
+                  tone="danger"
+                  label={consequence}
+                  checked={agreed === consequence}
+                  disabled={removing}
+                  onCheckedChange={(on) => setAgreed(on ? consequence : null)}
+                />
+              ) : null}
             </>
           )}
-
-          <CheckCallout
-            check={check}
-            summary={summaryOf(key, removal)}
-            moves={movesOf(key, removal, data.seats)}
-            data={data}
-          />
-
-          <Disclosure title="Every change in the revision">
-            <ul className="models-revision" aria-label="Every change in the revision">
-              <li>
-                <span className="mono">providers.llm.{key}</span> removed
-              </li>
-              {refs.map((ref) => {
-                const choice = choices[refId(ref)];
-                const to = choice ? choice.to : null;
-                const after = chainAfter(ref, key, to);
-                return (
-                  <li key={refId(ref)}>
-                    <span className="mono">{pathOf(ref.segments)}</span>:{" "}
-                    <span className="mono">{ref.chain.join(", ")}</span> becomes{" "}
-                    {after.length > 0 ? <span className="mono">{after.join(", ")}</span> : "unset"}
-                  </li>
-                );
-              })}
-            </ul>
-          </Disclosure>
-
+          {check.kind === "refused" ? (
+            <Callout variant="danger" title="This cannot be removed as it stands" live="polite">
+              {check.message}
+            </Callout>
+          ) : null}
           {notice ? (
             <Callout variant="danger" title={notice.title} live="polite">
               {notice.words}
             </Callout>
           ) : null}
-          <ConfirmField phrase={key} value={confirm} onValueChange={setConfirm} />
         </div>
       )}
     </Modal>
-  );
-}
-
-function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
-  if (outcome.kind === "valid" || outcome.kind === "saved")
-    return { kind: "valid", warnings: outcome.warnings };
-  return { kind: "refused", message: refusalWords(outcome, key, "check") };
-}
-
-function CheckCallout({
-  check,
-  summary,
-  moves,
-  data,
-}: {
-  check: Check;
-  summary: string;
-  moves: readonly string[];
-  data: ModelsData;
-}) {
-  if (check.kind === "checking") {
-    return (
-      <Text as="p" variant="body" tone="secondary" role="status">
-        Checking the change.
-      </Text>
-    );
-  }
-  if (check.kind === "refused") {
-    return (
-      <Callout variant="danger" title="The engine would refuse this" live="polite">
-        {check.message}
-      </Callout>
-    );
-  }
-  return (
-    <Callout variant="info" title="Ready to remove" live="polite">
-      {summary}
-      <NoticeList
-        label="Where each moves"
-        notices={[
-          ...moves.map((line) => ({ key: `move ${line}`, title: line })),
-          ...check.warnings.map((w, i) => ({ key: `also ${i}`, title: warningWords(w, data) })),
-        ]}
-      />
-    </Callout>
   );
 }

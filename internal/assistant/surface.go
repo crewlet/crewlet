@@ -206,6 +206,14 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
 	}
+	if tool.Name == catalog.FetchWebPageToolName && !s.t.seen(catalog.Args(args).String("url")) {
+		// SAID TO THE PERSON TOO: the step says why the page was not read.
+		step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
+		s.t.stepEnd(ctx, step, wire.StepRefused, "Not sent", &wire.Refusal{
+			Code: cards.CodeInvalidCall, Message: composedAddress, Said: composedAddress}, 0, 0)
+		return failed(mcp.Classify(mcp.RefusalInvalid, errComposedAddress),
+			"Refused before anything was sent: "+composedAddress), nil
+	}
 	key := readKey(tool, req)
 	if earlier, done := s.answered(key); done {
 		return toolloop.ToolResult{Output: alreadyRead + earlier}, nil
@@ -221,6 +229,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Signed out", nil, resp.Status, len(resp.Body))
 		return toolloop.ToolResult{}, errGrantEnded
 	}
+	apps := tool.AppsFor(args)
 	shaped, err := catalog.Shape(tool, args, resp, s.t.boundary, s.t.svc.now(), s.cardOptions(ctx))
 	if err != nil {
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be read", nil, resp.Status, len(resp.Body))
@@ -245,14 +254,18 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		if tool.Fence {
 			s.t.tainted(shaped.Source, shaped.Trust)
 		}
-		s.t.used(appNames(tool.Apps))
+		s.t.seeAnswer(tool, resp.Body)
+		if tool.Name == catalog.SearchWebToolName {
+			s.t.chargeSearch(ctx, resp.Body)
+		}
+		s.t.used(appNames(apps))
 	}
 	briefing := s.t.briefing()
 	if !briefing {
 		// A BRIEF'S READS DRAW NO CARD: the run chip shows each read, and
 		// the brief card is the whole answer.
 		for _, card := range shaped.Cards {
-			s.t.emitCard(ctx, card, appNames(tool.Apps))
+			s.t.emitCard(ctx, card, appNames(apps))
 		}
 	}
 	if shaped.Refusal != nil {

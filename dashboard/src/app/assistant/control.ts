@@ -25,6 +25,12 @@ export interface AssistantControl {
   toggle: (focus?: AssistantFocus) => void;
   /** Open it with a question typed elsewhere (the palette's row), for the panel to ask. */
   ask: (question: string) => void;
+  /**
+   * Open it with a question in its box, for the person to read, change and
+   * send: a question a screen offers about what it shows ("Ask Crewlet about
+   * this"), which is the person's to ask, never sent as their words for them.
+   */
+  draft: (question: string) => void;
 }
 
 /** A frame with no assistant: nothing opens, and the reason says so. */
@@ -38,6 +44,7 @@ const NONE: AssistantControl = {
   },
   toggle: () => {},
   ask: () => {},
+  draft: () => {},
 };
 
 export const AssistantControlContext = createContext<AssistantControl>(NONE);
@@ -54,25 +61,39 @@ export const ASSISTANT_TRIGGER_ID = "assistant-trigger";
 export const ASSISTANT_COMPOSER_ID = "assistant-composer";
 
 /**
- * A question typed outside the panel, waiting for the panel to ask it.
+ * A question typed outside the panel, waiting for the panel to ask it, or
+ * (`send: false`) to put in its box for the person to send.
  *
  * THE PALETTE IS ONE CHUNK AND THE PANEL ANOTHER, and the panel may not be
  * loaded when the question is asked. So the frame queues it here (in the
  * entry, a few bytes) as it opens the panel, and the panel takes it once it
- * is drawn: it asks at once where it could ask, and otherwise puts the words
- * in its box. One question at a time; a newer one replaces one never taken.
+ * is drawn: it asks at once where it could ask and was asked to, and
+ * otherwise puts the words in its box. One question at a time; a newer one
+ * replaces one never taken.
  */
-let queued: string | null = null;
+export interface QueuedQuestion {
+  text: string;
+  /** Ask it at once where the panel can; false puts it in the box. */
+  send: boolean;
+}
+
+let queued: QueuedQuestion | null = null;
 const waiting = new Set<() => void>();
 
-/** Queue a question for the panel. */
+/** Queue a question for the panel to ask. */
 export function queueQuestion(question: string): void {
-  queued = question;
+  queued = { text: question, send: true };
+  for (const listener of waiting) listener();
+}
+
+/** Queue a question for the panel's box, for the person to send. */
+export function queueDraft(question: string): void {
+  queued = { text: question, send: false };
   for (const listener of waiting) listener();
 }
 
 /** Take the queued question, if any; it is the taker's from here. */
-export function takeQueuedQuestion(): string | null {
+export function takeQueuedQuestion(): QueuedQuestion | null {
   const question = queued;
   queued = null;
   if (question !== null) for (const listener of waiting) listener();
@@ -87,7 +108,7 @@ function subscribe(listener: () => void): () => void {
 }
 
 /** The queued question, as a value the panel re-renders on. */
-export function useQueuedQuestion(): string | null {
+export function useQueuedQuestion(): QueuedQuestion | null {
   return useSyncExternalStore(
     subscribe,
     () => queued,

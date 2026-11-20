@@ -1010,8 +1010,16 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 				rec.Handle = handle
 			}
 		}
+		var busy time.Duration
 		for _, d := range s.Turns.Durations {
 			rec.Turns.Durations.Add(d)
+			busy += d
+		}
+		// ONLY A DAY WITH TURNS CARRIES IT: one with none was busy for
+		// none, and stays the format every build reads.
+		if s.Turns.Count > 0 {
+			busyMS := busy.Milliseconds()
+			rec.Turns.BusyMS = &busyMS
 		}
 		for _, t := range s.Tokens {
 			rec.Tokens = append(rec.Tokens, Tokens{

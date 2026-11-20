@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -617,11 +616,9 @@ func (c SessionCapture) SavePoint() (int, bool) {
 
 // stampReason is why a capture came out as it did, as its stamp carries it:
 // redacted, and held to the bound the executor log holds the same words to
-// ([SessionCapture.Bounded]) — an error's text is the engine's and has no
-// bound of its own.
-func stampReason(why string) string {
-	return textcut.Within(redact.Secrets(why), executorkeep.UnkeptReasonMaxBytes)
-}
+// ([SessionCapture.Bounded]) by the rule every reason is ([boundReason]) — an
+// error's text is the engine's and has no bound of its own.
+func stampReason(why string) string { return boundReason(why, executorkeep.UnkeptReasonMaxBytes) }
 
 // newerThan reports whether c's place is after o's.
 func (c SessionCapture) newerThan(o SessionCapture) bool {
@@ -1371,7 +1368,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
@@ -3490,12 +3487,13 @@ func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
 //
 // THE RUN'S ENDING CALLS IT for every turn that has a row
 // ([Coordinator.publishEnd]), after the turn's captures settle; a frame whose
-// turn has no row left reaches it through [Coordinator.EndTurn].
+// turn has no row left reaches it through [Coordinator.EndTurn]. Its failure
+// is fit as the log keeps it ([executorkeep.Excerpt]).
 func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 	if !c.keepsSessions() {
 		return nil
 	}
-	end.Ending.Failure = redact.Secrets(end.Ending.Failure)
+	end.Ending.Failure = executorkeep.Excerpt(end.Ending.Failure, executorkeep.FailureMaxBytes)
 	minted, err := c.keep.MintedAt(ctx, end.TurnID, end.WorkKey, end.WorkSince)
 	if err != nil {
 		return fmt.Errorf("sandbox: the operations of turn %s could not be minted to record its end: %w",

@@ -666,9 +666,9 @@ type CheckFinished struct {
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	// Summary is what a reader is told first, at most CheckSummaryBytes.
 	Summary string `json:"summary,omitempty" untrusted:"fence"`
-	// Tail is the run's last output, at most CheckTailBytes; a passed run
-	// carries none — the change's own code's words, as Summary is
-	// (ADR-0040).
+	// Tail is the run's last output, at most CheckTailBytes, a runner's
+	// redacted before it is cut and opening on a line; a passed run carries
+	// none — the change's own code's words, as Summary is (ADR-0040).
 	Tail string `json:"tail,omitempty" untrusted:"fence"`
 	// Failures are what the run's reports named, at most MaxCheckFailures
 	// weighing at most MaxCheckFailureBytes, and FailuresOmitted how many
@@ -676,8 +676,10 @@ type CheckFinished struct {
 	Failures        []CheckFailure `json:"failures,omitempty"`
 	FailuresOmitted int            `json:"failures_omitted,omitempty"`
 	// Tests are its JUnit report's counts, nil where none was read. LogLines is how many lines its
-	// whole output has (its newlines, and one for an unterminated last line), 0 where none were
-	// counted; TailCut reports a Tail whose first line began before it. Version 6.
+	// whole output has as Tail numbers them (its newlines, less those a runner's redaction took out
+	// of what Tail was read from, and one for an unterminated last line), 0 where none were counted;
+	// TailCut reports a Tail whose first line began before it, on a runner's ending a last line
+	// longer than CheckTailBytes. Version 6.
 	Tests    *CheckTests `json:"tests,omitempty"`
 	LogLines int         `json:"log_lines,omitempty"`
 	TailCut  bool        `json:"tail_cut,omitempty"`

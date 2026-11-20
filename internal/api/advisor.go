@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,6 +117,21 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// WHAT TO RUN: the rules (an empty body, as before), or a deep run.
+	raw, err := httpjson.ReadBody(w, r, maxAdvisorDecisionBytes)
+	if err != nil {
+		return
+	}
+	var body struct {
+		Kind advisordomain.RunKind `json:"kind"`
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err = json.Unmarshal(raw, &body); err != nil || !body.Kind.Valid() {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+				"detail": `the body is {"kind": "rules"} or {"kind": "deep"}`})
+			return
+		}
+	}
 	pending, err := a.advisor.PendingRequests(r.Context(), statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		refuseAdvisorLog(w, r, log, "advisor_pending_requests", err)
@@ -132,8 +148,10 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// THE ASKER BY THE NAME THE CALL RECORDS: a seat's handle, or an API
+	// token's or an operator's own name, never a seat that is not there.
 	if _, err := a.advisor.RequestRun(r.Context(), call, advisordomain.RunRequest{Run: run,
-		By: principal.Seat}); err != nil {
+		By: call.By.Name, RunKind: body.Kind}); err != nil {
 		refuseAdvisorLog(w, r, log, "advisor_run", err)
 		return
 	}
@@ -230,8 +248,14 @@ func (a *App) decide(ctx context.Context, call advisordomain.Call, row advisordo
 		move.Event, move.State = advisordomain.EventUseful, state
 	case DecisionReopen:
 		if advisor.State(state).Closed() {
-			_, err := a.advisor.Release(ctx, call, row.Key, row.KeyVersion)
-			return err
+			// A CLOSED EPISODE STAYS CLOSED: the reopen lifts its key's hold,
+			// and the condition that still holds returns as a new episode at
+			// the key's next run, which it asks for now rather than leave
+			// for the next hourly pass.
+			if _, err := a.advisor.Release(ctx, call, row.Key, row.KeyVersion); err != nil {
+				return err
+			}
+			return a.runSoon(ctx, call.By)
 		}
 		move.Event, move.State = advisordomain.EventUnsnoozed, state
 	case DecisionDismiss:
@@ -244,6 +268,19 @@ func (a *App) decide(ctx context.Context, call advisordomain.Call, row advisordo
 			advisordomain.CloseReason(reason), hold
 	}
 	_, err := a.advisor.Move(ctx, call, row.Key, move, row.KeyVersion)
+	return err
+}
+
+// runSoon asks the duty for a run now, by, unless one already waits: the run
+// a waiting request makes answers this one too.
+func (a *App) runSoon(ctx context.Context, by iam.Actor) error {
+	pending, err := a.advisor.PendingRequests(ctx, statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil || len(pending) > 0 {
+		return err
+	}
+	run := uuid.NewString()
+	_, err = a.advisor.RequestRun(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(time.Now(), "advisor_run")},
+		advisordomain.RunRequest{Run: run, By: by.Name})
 	return err
 }
 

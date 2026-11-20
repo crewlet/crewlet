@@ -23,6 +23,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { ASSISTANT_PROTOCOL_VERSION } from "~/contract/assistant.ts";
 import { resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { on as onBus } from "../bus.ts";
@@ -130,11 +131,14 @@ function mount(
   model: AssistantModelProblem | null = null,
   admin = false,
   attach: AttachClosed | null = null,
+  viewer: unknown = {},
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
+  // THE VIEWER, where a case says who reads the panel; every other question answers nothing.
+  (socket as unknown as { query: (name: string) => Promise<unknown> }).query = (name) =>
+    Promise.resolve(name === "viewer" ? viewer : {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -186,7 +190,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   expect(new Headers(turn.init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   const body = JSON.parse(String(turn.init.body));
   expect(body).toMatchObject({
-    protocol_version: 2,
+    protocol_version: ASSISTANT_PROTOCOL_VERSION,
     input: { text: "Fix the flaky sign-in test" },
   });
   expect(body.page_context).toMatchObject({ screen: "worklet-tasks", title: "Worklet › Tasks" });
@@ -469,7 +473,7 @@ test("an image dropped while the composer is closed is refused with the composer
   expect(sent.some((r) => new URL(r.url).pathname.endsWith("/files"))).toBe(false);
 });
 
-test("the history offers Delete only for a conversation with something in it", async () => {
+test("the history offers Rename and Delete only for a conversation with something in it", async () => {
   const sent = engine();
   const answered = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
@@ -487,6 +491,7 @@ test("the history offers Delete only for a conversation with something in it", a
   });
   await waitFor(() => expect(screen.getByText("Your recent conversations")).toBeDefined());
   expect(screen.queryByText("Delete this conversation")).toBeNull();
+  expect(screen.queryByText("Rename this conversation")).toBeNull();
   await act(async () => {
     fireEvent.click(history);
   });
@@ -504,6 +509,11 @@ test("the history offers Delete only for a conversation with something in it", a
   });
   await waitFor(() => expect(screen.getByText("Delete this conversation")).toBeDefined());
   expect(sent.length).toBeGreaterThan(0);
+  // RENAME OPENS ITS DIALOG on the open conversation.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("menuitem", { name: /Rename this conversation/ }));
+  });
+  await screen.findByRole("dialog", { name: "Rename conversation" });
 });
 
 test("an empty conversation opened from the history offers no Delete", async () => {
@@ -924,4 +934,47 @@ test("a restored question the reader deleted stays deleted when the drawer opens
   await act(async () => {});
   expect(box().value).toBe("");
   expect(document.body.textContent).toContain("Your question is back in the box below.");
+});
+
+// ASK CREWLET'S MODEL IS CHOSEN IN SETTINGS › MODELS ALONE: the panel offers no
+// picker and names no model; with none, a reader who may choose it is sent
+// there, and anybody else reads why with no way there.
+const NO_MODEL_HERE: AssistantUnavailable = {
+  reason: "no_model",
+  short: "No model is assigned to Ask Crewlet yet.",
+  title: "Ask Crewlet has no model for Nimbus yet",
+  body: "An admin has not chosen the model Ask Crewlet runs on.",
+};
+
+test("with no model, the panel sends a reader who may choose one to Settings › Models", async () => {
+  engine();
+  const opened: unknown[] = [];
+  const off = onBus("assistant.navigation.open", (target) => opened.push(target));
+  mount(NO_MODEL_HERE, null, true, null, {
+    login: "ada",
+    grants: ["admin"],
+    assistant: {
+      available: false,
+      reason: "no_model",
+      model: null,
+      notice: null,
+      can_assign: true,
+      reads_images: true,
+    },
+  });
+  await screen.findByText(/Ask Crewlet needs a model to answer/);
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Choose its model" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Model settings" }));
+  expect(opened).toEqual([{ path: ["settings", "models"], query: {}, mode: "here" }]);
+  off();
+});
+
+test("with no model, anybody else reads why in the panel, with no way to choose one", async () => {
+  engine();
+  mount(NO_MODEL_HERE);
+  expect(await screen.findByText("Ask Crewlet has no model for Nimbus yet")).toBeDefined();
+  expect(screen.getByText("An admin has not chosen the model Ask Crewlet runs on.")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
 });

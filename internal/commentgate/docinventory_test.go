@@ -4,7 +4,6 @@ package commentgate
 // doc that ran past docBound when the bound arrived. It only moves down.
 var docInventory = map[string]int{
 	"internal/coord/kv":         31392,
-	"internal/engine":           113165,
-	"internal/redact":           23747,
-	"internal/sandbox/executor": 83104,
+	"internal/redact":           22955,
+	"internal/sandbox/executor": 82737,
 }

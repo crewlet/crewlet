@@ -152,17 +152,33 @@ func rewriteLine(t testing.TB, line string, s scrubber) string {
 	return keptLines(t, line, s)
 }
 
-// keptLines is a transcript's text as both readings of a tar keep it: what the
-// second writes, held to the size the first counted.
+// keptLines is a transcript's text as both readings of a tar keep it, each
+// staging its texts as a take's do, the first read again where a take's is
+// ([firstReadings]): what the second writes, held to the size the first
+// counted.
 func keptLines(t testing.TB, text string, s scrubber) string {
 	t.Helper()
-	plan := &tarPlan{}
-	size, err := measureLines(strings.NewReader(text), s, plan)
+	var size int64
+	plan, err := firstReadings(strings.NewReader(text), func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(text)), nil
+	}, s, scrubBounds{}, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		from, _, err := plan.memberAt(0, src)
+		if err != nil {
+			return err
+		}
+		if plan.carry == nil {
+			s.unitBegins()
+		}
+		plan.markMember(0, 0, from, s)
+		size, err = measureLines(src, s, plan)
+		return err
+	})
 	if err != nil {
 		t.Fatalf("the first reading of the transcript: %v", err)
 	}
 	var out bytes.Buffer
-	if err = writeLines(&out, strings.NewReader(text), s, plan, plan.lines.count()); err != nil {
+	if err = writeLines(&out, strings.NewReader(text), s.secondReading(plan, nil), plan,
+		plan.lines.count()); err != nil {
 		t.Fatalf("the second reading of the transcript: %v", err)
 	}
 	if !plan.lines.done() || !plan.cuts.done() || plan.pending {

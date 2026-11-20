@@ -92,7 +92,10 @@ type SessionRows interface {
 // arrives within it; one at its 32 MiB bound would take about seventeen, which
 // no call should wait out, and two is far inside the ten a harness waits on a
 // call. Past it the call is answered unavailable, naming the session's size,
-// never as a session that holds nothing.
+// never as a session that holds nothing. A decode at its bounds of what a
+// harness writes takes up to 58 s, within it; one queued behind other such
+// reads, or of a value none writes (`pwd=x` lines), can miss it, and fails
+// closed so ([executor.PersonTranscriptReadWorst]).
 const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
@@ -784,7 +787,8 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 			after = "the entries after it were not searched"
 		}
 		return "", fmt.Sprintf("The read stopped at entry %d: the session's archive runs past what one read "+
-			"inflates (%d MiB), so %s.", t.Next, executor.TranscriptReadBytes>>20, after)
+			"inflates (%d MiB) or its lines and their parts past what one read frames (%d), so %s.", t.Next,
+			executor.TranscriptReadBytes>>20, executor.TranscriptReadLines, after)
 	case !filtered:
 		return page.Next, ""
 	case t.More():

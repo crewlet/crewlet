@@ -166,309 +166,232 @@ import (
 
 // Code is the machine-readable `error` value a failed request carries.
 //
-// A NAMED TYPE over a closed set, so a route cannot invent a fifth spelling of
-// "too large" the way three of them already had. Clients branch on these; the
-// sentence a person reads is [Code.Message], and the reason an operator needs
-// belongs in the log.
+// A NAMED TYPE over a closed set, so a route cannot invent another spelling of
+// "too large". Clients branch on these; the sentence a person reads is
+// [Code.Message], and the reason an operator needs belongs in the log.
 type Code string
 
-// The codes every JSON surface answers with. snake_case throughout, which is
-// what the dashboard and the websocket protocol already read.
+// The codes every JSON surface answers with, snake_case as the dashboard and the
+// websocket protocol read them.
 //
-// THE TABLE IS [codes], and these constants name its keys. A code that is not
-// there is not in the vocabulary: [Code.Valid] is membership in it and
-// [Code.Message] is what it carries, so a code cannot join without the
-// sentence a person is shown.
+// THE TABLE IS [codes], and these constants name its keys: [Code.Valid] is
+// membership in it, so a code cannot join without the sentence a person is shown.
 const (
-	// CodeEncodeFailed is the one this package can produce on its own: the
-	// handler's own body would not marshal.
+	// CodeEncodeFailed is the one this package produces itself: the handler's
+	// body would not marshal.
 	CodeEncodeFailed Code = "encode_failed"
 
-	// CodeBodyTooLarge is the single spelling of a 413, whether what
-	// overflowed was a config document, a secret value or a webhook
-	// delivery.
+	// CodeBodyTooLarge is the single spelling of a 413.
 	CodeBodyTooLarge Code = "body_too_large"
 
-	// CodeUnreadableBody is a body that could not be read to the end —
-	// a client that hung up mid-request, not one that sent too much.
+	// CodeUnreadableBody is a body that could not be read to the end: a client
+	// that hung up mid-request, not one that sent too much.
 	CodeUnreadableBody Code = "unreadable_body"
 
-	// CodeInvalidBody is a body that was read but is not what the route
-	// accepts: its shape, or a value in it the route or its domain refused —
-	// a login outside its grammar, a password under the floor, a lifetime
-	// past the cap — which the detail names.
+	// CodeInvalidBody is a body that was read but is not what the route accepts:
+	// its shape, or a value the route or its domain refused, which the detail names.
 	CodeInvalidBody Code = "invalid_body"
 
-	// CodeInvalidQuery is a query parameter the route does not take, or a
-	// value of one it does that it does not accept. Its own code rather
-	// than invalid_body, because the body may be perfectly good, and a
-	// client told the body is wrong changes the one thing that was right.
+	// CodeInvalidQuery is a query parameter the route does not take or a value it
+	// does not accept. Not invalid_body, because the body may be good and a client
+	// told otherwise changes the one thing that was right.
 	CodeInvalidQuery Code = "invalid_query"
-	// CodeNonCanonicalPath is a request path carrying a `.` or `..` segment
-	// or an empty one. Refused rather than redirected to where it resolves,
-	// because a path that reads one way to a person and matches another
-	// way at the router is exactly what an authority gate must not be
-	// asked to agree with — see internal/authz's CanonicalPath.
+	// CodeNonCanonicalPath is a request path with a `.`, `..` or empty segment.
+	// Refused rather than redirected: a path that reads one way to a person and
+	// matches another at the router is what an authority gate must not agree with
+	// (internal/authz's CanonicalPath).
 	CodeNonCanonicalPath Code = "non_canonical_path"
 
-	// CodeInternalError is the deliberately opaque answer to a failure the
-	// caller can do nothing about. The detail goes to the log.
+	// CodeInternalError is the deliberately opaque answer to a failure the caller
+	// can do nothing about. The detail goes to the log.
 	CodeInternalError Code = "internal_error"
 
-	// CodeDraining is a request that would start work on a node that has
-	// begun to drain. The request was fine and nothing was done with it; it
-	// belongs on another node, or on this one once it has restarted.
+	// CodeDraining is a request that would start work on a node that has begun to
+	// drain. Nothing was done; it belongs on another node, or this one once restarted.
 	CodeDraining Code = "draining"
 
-	// CodeStarting is a request that reached a node still starting: its
-	// listener is bound and answers, and the surface that serves the route is
-	// not up yet. Nothing was done with the request; it belongs on this node
-	// again after the Retry-After it carries, or on a peer. Its own code
-	// rather than `draining`, because the remedy is the opposite one: a
-	// starting node is about to serve, so asking it again is right, where a
-	// draining one is going away.
+	// CodeStarting is a request that reached a node still starting: its listener
+	// answers, the route's surface is not up. Nothing was done; ask this node
+	// again after the Retry-After, or a peer. Not `draining`, whose remedy is the
+	// opposite: a starting node is about to serve, a draining one is going away.
 	CodeStarting Code = "starting"
 
-	// CodeNoRoute is a path nothing on this node serves — a route that is
-	// not registered, a surface its build or configuration does not mount,
-	// an asset that is not in the build. Answered by [Mux] for the mux's
-	// own 404.
+	// CodeNoRoute is a path nothing on this node serves: an unregistered route, a
+	// surface this build or configuration does not mount, an asset not in the
+	// build. Answered by [Mux] for the mux's own 404.
 	//
-	// NOT `not_found`, which the routes that DO exist already answer for a
-	// record they do not hold — a secret, an event, a project. A client
-	// branches on that one as "there is no such thing", and `crewlet
-	// secrets get` answers it by reporting the secret absent: a node with no
-	// /secrets surface at all would have been read as a store holding
-	// nothing.
+	// NOT `not_found`, which existing routes answer for a record they do not hold
+	// and which `crewlet secrets get` reads as "secret absent": a node with no
+	// /secrets surface would have been read as an empty store.
 	CodeNoRoute Code = "no_route"
 
 	// CodeMethodNotAllowed is a path this node serves under another method.
-	// Answered by [Mux] for the mux's own 405, which also carries the
-	// `Allow` header naming the methods it does take.
+	// Answered by [Mux] for the mux's own 405, with an `Allow` header.
 	CodeMethodNotAllowed Code = "method_not_allowed"
 
-	// CodeInvalidToken is a credential that is missing, or present and not
-	// one this engine accepts — a Tier A token, a session, a machine token.
-	// ONE code for both, because telling them apart in the answer tells an
-	// unauthenticated caller which half of the guess was right — and one
-	// spelling for every place that refuses one: the request guard, the
-	// socket handshake and a per-run token's endpoint (the OTLP receiver,
-	// the MCP bridge), which each spelled it by hand until it was named here.
+	// CodeInvalidToken is a credential that is missing, or present and not one
+	// this engine accepts (a Tier A token, session or machine token). ONE code for
+	// both, because telling them apart tells an unauthenticated caller which half
+	// of the guess was right; one spelling for the request guard, the socket
+	// handshake and a per-run token's endpoint (the OTLP receiver, the MCP bridge).
 	CodeInvalidToken Code = "invalid_token"
 )
 
 // The query-answer set: the codes the `/ws/stream` socket answers a question
-// with, and the ones its REST twin answers the same question with.
+// with, and its REST twin.
 //
-// They are HERE rather than in the socket's own package so the two surfaces
-// cannot call one refusal two things — a dashboard that asks over the socket
-// and re-asks over HTTP would otherwise branch twice on one failure. The
-// socket names these values in its own constants and a walk holds the two
-// together; see internal/api/stream.
+// HERE rather than in the socket's package so the two surfaces cannot call one
+// refusal two things. The socket names these values in its own constants and a
+// walk holds the two together (internal/api/stream).
 const (
-	// CodeUnknownQuery is a question this build does not serve at all.
-	// Waiting never changes that answer, which is what separates it from
-	// CodeUnavailable.
+	// CodeUnknownQuery is a question this build does not serve at all. Waiting
+	// never changes it, which separates it from CodeUnavailable.
 	CodeUnknownQuery Code = "unknown_query"
 
-	// CodeUnauthorized is a request from a caller this node KNOWS, refused
-	// because their credential does not carry the permission it needs —
-	// admin or the app the request belongs to — or, for a personal record,
-	// the relation. DISTINCT from CodeInvalidToken, which
-	// refuses a caller nobody could identify: the remedy there is a
-	// credential and here it is authority, and a reader told the first
-	// when they meant the second goes and replaces a credential that
-	// works. It is a 403 over HTTP, and wherever the authority table made
-	// the refusal the detail names the rule's `reason` and the `grants`
-	// that would have admitted the caller.
+	// CodeUnauthorized is a request from a caller this node KNOWS, refused because
+	// their credential lacks the permission needed (admin, the request's app, or
+	// for a personal record the relation). DISTINCT from CodeInvalidToken, which
+	// refuses a caller nobody could identify: there the remedy is a credential,
+	// here authority, and a reader told the wrong one replaces a working
+	// credential. A 403 over HTTP; where the authority table decided, the detail
+	// names the rule's `reason` and the `grants` that would have admitted the caller.
 	CodeUnauthorized Code = "unauthorized"
 
-	// CodeQueryFailed is a question this node understood and could not
-	// answer. The reason reaches the log, never the caller: a failure here
-	// can carry a database path.
+	// CodeQueryFailed is a question this node understood and could not answer. The
+	// reason reaches the log, never the caller: it can carry a database path.
 	CodeQueryFailed Code = "query_failed"
 
-	// CodeNotFound is a question about a record this node does not hold.
-	// DISTINCT FROM CodeQueryFailed, because a client acts on them
-	// differently: "no such item" is a dead link to show the person, and
-	// "the query failed" is a retry.
+	// CodeNotFound is a question about a record this node does not hold. DISTINCT
+	// FROM CodeQueryFailed: "no such item" is a dead link, "the query failed" a retry.
 	CodeNotFound Code = "not_found"
 
-	// CodeBadParams is a question this node understood and REFUSED: a
-	// parameter missing, malformed, or outside the set the field accepts.
-	// The fault is the caller's, so it never succeeds however many times it
-	// is sent — which is the opposite of what a client does with
-	// CodeQueryFailed.
+	// CodeBadParams is a question this node REFUSED: a parameter missing,
+	// malformed or outside the accepted set. The caller's fault, so it never
+	// succeeds on resend, unlike CodeQueryFailed.
 	CodeBadParams Code = "bad_params"
 
-	// CodeUnavailable is a question this node understood and cannot answer
-	// HERE: a projection still catching up, a coordination store that
-	// could not be reached, or a refusal by its state log — including the
-	// ones no wait clears, a full log or a record this node cannot decode.
-	// Whether waiting helps is the Retry-After's to say ([Unavailable]),
-	// and its absence says it will not. It is the code that must never be
-	// flattened into an empty result — "this company has no work" is an
-	// answer a person acts on.
+	// CodeUnavailable is a question this node cannot answer HERE: a projection
+	// catching up, an unreachable coordination store, or a state-log refusal,
+	// including ones no wait clears (a full log, an undecodable record). The
+	// Retry-After says whether waiting helps ([Unavailable]); its absence says it
+	// will not. Never to be flattened into an empty result: "this company has no
+	// work" is an answer a person acts on.
 	CodeUnavailable Code = "unavailable"
 
-	// CodeIdentityUnavailable is a request this node could not decide WHO
-	// made, because the identity estate could not be read.
+	// CodeIdentityUnavailable is a request this node could not decide WHO made,
+	// because the identity estate could not be read.
 	//
-	// DISTINCT FROM CodeInvalidToken, AND THE DISTINCTION IS THE WHOLE
-	// POINT. That one is a refusal about the CALLER — this node checked
-	// and the credential is not one it accepts — and the only sensible
-	// response is to present a different one. This is a refusal about the
-	// NODE: the credential may be perfect and nothing here could tell.
-	// Answered as a 401 it would send everybody in the company to reset a
-	// working password for as long as the outage lasted, which is the
-	// three-valued rule internal/coord states, applied to authentication.
+	// DISTINCT FROM CodeInvalidToken, THE WHOLE POINT: that one refuses the CALLER
+	// (checked, not accepted), so the response is a different credential. This
+	// refuses the NODE: the credential may be perfect and nothing here could tell.
+	// As a 401 it would send everybody to reset a working password for the length
+	// of the outage: internal/coord's three-valued rule applied to authentication.
 	CodeIdentityUnavailable Code = "identity_unavailable"
-	// CodeSeatHoldersUnavailable is a /config write that removes a human
-	// seat, or a whole document replacing an unsealed revision (which asks
-	// about every seat it does not keep), answered while this node could not
-	// read the identity directory to learn whether anybody holds them:
-	// nothing was written. Its own code because [CodeIdentityUnavailable]'s
-	// sentence is about the CALLER, and the caller here was resolved; what
-	// could not be read is who holds the seats the write takes away. 503,
-	// under the identity estate's hint.
+	// CodeSeatHoldersUnavailable is a /config write that removes a human seat (or
+	// replaces an unsealed revision, which asks about every seat it does not keep)
+	// while this node could not read the identity directory to learn who holds
+	// them: nothing was written. Not [CodeIdentityUnavailable], whose sentence is
+	// about the CALLER, who was resolved. 503, under the identity estate's hint.
 	CodeSeatHoldersUnavailable Code = "seat_holders_unavailable"
 
-	// CodeCSRFOrigin is a state-changing request a cross-site page could
-	// have caused: an `Origin` naming somewhere this deployment is not
-	// reached at, or a cookie-authenticated request carrying none.
+	// CodeCSRFOrigin is a state-changing request a cross-site page could have
+	// caused: an `Origin` this deployment is not reached at, or a
+	// cookie-authenticated request with none.
 	//
-	// ITS OWN CODE rather than a 403 sharing the authorization one,
-	// because the two send a reader to opposite places: a missing grant
-	// is somebody asking for more than they hold, and this is a request
-	// that may be exactly what its holder is allowed to do and did not
-	// ask for.
+	// ITS OWN CODE, not a 403 sharing the authorization one: a missing grant is
+	// asking for more than one holds, while this may be exactly what its holder
+	// may do and did not ask for.
 	CodeCSRFOrigin Code = "csrf_origin"
 )
 
-// The setup-pass set: refusals from running a third-party app's provisioning
-// pass (`POST /setup/integrations/{kind}/provision` and its `check` twin).
-//
-// They were declared in the route file, which is where a fifth spelling of
-// "too large" comes from: a code nobody can see from here is a code the next
-// route invents again.
+// The setup-pass set: refusals from a third-party app's provisioning pass
+// (`POST /setup/integrations/{kind}/provision` and its `check` twin), declared
+// here so a code nobody sees from here is not reinvented by the next route.
 const (
-	// CodePassInFlight is a second pass asked for while one is running.
-	// The fleet lease is what refuses it, so this is a fact about the
-	// company rather than about this node.
+	// CodePassInFlight is a second pass asked for while one runs (the fleet lease
+	// refuses it: a fact about the company, not this node).
 	CodePassInFlight Code = "pass_in_flight"
 
-	// CodeNotProvisionable is an integration this build runs no
-	// provisioning pass for. Its setup is the values on the surface, plus
-	// whatever is done at the app itself.
+	// CodeNotProvisionable is an integration this build runs no provisioning pass for.
 	CodeNotProvisionable Code = "not_provisionable"
 
-	// CodeNoExternalURL is a gesture that has to hand somebody this
-	// deployment's own address (a webhook registration, an invitation link)
-	// on a node that has none: refused by name rather than registering
-	// nothing or minting a link nobody can follow.
+	// CodeNoExternalURL is a gesture that must hand somebody this deployment's own
+	// address (a webhook registration, an invitation link) on a node with none:
+	// refused rather than registering nothing or minting a dead link.
 	//
-	// ITS MESSAGE NAMES NEITHER GESTURE, because both surfaces answer with
-	// it; what each needed the address for is its own `detail`. It names the
-	// Tier A setting (a file and a restart), since the company document's key
-	// is refused by the loader.
+	// ITS MESSAGE NAMES NEITHER GESTURE, since both answer with it (each says what
+	// it needed in `detail`); it names the Tier A setting, since the loader refuses
+	// the company document's key.
 	CodeNoExternalURL Code = "no_external_url"
 
-	// CodeRequirementsOutstanding is a pass asked for against a
-	// half-configured integration: a pass writes at the app, so it is
-	// refused with the missing fields rather than run half way.
+	// CodeRequirementsOutstanding is a pass asked of a half-configured integration:
+	// a pass writes at the app, so it is refused with the missing fields.
 	CodeRequirementsOutstanding Code = "requirements_outstanding"
 
-	// CodeRunNotFound is a pass run this node does not hold. A run is
-	// remembered by the node that executed it and only for the last few
-	// passes, so this is as much "not here" as "not any more".
+	// CodeRunNotFound is a pass run this node does not hold: runs are remembered by
+	// the executing node, for the last few passes only.
 	CodeRunNotFound Code = "run_not_found"
 
-	// CodeVendorRefused is a pass the third-party app refused. Nothing it
-	// had already done is undone, so re-running is safe.
+	// CodeVendorRefused is a pass the third-party app refused; re-running is safe.
 	CodeVendorRefused Code = "vendor_refused"
 
-	// CodeNotConnected is an integration's own route asked of an integration
-	// the company has not connected, or has switched off.
+	// CodeNotConnected is an integration route asked of one not connected or switched off.
 	CodeNotConnected Code = "not_connected"
 
-	// CodeServerUnreachable is a server the engine could not reach, or that
+	// CodeServerUnreachable is a server the engine could not reach or that
 	// presented no host key it can pin.
 	CodeServerUnreachable Code = "server_unreachable"
 
-	// THE REST OF `/setup`'s refusals, which were declared in the route
-	// file with no sentence behind them — so a screen that rendered the
-	// envelope showed the code and nothing a person could act on. Two
-	// spellings that route file had invented for codes this table already
-	// held are gone with them: `bad_body` is [CodeInvalidBody], and
-	// `no_public_url` — the retired Tier B field's name — is
-	// [CodeNoExternalURL].
+	// The rest of `/setup`'s refusals. `bad_body` is [CodeInvalidBody] and
+	// `no_public_url` is [CodeNoExternalURL].
 
 	// CodeUnknownKind is an integration this build does not know.
 	CodeUnknownKind Code = "unknown_kind"
-	// CodeSeatRequired is a per-seat gesture that named no seat: a GitHub
-	// App connected for a seat, and — because a person holds a human seat
-	// for as long as they exist (ADR-0032) — a person's create or
-	// invitation naming none, and an edit clearing a person's seat. ONE
-	// CODE for all of them, so a client branches on one spelling; the
-	// detail says which seat it needs and why.
+	// CodeSeatRequired is a per-seat gesture that named no seat: a GitHub App, or
+	// (a person holds a human seat as long as they exist, ADR-0032) a person's
+	// create or invitation naming none or an edit clearing it. ONE CODE for all.
 	CodeSeatRequired Code = "seat_required"
 	// CodeNoSuchSeat is a seat the company does not hold.
 	CodeNoSuchSeat Code = "no_such_seat"
-	// CodeSeatNotGranted is an agent seat an MCP server is not given, named
-	// for a gesture on that seat's instance of it: a test, a restart or a
-	// value. Nothing runs the server as that seat, so there is nothing to act on.
+	// CodeSeatNotGranted is an agent seat an MCP server is not given, named for a
+	// gesture on its instance of it: nothing runs the server as that seat.
 	CodeSeatNotGranted Code = "seat_not_granted"
-	// CodeLiteralInConfig is a credential the company document carries as a
-	// literal where a ${VAR} pointer belongs, which the setup surface will
-	// not write over.
+	// CodeLiteralInConfig is a credential carried as a literal where a ${VAR}
+	// pointer belongs, which the setup surface will not write over.
 	CodeLiteralInConfig Code = "literal_in_config"
-	// CodeInvalidInput is a value the integration refused: a field it does
-	// not declare, a value outside its set, or one the vendor itself
-	// refused when it was checked.
+	// CodeInvalidInput is a value the integration or its vendor refused.
 	CodeInvalidInput Code = "invalid_input"
-	// CodeSurfaceBusy is a write refused because something else is writing
-	// at this surface right now — a reconcile tick, or an operator's own
-	// pass. The one TRANSIENT refusal on `/setup`, so it is a 503 with a
-	// Retry-After and a client repeats it.
+	// CodeSurfaceBusy is a write refused because something else is writing at this
+	// surface. The one TRANSIENT refusal on `/setup`: a 503 with a Retry-After.
 	CodeSurfaceBusy Code = "surface_busy"
 
-	// CodeNoSeatAccess is an integration with no per-agent access to set:
-	// one this build connects and manages no account per agent on, or Jira
-	// and Confluence asked for by their own names, whose agents hold one
-	// Atlassian account each and are set on `atlassian`.
+	// CodeNoSeatAccess is an integration with no per-agent access to set: one this
+	// build manages no per-agent account on, or Jira and Confluence by their own
+	// names (agents hold one Atlassian account each, set on `atlassian`).
 	CodeNoSeatAccess Code = "no_seat_access"
-	// CodeAccessNotOffered is an agent's access the vendor does not offer on
-	// that integration: a level, a permission or a scope outside what the
-	// vendor lists now. The detail names the lane, the value and what is
-	// offered.
+	// CodeAccessNotOffered is an agent's access the vendor does not offer on that
+	// integration; the detail names the lane, the value and what is offered.
 	CodeAccessNotOffered Code = "access_not_offered"
-	// CodeSeatStillOn is an agent's account asked to be removed while the
-	// agent is still on there. Remove is allowed only once it is off.
+	// CodeSeatStillOn is an account removal asked while the agent is still on there.
 	CodeSeatStillOn Code = "seat_still_on"
-	// CodeCredentialExternal is a rotation asked of a credential handed in
-	// from outside Crewlet, which the engine binds and never writes.
+	// CodeCredentialExternal is a rotation asked of a credential handed in from
+	// outside Crewlet, which the engine binds and never writes.
 	CodeCredentialExternal Code = "credential_external"
-	// CodeAccessExternal is a remove or a turn back on asked of an agent's
-	// account that is managed outside Crewlet, which the engine does not
-	// change.
+	// CodeAccessExternal is a remove or turn back on asked of an agent's account
+	// managed outside Crewlet.
 	CodeAccessExternal Code = "access_external"
 )
 
-// The configuration set: `/config`'s refusals, and the ones `/setup` shares
-// with it because a connection is written onto the same document.
-//
-// Every one of them used to be a bare `{"error": code}` object written by the
-// route, so `/config` — the surface the org builder's every save goes through
-// — was the one whose refusals carried no `message`.
+// The configuration set: `/config`'s refusals, and those `/setup` shares with it
+// because a connection is written onto the same document.
 const (
 	// CodeNoActiveRevision is a request that needs an active company
 	// configuration on a node that has none yet.
 	CodeNoActiveRevision Code = "no_active_revision"
 
-	// CodeRevisionAdvanced is a conditional write that lost: another write
-	// was activated after the one this was based on. 412 where the request
-	// named that base in its If-Match header, a precondition that failed,
-	// and 409 where it named none (`configapi.RevisionStatus`).
+	// CodeRevisionAdvanced is a conditional write that lost: another write was
+	// activated after its base. 412 where the request named the base in If-Match,
+	// 409 where it named none (`configapi.RevisionStatus`).
 	CodeRevisionAdvanced Code = "revision_advanced"
 
 	// CodeAlreadyConfigured is a create-only write (If-None-Match: *) that
@@ -479,42 +402,36 @@ const (
 	// deployment no longer holds.
 	CodeUnreadableRevision Code = "unreadable_revision"
 
-	// CodeUnsealedRevision is a revision stored WITHOUT a seal, which a
-	// node reads nowhere. Its own code rather than [CodeUnreadableRevision]
-	// because the remedies share nothing: that one is a key to put back,
-	// and this one depends on which revision it is, which the hint names.
+	// CodeUnsealedRevision is a revision stored WITHOUT a seal, which a node
+	// reads nowhere. Not [CodeUnreadableRevision]: that remedy is a key to put
+	// back, this one depends on which revision it is, which the hint names.
 	CodeUnsealedRevision Code = "unsealed_revision"
 
-	// CodeUnreadableFleetRevision is the fleet's revision, met only through
-	// its pointer, sealed under a key this node's keyring was never given.
-	// Its own code rather than [CodeUnreadableRevision], whose message tells
-	// the reader to put back a key the deployment lost: here the deployment
-	// holds it and this node does not.
+	// CodeUnreadableFleetRevision is the fleet's revision, met through its
+	// pointer, sealed under a key this node's keyring was never given. Not
+	// [CodeUnreadableRevision], which tells the reader to put back a key the
+	// deployment lost: here the deployment holds it and this node does not.
 	CodeUnreadableFleetRevision Code = "unreadable_fleet_revision"
 
-	// CodeUnsealedFleetRevision is the fleet's revision arriving on its
-	// pointer without a seal. Every node seals what it activates, so it came
-	// from outside the fleet, and no node reads it.
+	// CodeUnsealedFleetRevision is the fleet's revision arriving on its pointer
+	// without a seal. Every node seals what it activates, so it came from outside
+	// the fleet and no node reads it.
 	CodeUnsealedFleetRevision Code = "unsealed_fleet_revision"
 
-	// CodeUnknownSealRevision is a revision SEALED in a form this build does
-	// not read, most likely by a newer build: this node's own copy (a node
-	// that ran the newer build and was taken back to this one) or the
-	// fleet's, met through its pointer. ONE code for both, because the
-	// remedy is one: run the build that sealed it. Its own code rather than
-	// [CodeUnsealedRevision], because the two send a caller opposite ways: a
-	// whole document replaces an unsealed revision, reading nothing from it,
-	// while a replacement here would discard a document somebody sealed. And
-	// rather than [CodeUnreadableRevision], whose message names a key to put
-	// back, when no key opens a form this build does not parse.
+	// CodeUnknownSealRevision is a revision SEALED in a form this build does not
+	// read, most likely by a newer build: this node's own copy or the fleet's.
+	// ONE code for both, the remedy being one: run the build that sealed it. Not
+	// [CodeUnsealedRevision], because a whole document replaces an unsealed
+	// revision while a replacement here would discard a document somebody sealed;
+	// not [CodeUnreadableRevision], whose message names a key to put back, when no
+	// key opens a form this build does not parse.
 	CodeUnknownSealRevision Code = "unknown_seal_revision"
 
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
 
-	// CodeAgainstNotFound is a diff whose BASE is not held here. Its own
-	// code rather than [CodeNotFound], which names the target: a client
-	// has to know which of the two ids to correct.
+	// CodeAgainstNotFound is a diff whose BASE is not held here. Not
+	// [CodeNotFound], which names the target: a client must know which id to correct.
 	CodeAgainstNotFound Code = "against_not_found"
 
 	// CodeUnsupportedPatchMediaType is a PATCH in a format `/config` does
@@ -537,17 +454,15 @@ const (
 	// members have a place the path cannot name — a seat, a unit.
 	CodeNotCreatable Code = "not_creatable"
 
-	// CodeSeatHeld is a write that would take a human seat out of the
-	// company while something holds it: a person or a service account the
-	// identity directory binds to it, or an open invitation onto it. The
-	// refusal names every such seat and the ONE thing holding each, whose
-	// kind decides the remedy.
+	// CodeSeatHeld is a write that would take a human seat out of the company
+	// while something holds it: a person or service account the identity directory
+	// binds to it, or an open invitation. The refusal names each such seat and the
+	// ONE thing holding it, whose kind decides the remedy.
 	CodeSeatHeld Code = "seat_held"
 
-	// CodeConflictingPreconditions is a write carrying both
-	// `If-None-Match` and `If-Match`: at an entity's address they describe
-	// two different resources, and on /config they ask opposite things of
-	// one company.
+	// CodeConflictingPreconditions is a write carrying both `If-None-Match` and
+	// `If-Match`: at an entity's address they describe two resources, on /config
+	// opposite things of one company.
 	CodeConflictingPreconditions Code = "conflicting_preconditions"
 
 	// CodeValidationError is a write whose resulting document is invalid.
@@ -561,10 +476,9 @@ const (
 	CodeSummaryRequired Code = "summary_required"
 
 	// CodeConfigManaged is a change to a MANAGED company document
-	// (`api.auth.company_writers`, ADR-0030) through a credential that is
-	// not one of its writers. 403: the credential is valid and the request
-	// well formed, and no retry with them changes the answer. The detail
-	// names the writers (`managed_by`) and what to do instead.
+	// (`api.auth.company_writers`, ADR-0030) through a credential that is not one
+	// of its writers. 403: no retry with them changes it. The detail names the
+	// writers (`managed_by`) and what to do instead.
 	CodeConfigManaged Code = "config_managed"
 )
 
@@ -582,9 +496,9 @@ const (
 	// detail names the ones that moved.
 	CodeRekeyIncomplete Code = "rekey_incomplete"
 
-	// CodeReservedName is a name in the ENGINE's own namespace — a person's
-	// key, a blind-index key — which no caller of `/secrets` may address,
-	// whatever it holds. The detail names the gesture that does.
+	// CodeReservedName is a name in the ENGINE's own namespace (a person's key, a
+	// blind-index key), which no `/secrets` caller may address. The detail names
+	// the gesture that does.
 	CodeReservedName Code = "reserved_name"
 
 	// CodeWriteOnly is a reveal of a value stored write-only, which no route
@@ -594,50 +508,43 @@ const (
 
 // THE IDENTITY CODES, and why there are so few of them.
 //
-// A sign-in surface's refusals are the one place in this vocabulary where
-// SAYING LESS IS THE FEATURE. Every arm of a failed sign-in — no such login,
-// wrong password, wrong second factor, a person suspended, a person removed —
-// is one code, because a caller that could tell them apart has a roster and a
-// way to test it. The specific ones below are the arms where being specific
-// discloses nothing a stranger did not already know, or where a person is
-// stuck without the detail.
+// A sign-in surface is where SAYING LESS IS THE FEATURE: every arm of a failed
+// sign-in (no such login, wrong password, wrong second factor, suspended,
+// removed) is one code, because a caller who could tell them apart has a roster
+// and a way to test it. The specific ones below disclose nothing a stranger did
+// not know, or leave a person stuck without the detail.
 const (
 	// CodeSignInRefused is EVERY failed sign-in, whatever went wrong.
 	//
-	// ONE CODE FOR ALL OF THEM, deliberately. It is paired with the
-	// cost defence in internal/iam/credential — every arm spends one
-	// argon2id derivation, a miss against a dummy verifier — because a
-	// code that distinguished them would make the equal work pointless,
-	// and equal work with a distinguishing code would make the work
-	// pointless. Neither half works alone.
+	// ONE CODE FOR ALL, paired with the cost defence in internal/iam/credential
+	// (every arm spends one argon2id derivation, a miss against a dummy
+	// verifier): equal work with a distinguishing code, or one code with unequal
+	// work, each leaks. Neither half works alone.
 	CodeSignInRefused Code = "sign_in_refused"
 
-	// CodeThrottled is an attempt the throttle's curve says must wait
-	// longer than it will hold a request open for. It is a 429 carrying
-	// the time left in `Retry-After`, and [Throttled] is its one writer.
+	// CodeThrottled is an attempt the throttle's curve says must wait longer than
+	// it will hold a request open for: a 429 carrying the time left in
+	// `Retry-After`, [Throttled] its one writer.
 	//
 	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, safe because the curve a
-	// stranger can reach is keyed on the SOURCE and what was TYPED, never on
-	// what it resolved to: a name nobody holds is throttled exactly as a real
-	// one, whereas a resolved login would be an oracle ("this account
-	// exists"). The one curve keyed on the resolved person, a second factor's,
-	// is reached only past the password, so it tells nothing the password did
-	// not; its sentence cannot say "from here", because it counts every
-	// address.
+	// stranger reaches is keyed on the SOURCE and what was TYPED, never on what it
+	// resolved to: a name nobody holds is throttled as a real one, whereas a
+	// resolved login would be an oracle. The one curve keyed on the resolved
+	// person, a second factor's, is reached only past the password, so it tells
+	// nothing the password did not; its sentence cannot say "from here", since it
+	// counts every address.
 	CodeThrottled Code = "throttled"
 
-	// CodeSecondFactorRequired is a first factor that checked out where a
-	// second is still needed.
+	// CodeSecondFactorRequired is a first factor that checked out where a second
+	// is still needed.
 	//
-	// SPECIFIC BECAUSE THE PERSON IS ALREADY AUTHENTICATED by the first
-	// factor, so it discloses nothing to a stranger — and because without
-	// it a client cannot tell "your password is wrong" from "now type
-	// your code", which are different screens.
+	// SPECIFIC BECAUSE THE PERSON IS ALREADY AUTHENTICATED by the first factor, so
+	// it discloses nothing to a stranger, and without it a client cannot tell
+	// "your password is wrong" from "now type your code".
 	//
-	// A SIGN-IN'S 401, AND ALSO THE ENROLMENT'S 403: a session that may
-	// only enrol a second factor, whose person has come to hold one since
-	// it opened, has proved only the first factor and may not enrol over
-	// the second — the remedy there is the same, sign in with it.
+	// A SIGN-IN'S 401, AND ALSO THE ENROLMENT'S 403: a session that may only enrol
+	// a second factor, whose person has since come to hold one, has proved only
+	// the first factor and may not enrol over the second; the remedy is the same.
 	CodeSecondFactorRequired Code = "second_factor_required"
 
 	// CodeStepUpRequired is a session that is valid and has not proved
@@ -647,119 +554,100 @@ const (
 	// CodeTokenRefused is a request that presented a machine token on a
 	// verb that needs a person present.
 	//
-	// ITS OWN CODE rather than `unauthorized`, for step_up_required's
-	// reason: that code's sentence says the credential lacks a grant and to
-	// ask whoever runs the deployment for it, which is false here — the
-	// owner may hold every grant there is and no grant on a token admits
-	// it. Answered `unauthorized` with a sentence of its own as `detail`,
-	// the envelope's two sentences contradicted each other.
+	// ITS OWN CODE rather than `unauthorized`: that sentence says the credential
+	// lacks a grant and to ask the deployment's owner, which is false here (no
+	// grant on a token admits it); with a sentence of its own as `detail` the
+	// envelope's two sentences contradicted each other.
 	CodeTokenRefused Code = "token_refused"
 
-	// CodeSecondFactorEnrolmentRequired is a session opened on a password
-	// alone where the deployment requires a second factor its person does
-	// not hold: it may enrol one (`POST /auth/totp`), read who it is,
-	// re-confirm its password and sign out, and every other route answers
-	// this, 403.
+	// CodeSecondFactorEnrolmentRequired is a session opened on a password alone
+	// where the deployment requires a second factor its person does not hold: it
+	// may enrol one (`POST /auth/totp`), read who it is, re-confirm its password
+	// and sign out; every other route answers this, 403.
 	//
-	// ITS OWN CODE, not `step_up_required`: no fresher proof of the same
-	// kind changes the answer — enrolling a factor does — and a client that
-	// read it as a step-up would ask for the password in a loop.
+	// ITS OWN CODE, not `step_up_required`: no fresher proof of the same kind
+	// changes the answer, enrolling does, and a client reading it as a step-up
+	// would ask for the password in a loop.
 	CodeSecondFactorEnrolmentRequired Code = "second_factor_enrolment_required"
 
-	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out,
-	// revoked or expired.
+	// CodeSessionRevoked is a bearer this node KNOWS is over: signed out, revoked
+	// or expired.
 	//
-	// DISTINCT FROM [CodeInvalidToken], because a client acts on them
-	// differently: this one means discard the cookie and sign in again,
-	// and that one means the credential presented was never valid here.
-	// Folded together a browser would discard a cookie on every malformed
-	// Authorization header it sent.
+	// DISTINCT FROM [CodeInvalidToken]: this one means discard the cookie and sign
+	// in again, that one that the credential was never valid here. Folded
+	// together a browser would discard a cookie on every malformed Authorization
+	// header it sent.
 	CodeSessionRevoked Code = "session_revoked"
 
-	// CodeInviteSpent is an invitation that is redeemed, withdrawn or
-	// expired. SPECIFIC because the holder of the link needs to know to
-	// ask for another one, and because holding the link is already
-	// evidence it was issued to them.
+	// CodeInviteSpent is an invitation that is redeemed, withdrawn or expired.
+	// SPECIFIC because the link's holder must know to ask for another, and holding
+	// the link is already evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
 
-	// CodeResetSpent is a password reset link that opens nothing: an id that
-	// is no link, a secret that is not the id's, one spent, revoked or past
-	// its expiry, or a person the reset no longer reaches. ONE CODE FOR ALL
-	// OF THEM, for [CodeInviteSpent]'s reason — told apart they would say
-	// which ids exist — and the remedy is the same: ask for a new one.
+	// CodeResetSpent is a password reset link that opens nothing: an id that is no
+	// link, a wrong secret, one spent, revoked or expired, or a person the reset no
+	// longer reaches. ONE CODE FOR ALL, for [CodeInviteSpent]'s reason (told apart
+	// they would say which ids exist); the remedy is the same: ask for a new one.
 	CodeResetSpent Code = "reset_spent"
 
-	// CodeSeatUnavailable is somebody whose session validated perfectly
-	// and whose SEAT the org chart no longer holds.
+	// CodeSeatUnavailable is somebody whose session validated and whose SEAT the
+	// org chart no longer holds.
 	//
-	// A 403 AND NEVER A 401, so not folded into [CodeSessionRevoked]: the
-	// bearer is live and signing in again changes nothing, so a browser told
-	// to discard its cookie would loop through the sign-in page for ever. The
-	// detail NAMES the seat, which the person locked out and whoever removed
-	// it both need.
+	// A 403 AND NEVER A 401, so not [CodeSessionRevoked]: the bearer is live and
+	// signing in again changes nothing, so a browser told to discard its cookie
+	// would loop through sign-in for ever. The detail NAMES the seat, which the
+	// person locked out and whoever removed it both need.
 	//
-	// The wire value is internal/iam/session's `CodeNoSeat`, held equal by a
-	// test in internal/api/auth because this package imports no engine
-	// machinery beyond the vocabularies its sentences name.
+	// The wire value is internal/iam/session's `CodeNoSeat`, held equal by a test
+	// in internal/api/auth, since this package imports no engine machinery beyond
+	// the vocabularies its sentences name.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
-	// CodeReaderChanged is a request that names the principal it was made
-	// FOR (a dashboard tab's reader, in [ReaderHeader]) while the
-	// credential it carries resolves to somebody else: the
-	// browser's session changed hands under the tab that sent it.
+	// CodeReaderChanged is a request that names the principal it was made FOR (a
+	// dashboard tab's reader, in [ReaderHeader]) while its credential resolves to
+	// somebody else: the browser's session changed hands under the tab.
 	//
-	// A 409 AND NEVER A 401 OR A 403, because nothing is wrong with the
-	// credential or with what it may do: it is somebody else's than the
-	// request says, and the remedy is the CLIENT's — hand the tab to whoever
-	// the session is now — rather than a sign-in or a grant. Answered before
-	// any handler runs, so nothing was done, and a retry under the same
-	// operation key names no operation of the new principal's.
+	// A 409 AND NEVER A 401 OR A 403: nothing is wrong with the credential or what
+	// it may do, and the remedy is the CLIENT's (hand the tab to whoever the
+	// session is now). Answered before any handler runs, so nothing was done, and a
+	// retry under the same operation key names no operation of the new principal's.
 	CodeReaderChanged Code = "reader_changed"
 
-	// CodeForbidden is a write the DOMAIN forbade this caller on a rule of
-	// its own, beside the authority table's: an agent re-ordering a
-	// colleague's queue, an edit of somebody else's remark, a write into a
-	// reserved container. It is the tool refusal class of the same name
-	// (internal/mcp's RefusalForbidden), and its detail is the domain's
-	// sentence, which names who may.
+	// CodeForbidden is a write the DOMAIN forbade this caller on a rule of its
+	// own, beside the authority table's (an agent re-ordering a colleague's queue,
+	// editing somebody's remark, writing into a reserved container). It is the tool
+	// refusal class of the same name (internal/mcp's RefusalForbidden); its detail
+	// is the domain's sentence, which names who may.
 	//
-	// NOT [CodeUnauthorized], which is the AUTHORITY TABLE's refusal and
-	// carries the rule's `reason` and `grants` as values: "the table does not
-	// admit you" is remedied by a grant or a relation, and "this domain does
-	// not let anybody in your position do that" by asking whoever its
-	// sentence names.
+	// NOT [CodeUnauthorized], the AUTHORITY TABLE's refusal, remedied by a grant or
+	// a relation; this one by asking whoever its sentence names.
 	CodeForbidden Code = "forbidden"
 
-	// CodeStale is a write that lost to somebody else's: a version that
-	// moved since it was read, a title somebody else took, a race lost too
-	// many times. The one refusal whose remedy is "read it again".
+	// CodeStale is a write that lost to somebody else's: a version that moved
+	// since it was read, a title somebody took, a race lost too many times. The one
+	// refusal whose remedy is "read it again".
 	CodeStale Code = "stale"
 
 	// THE TOOL REFUSAL CLASSES, beside [CodeNotFound], [CodeForbidden] and
-	// [CodeUnavailable], which are classes as well and declared above with
-	// the meaning the class has. internal/mcp's Refusal is what a
-	// first-party tool states about a call that did not do what it was
-	// asked, and internal/api/operator's ONE refusal mapping answers each
-	// with the class's own spelling as the code — on the act route, the
-	// operator's MCP surface and the human write surface alike — so a
-	// client reads one vocabulary whichever of them it wrote through, and a
-	// screen branches on the class rather than on a sentence written for a
-	// model. Declared here, on the table, for the reason every code is: a
-	// code with no sentence answers a person with nothing.
+	// [CodeUnavailable], also classes and declared above. internal/mcp's Refusal is
+	// what a first-party tool states about a call that did not do what it was
+	// asked, and internal/api/operator's ONE refusal mapping answers each with the
+	// class's own spelling as the code, on the act route, the operator's MCP surface
+	// and the human write surface alike, so a screen branches on the class rather
+	// than on a sentence written for a model.
 
-	// CodeInvalid is an argument the tool refused, which a refusal worded
-	// for a person names in its detail: the only class whose fix is to send
-	// something different.
+	// CodeInvalid is an argument the tool refused, which a refusal worded for a
+	// person names in its detail: the only class whose fix is to send something
+	// different.
 	CodeInvalid Code = "invalid"
-	// CodeStaleVersion is an object that changed after the caller read it,
-	// the version stated as a tool's argument or a body field. 409. The same
-	// version stated as an If-Match header is [CodeVersionMoved].
+	// CodeStaleVersion is an object that changed after the caller read it, the
+	// version stated as a tool argument or body field. 409. As an If-Match header
+	// it is [CodeVersionMoved].
 	CodeStaleVersion Code = "stale_version"
-	// CodeConflict is a write that lost its race against other writers, or
-	// another gesture holding the object, which clears on its own — or the
-	// object the write is about refusing it by its state (archived, in the
-	// trash, its contents at their cap) until somebody changes it, which a
-	// refusal worded for a person names in its detail. Either way the request
+	// CodeConflict is a write that lost its race against other writers or another
+	// gesture holding the object (clears on its own), or the object refusing it by
+	// its state (archived, trashed, contents at cap) until somebody changes it,
+	// which a person-worded refusal names in its detail. Either way the request
 	// was not wrong and reading the object again is the move.
 	CodeConflict Code = "conflict"
 	// CodeExists is a create of something that already exists.
@@ -783,633 +671,532 @@ const (
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
-	// CodeNotReady is a change that does not yet meet its target's merge
-	// gate: nothing merged or was queued, the change's readiness names
-	// every unmet precondition and who it waits on, and the change's owner
-	// hears ready_to_merge once it is met. 409: the change's state collided
-	// with the request, and its people, not a retry, clear it.
+	// CodeNotReady is a change that does not yet meet its target's merge gate:
+	// nothing merged or queued; its readiness names each unmet precondition and who
+	// it waits on, and its owner hears ready_to_merge once met. 409: its people,
+	// not a retry, clear it.
 	//
-	// NO DETAIL NAMES THE PRECONDITIONS: the tool's sentence does, for a
-	// model, and nobody has worded it for a person, so a person's surface
-	// answers this code's own sentence alone (ADR-0060), which therefore
-	// sends them to the change rather than to a detail it does not carry.
+	// NO DETAIL NAMES THE PRECONDITIONS: the tool's sentence does, for a model, and
+	// nobody has worded it for a person, so a person's surface answers this code's
+	// own sentence alone (ADR-0060), sending them to the change.
 	CodeNotReady Code = "not_ready"
-	// CodeStoreFull is content the object store had no room for: nothing
-	// was stored, and an operator has to make room before the same request
-	// can land. 507, never a 503: waiting alone does not clear it, so it
-	// carries no Retry-After.
+	// CodeStoreFull is content the object store had no room for: nothing was
+	// stored, and an operator must make room first. 507, never a 503: waiting
+	// alone does not clear it, so no Retry-After.
 	CodeStoreFull Code = "store_full"
 
 	// CodeVendorForbidden is a vendor refusing the credential the engine
 	// minted for the seat, which lacks the permission the tool needs.
 	CodeVendorForbidden Code = "vendor_forbidden"
 
-	// THE ACT ROUTE'S OWN — `POST /operator/act/{tool}`, the dashboard's
-	// write transport — about the request rather than the tool.
+	// THE ACT ROUTE'S OWN (`POST /operator/act/{tool}`, the dashboard's write
+	// transport), about the request rather than the tool.
 
-	// CodeUnknownTool is a tool this company's operator catalogue does not
-	// serve. 404.
+	// CodeUnknownTool is a tool this company's operator catalogue does not serve. 404.
 	CodeUnknownTool Code = "unknown_tool"
-	// CodeReadOnlyTool is a tool the catalogue serves as a proven read,
-	// sent to a transport that only writes. 400.
+	// CodeReadOnlyTool is a proven-read tool sent to a transport that only writes. 400.
 	CodeReadOnlyTool Code = "read_only_tool"
 	// CodeUnsupportedMediaType is an act whose body is not declared
-	// `application/json`, which is what keeps a cross-site form — which
-	// needs no preflight — from reaching a write. 415.
+	// `application/json`, which keeps a cross-site form (no preflight) from
+	// reaching a write. 415.
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
 
-	// THE DEPLOYMENT'S OWN CONTROLS: a backup, the retention gestures and
-	// the capacity window. Each spelled its codes
-	// inline in a bare `{"error": …}` body with no `message`, so the one
-	// surface an operator reaches for when something is wrong was the one
-	// whose refusals a screen had nothing to show for. The wire values are
-	// the ones those routes always answered with, which `crewlet backup`
-	// and `crewlet retention` already branch on.
+	// THE DEPLOYMENT'S OWN CONTROLS: a backup, the retention gestures and the
+	// capacity window. The wire values are those `crewlet backup` and `crewlet
+	// retention` already branch on.
 
 	// CodeNoDestination is a backup asked for with no directory to write.
 	CodeNoDestination Code = "no_destination"
-	// CodeBackupFailed is a backup that did not finish. 400 when the
-	// destination the caller named is the problem, and the detail names it;
-	// 500 otherwise, with the reason in the log alone.
+	// CodeBackupFailed is a backup that did not finish: 400 when the caller's
+	// destination is the problem (the detail names it), else 500 with the reason in
+	// the log alone.
 	CodeBackupFailed Code = "backup_failed"
-	// CodeObjectsUnreachable is a backup whose copy named objects the
-	// object store did not answer for. 503 with a Retry-After: the node and
-	// the command are both sound, what failed is the store holding the
-	// company's files, and it clears when that store answers again. The hint
-	// says where to look; the objects themselves are the log's, never the
-	// body's.
+	// CodeObjectsUnreachable is a backup whose copy named objects the object store
+	// did not answer for. 503 with a Retry-After: it clears when the store answers.
+	// The objects are the log's, never the body's.
 	CodeObjectsUnreachable Code = "objects_unreachable"
-	// CodeBackupRunning is a backup asked for while another runs on this
-	// node. 409: the node is busy with exactly what was asked for, and the
-	// request can be made again once that one finishes.
+	// CodeBackupRunning is a backup asked for while another runs here. 409.
 	CodeBackupRunning Code = "backup_running"
-	// CodeRecordUnreadable is a backup refused because a log it replays
-	// holds a record a newer build wrote, which may name a file this node's
-	// build cannot read. 409: the node and the command are sound, and a node
-	// running that build, or this one once upgraded, takes the backup.
+	// CodeRecordUnreadable is a backup refused because a log it replays holds a
+	// record a newer build wrote. 409: a node running that build takes the backup.
 	CodeRecordUnreadable Code = "record_unreadable"
-	// CodeRecordUnverified is a backup refused because a log it replays
-	// holds a record signed under a key this node does not hold, which may
-	// name a file the backup would not know to carry. 409: the node and the
-	// command are sound, and this node once its keyring holds the key, or a
-	// node that holds it, takes the backup.
+	// CodeRecordUnverified is a backup refused because a log it replays holds a
+	// record signed under a key this node does not hold, which may name a file the
+	// backup would not carry. 409: a node holding the key takes the backup.
 	CodeRecordUnverified Code = "record_unverified"
-	// CodeLogRecreated is a backup refused because this node's copy is
-	// keyed to an earlier instance of a log that has since been recreated.
-	// 409: this node once it has re-keyed to the live log, or a node that
-	// has, takes the backup.
+	// CodeLogRecreated is a backup refused because this node's copy is keyed to an
+	// earlier instance of a log since recreated. 409.
 	CodeLogRecreated Code = "log_recreated"
-	// CodeLogGap is a backup refused because a log a restore would replay
-	// from the store copy no longer holds every record the copy needs. 503
-	// with a Retry-After: the next take makes a copy that stands past them.
+	// CodeLogGap is a backup refused because a log a restore would replay no longer
+	// holds every record the store copy needs. 503 with a Retry-After: the next take
+	// stands past them.
 	CodeLogGap Code = "log_gap"
-	// CodeMigrationRefused is an object store migration this node will not
-	// run as asked: the target file, the node's mode, a node still
-	// publishing, an estate this node has not applied whole. 409, and the
-	// detail says which and what to change.
+	// CodeMigrationRefused is an object store migration this node will not run as
+	// asked (the target file, the node's mode, a node still publishing, an estate
+	// not applied whole). 409; the detail says which.
 	CodeMigrationRefused Code = "objects_migration_refused"
-	// CodeMigrationFailed is a migration pass that stopped because the
-	// fleet's store or the target bucket did not answer. 503: the pass
-	// resumes where it stopped when run again, and the copies it made are
-	// counted in the body.
+	// CodeMigrationFailed is a migration pass stopped because a store did not
+	// answer. 503: it resumes where it stopped; the body counts the copies made.
 	CodeMigrationFailed Code = "objects_migration_failed"
-	// CodePositionRequired is a backup acknowledgement that named no stream
-	// or no sequence: it moves the floor the trim deletes against, so
-	// neither has a default.
+	// CodePositionRequired is a backup acknowledgement naming no stream or
+	// sequence: it moves the floor the trim deletes against, so no default.
 	CodePositionRequired Code = "position_required"
-	// CodeTakenAtRequired is a backup acknowledgement that did not say, as
-	// an RFC 3339 instant, when its copy was taken: the backup-age alarm
-	// and the trim's backup term age the copy by it, so it has no default.
+	// CodeTakenAtRequired is a backup acknowledgement without the RFC 3339 instant
+	// its copy was taken: the backup-age alarm and the trim age the copy by it.
 	CodeTakenAtRequired Code = "taken_at_required"
-	// CodeTakenAtInFuture is a backup acknowledgement whose copy was taken
-	// later than the node's own clock reads now. Recorded, it would read as
-	// a copy younger than any could be.
+	// CodeTakenAtInFuture is an acknowledgement whose copy was taken later than the
+	// node's clock; recorded, it would read as younger than any copy could be.
 	CodeTakenAtInFuture Code = "taken_at_in_future"
-	// CodeUnknownStream is a retention or capacity gesture naming a stream
-	// this node does not have. 404 rather than 503, because nothing about
-	// it is transient.
+	// CodeUnknownStream is a retention or capacity gesture naming a stream this node
+	// lacks. 404 rather than 503: nothing about it is transient.
 	CodeUnknownStream Code = "unknown_stream"
 	// CodeAckFailed is a backup acknowledgement that was not recorded.
 	CodeAckFailed Code = "ack_failed"
-	// CodeConfirmRequired is a destructive gesture whose confirmation did
-	// not repeat what it acts on. The detail says what to repeat.
+	// CodeConfirmRequired is a destructive gesture whose confirmation did not
+	// repeat what it acts on.
 	CodeConfirmRequired Code = "confirm_required"
-	// CodeOpIDInvalid is a write sent under an operation id this engine would
-	// not have minted ([statelog.CheckCallerOpID]): no mint instant, bytes the
-	// broker would carry as a different id, or, where a route derives what it
-	// creates from the id, more than the bare uuid7. 400, nothing judged or
-	// written: an id with no instant reads as older than every loss the ledger
-	// has had, so the write was answered `unknown` unpublished, on every retry.
+	// CodeOpIDInvalid is a write sent under an operation id this engine would not
+	// have minted ([statelog.CheckCallerOpID]): no mint instant, bytes the broker
+	// would carry as a different id, or (where a route derives what it creates from
+	// the id) more than the bare uuid7. 400, nothing judged or written: an id with
+	// no instant reads as older than every loss the ledger has had, so the write
+	// was answered `unknown` unpublished on every retry.
 	//
-	// ONE CODE WHEREVER THE ID ARRIVED (the node gate's `?op_id=` and every
-	// surface's `Idempotency-Key`). A refusal of a header also carries
-	// `field`, naming it.
+	// ONE CODE WHEREVER THE ID ARRIVED (the node gate's `?op_id=`, every surface's
+	// `Idempotency-Key`); a header refusal also carries `field`.
 	CodeOpIDInvalid Code = "op_id_invalid"
-	// CodeInvalidGate is an eviction or readmission naming a node id no
-	// node could run under. 400: nothing was judged or written, and the
-	// detail says what a node id may hold.
+	// CodeInvalidGate is an eviction or readmission naming a node id no node could
+	// run under. 400, nothing judged or written.
 	CodeInvalidGate Code = "invalid_gate"
-	// CodeEvictionRefused is an eviction of a node still holding a live
-	// presence lease, so still reaching the fleet. 409 with nothing written
-	// anywhere; the detail, `hint` and `actions` say what to do.
+	// CodeEvictionRefused is an eviction of a node still holding a live presence
+	// lease. 409, nothing written; `detail`, `hint` and `actions` say what to do.
 	CodeEvictionRefused Code = "eviction_refused"
-	// CodeEvictionUnjudged is an eviction this node could not judge,
-	// because the presence leases it is decided against could not be read.
-	// 503 — the condition is this node's, not the target's — carrying
-	// `actions`, one of which is forcing it past the leases.
+	// CodeEvictionUnjudged is an eviction this node could not judge because the
+	// presence leases could not be read. 503 (this node's condition) carrying
+	// `actions`, one of which forces it past the leases.
 	CodeEvictionUnjudged Code = "eviction_unjudged"
-	// CodeReadmissionUnjudged is a readmission this node could not judge,
-	// because a read it is decided on — the positions register, the
-	// published floors, or a log's first surviving record on this node's
-	// own copy — failed. 503: the condition is this node's, not the
-	// target's, and the body names the log where one was being read.
+	// CodeReadmissionUnjudged is a readmission this node could not judge because a
+	// read it is decided on failed. 503: this node's condition; the body names the
+	// log being read.
 	CodeReadmissionUnjudged Code = "readmission_unjudged"
-	// CodeNotPublishing is an eviction or readmission sent to a node in a
-	// capacity window, which appends nothing to any log. 409 with nothing
-	// judged or written: the remedy is the fleet's return to normal mode,
-	// not anything about the node named.
+	// CodeNotPublishing is an eviction or readmission sent to a node in a capacity
+	// window, which appends nothing to any log. 409, nothing judged or written: the
+	// remedy is the fleet's return to normal mode.
 	CodeNotPublishing Code = "not_publishing"
-	// CodeReadmissionRefused is a readmission of a node below a trim floor
-	// it would be counted against. 409 with nothing written, carrying the
-	// numbers the refusal is about.
+	// CodeReadmissionRefused is a readmission of a node below a trim floor it would
+	// be counted against. 409, carrying the numbers.
 	CodeReadmissionRefused Code = "readmission_refused"
 	// CodeGateFailed is an eviction or readmission that was not recorded.
 	CodeGateFailed Code = "gate_failed"
-	// CodeStreamRequired is a capacity or reanchor question that named no
-	// stream.
+	// CodeStreamRequired is a capacity or reanchor question naming no stream.
 	CodeStreamRequired Code = "stream_required"
-	// CodeStreamUnreadable is a reanchor question about a log this node
-	// runs whose broker did not answer the live read. 503 with a
-	// Retry-After, because the stream name was right and asking again is
-	// the remedy — told apart from [CodeUnknownStream] so an operator does
-	// not go looking for a typo.
+	// CodeStreamUnreadable is a reanchor question about a log whose broker did not
+	// answer the live read. 503 with a Retry-After: the name was right. Apart from
+	// [CodeUnknownStream] so an operator does not hunt a typo.
 	CodeStreamUnreadable Code = "stream_unreadable"
-	// CodeReanchorRefused is a reanchor the stream refused, or one that
-	// stopped where the detail says what is known and what to do.
+	// CodeReanchorRefused is a reanchor the stream refused, or one that stopped
+	// where the detail says what is known and what to do.
 	CodeReanchorRefused Code = "reanchor_refused"
 	// CodeReanchorFailed is a reanchor that stopped on a fault nothing in the
-	// transition told: 500, the detail saying how to learn where it stands,
-	// and the fault in this node's log.
+	// transition told: 500, the detail saying how to learn where it stands.
 	CodeReanchorFailed Code = "reanchor_failed"
-	// CodeTargetRequired is a capacity change that named no stream or no
-	// byte ceiling.
+	// CodeTargetRequired is a capacity change naming no stream or byte ceiling.
 	CodeTargetRequired Code = "target_required"
-	// CodeCapacityRefused is a capacity change the window refused. The
-	// detail carries the operation already open, when there is one, since
-	// "never opened" and "open and stuck" have opposite next steps.
+	// CodeCapacityRefused is a capacity change the window refused. The detail
+	// carries the operation already open: "never opened" and "open and stuck" have
+	// opposite next steps.
 	CodeCapacityRefused Code = "capacity_refused"
-	// CodeCapacityFailed is a capacity gesture that stopped on a fault
-	// nothing in the operation told: 500, the detail saying how to learn
-	// where it stands, and the fault in this node's log.
+	// CodeCapacityFailed is a capacity gesture that stopped on a fault nothing in
+	// the operation told: 500, the detail saying how to learn where it stands.
 	CodeCapacityFailed Code = "capacity_failed"
-	// CodeMaintenanceUnreadable is a capacity window whose state could not
-	// be read: 503 with a Retry-After, because the log was named right and
-	// asking again is the remedy.
+	// CodeMaintenanceUnreadable is a capacity window whose state could not be read.
+	// 503 with a Retry-After.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
 
-	// THE FLEET BROKER'S MEMBERSHIP: the removal of a voter the metadata
-	// group still counts. Each refusal sends an operator somewhere of its
-	// own, so each has its own code, and every one carries `detail` and
-	// `hint`; `crewlet fleet broker remove` and the dashboard's Nodes screen
-	// branch on them.
+	// THE FLEET BROKER'S MEMBERSHIP: removing a voter the metadata group still
+	// counts. Each refusal sends an operator somewhere of its own and carries
+	// `detail` and `hint`; `crewlet fleet broker remove` and the dashboard's Nodes
+	// screen branch on them.
 
-	// CodeVoterInvalid is a removal naming a voter by a spelling no node id
-	// or peer id has. 400 with nothing changed.
+	// CodeVoterInvalid is a removal naming a voter by a spelling no node id or peer
+	// id has. 400.
 	CodeVoterInvalid Code = "voter_invalid"
-	// CodeMemberLive is a removal of a member whose node still holds a live
-	// presence lease as a member, or does not say what its broker is. 409:
-	// a running member removed from the group rejoins it as a voter at its
-	// next restart, so it is stopped first, or the removal forced.
+	// CodeMemberLive is a removal of a member whose node holds a live presence lease
+	// as a member, or does not say what its broker is. 409: a running member removed
+	// rejoins as a voter at its next restart, so stop it first or force the removal.
 	CodeMemberLive Code = "member_live"
-	// CodeRemovalOutcomeUnknown is a removal whose carrying member went
-	// silent before it answered. 504: it may have been committed, so the
-	// group is read before anybody asks again.
+	// CodeRemovalOutcomeUnknown is a removal whose carrying member went silent
+	// before answering. 504: it may have been committed, so read the group first.
 	CodeRemovalOutcomeUnknown Code = "outcome_unknown"
-	// CodeExternalBroker is a removal asked of a node dialling an external
-	// cluster, whose membership is its own operator's. 409.
+	// CodeExternalBroker is a removal asked of a node dialling an external cluster,
+	// whose membership is its own operator's. 409.
 	CodeExternalBroker Code = "external_broker"
-	// CodeNotAMember is a removal of a voter the metadata group does not
-	// count. 404: never a member, or a removal already made it so.
+	// CodeNotAMember is a removal of a voter the group does not count. 404.
 	CodeNotAMember Code = "not_a_member"
-	// CodeMembershipChanging is a removal asked while another change to the
-	// group is in flight. 409, asked again once it has been committed.
+	// CodeMembershipChanging is a removal asked while another group change is in
+	// flight. 409.
 	CodeMembershipChanging Code = "membership_changing"
-	// CodeNoLeader is a removal asked of a group with no leader, which can
-	// change nothing about itself. 503 with a Retry-After of one election.
+	// CodeNoLeader is a removal asked of a group with no leader. 503, Retry-After
+	// of one election.
 	CodeNoLeader Code = "no_leader"
-	// CodeNoBrokerMember is a removal no live member could carry: it is made
-	// through a member's system account. 503 with a Retry-After of one
-	// election.
+	// CodeNoBrokerMember is a removal no live member could carry (it goes through a
+	// member's system account). 503, Retry-After of one election.
 	CodeNoBrokerMember Code = "no_member"
-	// CodeBrokerRemoveFailed is a removal that failed for any other reason.
-	// 500: the reason is in the detail, and the group is read before asking
-	// again, since the removal may have been committed although its answer
-	// was lost.
+	// CodeBrokerRemoveFailed is a removal that failed otherwise. 500: read the group
+	// before asking again, since it may have been committed although the answer was
+	// lost.
 	CodeBrokerRemoveFailed Code = "broker_remove_failed"
 
-	// THE WAKE FEEDS' DEAD LETTERS: an operator's discard of one entry, under
-	// /feeds/dead-letters. Each refusal carries `detail` and `hint`, and
-	// `crewlet feeds discard` reads them; a feed that could not be listed is
-	// `unavailable`, which a client already knows never to read as empty.
+	// THE WAKE FEEDS' DEAD LETTERS: an operator's discard of one entry under
+	// /feeds/dead-letters. Refusals carry `detail` and `hint` (`crewlet feeds
+	// discard` reads them); an unlistable feed is `unavailable`, never read as empty.
 
-	// CodeDeadLetterInvalid is a discard naming its entry by something that
-	// is no dead letter's id: the broker's sequence, a whole number above
-	// zero. 400 with nothing removed.
+	// CodeDeadLetterInvalid is a discard naming its entry by something that is no
+	// dead letter's id (the broker's sequence, a whole number above zero). 400.
 	CodeDeadLetterInvalid Code = "dead_letter_invalid"
-	// CodeNoDeadLetter is a discard of an id no wake feed's dead letters
-	// hold: never one, one a replay, its expiry or another discard took
-	// first, or a subscription's poison under another `dlq.` subject, which
-	// is no feed's to discard. 404 with nothing removed.
+	// CodeNoDeadLetter is a discard of an id no wake feed's dead letters hold: never
+	// one, taken first by a replay, expiry or another discard, or a subscription's
+	// poison under another `dlq.` subject. 404.
 	CodeNoDeadLetter Code = "no_dead_letter"
 	// CodeDeadLetterDiscardFailed is a discard whose drop failed for a reason
-	// waiting does not clear. 500: the reason is in the detail, and the
-	// dead letters are listed before asking again, since the drop may have
-	// landed although its answer was lost.
+	// waiting does not clear. 500: list the dead letters before asking again, since
+	// the drop may have landed although the answer was lost.
 	CodeDeadLetterDiscardFailed Code = "dead_letter_discard_failed"
 
-	// A PROJECT'S FILE BYTES: the streamed download, the upload and the
-	// removal under /worklet/files/{project}/{path}. The listing is a
-	// question and refuses as every question does.
+	// A PROJECT'S FILE BYTES: download, upload and removal under
+	// /worklet/files/{project}/{path}. The listing is a question.
 
 	// CodeNoProject is a file route naming a project there is none of. 404.
 	CodeNoProject Code = "no_project"
-	// CodeNoFile is a file route naming a path the project keeps no file
-	// at. 404.
+	// CodeNoFile is a file route naming a path the project keeps no file at. 404.
 	CodeNoFile Code = "no_file"
-	// CodeBadPath is a file path that is not one a project keeps a file
-	// under — an empty segment, a dot segment, too long. 400, the detail
-	// naming what is wrong with it.
+	// CodeBadPath is a file path a project keeps no file under (empty or dot
+	// segment, too long). 400.
 	CodeBadPath Code = "bad_path"
-	// CodeBadIfMatch is an If-Match header that is not a version as its
-	// ETag carries it: a project file's, or an artifact's head (`"<n>"`).
-	// 400; 428 where the write requires one and none was sent (an
-	// artifact's publish, the company's charter).
+	// CodeBadIfMatch is an If-Match header that is not a version as its ETag carries
+	// it (a project file's, or an artifact's head `"<n>"`). 400; 428 where the write
+	// requires one and none was sent (an artifact's publish, the company's charter).
 	CodeBadIfMatch Code = "bad_if_match"
-	// CodeVersionMoved is a write whose If-Match names a version the thing
-	// it writes has moved past: a project file, a work item or a page whose
-	// tool version the header stated, an artifact whose head is past the
-	// version a publish was based on, or the company's charter changed since
-	// an editor read it. 412: read it again and decide again. An artifact's
-	// carries the live head and its entry's text to merge onto, and the
-	// charter's the charter as it stands (`current`).
+	// CodeVersionMoved is a write whose If-Match names a version the thing has moved
+	// past: a project file, a work item or page whose tool version the header
+	// stated, an artifact past the publish's base, or the company's charter changed
+	// since an editor read it. 412. An artifact's carries the live head and its
+	// entry's text to merge onto, the charter's the charter as it stands (`current`).
 	CodeVersionMoved Code = "version_moved"
-	// CodeUploadExpired is an upload whose bytes cannot be recorded any
-	// more: stored, and older than a write may name its object after (409),
-	// or an artifact upload whose window closed before it was finished
-	// (410). Sending the bytes again is the one thing that lands.
+	// CodeUploadExpired is an upload whose bytes cannot be recorded any more: stored
+	// and older than a write may name its object after (409), or an artifact upload
+	// whose window closed unfinished (410). Sending the bytes again lands.
 	CodeUploadExpired Code = "upload_expired"
-	// CodeContentCorrupt is a file whose object the store answered with
-	// content that is not what the file records. 500: a retry reads the
-	// same bytes, so it is no 503.
+	// CodeContentCorrupt is a file whose object the store answered with content that
+	// is not what the file records. 500: a retry reads the same bytes, so no 503.
 	CodeContentCorrupt Code = "content_corrupt"
-	// CodeContentUnavailable is a file whose content the object store did
-	// not answer for. 503 with a Retry-After: the file exists, and it reads
-	// once the store answers again.
+	// CodeContentUnavailable is a file whose content the object store did not
+	// answer for. 503 with a Retry-After.
 	CodeContentUnavailable Code = "content_unavailable"
 
-	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
-	// status and the Retry-After and nothing else, so what these buy is the
-	// OPERATOR: a delivery log at the vendor, a proxy's access log and the
-	// engine's own all show the body, and the edge answered `{"error":
-	// "invalid signature"}` — a code with a space in it that no client could
-	// find in any vocabulary — and `{"status": "unavailable", "reason": …}`,
-	// an envelope of its own. A node with no active company revision is
-	// [CodeNoActiveRevision], and a verified delivery the broker would not
-	// take is [CodeUnavailable]: the same facts other surfaces answer with.
+	// THE WEBHOOK EDGE. A delivery's sender is a vendor reading only the status and
+	// Retry-After, so what these buy is the OPERATOR: vendor delivery logs, a proxy's
+	// access log and the engine's own show the body. A node with no active revision
+	// is [CodeNoActiveRevision], a verified delivery the broker would not take
+	// [CodeUnavailable], as elsewhere.
 
-	// CodeInvalidSignature is a delivery whose credential did not verify: an
-	// HMAC signature, a shared token, or a Forge invocation token — and a
-	// delivery to a per-seat route naming a seat with no app here, which is
-	// the same answer for the same reason. 401. The log says which check
-	// failed; the body never does, because that is what somebody probing the
-	// route would read, and a code of its own for the seat with no app was a
-	// roster of which handles have one.
+	// CodeInvalidSignature is a delivery whose credential did not verify (an HMAC
+	// signature, a shared token, a Forge invocation token), or one to a per-seat
+	// route naming a seat with no app here: the same answer, since a code of its own
+	// would be a roster of which handles have one. 401. The log says which check
+	// failed; the body never does, as somebody probing would read it.
 	CodeInvalidSignature Code = "invalid_signature"
-	// CodeNoWebhookSecret is a route with no secret to verify a delivery
-	// against. 503 with a Retry-After sized to a person editing the
-	// configuration, so the sender holds the delivery rather than dropping
-	// it.
+	// CodeNoWebhookSecret is a route with no secret to verify against. 503 with a
+	// Retry-After sized to a person editing the configuration, so the sender holds
+	// the delivery.
 	CodeNoWebhookSecret Code = "no_webhook_secret"
-	// CodeUnusableWebhookSecret is a route whose configured secret cannot
-	// do the check it is for: a shared token too short to be the whole of
-	// the authentication a provider that signs nothing leaves, or a GitLab
-	// signing key in a form GitLab never signs with. The same 503 as an
-	// absent secret, because the truth is the same — this route cannot check
-	// a delivery — under its own code because the fix is not: an operator
-	// told no secret is set goes looking for one they can see.
+	// CodeUnusableWebhookSecret is a route whose configured secret cannot do its
+	// check: a shared token too short to be a signing-less provider's whole
+	// authentication, or a GitLab signing key in a form GitLab never signs with. The
+	// same 503 as an absent secret, under its own code because an operator told no
+	// secret is set hunts for one they can see.
 	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
 )
 
-// THE ARTIFACTS SURFACE'S OWN (`/artifacts`): the refusals of an upload, a
-// publish and the pipeline between them that no other surface answers. A
-// publish based on a moved head is [CodeVersionMoved], an upload past its
-// window [CodeUploadExpired], a role below the verb's `unauthorized` naming
-// the role, and a value the domain refuses `invalid`, the codes every write
-// surface already answers with.
+// THE ARTIFACTS SURFACE'S OWN (`/artifacts`): the refusals of an upload, a publish
+// and the pipeline between them. A publish on a moved head is [CodeVersionMoved],
+// an upload past its window [CodeUploadExpired], a role below the verb
+// `unauthorized` naming the role, a value the domain refuses `invalid`.
 const (
-	// CodeArtifactTrashed is a write to, or an open of, an artifact in the
-	// trash. 409: its owner restores it first.
+	// CodeArtifactTrashed is a write to, or an open of, an artifact in the trash.
+	// 409: its owner restores it first.
 	CodeArtifactTrashed Code = "artifact_trashed"
-	// CodeArtifactPurging is a restore of an artifact whose purge has begun:
-	// its data may already be gone for good. 409: the purge finishes on its
-	// retry, an administrator's purge or the trash reaper's next pass.
+	// CodeArtifactPurging is a restore of an artifact whose purge has begun: its
+	// data may already be gone. 409: the purge finishes on its retry, an
+	// administrator's purge or the trash reaper's next pass.
 	CodeArtifactPurging Code = "artifact_purging"
-	// CodeQuotaExceeded is a write past a limit on what is kept: the
-	// company's storage (the artifacts' bytes, or a datastore's footprint,
-	// the store's own or the company's), or a cap on what one datastore
-	// holds (its collections and documents, a collection's rows, one
-	// participant's rows). 409, the code of the tools' `quota_exceeded`
-	// refusal class: the write collided with the state of what is held, which
-	// no request size changes. ITS SENTENCE STANDS ALONE, because what is
-	// beside it differs by route: artifacts answer the limit, the usage and
-	// the Tier A key to raise; a datastore answers the applier's reason as
-	// the detail; the act route answers the tool's words, else no detail
-	// (ADR-0060).
+	// CodeQuotaExceeded is a write past a limit on what is kept: the company's
+	// storage (artifact bytes, or a datastore's footprint), or a cap on what one
+	// datastore holds (collections, documents, a collection's rows, one
+	// participant's rows). 409, the code of the tools' `quota_exceeded` class: no
+	// request size changes it. ITS SENTENCE STANDS ALONE, as what is beside it
+	// differs by route: artifacts answer the limit, usage and Tier A key to raise;
+	// a datastore the applier's reason as detail; the act route the tool's words,
+	// else none (ADR-0060).
 	CodeQuotaExceeded Code = "quota_exceeded"
-	// CodeCarriedObjectGone is a publish carrying files the artifact no
-	// longer holds the bytes of. 409, the detail naming the paths to upload
-	// again.
+	// CodeCarriedObjectGone is a publish carrying files the artifact no longer
+	// holds the bytes of. 409, the detail naming the paths to upload again.
 	CodeCarriedObjectGone Code = "carried_object_gone"
-	// CodeUploadMismatch is a file whose stored bytes are not the ones its
-	// upload declared. 422: upload that path again in a new upload.
+	// CodeUploadMismatch is a file whose stored bytes are not those its upload
+	// declared. 422: upload that path again in a new upload.
 	CodeUploadMismatch Code = "upload_mismatch"
-	// CodeUploadMissing is a publish naming files whose bytes have not
-	// arrived. 409: transfer them, then publish again.
+	// CodeUploadMissing is a publish naming files whose bytes have not arrived.
+	// 409: transfer them, then publish again.
 	CodeUploadMissing Code = "upload_missing"
-	// CodeUploadsOutstanding is an upload the reservation budget refuses.
-	// 429, the detail naming whose budget, the figure and when the
-	// earliest hold lapses.
+	// CodeUploadsOutstanding is an upload the reservation budget refuses. 429, the
+	// detail naming whose budget, the figure and when the earliest hold lapses.
 	CodeUploadsOutstanding Code = "uploads_outstanding"
-	// CodeUploadNotFound is an upload this caller never began, or one whose
-	// record is gone; another caller's answers exactly this. 404.
+	// CodeUploadNotFound is an upload this caller never began, or whose record is
+	// gone; another caller's answers exactly this. 404.
 	CodeUploadNotFound Code = "upload_not_found"
-	// CodeUploadConsumed is an upload a publish has used or is using, or a
-	// file already transferred. 409.
+	// CodeUploadConsumed is an upload a publish has used or is using, or a file
+	// already transferred. 409.
 	CodeUploadConsumed Code = "upload_consumed"
-	// CodeMediaTypeRefused is a file whose type an artifact may not publish.
-	// 415, the detail naming the path.
+	// CodeMediaTypeRefused is a file whose type an artifact may not publish. 415,
+	// the detail naming the path.
 	CodeMediaTypeRefused Code = "media_type_refused"
-	// CodeCapabilityUnknown is a publish declaring a capability this build
-	// does not serve. 422.
+	// CodeCapabilityUnknown is a publish declaring a capability this build does not
+	// serve. 422.
 	CodeCapabilityUnknown Code = "capability_unknown"
-	// CodeContractUnknown is a publish pinning a runtime contract this
-	// build does not serve. 422.
+	// CodeContractUnknown is a publish pinning a runtime contract this build does
+	// not serve. 422.
 	CodeContractUnknown Code = "contract_unknown"
-	// CodeCredentialRefused is content an agent published that carries a
-	// credential's shape. 422: never redacted, which would ship a broken
-	// page.
+	// CodeCredentialRefused is agent-published content carrying a credential's
+	// shape. 422: never redacted, which would ship a broken page.
 	CodeCredentialRefused Code = "credential_refused"
-	// CodeContentRefused is a file whose bytes are not what its type
-	// promises: text that is not UTF-8, binary bytes that do not begin as
-	// their type's do. 422.
+	// CodeContentRefused is a file whose bytes are not what its type promises
+	// (non-UTF-8 text, binary not beginning as its type's does). 422.
 	CodeContentRefused Code = "content_refused"
-	// CodeEditRefused is an edit that could not be applied exactly once.
-	// 422, the detail naming the edit and how often its text matched.
+	// CodeEditRefused is an edit that could not be applied exactly once. 422, the
+	// detail naming the edit and how often its text matched.
 	CodeEditRefused Code = "edit_refused"
-	// CodePolicyRefused is a page the publish policy refuses: a script or a
-	// stylesheet from a host it does not allow, an unpinned version, a form
-	// posting off the page. 422, the detail listing every finding.
+	// CodePolicyRefused is a page the publish policy refuses (a script or
+	// stylesheet from a disallowed host, an unpinned version, a form posting off
+	// the page). 422, the detail listing every finding.
 	CodePolicyRefused Code = "policy_refused"
-	// CodeSourceTaken is a create naming a source address another artifact
-	// of the same owner holds. 409.
+	// CodeSourceTaken is a create naming a source address another artifact of the
+	// same owner holds. 409.
 	CodeSourceTaken Code = "source_taken"
-	// CodeLabelTaken is a label another version of the artifact holds: a
-	// collision, which another label avoids. 409.
+	// CodeLabelTaken is a label another version of the artifact holds; another
+	// label avoids it. 409.
 	CodeLabelTaken Code = "label_taken"
-	// CodeLabelsFull is a label for a version of an artifact whose every
-	// kept label is in use: the artifact's state, which removing a label
-	// changes and no other label does. 409.
+	// CodeLabelsFull is a label for a version of an artifact whose every kept label
+	// is in use: its state, which removing a label changes and no other label does.
+	// 409.
 	CodeLabelsFull Code = "labels_full"
-	// CodeBrandContrast is an adoption of a brand whose body text does not
-	// contrast enough with its light ground to be read. 422, the detail's
-	// `contrast` naming the pair, its two colours, the ratio and the floor.
+	// CodeBrandContrast is an adoption of a brand whose body text does not contrast
+	// enough with its light ground to be read. 422, the detail's `contrast` naming
+	// the pair, its two colours, the ratio and the floor.
 	CodeBrandContrast Code = "brand_contrast"
-	// CodeArtifactOriginUnset is a frame asked of a deployment that serves
-	// no artifact origin (`api.artifacts.external_url` unset). 409: an
-	// operator sets one; no retry here changes it.
+	// CodeArtifactOriginUnset is a frame asked of a deployment serving no artifact
+	// origin (`api.artifacts.external_url` unset). 409: an operator sets one.
 	CodeArtifactOriginUnset Code = "artifact_origin_unset"
-	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard
-	// renders itself (a doc, a native sheet), which runs no
-	// author code and so is never opened on the artifact origin. 409.
+	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard renders
+	// itself (a doc, a native sheet), which runs no author code and is never opened
+	// on the artifact origin. 409.
 	CodeArtifactNotFramed Code = "artifact_not_framed"
 
-	// CodeFolderNotFound is a folder a write names (a parent, a destination,
-	// the folder a create files into) that does not exist, was removed, or
-	// that the caller cannot see: one answer for all three, so a folder's
-	// existence is never disclosed to somebody it is not shown to. 404.
+	// CodeFolderNotFound is a folder a write names (a parent, a destination) that
+	// does not exist, was removed, or the caller cannot see: one answer for all
+	// three, so a folder's existence is never disclosed to somebody it is not shown
+	// to. 404.
 	CodeFolderNotFound Code = "folder_not_found"
 	// CodeFolderNameTaken is a folder name its place already holds, compared
-	// without regard to case. 409, the detail naming it.
+	// case-insensitively. 409, the detail naming it.
 	CodeFolderNameTaken Code = "folder_name_taken"
-	// CodeFolderCycle is a folder moved into itself or a folder inside it.
-	// 422: the destination is the argument to change.
+	// CodeFolderCycle is a folder moved into itself or a folder inside it. 422.
 	CodeFolderCycle Code = "folder_cycle"
-	// CodeFolderDepth is a create or a move that would place a folder deeper
-	// than folders go. 422: a shallower destination lands.
+	// CodeFolderDepth is a create or move that would place a folder deeper than
+	// folders go. 422: a shallower destination lands.
 	CodeFolderDepth Code = "folder_depth"
-	// CodeFolderLimit is a create or a move past the folders the company or
-	// one folder holds. 409.
+	// CodeFolderLimit is a create or move past the folders the company or one
+	// folder holds. 409.
 	CodeFolderLimit Code = "folder_limit"
-	// CodeFolderWidens is a folder move into a tree whose audience reaches
-	// somebody the folder's present one does not: the folder and every
-	// folder beneath it become visible to them by name, while the artifacts
-	// in them keep their own access. 409 until the request confirms it
-	// (`confirm_widen`).
+	// CodeFolderWidens is a folder move into a tree whose audience reaches somebody
+	// the folder's present one does not: the folder and every folder beneath it
+	// become visible to them by name, while the artifacts in them keep their own
+	// access. 409 until the request confirms it (`confirm_widen`).
 	CodeFolderWidens Code = "folder_widens"
-	// CodeFolderAmbiguous is a folder path that names more than one folder
-	// the caller can see. 422, the detail listing each by id, which lands.
+	// CodeFolderAmbiguous is a folder path naming more than one folder the caller
+	// can see. 422, the detail listing each by id, which lands.
 	CodeFolderAmbiguous Code = "folder_ambiguous"
 )
 
-// THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
-// applier writes that no other surface's refusal names, and the write budget a
-// node keeps per principal and per store. A guarded write that lost is
-// `stale_version`, a rule that refused is `forbidden` and a value that failed
-// is `invalid`, the codes every write surface already answers with.
+// THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its applier
+// writes that no other surface names, and the write budget a node keeps per
+// principal and per store. A lost guarded write is `stale_version`, a refusing
+// rule `forbidden`, a failed value `invalid`.
 const (
-	// CodeDataGone is a datastore whose artifact was purged, so nothing is
-	// written to it. 410. An artifact in the trash is [CodeArtifactTrashed],
-	// as it is on every other artifacts route: it is restored, not gone.
+	// CodeDataGone is a datastore whose artifact was purged, so nothing is written
+	// to it. 410. A trashed artifact is [CodeArtifactTrashed]: restored, not gone.
 	CodeDataGone Code = "data_gone"
-	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
-	// and the detail says why.
+	// CodeNotUndoable is an undo of a write the history cannot undo. 409; the
+	// detail says why.
 	CodeNotUndoable Code = "not_undoable"
-	// CodeMigrationTooLarge is a schema change that would rewrite more
-	// documents than one change may. 422.
+	// CodeMigrationTooLarge is a schema change that would rewrite more documents
+	// than one change may. 422.
 	CodeMigrationTooLarge Code = "migration_too_large"
-	// CodeWriteBudget is a datastore write this node's cost-weighted
-	// budget refused for now. 429 with a Retry-After; never a lockout.
+	// CodeWriteBudget is a datastore write this node's cost-weighted budget
+	// refused for now. 429 with a Retry-After; never a lockout.
 	CodeWriteBudget Code = "write_budget"
-	// CodeReadBudget is a dashboard dataset read this node's cost-weighted
-	// budget for live sources refused for now (adr/0043). 429 with a
-	// Retry-After; never a lockout.
+	// CodeReadBudget is a dashboard dataset read this node's cost-weighted budget
+	// for live sources refused for now (adr/0043). 429 with a Retry-After; never a
+	// lockout.
 	CodeReadBudget Code = "read_budget"
-	// CodeCheckBudget is a page check (`POST /artifacts/checks`) this node's
-	// budget for checks refused for now: a check is asked for while a person
-	// writes, so a client sending one per keystroke is held to a few a
-	// second. 429 with a Retry-After; never a lockout.
+	// CodeCheckBudget is a page check (`POST /artifacts/checks`) refused by this
+	// node's budget: checks are asked while a person writes, so a client sending
+	// one per keystroke is held to a few a second. 429 with a Retry-After; never a
+	// lockout.
 	CodeCheckBudget Code = "check_budget"
-	// CodeRateLimited is a comment on an artifact this node's budget for
-	// comment writes refused for now, the writer's own on the artifact or
-	// the artifact's. 429 with a Retry-After; never a lockout.
+	// CodeRateLimited is a comment on an artifact refused by this node's comment
+	// budget, the writer's own on the artifact or the artifact's. 429 with a
+	// Retry-After; never a lockout.
 	CodeRateLimited Code = "rate_limited"
 
 	// --- the Dashboard Assistant ---
 
 	// CodeAssistantProtocolMismatch is a request naming an assistant
-	// protocol_version this node does not speak. 409: the dashboard is
-	// older or newer than the engine, and reloading it fixes it.
+	// protocol_version this node does not speak. 409: the dashboard is older or
+	// newer than the engine; reloading fixes it.
 	CodeAssistantProtocolMismatch Code = "assistant_protocol_mismatch"
-	// CodeAssistantNotAvailable is the assistant refused to this caller
-	// here, its detail `reason` the viewer's (disabled, no_model,
-	// not_a_person, no_permission). 403.
+	// CodeAssistantNotAvailable is the assistant refused to this caller here, its
+	// detail `reason` the viewer's (disabled, no_model, not_a_person,
+	// no_permission). 403.
 	CodeAssistantNotAvailable Code = "assistant_not_available"
-	// CodeAssistantTurnRunning is a question asked in a conversation whose
-	// turn is still running: one at a time. 409.
+	// CodeAssistantTurnRunning is a question asked in a conversation whose turn is
+	// still running: one at a time. 409.
 	CodeAssistantTurnRunning Code = "assistant_turn_running"
-	// CodeAssistantBusy is a person past their running turns or their turn
-	// rate. 429 with a Retry-After.
+	// CodeAssistantBusy is a person past their running turns or turn rate. 429
+	// with a Retry-After.
 	CodeAssistantBusy Code = "assistant_busy"
-	// CodeAssistantUnavailable is an assistant this node cannot run now for
-	// a reason of its own: no model chain it can build, the node shutting
-	// down, or the turn's runner on a node this one cannot reach. 503 with
-	// no Retry-After, since no wait it knows clears any of them. A
-	// condition of the node is answered as one instead (unavailable, in a
-	// person's words under its own hint).
+	// CodeAssistantUnavailable is an assistant this node cannot run now for a
+	// reason of its own: no model chain it can build, shutting down, or the turn's
+	// runner on an unreachable node. 503 with no Retry-After, since no wait it
+	// knows clears any. A condition of the node is answered as one instead
+	// (unavailable, in a person's words under its own hint).
 	CodeAssistantUnavailable Code = "assistant_unavailable"
-	// CodeAssistantModelNotReady is a question refused before its first
-	// round because every model in the assistant's chain is known unusable
-	// now: its detail `reason` is the error code a turn would have failed
-	// with (model_signed_out, model_busy, model_unavailable), with the
-	// `detail` and `hint` a person reads. 503, with a Retry-After only for
-	// a spent plan whose reset is known: a signed-out model needs somebody
-	// to act, not a wait.
+	// CodeAssistantModelNotReady is a question refused before its first round
+	// because every model in the assistant's chain is known unusable now: its
+	// detail `reason` is the error code a turn would have failed with
+	// (model_signed_out, model_busy, model_unavailable), with the `detail` and
+	// `hint` a person reads. 503, Retry-After only for a spent plan whose reset is
+	// known: a signed-out model needs somebody to act, not a wait.
 	CodeAssistantModelNotReady Code = "assistant_model_not_ready"
-	// CodeAssistantFileRefused is a file the assistant does not keep: its
-	// bytes are not one of the image types a person may attach (whatever
-	// its name or declared type says), or it is empty. 415, its `detail`
-	// naming the types that are kept.
+	// CodeAssistantFileRefused is a file the assistant does not keep: not one of
+	// the attachable image types (whatever its name or declared type says), or
+	// empty. 415, its `detail` naming the types kept.
 	CodeAssistantFileRefused Code = "assistant_file_refused"
-	// CodeAssistantFileLimit is an attachment uploaded into a conversation
-	// that already keeps as many as one conversation may. 409.
+	// CodeAssistantFileLimit is an attachment uploaded into a conversation already
+	// at its limit. 409.
 	CodeAssistantFileLimit Code = "assistant_file_limit"
-	// CodeProposalAlreadyDecided is an approval or a decline of a proposal
-	// somebody, or another tab, already decided; its detail `state` is the
-	// state it is in now. 409.
+	// CodeProposalAlreadyDecided is an approval or decline of a proposal somebody,
+	// or another tab, already decided; its detail `state` is its state now. 409.
 	CodeProposalAlreadyDecided Code = "proposal_already_decided"
 	// CodeProposalExpired is an approval past the proposal's lifetime. 410.
 	CodeProposalExpired Code = "proposal_expired"
 	// CodeProposalDigestMismatch is an approval whose digest is not the
 	// proposal's, so nothing was sent. 409.
 	CodeProposalDigestMismatch Code = "proposal_digest_mismatch"
-	// CodeProposalStale is an approval of a change whose object moved since
-	// it was proposed. 409; the assistant may propose it again.
+	// CodeProposalStale is an approval of a change whose object moved since it was
+	// proposed. 409; the assistant may propose it again.
 	CodeProposalStale Code = "proposal_stale"
-	// CodeActionAlreadyClaimed is a page action another tab already
-	// claimed. 409.
+	// CodeActionAlreadyClaimed is a page action another tab already claimed. 409.
 	CodeActionAlreadyClaimed Code = "action_already_claimed"
 
 	// --- the model routes (internal/api/llmapi) --- //
 
-	// CodeCredentialRejected is a candidate credential that did not sign
-	// the model in when it was tested (the vendor refused it, or the harness did
-	// not use it): nothing was stored, and the model keeps its current
-	// credential. 422, its problem at the value. Not
-	// `credential_refused`, which is an artifact's content carrying a
-	// credential's shape and says so to the person.
+	// CodeCredentialRejected is a candidate credential that did not sign the model
+	// in when tested (the vendor refused it, or the harness did not use it):
+	// nothing stored, the model keeps its current credential. 422, at the value.
+	// Not `credential_refused`, an artifact's content carrying a credential's shape.
 	CodeCredentialRejected Code = "credential_rejected"
-	// CodeCredentialUntested is a candidate credential the vendor did not
-	// answer the test of (a timeout, a server error): nothing was stored.
-	// 502.
+	// CodeCredentialUntested is a candidate credential the vendor did not answer
+	// the test of (a timeout, a server error): nothing stored. 502.
 	CodeCredentialUntested Code = "credential_untested"
-	// CodeValueTestFailed is an MCP server's value whose test failed, so
-	// nothing was stored. 422, with the `stage` and `class` it stopped at.
+	// CodeValueTestFailed is an MCP server's value whose test failed, so nothing
+	// was stored. 422, with the `stage` and `class` it stopped at.
 	CodeValueTestFailed Code = "value_test_failed"
-	// CodeAlreadyExists is a create-only credential write (`If-None-Match:
-	// *`) naming a secret that is already stored, its `names` listed. 412.
+	// CodeAlreadyExists is a create-only credential write (`If-None-Match: *`)
+	// naming a secret already stored, its `names` listed. 412.
 	CodeAlreadyExists Code = "already_exists"
 	// CodeNotSittingOut is a probe of a model no live node sits out. 409.
 	CodeNotSittingOut Code = "not_sitting_out"
-	// CodeSignInInProgress is a device sign-in started while another for the
-	// same model is running, which the answer carries. 409.
+	// CodeSignInInProgress is a device sign-in started while another for the same
+	// model runs, which the answer carries. 409.
 	CodeSignInInProgress Code = "sign_in_in_progress"
-	// CodeCheckInProgress is a check of a model asked while another check of
-	// it runs that is not the one asked for — of a draft, or with the other
-	// smoke setting — which the answer carries. 409; one asking what the
-	// running check asks is handed it instead.
+	// CodeCheckInProgress is a check of a model asked while a different check of it
+	// runs (of a draft, or with the other smoke setting), which the answer
+	// carries. 409; one asking what the running check asks is handed it instead.
 	CodeCheckInProgress Code = "check_in_progress"
-	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has
-	// none, or whose sign-in reads no login. 422.
+	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has none, or
+	// whose sign-in reads no login. 422.
 	CodeNoDeviceSignIn Code = "no_device_sign_in"
-	// CodeDeviceSignInUnavailable is a device sign-in whose harness printed no
-	// code in time, its first line beside it. 502.
+	// CodeDeviceSignInUnavailable is a device sign-in whose harness printed no code
+	// in time, its first line beside it. 502.
 	CodeDeviceSignInUnavailable Code = "device_sign_in_unavailable"
-	// CodeNoHostLogin is a host login check of a model that signs in with
-	// no harness login. 422.
+	// CodeNoHostLogin is a host login check of a model that signs in with no
+	// harness login. 422.
 	CodeNoHostLogin Code = "no_host_login"
-	// CodeUnknownProvider is a model catalogue question about a provider
-	// the catalogue lists nothing under. 422.
+	// CodeUnknownProvider is a model catalogue question about a provider the
+	// catalogue lists nothing under. 422.
 	CodeUnknownProvider Code = "unknown_provider"
 )
 
-// GITLET'S OWN (`/gitlet/`): why a node serves none of Gitlet now,
-// and the refusals of its reads and its cache's verify that no other surface
-// answers. A repository nobody declared, a company hosting no code and a copy
-// this node does not hold are each `not_found` with a `reason` beside it,
-// because none has anything here to answer and a client tells them apart
-// without reading the sentence.
+// GITLET'S OWN (`/gitlet/`): why a node serves none of Gitlet now, and the
+// refusals of its reads and its cache's verify that no other surface answers. A
+// repository nobody declared, a company hosting no code and a copy this node does
+// not hold are each `not_found` with a `reason` beside it, which a client tells
+// apart without reading the sentence.
 //
-// THE FOUR UNSERVED CODES ARE FOUR, never `unavailable` with a reason, because
-// a client acts on each a different way: an apply in flight clears by waiting
-// and carries a Retry-After, and the other three clear only when somebody acts
-// — another node serves the request meanwhile — so they carry none.
+// THE FOUR UNSERVED CODES ARE FOUR, never `unavailable` with a reason, because a
+// client acts on each differently: an apply in flight clears by waiting and
+// carries a Retry-After; the other three clear only when somebody acts (another
+// node serves meanwhile), so they carry none.
 const (
-	// CodeApplying is a node applying the configuration the fleet
-	// activated, which answers once that apply ends. 503 with a
-	// Retry-After. It says nothing of what the configuration holds: an
-	// apply in flight may not have decoded the revision yet.
+	// CodeApplying is a node applying the configuration the fleet activated, which
+	// answers once that apply ends. 503 with a Retry-After. It says nothing of what
+	// the configuration holds: the apply may not have decoded the revision yet.
 	CodeApplying Code = "applying"
-	// CodeConfigApplyFailed is a node whose apply of a configuration that
-	// hosts code failed. 503 and no Retry-After, since waiting clears
-	// nothing; `GET /fleet` and the node's log say why.
+	// CodeConfigApplyFailed is a node whose apply of a configuration that hosts
+	// code failed. 503, no Retry-After, since waiting clears nothing; `GET /fleet`
+	// and the node's log say why.
 	CodeConfigApplyFailed Code = "config_apply_failed"
 	// CodeCodeUnknown is a node whose apply failed before it could read the
-	// configuration the fleet activated, so it cannot say whether the
-	// company hosts code at all. Its own code rather than
-	// config_apply_failed, because that one states the configuration hosts
-	// code, which this node never read. 503 and no Retry-After.
+	// configuration, so it cannot say whether the company hosts code. Not
+	// config_apply_failed, which states the configuration hosts code, which this
+	// node never read. 503, no Retry-After.
 	CodeCodeUnknown Code = "code_unknown"
-	// CodeNativeBackendNeedsRestart is a node whose native runtime was
-	// running before the configuration turned one of the company's own
-	// halves on (Worklet, Doclet, Chatlet or Gitlet), and which serves it
-	// once restarted. 503 and no Retry-After: only a restart clears it, and
-	// another node serves the request meanwhile.
+	// CodeNativeBackendNeedsRestart is a node whose native runtime was running
+	// before the configuration turned one of the company's own halves on (Worklet,
+	// Doclet, Chatlet or Gitlet), and which serves it once restarted. 503, no
+	// Retry-After: only a restart clears it; another node serves meanwhile.
 	CodeNativeBackendNeedsRestart Code = "native_backend_needs_restart"
-	// CodeVerifyRunning is a verify of a repository on a node already
-	// checking it with the other repair setting. 409, the running one
-	// carried beside it; one asking with the same setting is handed the
-	// running check instead.
+	// CodeVerifyRunning is a verify of a repository on a node already checking it
+	// with the other repair setting. 409, the running one carried beside it; one
+	// asking with the same setting is handed the running check.
 	CodeVerifyRunning Code = "verify_running"
-	// CodeNotPermitted is a code read the asker's grant on the repository
-	// does not cover (ADR-0088): the same word a refused push prints, so
-	// one refusal has one spelling on every surface that names it. 403,
-	// the detail naming who asked, the repository and what would admit
-	// them.
+	// CodeNotPermitted is a code read the asker's grant on the repository does not
+	// cover (ADR-0088): the word a refused push prints, so one refusal has one
+	// spelling everywhere. 403, the detail naming who asked, the repository and
+	// what would admit them.
 	CodeNotPermitted Code = "not_permitted"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
-// ONE MAP RATHER THAN A SET AND A SWITCH, because the two halves are the same
-// decision: admitting a code to the vocabulary IS writing the copy for it. A
-// switch of valid codes beside a map of messages is two lists to keep in step,
-// and the one that rots is the one nothing renders in a test.
+// ONE MAP RATHER THAN A SET AND A SWITCH: admitting a code IS writing its copy,
+// and two lists to keep in step rot where nothing renders them in a test.
 //
-// Every value is PRODUCT COPY — a sentence a person reads on a screen, saying
-// what happened and what to do about it. The dashboard renders it verbatim
-// (see docs/reference/dashboard-design.md), so a log line here is a log line
-// shown to an operator in a toast.
+// Every value is PRODUCT COPY: a sentence a person reads on a screen, saying what
+// happened and what to do. The dashboard renders it verbatim (see
+// docs/reference/dashboard-design.md), so a log line here is shown to an operator
+// in a toast.
 var codes = map[Code]string{
 	CodeEncodeFailed: "Something went wrong while building this answer. " +
 		"The engine's log has the reason.",
@@ -1433,18 +1220,14 @@ var codes = map[Code]string{
 	CodeInvalidToken: "Sign in, or send a valid token.",
 
 	CodeUnknownQuery: "This node does not serve that query.",
-	// ABOUT THE ACCESS, NOT A TOKEN. It said "that query needs an operator
-	// token", which was true while an operator token was the only credential
-	// and authority a single yes-or-no; a person signed in with a session
-	// and refused one permission was told to go and find a token.
+	// ABOUT THE ACCESS, NOT A TOKEN: a person signed in with a session and
+	// refused one permission must not be told to find a token.
 	//
-	// THIS IS THE SENTENCE FOR A REFUSAL THAT SAYS NOTHING MORE about itself
-	// — no `reason` beside it — and it NAMES EVERY PERMISSION there is
-	// (ADR-0033), read off [iam.AllGrants], because a person reading it has
-	// to know what to ask an admin for. A refusal that carries the deciding
-	// rule's reason is told that rule's own sentence instead
-	// ([unauthorizedMessage]), since most of the rules it covers are ones
-	// no permission would change.
+	// THE SENTENCE FOR A REFUSAL WITH NO `reason` beside it, and it NAMES EVERY
+	// PERMISSION (ADR-0033), read off [iam.AllGrants], so a person knows what to
+	// ask an admin for. A refusal carrying the deciding rule's reason gets that
+	// rule's own sentence ([unauthorizedMessage]), since most such rules no
+	// permission would change.
 	CodeUnauthorized: lacksSentence(grantWords(grantNames(iam.AllGrants))),
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
@@ -1472,9 +1255,8 @@ var codes = map[Code]string{
 	CodeVendorRefused: "The third-party app refused this pass. Nothing it had " +
 		"already done is undone, so running it again is safe.",
 
-	// THE COPY IS AS UNIFORM AS THE CODE. A message that said "no such
-	// user" for one arm and "wrong password" for another would be the
-	// oracle the single code exists to close, written out in the body.
+	// The copy is as uniform as the code: "no such user" for one arm would be the
+	// oracle the single code closes.
 	CodeSignInRefused: "Those sign-in details were not accepted. Check them " +
 		"and try again.",
 	CodeThrottled: "Too many failed attempts. Wait a moment, then try again.",
@@ -1495,9 +1277,8 @@ var codes = map[Code]string{
 	CodeResetSpent: "This password reset link is no longer valid. Ask an " +
 		"admin for a new one.",
 
-	// THE TWO A REFUSAL'S DETAIL MOST OFTEN NAMES, and each stands alone:
-	// a refusal nobody worded for a person carries no detail, and this
-	// sentence is the whole of what that person reads (ADR-0060).
+	// Each of these two stands alone: a refusal nobody worded for a person carries
+	// no detail, so this sentence is all they read (ADR-0060).
 	CodeForbidden: "That change is not yours to make here, and nothing was " +
 		"written. Ask whoever owns it.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
@@ -1510,10 +1291,9 @@ var codes = map[Code]string{
 		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	// A RACE OR A STATE, and it stands alone as well: the dashboard draws
-	// this sentence for every conflict nobody has worded for a person, so it
-	// says how to find out which rather than pointing at a detail it does not
-	// carry.
+	// Stands alone too: the dashboard draws it for every conflict nobody has
+	// worded for a person, so it says how to find out which rather than pointing
+	// at a detail it does not carry.
 	CodeConflict: "This collided with another change, or with the state the " +
 		"object is in now, and nothing was written. Read it again to see " +
 		"which, and what has to change before the same request lands.",
@@ -1533,11 +1313,9 @@ var codes = map[Code]string{
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",
-	// IT STANDS ALONE, as CodeConflict's does: nobody has worded a merge
-	// gate's refusal for a person, so this sentence is the whole answer,
-	// and it says where what the change waits on is read — its readiness,
-	// on its page and in code_get_change — rather than pointing at a
-	// detail the answer does not carry.
+	// Stands alone, as CodeConflict's does: nobody has worded a merge gate's
+	// refusal for a person, so it says where the wait is read (the change's
+	// readiness, on its page and in code_get_change).
 	CodeNotReady: "The change does not meet its branch's merge rules yet, so " +
 		"nothing was merged. Read the change to see what it still waits on " +
 		"and who clears each; its owner hears once it is ready.",
@@ -1883,7 +1661,7 @@ var codes = map[Code]string{
 		"nothing was sent. Ask Crewlet to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
 	CodeCredentialRejected: "This credential did not sign the model in, so nothing was " +
-		"stored. The model still uses its current credential.",
+		"stored.",
 	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
 		"Try again.",
 	CodeValueTestFailed: "The server did not work with this value, so nothing was stored. " +
@@ -1902,66 +1680,54 @@ var codes = map[Code]string{
 	CodeUnknownProvider:         "The model catalogue lists no provider by that name.",
 }
 
-// Codes is every code in the vocabulary, sorted.
-//
-// FOR THE WALKS that hold the table against what reads it: this package's own
-// copy review, which must see every code rather than a list somebody kept by
-// hand, and the gates elsewhere that hold a client's copy of the vocabulary
-// against the engine's.
+// Codes is every code in the vocabulary, sorted, for the walks that hold the
+// table against what reads it (this package's copy review, and the gates holding
+// a client's copy of the vocabulary against the engine's).
 func Codes() []Code { return slices.Sorted(maps.Keys(codes)) }
 
-// Valid reports whether c is in the vocabulary — which is to say, whether the
-// table carries a sentence for it.
+// Valid reports whether c is in the vocabulary: whether the table carries a
+// sentence for it.
 func (c Code) Valid() bool {
 	_, ok := codes[c]
 	return ok
 }
 
 // Message is the sentence a person is shown for c, or "" for a code the table
-// does not carry — for a refusal under c that says nothing more about itself.
-// One that does may be shown a sentence chosen by what it says ([Envelope]):
+// does not carry, for a refusal that says nothing more about itself. One that
+// does may be shown a sentence chosen by what it says ([Envelope]):
 // `unauthorized` follows the deciding rule's reason.
 //
 // A code with no sentence still ANSWERS: `error` is what a client branches on,
-// and refusing over missing copy would turn a refusal into a failure. What it
-// loses is the half a person reads, so [FailWithFields] logs it — a route that
-// spells its own code is a code that has not landed on this table yet, and
-// that log line is where the next author finds out.
+// and refusing over missing copy would turn a refusal into a failure.
+// [FailWithFields] logs it, where the next author of a route spelling its own
+// code finds out.
 func (c Code) Message() string { return codes[c] }
 
-// Detail is the machine-readable half of a refusal: the facts about THIS
-// refusal a client branches on, beside the `error` code and the `message` a
-// person reads.
+// Detail is the machine-readable half of a refusal: the facts about THIS refusal
+// a client branches on, beside the `error` code and the `message`.
 //
-// VALUES, NOT TEXT. `{"retry_after_ms": 4000}` is a number a client can wait
-// on; "4000" is a string it has to parse first, and "retry in about four
-// seconds" is a sentence it can only show. A refusal that carries a list of
-// located problems, a derived hierarchy or a revision id keeps their shape
-// here, so nothing has to read a message to find a field.
+// VALUES, NOT TEXT: `{"retry_after_ms": 4000}` is a number a client can wait on;
+// "4000" it must parse and "retry in about four seconds" it can only show. Lists
+// of located problems, a derived hierarchy or a revision id keep their shape.
 //
-// The keys are the route's own vocabulary; `error` and `message` are this
-// package's and always win over them.
+// The keys are the route's own vocabulary; `error` and `message` always win.
 type Detail map[string]any
 
-// The two keys the envelope reserves. Named rather than spelled at each use,
-// because "always wins" is only true if every writer means the same key.
+// The two keys the envelope reserves, named so "always wins" holds: every writer
+// must mean the same key.
 const (
 	keyError   = "error"
 	keyMessage = "message"
 )
 
-// ErrTooLarge is what a body over a route's cap surfaces as.
-//
-// A sentinel rather than a *http.MaxBytesError so callers do not each have to
-// know that detail of net/http, and so [Refuse] can tell the two failures
-// apart without a second type assertion.
+// ErrTooLarge is what a body over a route's cap surfaces as: a sentinel rather
+// than a *http.MaxBytesError, so callers need not know net/http's detail and
+// [Refuse] tells the two failures apart without a second type assertion.
 var ErrTooLarge = errors.New("httpjson: body over the limit")
 
-// Write answers with status and body as JSON.
-//
-// The status is written BEFORE the body because it has to be: once any byte of
-// the body is written the header is gone, and a WriteHeader after it is a
-// silent no-op that leaves the route answering 200 for a failure.
+// Write answers with status and body as JSON. The status goes BEFORE the body:
+// once any body byte is written a later WriteHeader is a silent no-op that leaves
+// the route answering 200 for a failure.
 func Write(w http.ResponseWriter, status int, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -1971,19 +1737,17 @@ func Write(w http.ResponseWriter, status int, body any) {
 	writeEncoded(w, status, raw)
 }
 
-// writeEncoded answers status with raw, a body already encoded as JSON — the
-// one place the content type is set, for [Write] and [Immutable] alike.
+// writeEncoded answers status with raw, a body already encoded as JSON: the one
+// place the content type is set, for [Write] and [Immutable].
 func writeEncoded(w http.ResponseWriter, status int, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
 }
 
-// encodeFailed answers a handler's body that would not marshal: the only thing
-// left to send is this package's own refusal, written by hand rather than
-// through Marshal, which is what just failed — and quoted through strconv
-// rather than concatenated, so the envelope stays valid JSON whatever
-// punctuation a sentence in [codes] carries.
+// encodeFailed answers a handler's body that would not marshal with this
+// package's own refusal, written by hand (Marshal just failed) and quoted through
+// strconv so the envelope stays valid JSON whatever punctuation [codes] carries.
 func encodeFailed(w http.ResponseWriter, err error) {
 	slog.Error("http_encode_failed", "error", err)
 	writeEncoded(w, http.StatusInternalServerError, []byte(`{"`+keyError+`":`+
@@ -1991,17 +1755,14 @@ func encodeFailed(w http.ResponseWriter, err error) {
 		strconv.Quote(CodeEncodeFailed.Message())+`}`))
 }
 
-// Fail answers with status and the refusal envelope for code, carrying no
-// detail: the code and its sentence are the whole of what this refusal knows.
+// Fail answers with status and the refusal envelope for code, carrying no detail.
 func Fail(w http.ResponseWriter, status int, code Code) {
 	FailWithFields(w, status, code, nil)
 }
 
-// FailWith is [Fail] with a detail whose every value is text — which most of
-// them are: a field path, a hint, the name of the thing that was wrong.
-//
-// It widens the map rather than being a second writer, so the reserved keys
-// and the sentence cannot hold for one form and not the other.
+// FailWith is [Fail] with a detail whose every value is text. It widens the map
+// rather than being a second writer, so the reserved keys and sentence hold for
+// both forms.
 func FailWith(w http.ResponseWriter, status int, code Code, detail map[string]string) {
 	fields := make(Detail, len(detail))
 	for k, v := range detail {
@@ -2010,25 +1771,19 @@ func FailWith(w http.ResponseWriter, status int, code Code, detail map[string]st
 	FailWithFields(w, status, code, fields)
 }
 
-// FailWithFields is THE refusal writer: the envelope's three parts, assembled
-// once, whatever the surface.
-//
-// ONE implementation under every Fail, so the rules that `error` and `message`
-// are always present and always win cannot hold for one of them and not the
-// other. The caller's map is not written to.
+// FailWithFields is THE refusal writer, under every Fail, so `error` and
+// `message` are always present and always win. The caller's map is not written to.
 func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail) {
 	Write(w, status, Envelope(code, detail))
 }
 
-// Envelope is the refusal body [FailWithFields] writes, as a value: the
-// detail with `error` and `message` over it — the message the code's, chosen
-// by what the detail says where the code's sentence depends on it
-// ([messageFor]).
+// Envelope is the refusal body [FailWithFields] writes, as a value: the detail
+// with `error` and `message` over it, the message chosen by what the detail says
+// where the code's sentence depends on it ([messageFor]).
 //
-// EXPORTED FOR A RENDERING THAT IS ALSO A FIXTURE — the node gate's refusals,
-// whose bodies a golden file pins and the dashboard's suite reads — so the
-// bytes a test records are the bytes the route sends, assembled here and
-// nowhere else. The caller's map is not written to.
+// EXPORTED FOR A RENDERING THAT IS ALSO A FIXTURE (the node gate's refusals, whose
+// bodies a golden file pins and the dashboard's suite reads), so the recorded
+// bytes are the bytes the route sends. The caller's map is not written to.
 func Envelope(code Code, detail Detail) map[string]any {
 	body := make(map[string]any, len(detail)+2)
 	maps.Copy(body, detail)
@@ -2041,18 +1796,15 @@ func Envelope(code Code, detail Detail) map[string]any {
 	if message := messageFor(code, detail); message != "" {
 		body[keyMessage] = message
 	} else {
-		// A refusal a person is shown nothing for. Not a failure of this
-		// request — the code still answers it — so it is logged rather
-		// than raised, under a name whoever adds the missing entry can
-		// grep for.
+		// Not a failure of this request (the code still answers it): logged under
+		// a greppable name for whoever adds the missing entry.
 		slog.Debug("http_refusal_without_message", "code", string(code))
 	}
 	return body
 }
 
-// The detail keys whose text a person reads on its own line: `detail` says
-// what happened and `hint` says what to do. The dashboard and the CLI both
-// print each as a sentence of its own.
+// The detail keys a person reads on their own line: `detail` says what happened,
+// `hint` what to do. The dashboard and CLI print each as a sentence.
 const (
 	keyDetail = "detail"
 	keyHint   = "hint"
@@ -2061,18 +1813,18 @@ const (
 // proseKeys are the detail keys [Envelope] writes as sentences.
 var proseKeys = [...]string{keyDetail, keyHint}
 
-// Sentence is text as a person reads it on its own: its first letter
-// capitalised and a full stop after it.
+// Sentence is text as a person reads it: first letter capitalised, a full stop
+// after it.
 //
 // ONE PLACE, AT THE BOUNDARY: a Go error stays lowercase with no full stop
-// because errors wrap, but the OUTERMOST text, once in `detail` or `hint`, is
-// never wrapped again. [Envelope] calls this on both keys, so a handler passes
+// because errors wrap, but the OUTERMOST text in `detail` or `hint` is never
+// wrapped again. [Envelope] calls this on both keys, so a handler passes
 // err.Error() as it is.
 //
-// AN IDENTIFIER KEEPS ITS SPELLING: only a plain lowercase word is
-// capitalised, not a field name, flag, path, address, quoted value or Go
-// package prefix ([goPackages]). Text already ending in `.`, `?` or `!` keeps
-// it, so calling this twice changes nothing.
+// AN IDENTIFIER KEEPS ITS SPELLING: only a plain lowercase word is capitalised,
+// not a field name, flag, path, address, quoted value or Go package prefix
+// ([goPackages]). Text already ending in `.`, `?` or `!` keeps it, so a second
+// call changes nothing.
 func Sentence(text string) string {
 	s := strings.TrimSpace(text)
 	if s == "" {
@@ -2087,11 +1839,9 @@ func Sentence(text string) string {
 	return s
 }
 
-// plainWord reports whether s opens with a word made of letters alone (an
-// apostrophe within it, as in "isn't", and a clause mark after it allowed),
-// which is what separates prose from an identifier at the start of a line. A
-// package's name followed by a colon is the package prefix of a Go error,
-// and an identifier.
+// plainWord reports whether s opens with a word of letters alone (an apostrophe
+// within and a clause mark after allowed), which separates prose from an
+// identifier. A package name plus a colon is a Go error's prefix, an identifier.
 func plainWord(s string) bool {
 	word, _, _ := strings.Cut(s, " ")
 	if name, prefixed := strings.CutSuffix(word, ":"); prefixed && goPackages()[name] {
@@ -2109,38 +1859,32 @@ func plainWord(s string) bool {
 	return true
 }
 
-// BodyReadTimeout bounds how long a client may take to deliver its body.
+// BodyReadTimeout bounds how long a client may take to deliver its body: a size
+// cap does not stop 25 bytes a minute, which would hold a handler and connection
+// slot against a surface an unauthenticated caller reaches. NOT the server's
+// ReadTimeout (unset): that covers the exchange from the first header byte, so
+// one big enough for a 25 MiB webhook on a slow link bounds nothing on a small
+// one. A deadline taken HERE starts when the handler asks for the body.
 //
-// A size cap does not stop a client sending 25 bytes a minute apart, which
-// would hold a handler and a connection slot against a surface an
-// unauthenticated caller reaches. It is NOT the server's ReadTimeout (unset):
-// that covers the exchange from the first header byte, so one big enough for a
-// 25 MiB webhook on a slow link bounds nothing on a small one. A deadline
-// taken HERE starts when the handler asks for the body.
-//
-// THIRTY SECONDS: webhooks.MaxBodyBytes is 25 MiB, about 7 Mbit/s sustained,
-// far below any CI runner or forge and far above the trickle cut off.
+// THIRTY SECONDS: webhooks.MaxBodyBytes is 25 MiB, about 7 Mbit/s sustained, far
+// below any CI runner or forge and far above the trickle cut off.
 // ReadHeaderTimeout (10 s) and IdleTimeout (60 s) bound the other phases.
 const BodyReadTimeout = 30 * time.Second
 
-// ReadBody reads at most max bytes of a request body, within
-// [BodyReadTimeout].
+// ReadBody reads at most max bytes of a request body, within [BodyReadTimeout].
 //
-// It reads the WHOLE body even when the request will be refused. An HTTP
-// server that answers without draining leaves unread bytes in the socket and
-// the client sees a connection reset instead of the status it was sent — which
-// for a 401 means "retry forever" rather than "your signature is wrong".
+// It reads the WHOLE body even when the request will be refused: a server that
+// answers without draining leaves unread bytes in the socket and the client sees
+// a connection reset instead of its status, which for a 401 means "retry
+// forever" rather than "your signature is wrong".
 //
-// Over the cap it returns [ErrTooLarge]; anything else is the read's own
-// error — a blown deadline included, since a body that never arrived and one
-// that was cut off are the same thing to a caller.
+// Over the cap it returns [ErrTooLarge]; anything else is the read's own error,
+// a blown deadline included (a body that never arrived and one cut off are the
+// same to a caller).
 func ReadBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte, error) {
-	// http.ErrNotSupported is IGNORED rather than reported: a
-	// ResponseWriter that cannot carry a deadline is a recorder or a
-	// wrapper, never a real connection, so there is nothing to bound and
-	// nothing a caller could do about it. Failing the read there would
-	// break every handler under httptest for a property the test has no
-	// way to violate.
+	// http.ErrNotSupported is IGNORED: a ResponseWriter that cannot carry a
+	// deadline is a recorder or wrapper, never a real connection, and failing
+	// there would break every handler under httptest.
 	if err := http.NewResponseController(w).
 		SetReadDeadline(time.Now().Add(BodyReadTimeout)); err != nil &&
 		!errors.Is(err, http.ErrNotSupported) {
@@ -2167,79 +1911,71 @@ func Refuse(w http.ResponseWriter, err error) {
 	Fail(w, http.StatusBadRequest, CodeUnreadableBody)
 }
 
-// EngineHeader is the header every answer the engine's API writes carries,
-// with the value [EngineHeaderValue], set once around everything a socket
-// serves (`api.servedOn`): a route's answer, a refusal, the mux's own 404
-// and 405, the canonical-path refusal and the boot surface's `503 starting`
-// alike.
+// EngineHeader is the header every answer the engine's API writes carries, with
+// the value [EngineHeaderValue], set once around everything a socket serves
+// (`api.servedOn`): routes, refusals, the mux's own 404 and 405, the
+// canonical-path refusal and the boot surface's `503 starting`.
 //
-// IT SAYS WHOSE ANSWER AN ANSWER IS: a proxy's 504, a gateway's 403 or a
-// cache's 413 says nothing about what the engine did, and the error envelope
-// cannot tell them apart since anything in front can answer JSON with an
-// `error` field. The dashboard requires it (dashboard/src/contract/engine.ts,
-// held to these two values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
+// IT SAYS WHOSE ANSWER AN ANSWER IS: a proxy's 504, a gateway's 403 or a cache's
+// 413 says nothing of what the engine did, and the error envelope cannot tell
+// them apart since anything in front can answer JSON with an `error` field. The
+// dashboard requires it (dashboard/src/contract/engine.ts, held to these two
+// values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
 const EngineHeader = "X-Crewlet-Engine"
 
 // EngineHeaderValue is [EngineHeader]'s one value.
 const EngineHeaderValue = "1"
 
-// ReaderHeader names the principal a request is made FOR: the id a dashboard
-// tab recorded as who it is read by, sent beside the session cookie. The guard
+// ReaderHeader names the principal a request is made FOR: the id a dashboard tab
+// recorded as who it is read by, sent beside the session cookie. The guard
 // refuses a request whose credential resolves to anybody else
-// (internal/api/auth's readerMoved says why), and [Immutable] keys a kept
-// answer on it. Here, with [EngineHeader], because both read it and this
-// package cannot import the guard. Spelled `READER_HEADER` in
-// dashboard/src/contract/identity.ts.
+// (internal/api/auth's readerMoved), and [Immutable] keys a kept answer on it.
+// Here because both read it and this package cannot import the guard. Spelled
+// `READER_HEADER` in dashboard/src/contract/identity.ts.
 const ReaderHeader = "X-Crewlet-Reader"
 
-// RequestIDHeader is the header a write's request id travels in, both ways:
-// the API reads a caller's (or a proxy's) and answers one back on every
-// write, the caller's where it is one token and a minted UUID where not, so a
-// refusal a caller reports can be found in the engine's log by it. Here, with
-// [EngineHeader], so the API that answers it and the CORS policy that lets a
+// RequestIDHeader is the header a write's request id travels in, both ways: the
+// API reads a caller's (or proxy's) and answers one back on every write (the
+// caller's where it is one token, else a minted UUID), so a reported refusal can
+// be found in the engine's log. Here so the API and the CORS policy that lets a
 // browser read it name one header.
 const RequestIDHeader = "X-Request-Id"
 
 // Marked reports whether an answer's headers carry the engine's mark
-// ([EngineHeader]): the one test a client applies before it reads an answer
-// as the engine's, whatever its body says.
+// ([EngineHeader]): the test a client applies before reading an answer as the
+// engine's, whatever its body says.
 func Marked(h http.Header) bool { return h.Get(EngineHeader) == EngineHeaderValue }
 
 // NoActiveRevisionRetry is the Retry-After a `503 no_active_revision` carries:
-// the control plane's reconcile poll, because a node that has not been handed
-// a company takes the active revision on its next one, so a client told to
-// come back sooner only spends requests against a node that cannot have
-// converged yet.
+// the control plane's reconcile poll, since a node without a company takes the
+// active revision on its next one, so a client told to come back sooner only
+// spends requests on a node that cannot have converged.
 //
-// THE POLL ITSELF, not a copy of its value, for the reason the webhook edge's
-// copy was removed: a retune of the poll would have left every surface
-// telling its clients the old cadence.
+// THE POLL ITSELF, not a copy of its value: a retune would have left every
+// surface telling clients the old cadence.
 const NoActiveRevisionRetry = configplane.ReconcileInterval
 
-// NoActiveRevision writes `503 no_active_revision`: a request for something
-// only a company can have (a delivery to route, Worklet or Doclet) on a
-// node that has not been handed one yet.
+// NoActiveRevision writes `503 no_active_revision`: a request for something only
+// a company can have (a delivery to route, Worklet or Doclet) on a node that has
+// not been handed one.
 //
-// ONE WRITER FOR THE CODE AND ITS HINT, used by the webhook edge, the human
-// write surface, the operator's MCP surface and the read surface's native
-// questions alike, so a node with no company answers every one of them the
-// same way and a client branches on one spelling. The detail says what brings
-// the company.
+// ONE WRITER FOR THE CODE AND ITS HINT, used by the webhook edge, the human write
+// surface, the operator's MCP surface and the read surface's native questions, so
+// a node with no company answers all alike. The detail says what brings the company.
 func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 	UnavailableWith(w, CodeNoActiveRevision, RetrySeconds(NoActiveRevisionRetry),
 		detail)
 }
 
 // NativeHalvesNotUp is the detail every surface over Worklet, Doclet and Chatlet
-// answers beside `no_active_revision`: the human write surface, the
-// operator's act and MCP surfaces, and the work, page, chat and search
-// questions on both transports.
+// answers beside `no_active_revision`: the human write surface, the operator's
+// act and MCP surfaces, and the work, page, chat and search questions on both
+// transports.
 //
-// ONE SENTENCE, for [NoActiveRevision]'s reason: a client shows it from
-// whichever of the four places it asked. It NAMES ALL THREE HALVES, since each
-// is the answer for every one: naming Worklet and Doclet alone told a Chatlet
-// verb that two halves it never asked for were down, and nothing about its
-// own. IN A PERSON'S WORDS, not the engine's bring-up vocabulary.
+// ONE SENTENCE, for [NoActiveRevision]'s reason, NAMING ALL THREE HALVES since
+// each is the answer for every one (naming two told a Chatlet verb about halves
+// it never asked for, and nothing about its own), IN A PERSON'S WORDS, not the
+// engine's bring-up vocabulary.
 const NativeHalvesNotUp = "this node isn't running a company yet, so " +
 	"Worklet, Doclet and Chatlet aren't up here. The ones the company uses " +
 	"start as soon as it's set up, with no restart"
@@ -2248,37 +1984,34 @@ const NativeHalvesNotUp = "this node isn't running a company yet, so " +
 // (Worklet, Doclet, Chatlet or Gitlet, named by half) is answered with beside
 // [CodeNativeBackendNeedsRestart], on both transports.
 //
-// ONE SENTENCE FOR EVERY HALF, for [NativeHalvesNotUp]'s reason, and IN A
-// PERSON'S WORDS: what happened (the company turned it on while this node was
-// running), what brings it (the node's restart) and what serves the question
-// meanwhile (another node), with no "native runtime", which is how the engine
-// describes itself.
+// ONE SENTENCE FOR EVERY HALF, as [NativeHalvesNotUp], IN A PERSON'S WORDS: what
+// happened, what brings it (the restart) and what serves meanwhile (another
+// node), with no "native runtime", which is how the engine describes itself.
 func NeedsRestart(half string) string {
 	return "this node was already running when the company turned " + half +
 		" on, and it starts " + half + " when it restarts: restart this node, or " +
 		"ask another one"
 }
 
-// Unavailable writes a 503 carrying a Retry-After, which is the pair a client
-// needs to tell "come back" from "do not come back".
+// Unavailable writes a 503 carrying a Retry-After, the pair a client needs to
+// tell "come back" from "do not come back".
 //
-// ONE WRITER, because header and envelope must agree: a 503 with no
-// Retry-After reads as a node down for good, and one on a non-retryable
-// refusal teaches clients to hammer it. Seconds, as the header carries them.
-// The body is [FailWithFields]'s. ZERO MEANS NOT RETRYABLE and writes no
-// header: missing configuration will not appear after any wait.
+// ONE WRITER, because header and envelope must agree: a 503 with no Retry-After
+// reads as a node down for good, and one on a non-retryable refusal teaches
+// clients to hammer it. Seconds, as the header carries them. The body is
+// [FailWithFields]'s. ZERO MEANS NOT RETRYABLE and writes no header: missing
+// configuration will not appear after any wait.
 func Unavailable(w http.ResponseWriter, code Code, retryAfterSeconds int) {
 	UnavailableWith(w, code, retryAfterSeconds, nil)
 }
 
 // RetrySeconds is a hint as the whole seconds a `Retry-After` carries: ROUNDED
-// UP, so a derived hint of 1.2s is never sent as "come back in one" before the
-// node could have got there, and zero — not retryable — stays zero, which
-// [Unavailable] writes as no header at all.
+// UP, so 1.2s is never sent as "come back in one" before the node could be
+// there, and zero (not retryable) stays zero, which [Unavailable] writes as no
+// header.
 //
-// ONE CONVERSION for every surface that has a hint as a duration, because
-// converting at each call site is how two of them came to round differently:
-// one rounded to the nearest second, and a 1.4s drain estimate went out as 1.
+// ONE CONVERSION for every surface with a duration hint: per-site conversion let
+// two round differently (a 1.4s drain estimate went out as 1).
 func RetrySeconds(hint time.Duration) int {
 	if hint <= 0 {
 		return 0
@@ -2288,36 +2021,32 @@ func RetrySeconds(hint time.Duration) int {
 
 // Throttled writes `429 throttled` carrying the wait left as a Retry-After.
 //
-// ONE WRITER, for [Unavailable]'s reason: a 429 with no Retry-After tells a
-// client it was refused and not when it may try again, so it retries at once,
-// is refused again, and a person at a form reads a lockout where there is a
-// wait of seconds. ROUNDED UP and never below a second, because a hint of
-// 0.2s sent as 0 is a client told to come back before the curve could have
-// admitted it — and zero here would read as "do not retry", which is never
-// what a curve means.
+// ONE WRITER, for [Unavailable]'s reason: a 429 with no Retry-After makes a
+// client retry at once into the same refusal, and a person at a form reads a
+// lockout where there is a wait of seconds. ROUNDED UP and never below a second:
+// 0.2s sent as 0 sends a client back before the curve could admit it, and zero
+// reads as "do not retry", which no curve means.
 func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
 	ThrottledWith(w, CodeThrottled, retryAfter, nil)
 }
 
-// ThrottledWith is [Throttled] for a limit of a surface's own, under its own
-// code and carrying a detail: the artifact datastore's write budget, which is
-// no sign-in's failed attempts. THE SAME ONE WRITER of a 429 underneath, so
-// the Retry-After every client waits on is carried by every 429 there is.
+// ThrottledWith is [Throttled] for a limit of a surface's own, under its own code
+// with a detail (the artifact datastore's write budget). THE SAME ONE WRITER of
+// a 429 underneath, so every 429 carries the Retry-After.
 func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, detail Detail) {
 	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
 	FailWithFields(w, http.StatusTooManyRequests, code, detail)
 }
 
-// UnavailableWith is [Unavailable] carrying a detail: what could not be read,
-// the operation id a retry must reuse, the setting to change.
+// UnavailableWith is [Unavailable] carrying a detail (what could not be read, the
+// operation id a retry must reuse, the setting to change).
 //
 // THE ONLY OTHER WAY a 503 is written, so a route with something to say beside
 // the code cannot reach for [FailWithFields] and drop the header.
 //
-// THE MESSAGE FOLLOWS THE HINT: a code whose own sentence invites a wait reads
-// its [waitless] sentence under no Retry-After, since header and sentence are
-// one answer to "should I come back"; "Try again in a moment" with no header
-// sent clients reading the message into the same refusal.
+// THE MESSAGE FOLLOWS THE HINT: a code whose sentence invites a wait reads its
+// [waitless] sentence under no Retry-After, header and sentence being one answer
+// to "should I come back".
 func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, detail Detail) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
@@ -2331,15 +2060,13 @@ func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, de
 	Write(w, http.StatusServiceUnavailable, body)
 }
 
-// waitless are the sentences of the codes a caller writes under a hint it
-// derived (one that is zero where no wait clears the cause), as each reads
-// when it is zero: what happened, and that waiting does not change it — the
-// detail beside it says what does.
+// waitless are the sentences of codes a caller writes under a derived hint, as
+// each reads when it is zero: what happened and that waiting does not change it;
+// the detail says what does.
 //
 // NOT FOR A WRITE WHOSE OUTCOME NOBODY KNOWS ([UnknownOutcome]): it may have
-// landed, so "this can't be done" would be false, and it keeps the code's own
-// sentence, which sends the caller to retry the same operation or ask another
-// node.
+// landed, so "this can't be done" would be false; it keeps the code's own
+// sentence, sending the caller to retry the same operation or ask another node.
 var waitless = map[Code]string{
 	CodeUnavailable: "This can't be done here, and waiting won't change that.",
 	CodeIdentityUnavailable: "Can't check who you are here, and waiting won't " +
@@ -2349,15 +2076,13 @@ var waitless = map[Code]string{
 }
 
 // OutcomeUnknown is the `outcome` a write nobody on this node can account for
-// answers with — the state log's own word for the third of its three outcomes
-// (statelog.OutcomeUnknown), spelled here because this package imports no
-// engine machinery, only the vocabularies its sentences name; a test holds
-// the two equal.
+// answers with: the state log's word for its third outcome
+// (statelog.OutcomeUnknown), spelled here because this package imports no engine
+// machinery beyond the vocabularies its sentences name; a test holds the two equal.
 const OutcomeUnknown = "unknown"
 
-// The keys an unknown outcome reserves, for [UnknownOutcome]'s rule that they
-// always win over a route's own detail — the same reason `error` and
-// `message` are named rather than spelled.
+// The keys an unknown outcome reserves: they always win over a route's own
+// detail, as `error` and `message` do.
 const (
 	keyOutcome   = "outcome"
 	keyOpID      = "op_id"
@@ -2368,14 +2093,13 @@ const (
 // establish: `outcome: "unknown"` and the `op_id` a retry must send back, and
 // `unvouched: true` where this node's operation ledger cannot vouch for it.
 //
-// A route with no operation id passes none and the key is left out: an empty
-// op_id would be sent back (the config surface; its detail names the stored
+// A route with no operation id passes none and the key is left out (an empty
+// op_id would be sent back; the config surface's detail names the stored
 // revision and the node holding it). Not [UnavailableWith] plus a map: a write
-// that MAY HAVE LANDED is retried under the same operation, a REFUSED one
-// wrote nothing, and per-surface writers drifted (`/iam` said it only in
-// prose). The three keys win over a detail. An unvouched unknown was not
-// published, so it carries NO Retry-After: clients would poll the one node
-// that cannot answer.
+// that MAY HAVE LANDED is retried under the same operation, a REFUSED one wrote
+// nothing, and per-surface writers drifted (`/iam` said it only in prose). The
+// three keys win over a detail. An unvouched unknown was not published, so it
+// carries NO Retry-After: clients would poll the one node that cannot answer.
 func UnknownOutcome(w http.ResponseWriter, retryAfterSeconds int, opID string,
 	unvouched bool, detail Detail) {
 

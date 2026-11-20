@@ -412,7 +412,7 @@ func TestAResumedTurnContinuesItsNumberingOnAnotherNode(t *testing.T) {
 	resumed, err := b.Svc.Resume(ctx, approval.Resumption{Owner: b.Person.ID,
 		Conversation: b.Conversation, Turn: accepted.TurnID, Proposal: proposals[0].ID,
 		Read: b.Grant("approve"), State: wire.ProposalApplied,
-		Receipt: &wire.Receipt{Summary: "Created ENG-7."},
+		Receipt: &wire.Receipt{Summary: wire.Plain("Created ENG-7.")},
 		Card:    cardAt(proposals[0], wire.ProposalApplied)})
 	if err != nil {
 		t.Fatal(err)

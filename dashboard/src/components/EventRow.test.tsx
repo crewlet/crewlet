@@ -30,7 +30,10 @@ test("a card's row is the time and one line: the actor, then what happened", () 
   // THE ROW OPENS ITS EVENT through the time's link, stretched over the row.
   const link = card.querySelector("a.feed-row__open")!;
   expect(link.getAttribute("href")).toBe("#/live/events/e-1");
-  expect(link.getAttribute("aria-label")).toBe("harness-0 Organization 'Nimbus' started");
+  // NAMED FROM WHAT IT SHOWS FIRST, the time, then what happened (WCAG 2.5.3).
+  const time = link.querySelector(".feed-time")!.textContent!;
+  expect(time).not.toBe("");
+  expect(link.getAttribute("aria-label")).toBe(`${time} harness-0 Organization 'Nimbus' started`);
   // TWO TRACKS: the clock, and the sentence with its actor inside it.
   expect([...card.children].map((c) => c.className)).toEqual([
     "feed-row__open",

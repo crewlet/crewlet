@@ -7,17 +7,21 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { AssistantControlContext, type AssistantControl } from "~/app/assistant/control.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { AdvisorPage, goLiveSteps, runWords } from "./AdvisorPage.tsx";
+import { AdvisorPage, type AdvisorSection, pagedOn } from "./AdvisorPage.tsx";
 import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
 import { ranked } from "./words.ts";
+import { runView, runWords } from "./Run.tsx";
 
-vi.mock("./AdvisorModel.tsx", () => ({ AdvisorModel: () => null }));
 vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>Review what each agent can do</p> }));
 
-const NOW = Date.now();
+// A FIXED MIDDAY: a row words its instants by the reader's calendar day, so a
+// fixture taken from the real clock read "3 days ago" for two days near
+// midnight. Every case's clock is held here (beforeEach).
+const NOW = Date.parse("2026-06-10T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 
 let serial = 0;
@@ -61,9 +65,68 @@ function finding(patch: Partial<AdvisorKeptFinding> = {}): AdvisorKeptFinding {
     impact: null,
     evidence: { window: { from: ago(60 * 24 * 7), to: ago(0) }, facts: [], records: [] },
     fix: { kind: "none", sentence: "Nothing to change by hand.", options: [] },
+    headline: patch.title ?? `Finding ${serial}`,
+    stats: [],
+    chart: null,
+    seats: [],
+    actions: { primary: null, secondary: [] },
+    premise_checked_at: null,
     ...patch,
   };
 }
+
+/** The company's numbers over the range, as `advisor_snapshot` answers them. */
+const SNAPSHOT = {
+  as_of: ago(0),
+  run_id: null,
+  range: { from: ago(60 * 24 * 7), to: ago(0), days: 7 },
+  stats: [
+    { key: "open_items", label: "Open items", value: 15, unit: "items", was: 12, better: "down" },
+    { key: "turns", label: "Turns", value: 40, unit: "turns", was: null, better: null },
+    {
+      key: "wasted_turns_percent",
+      label: "Wasted",
+      value: 75,
+      unit: "percent",
+      was: null,
+      better: "down",
+    },
+  ],
+  charts: [
+    {
+      id: "wasted_wakes",
+      title: "Turns that changed nothing, by what woke them",
+      unit: "turns",
+      kind: "bars",
+      x: {
+        kind: "reason",
+        keys: ["work_item:lead_fallback"],
+        labels: ["Work items (the unit's lead)"],
+      },
+      series: [
+        { id: "nothing", label: "Changed nothing", values: [30] },
+        { id: "moved", label: "Moved work", values: [10] },
+      ],
+      note: null,
+    },
+  ],
+  unread: [],
+};
+
+/** A press of the engine's, every key sent. */
+const press = (patch: Record<string, unknown>) => ({
+  kind: "apply",
+  label: "",
+  option: null,
+  items: null,
+  to: null,
+  page: null,
+  target: null,
+  setting: null,
+  url: null,
+  question: null,
+  ...patch,
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -102,12 +165,31 @@ function engine(findings: AdvisorKeptFinding[], run: AdvisorRunSummary | null = 
       };
     }
     if (name === "advisor_run") return run;
+    if (name === "advisor_snapshot") return SNAPSHOT;
     return {};
   };
   return { sent, asked, answer };
 }
 
-function mount(answer: (name: string, params: Record<string, unknown>) => unknown) {
+/** An assistant the reader may ask, recording what each control was handed. */
+function assistant() {
+  const drafted: string[] = [];
+  const asked: string[] = [];
+  const control: AssistantControl = {
+    open: false,
+    unavailable: null,
+    toggle: () => {},
+    ask: (q) => asked.push(q),
+    draft: (q) => drafted.push(q),
+  };
+  return { control, drafted, asked };
+}
+
+function mount(
+  answer: (name: string, params: Record<string, unknown>) => unknown,
+  section: AdvisorSection = "findings",
+  control: AssistantControl = assistant().control,
+) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (
@@ -118,11 +200,13 @@ function mount(answer: (name: string, params: Record<string, unknown>) => unknow
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <ToastProvider>
-          <LayerHost>
-            <AdvisorPage section="findings" />
-          </LayerHost>
-        </ToastProvider>
+        <AssistantControlContext.Provider value={control}>
+          <ToastProvider>
+            <LayerHost>
+              <AdvisorPage section={section} />
+            </LayerHost>
+          </ToastProvider>
+        </AssistantControlContext.Provider>
       </Router>
     </ClientContext.Provider>,
   );
@@ -130,10 +214,12 @@ function mount(answer: (name: string, params: Record<string, unknown>) => unknow
 
 beforeEach(() => {
   serial = 0;
+  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // THE OWNER'S ORDER: the most costly severity first, then the largest
@@ -157,9 +243,16 @@ test("findings are ranked by severity, then measured cost, then recency", () => 
   ]);
 });
 
-test("each row says how fresh it is: checked when, or not re-checked since, and what became of a fix", async () => {
+// A ROW IS ITS NUMBERS AND WHAT BECAME OF IT; when it was found and checked
+// is behind Details.
+test("each row says its numbers and what became of it, and Details when it was checked", async () => {
   const { answer } = engine([
-    finding({ title: "Fresh one", impact: { hours_per_week: 12, tokens_per_week: null } }),
+    finding({
+      title: "Fresh one",
+      stats: [
+        { key: "h", label: "Hours a week", value: 12, unit: "hours", was: null, better: null },
+      ],
+    }),
     finding({ title: "Stale one", confirmed: "stale", last_confirmed_at: "2026-11-01T08:00:00Z" }),
     finding({
       title: "Applied one",
@@ -170,13 +263,19 @@ test("each row says how fresh it is: checked when, or not re-checked since, and 
   ]);
   mount(answer);
   await screen.findByText("Fresh one");
-  expect(screen.getByText(/^12 h a week · found .+ · checked 4 minutes ago$/)).toBeDefined();
+  expect(screen.getByText(/Hours a week: 12 h/)).toBeDefined();
   expect(screen.getByText(/not re-checked since/)).toBeDefined();
   expect(screen.getByText(/applied, checking its effect until/)).toBeDefined();
   expect(screen.getByText(/seen 2 times before/)).toBeDefined();
+  expect(screen.queryByText(/checked 4 minutes ago/)).toBeNull();
+  const fresh = screen
+    .getAllByRole("listitem")
+    .find((li) => li.textContent?.includes("Fresh one"))!;
+  fireEvent.click(within(fresh).getByRole("button", { name: /Details/ }));
+  expect(await within(fresh).findByText(/checked 4 minutes ago/)).toBeDefined();
 });
 
-test("a finding the engine builds a change for offers Apply, which re-checks it first", async () => {
+test("a fix's press says what it does and opens its Apply in place, on a re-check", async () => {
   const add = finding({
     title: "Add a seat",
     fix: {
@@ -186,21 +285,25 @@ test("a finding the engine builds a change for offers Apply, which re-checks it 
         { label: "Add one", change: { entity: "units", id: "eng", set: {}, summary: "add" } },
       ],
     },
+    actions: { primary: press({ kind: "apply", label: "Add one", option: 0 }), secondary: [] },
   });
   const { id } = add;
   const { sent, answer } = engine([add]);
   mount(answer);
   await screen.findByText("Add a seat");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add one" }));
   });
-  // THE DIALOG OPENS ON A RE-CHECK, never on the finding as it was stored.
+  // APPLY OPENS IN PLACE, under its row, on a re-check, never on the finding
+  // as it was stored, and never in a dialog over the list.
   await waitFor(() =>
     expect(
       sent.some((r) => r.method === "POST" && r.path === `/advisor/findings/${id}/recheck`),
     ).toBe(true),
   );
-  expect(screen.getByRole("dialog")).toBeDefined();
+  const panel = screen.getByRole("region", { name: "Apply: Add one" });
+  expect(screen.getAllByRole("listitem").find((li) => li.contains(panel))).toBeDefined();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("Snooze and Dismiss send the person's answer and read the list again", async () => {
@@ -224,22 +327,15 @@ test("Snooze and Dismiss send the person's answer and read the list again", asyn
   await waitFor(() => expect(reads()).toBeGreaterThan(before));
 });
 
-test("what blocks the company brings the go-live check to the top", async () => {
+test("while anything blocks, the review of each agent's access is offered after the findings", async () => {
   const { answer } = engine([
     finding({ severity: "blocks", title: "No model signs in" }),
     finding({ title: "Slow" }),
   ]);
   mount(answer);
-  const check = await screen
-    .findByRole("list", { name: /Go-live check/ })
-    .catch(() => screen.findByLabelText(/Go-live check/));
-  expect(within(check as HTMLElement).getByText("Fix what blocks the company (1)")).toBeDefined();
+  await screen.findByText("No model signs in");
   expect(screen.getByText("Review what each agent can do")).toBeDefined();
-  expect(goLiveSteps([finding({ severity: "note" })]).map((s) => s.state)).toEqual([
-    "done",
-    "done",
-    "waiting",
-  ]);
+  expect(screen.queryByText(/Go-live check/)).toBeNull();
 });
 
 test("the head says when the checks last ran, and Run now starts them", async () => {
@@ -255,17 +351,41 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     opened: 2,
     resolved: 1,
     model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
   };
   const { sent, answer } = engine([], run);
   mount(answer);
-  await screen.findByText("Checked 4 minutes ago. It found 2 new findings and closed 1.");
+  await screen.findByText(
+    "All checks ran 4 minutes ago. It found 2 new findings and closed 1 finding.",
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
   });
   await waitFor(() =>
     expect(sent.some((r) => r.method === "POST" && r.path === "/advisor/runs")).toBe(true),
   );
-  expect(runWords(null, NOW)).toBe("The checks have not run yet.");
+  expect(sent.find((r) => r.path === "/advisor/runs")?.body).toEqual({ kind: "rules" });
+  expect(runWords(runView(null), NOW)).toBe("The checks have not run yet.");
+});
+
+// A DEEP RUN IS ASKED FOR BY NAME, beside the checks: it investigates with the
+// Advisor's model and can take many minutes, so it is its own press.
+test("Run deep asks the engine for a deep run", async () => {
+  const { sent, answer } = engine([], null);
+  mount(answer);
+  const press = await screen.findByRole("button", { name: "Run deep" });
+  await act(async () => {
+    fireEvent.click(press);
+  });
+  await waitFor(() =>
+    expect(sent.find((r) => r.method === "POST" && r.path === "/advisor/runs")?.body).toEqual({
+      kind: "deep",
+    }),
+  );
 });
 
 // R5: AN ATLAS FIX IS OFFERED ON THE ENTRIES THE ENGINE NAMES, only to a reader
@@ -278,17 +398,318 @@ test("an atlas finding offers its fix where the engine named its entries, and th
     options: [],
     act: { tool: "atlas_set_owner", asks: "owner" },
   };
+  const actions = { primary: press({ kind: "fix", label: "Review the fix" }), secondary: [] };
   const named = finding({
     title: "3 services have no owner",
     fix: act,
     entries: [{ id: "e1", kind: "service", key: "checkout", name: "Checkout" }],
+    actions,
   });
-  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null });
+  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null, actions });
   const { answer } = engine([named, unnamed]);
   mount(answer);
   await screen.findByText("3 services have no owner");
   expect(screen.getAllByRole("button", { name: "Review the fix" })).toHaveLength(1);
   expect(screen.getByRole("link", { name: "Open the atlas" }).getAttribute("href")).toBe(
     "#/company/atlas",
+  );
+});
+
+// THE REPORTS TAB lists each week's report, newest first, with what the week
+// moved; each opens its week's page, and an older page is asked for by the
+// cursor the engine answered.
+test("the Reports tab lists each week and asks for older ones by the engine's cursor", async () => {
+  const { asked, answer } = engine([]);
+  const week = (n: number) => ({
+    week: `2026-W${n}`,
+    period: { from: "2026-11-16T00:00:00Z", to: "2026-11-23T00:00:00Z" },
+    written_at: ago(60),
+    opened: n === 47 ? 3 : 0,
+    resolved: 1,
+    applied: 0,
+    dismissed: 2,
+  });
+  const reports = (name: string, params: Record<string, unknown>) => {
+    const said = answer(name, params);
+    if (name !== "advisor_reports") return said;
+    return params.cursor === "c2"
+      ? { reports: [week(45)], next_cursor: null }
+      : { reports: [week(47), week(46)], next_cursor: "c2" };
+  };
+  mount(reports, "reports");
+  const list = await screen.findByRole("list", { name: "Weekly reports" });
+  const first = within(list).getByRole("link", { name: "Week 47 of 2026" });
+  expect(first.getAttribute("href")).toBe("#/advisor/reports/2026-W47");
+  expect(within(list).getAllByText(/3 opened · 1 resolved · 0 applied · 2 dismissed/)).toHaveLength(
+    1,
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Show older reports" }));
+  });
+  await within(list).findByRole("link", { name: "Week 45 of 2026" });
+  // THE WEEKS ALREADY SHOWN STAY, the older page after them.
+  expect(
+    within(list)
+      .getAllByRole("link")
+      .map((a) => a.textContent),
+  ).toEqual(["Week 47 of 2026", "Week 46 of 2026", "Week 45 of 2026"]);
+  expect(asked.filter((q) => q.name === "advisor_reports").map((q) => q.params.cursor)).toEqual([
+    undefined,
+    "c2",
+  ]);
+  expect(screen.queryByRole("button", { name: "Show older reports" })).toBeNull();
+});
+
+test("the Reports tab says when no report was written yet", async () => {
+  const { answer } = engine([]);
+  mount((name, params) => {
+    const said = answer(name, params);
+    return name === "advisor_reports" ? { reports: [], next_cursor: null } : said;
+  }, "reports");
+  expect(await screen.findByText("No report yet")).toBeDefined();
+});
+
+// A PAGE STILL HELD while the next is asked for is not drawn twice.
+test("a page's rows already held are drawn once", () => {
+  const held = [{ id: "a" }, { id: "b" }];
+  expect(pagedOn(held, held, (r) => r.id)).toEqual(held);
+  expect(pagedOn(held, [{ id: "b" }, { id: "c" }], (r) => r.id).map((r) => r.id)).toEqual([
+    "a",
+    "b",
+    "c",
+  ]);
+  expect(pagedOn([], undefined, (r: { id: string }) => r.id)).toEqual([]);
+});
+
+// "CLOSED 0" SAID NOTHING: a run says what it moved, and only that.
+test("the run line says only what the run moved", () => {
+  const run = (opened: number, resolved: number): AdvisorRunSummary => ({
+    run_id: "r",
+    trigger: "schedule",
+    by: "",
+    unread: [],
+    started_at: ago(7),
+    ended_at: ago(6),
+    status: "done",
+    classes_run: 30,
+    opened,
+    resolved,
+    model: null,
+    kind: "rules",
+    progress: [],
+    budget: null,
+    stopped_by: null,
+    classes: [],
+  });
+  expect(runWords(runView(run(1, 0)), NOW)).toBe(
+    "All checks ran 6 minutes ago. It found 1 new finding.",
+  );
+  expect(runWords(runView(run(0, 2)), NOW)).toBe(
+    "All checks ran 6 minutes ago. It closed 2 findings.",
+  );
+  expect(runWords(runView(run(0, 0)), NOW)).toBe("All checks ran 6 minutes ago.");
+});
+
+// THE HEAD'S PLACEMENT IS ON A BOX OF OUR OWN: on the kit's Text, our rule
+// tied with the kit's own (min-width: 0), and whichever chunk's style loaded
+// last won, which squeezed the line to a word a line at 390 px.
+test("the run line's placement is on the page's own box, never on the kit's Text", async () => {
+  const { answer } = engine([]);
+  mount(answer);
+  await screen.findByText("The checks have not run yet.");
+  const box = document.querySelector(".advisor-head__run")!;
+  expect(box.classList.contains("crewlet-text")).toBe(false);
+  expect(box.querySelector(".crewlet-text")?.textContent).toBe("The checks have not run yet.");
+  expect(document.querySelector(".crewlet-text.advisor-head__run")).toBeNull();
+});
+
+// WHAT TO CHANGE COMES BEFORE THE REVIEW: the review of what each agent can
+// do stood between the go-live check and the findings, and pushed the first
+// finding below the fold.
+test("the review of each agent's access comes after what to change", async () => {
+  const { answer } = engine([finding({ severity: "blocks", title: "No model signs in" })]);
+  mount(answer);
+  const list = await screen.findByText("What to change");
+  const review = screen.getByText("Review what each agent can do");
+  expect(list.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// A SNOOZE IS SEEN AND CAN BE ENDED: the finding leaves What to change for a
+// list of its own that says until when, and its menu ends the snooze.
+test("a snoozed finding is listed apart, says until when, and can be woken", async () => {
+  const later = new Date(NOW + 6 * 86_400_000).toISOString();
+  const quiet = finding({ title: "Quiet one", snoozed_until: later });
+  const { sent, answer } = engine([finding({ title: "Loud one" }), quiet]);
+  mount(answer);
+  const snoozedList = await screen
+    .findByRole("region", { name: /Snoozed/ })
+    .catch(() => screen.findByLabelText(/Snoozed/));
+  expect(within(snoozedList as HTMLElement).getByText("Quiet one")).toBeDefined();
+  expect(within(snoozedList as HTMLElement).getByText(/snoozed until/)).toBeDefined();
+  const change = screen.getByText("What to change").closest("section, [role=region], div")!;
+  expect(within(change as HTMLElement).queryByText("Quiet one")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More for Quiet one" }));
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("menuitem", { name: "End the snooze" }));
+  });
+  await waitFor(() =>
+    expect(sent.find((r) => r.path === `/advisor/findings/${quiet.id}/decision`)?.body).toEqual({
+      decision: "reopen",
+    }),
+  );
+});
+
+// A ROW'S TIMES ARE READ, NOT LOGGED: no seconds, and no year of this one.
+test("a row's instants carry no seconds and no year", async () => {
+  const { answer } = engine([
+    finding({ title: "Stale", confirmed: "stale", last_confirmed_at: ago(60 * 26) }),
+    finding({
+      title: "Applied",
+      state: "applied",
+      effect_due_at: new Date(NOW + 20 * 3_600_000).toISOString(),
+      ineffective: { fix_digest: "x", applied_at: ago(60 * 50) },
+    }),
+  ]);
+  mount(answer);
+  await screen.findByText("Stale");
+  const metas = [
+    screen.getByText(/not re-checked since/).textContent!,
+    screen.getByText(/checking its effect until/).textContent!,
+  ];
+  for (const meta of metas) {
+    expect(meta).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+    expect(meta).not.toMatch(new RegExp(String(new Date(NOW).getFullYear())));
+  }
+  expect(screen.getByText(/a change applied 2 days ago did not clear it/)).toBeDefined();
+});
+
+// ONE CONDITION ON MANY SEATS IS ONE ROW, each seat inside it with its own
+// fix: seven seats were seven rows of the same sentence.
+test("findings of one class are one row, each subject inside it with its own fix", async () => {
+  const fix: AdvisorKeptFinding["fix"] = {
+    kind: "config_change",
+    sentence: "Run learning on a smaller model.",
+    options: [
+      { label: "Learn on Haiku", change: { entity: "roles", id: "x", set: {}, summary: "s" } },
+    ],
+  };
+  const same = (n: number) =>
+    finding({
+      class: "learning.auxiliary_model",
+      key: `learning.auxiliary_model:seat:s${n}`,
+      title: "Agents that learn on their main model.",
+      severity: "note",
+      fix,
+      actions: {
+        primary: press({ kind: "apply", label: "Learn on Haiku", option: 0 }),
+        secondary: [],
+      },
+    });
+  const { answer } = engine([same(1), same(2), same(3), finding({ title: "Alone" })]);
+  mount(answer);
+  await screen.findByText("Alone");
+  const lines = [...document.querySelectorAll(".crewlet-attention-list__line")].map(
+    (l) => l.textContent,
+  );
+  expect(lines.filter((l) => l?.includes("Agents that learn on their main model."))).toEqual([
+    "Worth knowing: 3 seats: Agents that learn on their main model.",
+  ]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Details/ })[1]!);
+  const inside = await screen.findByRole("list", { name: "Each of the 3 seats" });
+  expect(
+    within(inside)
+      .getAllByRole("link")
+      .map((a) => a.textContent),
+  ).toEqual(["Seat 1", "Seat 2", "Seat 3"]);
+  expect(within(inside).getByRole("button", { name: "Learn on Haiku for Seat 2" })).toBeDefined();
+  expect(within(inside).getByRole("button", { name: /More for Seat 3/ })).toBeDefined();
+});
+
+// ASK CREWLET ABOUT THIS opens the finding's own page with the question in the
+// box for the person to send: never sent for them, and never naming the
+// finding by its id, which the page's context names.
+test("Ask Crewlet about this drafts a question on the finding's page, never sends it", async () => {
+  const f = finding({ title: "Slow reviews" });
+  const { answer } = engine([f]);
+  const { control, drafted, asked } = assistant();
+  mount(answer, "findings", control);
+  await screen.findByText("Slow reviews");
+  fireEvent.click(screen.getByRole("button", { name: "More for Slow reviews" }));
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Ask Crewlet about this" }));
+  });
+  expect(asked).toEqual([]);
+  expect(drafted).toHaveLength(1);
+  expect(drafted[0]).not.toContain(f.id);
+  expect(window.location.hash).toBe(`#/advisor/findings/${f.id}`);
+});
+
+// A DISMISSAL CAN BE TAKEN BACK at once, from its toast.
+test("a dismissal's toast offers Undo, which reopens it", async () => {
+  const f = finding({ title: "Wrong one" });
+  const { sent, answer } = engine([f]);
+  mount(answer);
+  await screen.findByText("Wrong one");
+  fireEvent.click(screen.getByRole("button", { name: "More for Wrong one" }));
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Dismiss: it's wrong" }));
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  });
+  await waitFor(() =>
+    expect(
+      sent.filter((r) => r.path === `/advisor/findings/${f.id}/decision`).map((r) => r.body),
+    ).toEqual([{ decision: "dismiss", reason: "wrong" }, { decision: "reopen" }]),
+  );
+});
+
+// THE HEAD NAMES NO MODEL: the Advisor's model is chosen in Settings › Models,
+// and the page neither says it nor reads it (no model list, no company
+// document), so it offers no model line, no link to it and no picker.
+test("the head shows no model line, no model link and no picker, and reads no model", async () => {
+  const { asked, answer } = engine([finding({ title: "Slow" })]);
+  mount(answer);
+  await screen.findByText("Slow");
+  const head = document.querySelector<HTMLElement>(".advisor-head")!;
+  expect(head.textContent).not.toMatch(/Explains with|No model explains|Model settings/);
+  expect(within(head).queryByRole("link")).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(document.querySelector('a[href="#/settings/models"]')).toBeNull();
+  expect(asked.map((q) => q.name)).not.toContain("llm_entries");
+  expect(asked.map((q) => q.name)).not.toContain("config");
+});
+
+// THE PAGE OPENS ON THE NUMBERS: each figure against the previous range, and
+// linked to the open finding that explains it.
+test("the numbers open the page, each linked to the finding that explains it", async () => {
+  const waste = finding({ class: "wake.noop_share", title: "Turns that changed nothing" });
+  const { answer } = engine([waste]);
+  mount(answer);
+  const strip = await screen.findByLabelText("The company's numbers");
+  const wakes = strip.querySelector<HTMLElement>('[data-stat="wasted_turns_percent"]')!;
+  expect(within(wakes).getByText("75%")).toBeDefined();
+  expect(
+    within(wakes)
+      .getByRole("link", { name: "Why: Turns that changed nothing" })
+      .getAttribute("href"),
+  ).toBe(`#/advisor/findings/${waste.id}`);
+  const open = strip.querySelector<HTMLElement>('[data-stat="open_items"]')!;
+  expect(within(open).getByText("15")).toBeDefined();
+  expect(within(open).queryByRole("link")).toBeNull();
+  expect(screen.getByText("Turns that changed nothing, by what woke them")).toBeDefined();
+});
+
+test("the range picker asks the numbers for its range", async () => {
+  const { asked, answer } = engine([]);
+  mount(answer);
+  await screen.findByLabelText("The company's numbers");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: "30 days" }));
+  });
+  await waitFor(() =>
+    expect(asked.filter((q) => q.name === "advisor_snapshot").map((q) => q.params.range)).toContain(
+      "30d",
+    ),
   );
 });

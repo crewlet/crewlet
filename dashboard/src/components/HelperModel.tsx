@@ -1,7 +1,8 @@
 /**
  * The one setting each of Crewlet's two helpers has: the model it runs on
- * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), shown
- * in the head of the helper's own page and chosen there by an administrator.
+ * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), chosen
+ * by an administrator in Settings › Models alone, on the helpers' line under its list;
+ * neither helper's own page names it.
  *
  * WHICH MODELS CAN RUN A HELPER IS THE ENGINE'S ANSWER (`llm_entries`'
  * `helper_problem`): a model whose harness keeps tools of its own that Crewlet
@@ -14,32 +15,31 @@
  * key, which turns Ask Crewlet off and the Advisor's model work with it.
  */
 
-import { useCallback, useMemo } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Select, Text } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { documentLimit } from "~/lib/limits.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
-import type { ModelEntriesAnswer } from "~/protocol/models.ts";
-import type { CompanyDocument } from "~/protocol/types.ts";
-import { SettingWriteStatus } from "./SettingWriteStatus.tsx";
+import { SettingWriteStatus, standingWords } from "./SettingWriteStatus.tsx";
 
 /** The two helpers, by the block of the company document each is set in. */
 export type Helper = "assistant" | "advisor";
 
 /** What each helper is called, where its model is written, and what having none means. */
 export const HELPERS: Readonly<
-  Record<Helper, { name: string; settingKey: string; without: string }>
+  Record<Helper, { name: string; settingKey: string; without: string; off: string }>
 > = {
   assistant: {
     name: "Ask Crewlet",
     settingKey: "assistant.model",
     without: "Ask Crewlet is off without a model",
+    off: "Turn Ask Crewlet off",
   },
   advisor: {
     name: "Advisor",
     settingKey: "advisor.model",
     without: "Its checks still run, with no explanations or report summary",
+    off: "Run the Advisor with no model",
   },
 };
 
@@ -50,6 +50,10 @@ export interface HelperChoice {
   model: string;
   /** Why it cannot run a helper, in the engine's words; null where it can. */
   problem: string | null;
+  /** Drawn before its key on the option and the trigger: its harness's mark. */
+  leading?: ReactNode;
+  /** Its words on the option and the trigger, where they say more than its key (the model it runs, by name). */
+  label?: ReactNode;
 }
 
 /** The change that gives `helper` the model `key`, or takes its model away for null. */
@@ -81,15 +85,41 @@ export interface HelperModelProps {
   canAssign: boolean;
   /** Read again what the page draws, once the change is applied or a reload is the remedy. */
   onApplied: () => void;
+  /** How wide the picker is: its own words' width, or its place's whole width in a column of them. */
+  width?: "auto" | "full";
 }
 
 /** The helper's model: a picker for a reader who may choose, its name for anybody else. */
-export function HelperModel({ helper, current, choices, canAssign, onApplied }: HelperModelProps) {
+export function HelperModel({
+  helper,
+  current,
+  choices,
+  canAssign,
+  onApplied,
+  width = "auto",
+}: HelperModelProps) {
   const { name } = HELPERS[helper];
   const write = useSettingWrite({
     reread: `Reload to see ${name}'s model as it is now.`,
     onApplied,
   });
+  // THE CHOICE SHOWS AT ONCE: the stored model is read back only once the
+  // write is applied, seconds later, and the old one standing until then read
+  // as a change that was lost. The chosen model is drawn while it is checked
+  // and saved, and the stored one again where nothing was saved.
+  const [chosen, setChosen] = useState<string | null | undefined>(undefined);
+  const settled = write.state.kind;
+  useEffect(() => {
+    if (settled === "refused" || settled === "unchanged" || settled === "idle") {
+      setChosen(undefined);
+    }
+  }, [settled]);
+  useEffect(() => {
+    if (chosen !== undefined && chosen === current) setChosen(undefined);
+  }, [chosen, current]);
+  const shown = chosen !== undefined ? chosen : current;
+  /** A pick waiting for its one confirm: the model, or null for none. */
+  const [asked, setAsked] = useState<{ key: string | null } | null>(null);
   if (!canAssign) {
     return (
       <Text as="span" variant="caption" tone="secondary" className="helper-model">
@@ -99,16 +129,19 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
   }
   // A MODEL ASSIGNED BUT NOT LISTED (removed from the company since) is still
   // the value, drawn as what it is rather than as None.
-  const listed = choices.some((c) => c.key === current);
+  const listed = choices.some((c) => c.key === shown);
   const options = [
     ...choices.map((c) => ({
       value: c.key,
-      label: c.key,
-      description: c.problem ?? c.model,
-      disabled: c.problem !== null && c.key !== current,
+      label: c.label ?? c.key,
+      text: c.key,
+      ...(c.leading ? { leading: c.leading } : {}),
+      // THE MODEL IS IN THE LABEL where one is given; the line under it is then the reason alone.
+      ...(c.problem !== null || !c.label ? { description: c.problem ?? c.model } : {}),
+      disabled: c.problem !== null && c.key !== shown,
     })),
-    ...(current !== null && !listed
-      ? [{ value: current, label: current, description: "Not one of the company's models" }]
+    ...(shown !== null && !listed
+      ? [{ value: shown, label: shown, description: "Not one of the company's models" }]
       : []),
     { value: NONE, label: "None", description: HELPERS[helper].without },
   ];
@@ -117,61 +150,47 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
       <Select
         ariaLabel={`${name}'s model`}
         size="sm"
-        width="auto"
-        value={current ?? NONE}
+        width={width}
+        value={shown ?? NONE}
         options={options}
         disabled={write.busy}
-        onChange={(value) =>
-          write.submit(helperModelPlan(helper, String(value) === NONE ? null : String(value)))
-        }
+        // ONE CONFIRM, as every model picker on its page asks: a pick saved
+        // at once changed Ask Crewlet's model by a stray choice.
+        onChange={(value) => {
+          const key = String(value) === NONE ? null : String(value);
+          if (key !== shown) setAsked({ key });
+        }}
       />
+      {asked ? (
+        <ConfirmModal
+          open
+          onClose={() => setAsked(null)}
+          onConfirm={() => {
+            setChosen(asked.key);
+            write.submit(helperModelPlan(helper, asked.key));
+            setAsked(null);
+          }}
+          title={asked.key === null ? `${HELPERS[helper].off}?` : `Move ${name} to ${asked.key}?`}
+          message={
+            asked.key === null
+              ? `${HELPERS[helper].without}.`
+              : `${name} runs on ${asked.key} from now on.`
+          }
+          confirmLabel={asked.key === null ? "Turn off" : "Move"}
+          {...(asked.key === null ? { destructive: true } : {})}
+        />
+      ) : null}
       <SettingWriteStatus write={write} onReload={onApplied} answersWarning />
+      {write.state.kind === "saved" ? (
+        <Text as="span" variant="caption" tone="secondary" role="status">
+          {chosen === null || (chosen === undefined && current === null)
+            ? `${name} has no model now`
+            : `${name} now runs on ${chosen ?? current}`}
+          {write.state.standing === "applied" || write.state.standing === "passed"
+            ? "."
+            : `, ${standingWords(write.state.standing)}`}
+        </Text>
+      ) : null}
     </span>
   );
-}
-
-/**
- * Every model of the company as a helper's choice, with the engine's reason
- * where it cannot run one: the administrator's reading, the only one that
- * says it, and the only reader who chooses.
- */
-export function helperChoices(answer: ModelEntriesAnswer | null): HelperChoice[] {
-  if (answer?.reading !== "admin") return [];
-  return answer.entries.map((entry) => ({
-    key: entry.key,
-    model: entry.model,
-    problem: entry.helper_problem,
-  }));
-}
-
-/**
- * A helper's model as its page draws it: the key assigned, read off the
- * company document an administrator reads, the company's models to choose
- * from, and whether this reader may choose. A reader who may not choose is
- * told the model's name by the page from what it already reads.
- */
-export function useHelperModel(helper: Helper): {
-  current: string | null;
-  choices: HelperChoice[];
-  canAssign: boolean;
-  reload: () => void;
-} {
-  const access = useConfigWriteAccess();
-  const entries = useQuery("llm_entries", undefined, { enabled: access.can });
-  const config = useQuery("config", undefined, { enabled: access.can });
-  const doc = (config.data as CompanyDocument | null) ?? null;
-  const held = doc ? documentLimit(doc, HELPERS[helper].settingKey) : undefined;
-  const choices = useMemo(() => helperChoices(entries.data), [entries.data]);
-  const { refetch: refetchEntries } = entries;
-  const { refetch: refetchConfig } = config;
-  const reload = useCallback(() => {
-    refetchEntries();
-    refetchConfig();
-  }, [refetchEntries, refetchConfig]);
-  return {
-    current: typeof held === "string" && held !== "" ? held : null,
-    choices,
-    canAssign: access.can,
-    reload,
-  };
 }

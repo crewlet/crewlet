@@ -1013,7 +1013,7 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
-	if s.Research != nil && s.Company != nil {
+	if s.Research != nil {
 		r.Register("research_page", Everybody(), s.researchPage)
 	}
 	if s.Searcher != nil {
@@ -1145,6 +1145,8 @@ func Register(r *Registry, s Sources) {
 		r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
 		r.Register("advisor_reports", Requires(iam.GrantAdmin), s.advisorReports)
 		r.Register("advisor_report", Requires(iam.GrantAdmin), s.advisorReport)
+		r.Register("advisor_snapshot", Requires(iam.GrantAdmin), s.advisorSnapshot)
+		r.Register("advisor_capacity", Requires(iam.GrantAdmin), s.advisorCapacity)
 	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the

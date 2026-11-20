@@ -413,7 +413,7 @@ const (
 	seatDayStatement = `
 		SELECT node, agent_id, handle, role, turns, failed, reviewed,
 		       first_pass, sent_back, duration_hist, last_ended_at,
-		       changes_opened, reviews_given, findings_received, checks_failed, ejections
+		       changes_opened, reviews_given, findings_received, checks_failed, ejections, busy_ms
 		  FROM usage_turns
 		 WHERE day = ? AND (? = '' OR agent_id = ?) AND %s
 		 ORDER BY day, node, agent_id`

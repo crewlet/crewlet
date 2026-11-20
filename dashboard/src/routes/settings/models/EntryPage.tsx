@@ -91,6 +91,8 @@ export interface WhoRuns {
   categories: CategoryUse[];
   /** Whether Ask Crewlet runs on the model. */
   assistant: boolean;
+  /** Whether the Advisor explains its findings with the model. */
+  advisor: boolean;
   /** Every distinct seat on the model, at any position. */
   seats: number;
 }
@@ -143,6 +145,7 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
       backups: list(category, backups),
     })).filter((c) => c.runs.length > 0 || c.backups.length > 0),
     assistant: usedBy.some((u) => u.assistant === "chat"),
+    advisor: usedBy.some((u) => u.advisor === "findings"),
     seats: new Set(usedBy.flatMap((u) => (u.seat ? [u.seat] : []))).size,
   };
 }
@@ -168,13 +171,17 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
   );
 }
 
-function assistantLine(runs: boolean): string[] {
-  return runs ? ["Ask Crewlet runs on it."] : [];
+/** The helpers that run on a model, a line each: Ask Crewlet and the Advisor are no seat's. */
+function helperLines(who: Pick<WhoRuns, "assistant" | "advisor">): string[] {
+  return [
+    ...(who.assistant ? ["Ask Crewlet runs on it."] : []),
+    ...(who.advisor ? ["The Advisor explains its findings with it."] : []),
+  ];
 }
 
 function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const who = useMemo(() => whoRuns(model.entry.used_by), [model.entry.used_by]);
-  const assistant = assistantLine(who.assistant);
+  const assistant = helperLines(who);
   return (
     <Card padding="none">
       <Card.Header count={who.seats}>
@@ -637,7 +644,7 @@ export function EntryPage({
 }) {
   const signInRef = useRef<HTMLElement | null>(null);
   const key = model.key;
-  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, By job, an alarm) arrives
+  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, a seat's job, an alarm) arrives
   // here as `?focus=host-login`: the sign-in card is where it is made, and
   // the parameter is spent once it has moved focus, so Back does not move it
   // again.
@@ -673,7 +680,17 @@ export function EntryPage({
   // 2); the limits are a card of their own. Where it runs and the web tools
   // are read off the document, which only an admin reads.
   const facts: Fact[] = [
-    { label: "Model", value: <span className="mono">{model.model}</span>, token: true },
+    // THE MODEL BY NAME where the engine's catalogue names it, its id on hover; else its id.
+    {
+      label: "Model",
+      value:
+        model.modelName === model.model ? (
+          <span className="mono">{model.model}</span>
+        ) : (
+          <span title={model.model}>{model.modelName}</span>
+        ),
+      token: true,
+    },
     { label: "Status", value: <HealthLine model={model} compact /> },
     ...(data.admin && model.executor
       ? [
