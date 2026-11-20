@@ -12,6 +12,13 @@
 // administrator's session and under the entity's own tag, only when they press
 // Apply. ADR-0115 records the rule.
 //
+// # Stated with its numbers, and every class says what it concluded (ADR-0166)
+//
+// A finding leads with a headline carrying its number, its stats, a chart, the
+// seats it is about and one primary action; a run records, per class, found,
+// clear, unread, or silent with why ([Outcomes]); the page reads the company's
+// numbers from [ComputeSnapshot].
+//
 // # Kept, re-derived, and re-checked before a fix is sent (ADR-0164)
 //
 // A background duty runs every detector on its class's cadence and keeps what
@@ -221,6 +228,11 @@ type Finding struct {
 	// every finding of one class, so a class reads as one row: what it is
 	// about is Subject, Item, Names, Evidence and Records.
 	Title string `json:"title"`
+	// Headline is one line that carries the finding's number ("Seats sat
+	// idle 11 h on 19 Nov: the model hit its limit 4 times"), where the
+	// class or the investigation wrote one; the title stands in for it
+	// otherwise (ADR-0166).
+	Headline string `json:"headline,omitempty"`
 	// Why says what it costs, in the owner's words.
 	Why string `json:"why"`
 	// Item is the one thing within the subject the finding is about, as a
@@ -251,6 +263,15 @@ type Answer struct {
 	Revision string    `json:"revision"`
 	Findings []Finding `json:"findings"`
 	Unread   []string  `json:"unread"`
+	// Silent is each class that read its sources and still could not judge
+	// all of the company, with why (ADR-0166).
+	Silent []Silence `json:"silent,omitempty"`
+}
+
+// Silence is what a class could not judge, and why, in words.
+type Silence struct {
+	Class  Class  `json:"class"`
+	Reason string `json:"reason"`
 }
 
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's

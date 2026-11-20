@@ -227,6 +227,55 @@ func (s Staffing) flowOf(g seatGroup) groupFlow {
 	return out
 }
 
+// unjudged says which seat groups of at least least seats s could not judge
+// and why, "" where it judged them all: the classes stay silent rather than
+// judge a partial week, and the run says so (ADR-0166).
+func (s *Staffing) unjudged(c *config.Company, least int) string {
+	if s == nil {
+		return "The tracker keeps no flow record, so no seat's time can be judged."
+	}
+	groups, changed := 0, 0
+	var unmeasured []string
+	for _, g := range groupsOf(c) {
+		if len(g.roles) < least {
+			continue
+		}
+		groups++
+		switch {
+		case !s.measured(g):
+			for _, h := range g.handles() {
+				if t, ok := s.Seats[h]; (!ok || !t.Measured) && !slices.Contains(unmeasured, h) {
+					unmeasured = append(unmeasured, h)
+				}
+			}
+		case !s.unchanged(g):
+			changed++
+		}
+	}
+	var why []string
+	if len(unmeasured) > 0 {
+		slices.Sort(unmeasured)
+		why = append(why, fmt.Sprintf("%s not measured every day of the window (%s)",
+			countSaid(len(unmeasured), "seat's time was", "seats' time was"), strings.Join(unmeasured, ", ")))
+	}
+	if changed > 0 {
+		why = append(why, countSaid(changed, "group changed its seats", "groups changed their seats")+
+			" during the window")
+	}
+	if len(why) == 0 {
+		return ""
+	}
+	return "Some seat groups could not be judged: " + strings.Join(why, "; ") + "."
+}
+
+// countSaid is n with the singular or plural words that follow it.
+func countSaid(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
 // measured reports whether every seat of g has numbers to judge.
 func (s Staffing) measured(g seatGroup) bool {
 	for _, h := range g.handles() {
