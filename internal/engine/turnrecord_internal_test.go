@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -77,5 +78,49 @@ func TestATurnsRecordAtEveryBoundFitsOneMessage(t *testing.T) {
 	if len(got.ToolExecutions) != sandbox.MaxBridgeCalls || got.CallsElided == 0 || len(got.ElidedCalls) == 0 {
 		t.Errorf("the record lists %d calls and counts %d more in %d tallies, want the cap's and the rest counted",
 			len(got.ToolExecutions), got.CallsElided, len(got.ElidedCalls))
+	}
+}
+
+// A TURN'S RECORDS HOLD NO SECRET ITS WORDS CARRIED. A provider's key in the
+// turn's answer, the reviewer's account of it, its failure and the guard that
+// stopped it reaches every record the turn's end publishes as a marker, the
+// words around it kept, as the phases' records hold them.
+//
+// Mutation: publish the answer or the summary unredacted (Response,
+// planSummary), or clip a diagnostic before redacting it (events.Diagnostic),
+// and its record holds the key.
+func TestATurnsRecordsHoldNoSecretItsWordsCarried(t *testing.T) {
+	t.Parallel()
+	var key string
+	for _, s := range redacttest.Shapes() {
+		if s.Name == "anthropic-key" {
+			key = s.Sample
+		}
+	}
+	said := "deployed with\n" + key + "\nthen checked the logs"
+	for name, res := range map[string]turn.Result{
+		"the answer": {Decision: phase.Failed, Artifact: said,
+			Breach: &turn.Breach{Kind: types.GuardMaxIter, Detail: said}},
+		"the reviewer's account": {Decision: phase.Done, Artifact: "done",
+			LastReview: &turn.Review{CompletedWork: said}},
+	} {
+		e, p, tel := failing(t)
+		e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, res, errors.New("execute: "+said), time.Now())
+		if len(p.events) < 2 {
+			t.Fatalf("%s: published %s, want the turn's records", name, typesOf(p.events))
+		}
+		for _, ev := range p.events {
+			wire, err := json.Marshal(ev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(wire), key[len(key)-12:]) {
+				t.Errorf("%s: %s holds the key: %s", name, ev.Type, wire)
+			}
+		}
+		summary := only[*types.TurnCompleted](t, p, "turn_completed")
+		if !strings.Contains(summary.PlanSummary, "then checked") || !strings.Contains(summary.PlanSummary, "[REDACTED:") {
+			t.Errorf("%s: the turn's summary is %q, want the words around a marker", name, summary.PlanSummary)
+		}
 	}
 }
