@@ -75,18 +75,25 @@ type documentedDetector struct {
 	class  Class
 	source source
 	detect func(c *config.Company, ev Evidence) []Finding
+	// silent, where set, says in words what of the company the class could
+	// not judge from ev and why, "" where it judged all of it (ADR-0166).
+	silent func(c *config.Company, ev Evidence) string
 }
 
 // documented is every class whose fix the document decides.
 var documented = []documentedDetector{
-	{ClassRoundCap, sourceRuns, roundCap},
-	{ClassBudgetStopped, sourceStops, budgetStopped},
-	{ClassWorkConcentrated, sourceWork, workConcentrated},
-	{ClassAlarmNoop, sourceLedger, alarmNoop},
-	{ClassModelHeld, sourceFlow, modelHeld},
-	{ClassScheduleOverdue, sourceSkips, scheduleOverdue},
-	{ClassAddSeat, sourceStaffing, addSeat},
-	{ClassRemoveSeat, sourceStaffing, removeSeat},
+	{ClassRoundCap, sourceRuns, roundCap, nil},
+	{ClassBudgetStopped, sourceStops, budgetStopped, nil},
+	{ClassWorkConcentrated, sourceWork, workConcentrated, nil},
+	{ClassAlarmNoop, sourceLedger, alarmNoop, nil},
+	{ClassModelHeld, sourceFlow, modelHeld, nil},
+	{ClassScheduleOverdue, sourceSkips, scheduleOverdue, nil},
+	{ClassAddSeat, sourceStaffing, addSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingWeek.unjudged(c, 1)
+	}},
+	{ClassRemoveSeat, sourceStaffing, removeSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingFortnight.unjudged(c, 2)
+	}},
 }
 
 // stallWords is each class's words, the same for every subject.

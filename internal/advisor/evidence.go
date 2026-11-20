@@ -320,8 +320,14 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 		}
 	}
 	for _, d := range documented {
-		if !ev.unread(d.source) {
-			found = append(found, d.detect(c, ev)...)
+		if ev.unread(d.source) {
+			continue
+		}
+		found = append(found, d.detect(c, ev)...)
+		if d.silent != nil {
+			if reason := d.silent(c, ev); reason != "" {
+				answer.Silent = append(answer.Silent, Silence{Class: d.class, Reason: reason})
+			}
 		}
 	}
 	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))

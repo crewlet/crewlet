@@ -224,6 +224,16 @@ Every Monday the Advisor writes one report of the week before, Monday to Monday 
 
 A server that was down on Monday writes the report when the Advisor next runs that week. A week the company did not exist through all of, such as the one before its first start, has no report: its numbers would read as a measured week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
 
+## The company's numbers
+
+`GET /advisor/snapshot` answers the company's numbers over the last 7, 14 or 30 company days (`range=7d`, `14d` or `30d`), today included, each beside the range before it: open items, the hours work waited for a seat, was held and stood blocked, the median pickup wait, turns, the share of turns that changed nothing and tokens per turn; and the charts the Advisor page draws from them: where each seat's work stood, open items by who holds them, what each kind of wake led to, and tokens per turn by seat. A source that could not be read is named in `unread` and its numbers left out. From a script:
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" "https://crewlet.example.com/advisor/snapshot?range=14d"
+```
+
+Every run also says what it concluded about each class (`classes` in `GET /advisor/runs/latest`): `found`, `clear`, `unread` (its source could not be read), or `silent` with why, for a class that read its sources and still could not judge all of the company, such as seat groups whose time was not measured every day of the window. A class is never skipped without saying so.
+
 ## What never happens on its own
 
 The engine does not grant access, change a model, move or remove a schedule, edit a policy or close anything because of a finding. The Advisor keeps findings and nothing else; a fix is sent by a person (ADR-0115).

@@ -3,6 +3,7 @@ package duty_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -94,11 +95,13 @@ type fakeReader struct {
 	weeks     []advisor.Span
 	// weekErr is what reading a week answers beside its metrics.
 	weekErr error
+	// silent is what the rule pass could not judge.
+	silent []advisor.Silence
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
 	r.reads++
-	return duty.Observed{Observations: r.observed}, nil
+	return duty.Observed{Observations: r.observed, Silent: r.silent}, nil
 }
 
 func (r *fakeReader) Signature(context.Context) (string, error) { return r.signature, nil }
@@ -204,6 +207,28 @@ func TestARunNowIsRunByTheHolderUnderItsId(t *testing.T) {
 	step(t, d)
 	if len(l.runs) != 1 || l.runs[0].ID != "pressed" || l.runs[0].Trigger != duty.TriggerPerson || m.passes != 1 {
 		t.Fatalf("runs %+v, model passes %d; want the press run with its model pass", l.runs, m.passes)
+	}
+}
+
+// A RUN RECORDS WHAT IT CONCLUDED ABOUT EVERY CLASS: found, clear, or silent
+// with why, so the run's summary names a class that could not judge rather
+// than reading it as one that found nothing. Mutation: record the scopes
+// alone, and a silent class is lost.
+func TestARunRecordsWhatItConcludedAboutEveryClass(t *testing.T) {
+	t.Parallel()
+	l := &fakeLog{}
+	r := &fakeReader{signature: "r1", silent: []advisor.Silence{{Class: advisor.ClassAddSeat, Reason: "Not measured."}}}
+	step(t, newDuty(l, r, nil, &clock{now: start}))
+	if len(l.runs) != 1 {
+		t.Fatalf("recorded %d runs, want the first tick's", len(l.runs))
+	}
+	at := slices.IndexFunc(l.runs[0].Classes, func(c advisor.ClassOutcome) bool { return c.Class == advisor.ClassAddSeat })
+	if at < 0 || l.runs[0].Classes[at].Outcome != advisor.OutcomeSilent || l.runs[0].Classes[at].Reason != "Not measured." {
+		t.Errorf("the run's classes = %+v, want add_seat silent with its reason", l.runs[0].Classes)
+	}
+	if len(l.runs[0].Classes) < len(advisor.EvidenceClasses()) {
+		t.Errorf("the run names %d classes, fewer than the %d evidence classes", len(l.runs[0].Classes),
+			len(advisor.EvidenceClasses()))
 	}
 }
 

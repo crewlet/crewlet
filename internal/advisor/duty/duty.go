@@ -77,6 +77,9 @@ type Observed struct {
 	Observations []advisor.Observation
 	Unread       []string
 	Held         func(advisor.Subject) bool
+	// Silent is each class that read its sources and could not judge all of
+	// the company, with why.
+	Silent []advisor.Silence
 }
 
 // ModelPass is the Advisor's model pass, nil where none runs on this node.
@@ -148,6 +151,9 @@ type Run struct {
 	// Scopes is each scope the run concluded about, or could not read, with
 	// how many findings each step took in it.
 	Scopes []ScopeRun
+	// Classes is what the rule pass concluded about each class, nil where
+	// none ran (ADR-0166).
+	Classes []advisor.ClassOutcome
 	// Model is the model pass's summary, nil where none ran.
 	Model any
 }
@@ -367,6 +373,11 @@ func (d *Duty) run(ctx context.Context, now time.Time, rules, model bool, trigge
 			reading.Groups = append(reading.Groups, advisor.GroupSetup, advisor.GroupEvidence)
 			reading.Unread, reading.Held = o.Unread, o.Held
 			observed = append(observed, o.Observations...)
+			found := make([]advisor.Finding, len(o.Observations))
+			for i, ob := range o.Observations {
+				found[i] = ob.Finding
+			}
+			run.Classes = advisor.Outcomes(found, o.Unread, o.Silent)
 		}
 	}
 	if model {

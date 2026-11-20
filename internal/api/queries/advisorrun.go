@@ -42,7 +42,43 @@ type AdvisorRunSummary struct {
 	Opened     int                  `json:"opened"`
 	Resolved   int                  `json:"resolved"`
 	Model      *AdvisorModelSummary `json:"model"`
+	// Kind is "rules" for a run of the detectors (with the model pass where
+	// one ran), "deep" for an investigation (ADR-0166).
+	Kind string `json:"kind"`
+	// Progress is a deep run's progress lines, oldest first; [] otherwise.
+	Progress []AdvisorProgress `json:"progress"`
+	// Budget is what a deep run spent of its bounds; nil otherwise.
+	Budget *AdvisorRunBudget `json:"budget"`
+	// StoppedBy is the bound a deep run stopped at, or "done"; nil otherwise.
+	StoppedBy *string `json:"stopped_by"`
+	// Classes is what the run concluded about each class: found, clear,
+	// silent (with why) or unread; [] for a run that ran no rules.
+	Classes []AdvisorClassOutcome `json:"classes"`
 }
+
+// AdvisorProgress is one line of a deep run's progress.
+type AdvisorProgress struct {
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
+// AdvisorRunBudget is what a deep run spent of its bounds.
+type AdvisorRunBudget struct {
+	Tokens         int64 `json:"tokens"`
+	TokensCeiling  int64 `json:"tokens_ceiling"`
+	Minutes        int64 `json:"minutes"`
+	MinutesCeiling int64 `json:"minutes_ceiling"`
+}
+
+// AdvisorClassOutcome is what a run concluded about one class.
+type AdvisorClassOutcome struct {
+	Class  string          `json:"class"`
+	Status advisor.Outcome `json:"status"`
+	Reason *string         `json:"reason"`
+}
+
+// RunKindRules is a run of the detectors, the model pass beside them where one ran.
+const RunKindRules = "rules"
 
 // advisorRun answers `advisor_run`: the latest run, or a Run now waiting for
 // the duty's next tick, which reads as running.
@@ -63,7 +99,8 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 	if len(pending) > 0 {
 		p := pending[0]
 		return &AdvisorRunSummary{RunID: p.ID, Trigger: string(advisordomain.TriggerPerson), By: p.By,
-			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}}, nil
+			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: RunKindRules,
+			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}, nil
 	}
 	row, found, err := s.Advisor.LatestRun(ctx, advisorFresh)
 	if err != nil {
@@ -78,7 +115,8 @@ func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
 // runSummary is row as a person reads it.
 func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 	out := &AdvisorRunSummary{RunID: row.ID, Trigger: string(row.Trigger), By: row.By, StartedAt: row.StartedAt,
-		EndedAt: instant(row.EndedAt), Status: string(row.Status), Unread: []string{}}
+		EndedAt: instant(row.EndedAt), Status: string(row.Status), Unread: []string{}, Kind: RunKindRules,
+		Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}
 	var scopes []duty.ScopeRecord
 	if len(row.Classes) > 0 {
 		if err := json.Unmarshal(row.Classes, &scopes); err != nil {
@@ -86,6 +124,15 @@ func runSummary(row advisordomain.RunRow) (*AdvisorRunSummary, error) {
 		}
 	}
 	for _, s := range scopes {
+		if s.Outcome != "" {
+			// A CLASS'S LINE, not a scope's: what the run concluded about it.
+			c := AdvisorClassOutcome{Class: s.Class, Status: s.Outcome}
+			if s.Reason != "" {
+				c.Reason = &s.Reason
+			}
+			out.Classes = append(out.Classes, c)
+			continue
+		}
 		out.Opened += s.Opened
 		out.Resolved += s.Resolved
 		switch s.Status {
