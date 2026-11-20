@@ -154,9 +154,10 @@ func (b *transcriptBuilder) claudeLineWhole(ctx context.Context, raw []byte, fra
 	return b.claudeNotesWhole(ctx, line, at)
 }
 
-// wordOf is raw's string where it is one within the value bound, else "".
+// wordOf is raw's string where it is one within [transcriptNameMaxBytes], the
+// longest word the reader holds, else "".
 func (b *transcriptBuilder) wordOf(raw json.RawMessage) string {
-	if word := looseString(raw); len(word) <= b.valueMax {
+	if word := looseString(raw); len(word) <= transcriptNameMaxBytes {
 		return word
 	}
 	return ""

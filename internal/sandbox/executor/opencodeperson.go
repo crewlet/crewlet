@@ -306,12 +306,7 @@ func (t *valueText) text() string { return string(t.held) }
 
 // drop lets go of what the text held, keeping a buffer of an ordinary text's
 // size for the next.
-func (t *valueText) drop() {
-	if cap(t.held) > lineScratchKeep {
-		t.held = nil
-	}
-	t.held = t.held[:0]
-}
+func (t *valueText) drop() { t.held = lineScratch(t.held) }
 
 // end is the one entry a text past the bound makes at ordinal (R1): none for
 // a blank one where blank drops it, its stream's where shaped, and one only
@@ -684,6 +679,7 @@ func (r *openCodeReading) itemEnd() {
 			step.add(r.b, r.named(result, step.next()), unixMillis(it.times[timeCompleted]))
 		}
 	}
+	r.result.drop()
 }
 
 // named is p, the entry at ordinal, naming the item's tool; or, where the
@@ -807,8 +803,17 @@ type callResult struct {
 // start starts a state whose result takes ordinal, shaped where the page holds
 // it and kept where the filter keeps its kind.
 func (c *callResult) start(ordinal int, shaped, ofKept bool) {
-	*c = callResult{b: c.b, ordinal: ordinal, shaped: shaped, ofKept: ofKept, canonical: true, message: c.message[:0],
-		kind: c.kind[:0], answer: c.answer[:0], part: c.part[:0], mime: c.mime[:0]}
+	c.drop()
+	*c = callResult{b: c.b, ordinal: ordinal, shaped: shaped, ofKept: ofKept, canonical: true, message: c.message,
+		kind: c.kind, answer: c.answer, part: c.part, mime: c.mime[:0]}
+}
+
+// drop lets go of what the result held once its entry is made, keeping the
+// buffers of an ordinary text's size for the next ([lineScratch]): A READ HOLDS
+// ONE RESULT'S TEXTS AT A TIME, never what an earlier one grew them to.
+func (c *callResult) drop() {
+	c.message, c.kind, c.answer, c.part = lineScratch(c.message), lineScratch(c.kind), lineScratch(c.answer),
+		lineScratch(c.part)
 }
 
 // order notes a member read out of the order a stream takes: the state's

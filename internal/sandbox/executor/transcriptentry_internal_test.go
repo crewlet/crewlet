@@ -2,6 +2,7 @@ package executor
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
@@ -319,4 +320,70 @@ func tarOfTree(t *testing.T, root string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// A READ LETS GO OF EACH VALUE ONCE IT ENDS, so it holds one value's texts at a
+// time, never what values before it grew its buffers to: both readers, the
+// value bound at 64 KiB, each record's values just within it (a result's parts
+// joined, a record's other members, a system record's content, a failure's type
+// and message), and then an ordinary record; once read, every buffer of each
+// reading is an ordinary text's size ([lineScratchKeep]), and no word past
+// [transcriptNameMaxBytes] (a call's id) is held for its line's entries.
+//
+// Mutation: start a result or a word from the buffer the one before it grew,
+// or keep an id within the value bound, and a reading holds it at its end.
+func TestAReadLetsGoOfEachValueOnceItEnds(t *testing.T) {
+	t.Parallel()
+	const valueMax = 64 << 10
+	long := quoted(t, strings.Repeat("a line of the build's log\n", valueMax/26-1))
+	small := func(name string, n int) {
+		t.Helper()
+		if n > lineScratchKeep {
+			t.Errorf("%s keeps %d bytes once its value ended, want at most %d", name, n, lineScratchKeep)
+		}
+	}
+	t.Run("claude code", func(t *testing.T) {
+		member := strings.Join([]string{
+			`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",` +
+				`"content":[{"type":"text","text":` + long + `}]}]},"toolUseResult":{"stdout":` + long + `}}`,
+			`{"type":"system","subtype":"informational","content":` + long + `}`,
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":` +
+				quoted(t, strings.Repeat("i", transcriptNameMaxBytes+1)) + `,"name":"Bash","input":{}}]}}`,
+		}, "\n") + "\n"
+		b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
+		b.valueMax = valueMax
+		r := newClaudeReading(b, bufio.NewReaderSize(strings.NewReader(member), lineChunkBytes))
+		if err := r.member(t.Context()); err != nil || len(b.entries) != 2 {
+			t.Fatalf("read (%d entries, %v), want the result and the call", len(b.entries), err)
+		}
+		for name, n := range map[string]int{"a word's buffer": cap(r.str.held), "a text's": cap(r.text.held),
+			"a name's": cap(r.name.held), "an input's": cap(r.input.held), "a result's parts joined": cap(r.res.answer)} {
+			small(name, n)
+		}
+		if len(r.blk.id) > transcriptNameMaxBytes {
+			t.Errorf("a call's id of %d bytes is held for its line, want none past %d", len(r.blk.id),
+				transcriptNameMaxBytes)
+		}
+	})
+	t.Run("opencode", func(t *testing.T) {
+		state := func(s string) string {
+			return `{"type":"tool","name":"bash","state":` + s + `}`
+		}
+		doc := `{"messages":[{"type":"assistant","content":[` + strings.Join([]string{
+			state(`{"status":"error","input":{"c":1},"error":{"type":` + long + `,"message":` + long + `}}`),
+			state(`{"status":"completed","input":{"c":1},"content":[{"type":"text","text":` + long + `}]}`),
+			state(`{"status":"completed","input":{"c":1},"content":[{"type":"text","text":"ok"}]}`),
+		}, ",") + `]}]}`
+		b := newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
+		b.valueMax = valueMax
+		r := newOpenCodeReading(b)
+		if err := scanExport(t.Context(), strings.NewReader(doc), r); err != nil || len(b.entries) != 6 {
+			t.Fatalf("read (%d entries, %v), want three calls and their results", len(b.entries), err)
+		}
+		for name, n := range map[string]int{"a failure's message": cap(r.result.message),
+			"a failure's type": cap(r.result.kind), "an answer's parts joined": cap(r.result.answer),
+			"an answer's part": cap(r.result.part), "a text's": cap(r.text.held)} {
+			small(name, n)
+		}
+	})
 }

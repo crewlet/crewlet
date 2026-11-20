@@ -223,14 +223,17 @@ func (r *claudeReading) own(t *valueText) error {
 // holds: a line runs to mebibytes, and the source asks only as it takes a piece.
 func (r *claudeReading) asked() error { return r.src.ctx.Err() }
 
-// word reads the current string into the word buffer and its own words, and
-// is the word, "" where it runs past the value bound.
+// word reads the current string for its own words, and is the word, "" where
+// it runs past [transcriptNameMaxBytes]: every word this read compares or
+// remembers is a kind, a time or an id, none longer, and [transcriptBuilder.called]
+// refuses a longer id, so a block of such ids holds none until its line ends.
 func (r *claudeReading) word() (string, error) {
 	t := r.str.begin(r.b, TranscriptEntry{Kind: EntryNote}, false)
+	defer t.drop()
 	if err := r.read(t); err != nil {
 		return "", err
 	}
-	if err := r.own(t); err != nil || t.past {
+	if err := r.own(t); err != nil || t.past || len(t.held) > transcriptNameMaxBytes {
 		return "", err
 	}
 	return t.text(), nil
@@ -429,6 +432,7 @@ func (r *claudeReading) systemContent(k jsonscan.Kind) error {
 		return r.value(k)
 	}
 	t := r.str.begin(r.b, TranscriptEntry{Kind: EntryNote}, false)
+	defer t.drop()
 	if err := r.read(t); err != nil {
 		return err
 	}
@@ -555,8 +559,8 @@ func (r *claudeReading) streamedInto(t *valueText, out *[3][]pendingEntry) {
 // claudeEvent is what an entry of a message's reading does, as it commits, to
 // the calls the transcript waits on: a call remembers its tool
 // ([transcriptBuilder.called]), and a result names the tool it answers
-// ([transcriptBuilder.answered]). An id or a tool past the value bound is ""
-// and remembers nothing.
+// ([transcriptBuilder.answered]). An id or a tool past [transcriptNameMaxBytes]
+// is "" and remembers nothing.
 type claudeEvent struct {
 	kind     claudeEventKind
 	id, tool string
@@ -665,8 +669,9 @@ type claudeBlockRead struct {
 	words                [3][]pendingEntry
 	call, result         [3]pendingEntry
 	callRead, resultRead bool
-	// tool is its `name` as shown, raw as written within the bound, refused
-	// where the stream refused its redaction (R6).
+	// tool is its `name` as shown, raw as written within
+	// [transcriptNameMaxBytes] and namePast past it, refused where the stream
+	// refused its redaction (R6).
 	tool, raw             string
 	namePast, toolRefused bool
 }
@@ -751,7 +756,7 @@ func (r *claudeReading) toolName(k jsonscan.Kind) error {
 	if err := r.own(t); err != nil {
 		return err
 	}
-	if blk.namePast = t.past; !t.past {
+	if blk.namePast = t.past || len(t.held) > transcriptNameMaxBytes; !blk.namePast {
 		blk.raw = t.text()
 	}
 	blk.tool, blk.toolRefused = t.shownName()
@@ -838,6 +843,7 @@ func (r *claudeReading) resultContent(k jsonscan.Kind) error {
 		blk.result[i] = c.entry(r.entry(EntryToolResult), &r.rec.msg[i])
 	}
 	r.text.drop()
+	c.answer = lineScratch(c.answer)
 	return nil
 }
 
