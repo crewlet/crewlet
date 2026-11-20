@@ -38,6 +38,7 @@ import {
 } from "@crewlethq/ui";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useOrgIndex } from "~/lib/seats.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 import { MoveWorkConfirm, type MoveWork } from "~/components/writes.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -207,7 +208,12 @@ export function ApplyPanel({
     () =>
       index.seats
         .filter((s) => s.kind !== "human" && moves.every((m) => m.from !== s.handle))
-        .map((s) => ({ value: s.handle, label: s.name, text: `${s.name} ${s.handle}` })),
+        .map((s) => ({
+          value: s.handle,
+          label: s.name,
+          leading: <ChoiceFace seat={s} />,
+          text: `${s.name} ${s.handle}`,
+        })),
     [index, moves],
   );
   const toName = index.byHandle.get(to)?.name ?? to;
