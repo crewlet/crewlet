@@ -174,7 +174,7 @@ const jobsOf = (intent: Exclude<Intent, "custom">): readonly SeatJob[] =>
  * The models other than `key` each seat runs one of `jobs` on today, by
  * handle: the engine's own resolution (`used_by`, the model a job runs on
  * first), so a job that falls back to the seat's executor or to the
- * company's models counts as having one, as By job shows it.
+ * company's models counts as having one, as the seats' grid shows it.
  */
 export function modelsNow(
   data: Pick<ModelsData, "models">,

@@ -139,23 +139,39 @@
   align-self: stretch;
 }
 
-/* The Assistant's one picker, as wide as a cell's on the grid under it. */
-.models-roles__picker {
-  inline-size: 14rem;
-  max-inline-size: 100%;
+/* Ask Crewlet and the Advisor under the list: a compact row each, its name, picker and a few words. */
+.models-helpers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-/* The Assistant on By job: its name, its one picker and what it is, on one line that wraps. */
-.models-roles__assistant {
+.models-helpers__row {
+  display: grid;
+  grid-template-columns: 9rem minmax(10rem, 13rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.models-helpers__picker {
+  min-width: 0;
+}
+
+.models-helpers__about {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2) var(--spacing-4);
+  gap: var(--spacing-1) var(--spacing-3);
+  min-width: 0;
 }
 
 @media (width < 640px) {
   .models-doctor__line,
   .models-repoint__row,
+  .models-helpers__row,
   .models-choices {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -238,7 +254,7 @@
   border-radius: var(--radius-md);
 }
 
-/* By job's seat cell: the seat, and under it "Everything" where one model runs every job. */
+/* The seats' grid's seat cell: the seat, and under it "Everything" where one model runs every job. */
 .models-seat-cell {
   display: flex;
   flex-direction: column;
@@ -260,7 +276,7 @@
   margin: 0;
 }
 
-/* ── The list, its alarms and By job (Overview.tsx, Alarms.tsx, ByJob.tsx) ── */
+/* ── The one page: the list, its alarms and every seat's jobs (Overview.tsx, Alarms.tsx, SeatJobs.tsx) ── */
 
 /* An alarm's one line, then its disclosure of who it stops and what the engine recorded. */
 .models-alarm,
@@ -363,8 +379,8 @@
   outline-offset: 2px;
 }
 
-/* By job's cell: the picker the column's width, its notes under it. */
-.models-byjob__cell {
+/* A seat's job cell: the picker the column's width, its notes under it. */
+.models-jobs__cell {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
@@ -379,12 +395,12 @@
  * model's name, condition and id are never cut to the column; the bounds are
  * the kit's own properties for an auto picker.
  */
-.models-byjob__picker .models-byjob__select {
+.models-jobs__picker .models-jobs__select {
   --crewlet-select-auto-min-width: 100%;
   --crewlet-select-auto-max-width: 100%;
 }
 
-.models-byjob__notes {
+.models-jobs__notes {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -393,12 +409,12 @@
 
 /* A cell whose model will not answer says so in the warning ink (QA M19). */
 /* A slow model under a timed job: a quiet mark, its words on hover. */
-.models-byjob__slow {
+.models-jobs__slow {
   display: inline-flex;
   color: var(--color-text-tertiary);
 }
 
-.models-byjob__cell--alarm .models-byjob__health {
+.models-jobs__cell--alarm .models-jobs__health {
   color: var(--color-feedback-warning-ink);
 }
 

@@ -10,7 +10,7 @@ import type { WizardStep } from "../parts.tsx";
 import { Waiting } from "../Waiting.tsx";
 import { STEP_LABELS, fieldOf, messageOf, stepOf } from "./draft.ts";
 import type { ReviewCheck, SaveStage } from "./steps/Review.tsx";
-import type { TestState } from "./steps/TestStep.tsx";
+import type { TestState } from "./steps/testCall.ts";
 
 /** Where Finish and save stands. */
 export type Finish = { kind: "idle" } | { kind: "running" } | { kind: "failed" };
@@ -25,7 +25,6 @@ export function FinishStatus({
   secretNoun,
   pasted,
   editing,
-  onTestStep,
   onGo,
 }: {
   finish: Finish;
@@ -38,13 +37,9 @@ export function FinishStatus({
   /** Whether a credential is pasted, which the test call tests. */
   pasted: boolean;
   editing: boolean;
-  /** On the Test call step, whose own result already says what failed. */
-  onTestStep: boolean;
   onGo: (step: WizardStep) => void;
 }) {
   if (finish.kind === "running") {
-    // The Test call step draws its own wait while the test runs.
-    if (onTestStep && test.kind === "running" && !saving) return null;
     const words = saving
       ? saving === "credential"
         ? `Storing the ${secretNoun} and re-activating the company with it.`
@@ -55,16 +50,14 @@ export function FinishStatus({
     return <Waiting key={saving || test.kind}>{words}</Waiting>;
   }
   if (finish.kind !== "failed") return null;
-  if (test.kind === "failed" && onTestStep)
-    return <Callout variant="danger" title="Not saved: the test call below failed" />;
   if (test.kind === "failed")
     return (
       <Callout
         variant="danger"
         title="Not saved: the test call failed"
         action={
-          <button type="button" className="t-link" onClick={() => onGo("test")}>
-            See the test call
+          <button type="button" className="t-link" onClick={() => onGo("review")}>
+            See it on Review
           </button>
         }
       >

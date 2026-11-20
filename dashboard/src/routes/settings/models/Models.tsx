@@ -3,25 +3,24 @@
  * every operator task on them from the page, with no hand edit of the company
  * document.
  *
- * Two lenses (Models, By job), one page per model, and the flows a task
- * needs, each opened by the address (`?flow=`), so a link, an alarm's fix or
- * the browser's Back reaches the same step. Every member can open the page and
+ * One page (the models, then Ask Crewlet and the Advisor, then every seat's
+ * jobs), one page per model, and the flows a task needs, each opened by the
+ * address (`?flow=`), so a link, an alarm's fix or the browser's Back reaches
+ * the same step. Every member can open the page and
  * read each model's condition; the reading names no credential, and every
  * action is an admin's (`llm_entries` answers each reading, and the engine
  * decides every write).
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
+import { EmptyState, Skeleton, useToast } from "@crewlethq/ui";
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
-import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { MODELS_POLL_MS, useModelsData, type ModelView } from "./data.ts";
 import { QueryState } from "~/components/common.tsx";
 import { EntryPage } from "./EntryPage.tsx";
 import { Overview } from "./Overview.tsx";
 import { flowMisfit, useFlow, type OnFlow } from "./parts.tsx";
-import { ByJob } from "./ByJob.tsx";
 import { DeviceDialog } from "./flows/DeviceDialog.tsx";
 import { RemoveDialog } from "./flows/RemoveDialog.tsx";
 import { RetryDialog } from "./flows/RetryDialog.tsx";
@@ -35,7 +34,11 @@ const ModelWizard = lazyScreen("model-wizard", (module) => module.ModelWizard);
 export function Models({ id }: { id?: string }) {
   const data = useModelsData();
   const nav = useNavigator();
-  const [view, setView] = useParam("view", "", "section");
+  // THE OLD LENS ADDRESS (`?view=jobs`) opens the one page: its grid is on it now.
+  const [view] = useParam("view", "");
+  useEffect(() => {
+    if (view) nav.filter({ view: null });
+  }, [view, nav]);
   // A model the wizard has just added, which the engine's reading may not hold yet.
   const [added, setAdded] = useParam("added", "");
   const flow = useFlow(id);
@@ -98,21 +101,6 @@ export function Models({ id }: { id?: string }) {
 
   return (
     <>
-      {!id ? (
-        <PageLenses>
-          <Tabs
-            variant="chip"
-            ariaLabel="Lens"
-            value={view || "models"}
-            onValueChange={(v) => setView(v === "models" ? "" : v)}
-            items={[
-              { value: "models", label: "Models" },
-              { value: "jobs", label: "By job" },
-            ]}
-          />
-        </PageLenses>
-      ) : null}
-
       {id && addressed ? <EntryPage model={addressed} data={data} onFlow={open} /> : null}
       {adding ? <Skeleton variant="text" rows={6} label={`Adding ${id}`} /> : null}
       {id && !addressed && !adding ? (
@@ -127,8 +115,7 @@ export function Models({ id }: { id?: string }) {
           }
         />
       ) : null}
-      {!id && view !== "jobs" ? <Overview data={data} onFlow={open} /> : null}
-      {!id && view === "jobs" ? <ByJob data={data} onFlow={open} /> : null}
+      {!id ? <Overview data={data} onFlow={open} /> : null}
 
       {data.admin && model && !misfit && flow.flow === "test" ? (
         <TestDialog model={model} onClose={flow.close} onDone={data.reload} />
@@ -142,8 +129,7 @@ export function Models({ id }: { id?: string }) {
           data={data}
           onClose={flow.close}
           onDone={data.reload}
-          // BACK TO WHERE IT WAS OPENED: the list (on the lens it was on)
-          // stays the list. Only the removed model's own page has nowhere to
+          // BACK TO WHERE IT WAS OPENED: the list stays the list. Only the removed model's own page has nowhere to
           // return to, and goes to the list.
           onRemoved={() => (id ? nav.to(["settings", "models"]) : flow.close())}
         />

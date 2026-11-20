@@ -1,7 +1,7 @@
 /**
  * The one setting each of Crewlet's two helpers has: the model it runs on
  * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), chosen
- * by an administrator in Settings › Models alone, on By job's helper lines;
+ * by an administrator in Settings › Models alone, on the helpers' rows under its list;
  * neither helper's own page names it.
  *
  * WHICH MODELS CAN RUN A HELPER IS THE ENGINE'S ANSWER (`llm_entries`'

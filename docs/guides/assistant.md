@@ -181,8 +181,8 @@ and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-
 The Models screen says of each entry whether a helper can run on it.
 
 In the dashboard, the model is chosen in Settings › Models alone: as a
-model's use (*What this model does*, Ask Crewlet) or on By job's Ask Crewlet
-line, with each entry a helper cannot run on drawn disabled beside the
+model's use (*What this model does*, Ask Crewlet) or on Ask Crewlet's row
+under the list of models, with each entry a helper cannot run on drawn disabled beside the
 engine's reason. The change is checked by the engine before it is saved, as
 a configuration edit is. Ask Crewlet's own page and drawer name no model;
 with none, they send an administrator to Settings › Models.
