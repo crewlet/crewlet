@@ -75,7 +75,7 @@ func SettledWhole(text string) int {
 const SettlingKeeps = settlingKeeps
 
 // Asks is how many times a live stream asked Settled's readers.
-func Asks(s *Stream) int { return s.live.raw.asks }
+func Asks(s *Stream) int { return s.live.view.asks + s.live.raw.asks }
 
 // CountEarly counts in n each window s's keys' stage decides early.
 func CountEarly(s *Stream, n *int) {
@@ -224,6 +224,45 @@ func TestAShortTextShowsItsSettledPartOnAFlush(t *testing.T) {
 	_, _ = s.Write([]byte(text[10*len(line)+7:]))
 	if err := s.Close(); err != nil || out.String() != Secrets(text) {
 		t.Errorf("past wholeBytes, Close answered %v, and wrote %d bytes where Secrets writes %d %s", err, out.Len(), len(Secrets(text)), parted(out.String(), Secrets(text)))
+	}
+}
+
+// A LIVE STREAM KEEPS NONE OF ITS HEAD'S BUFFER ONCE ITS STAGES RUN: a text
+// of [wholeBytes] whose last line Settled holds back, flushed, then written
+// past it without growing the head, keeps what is past the settled point in
+// a buffer of its own, so the head's goes; Close answers nil and the stream
+// wrote [Secrets]. The head itself only Write changes ([live]'s view).
+//
+// Mutation: keep the rest as a view of the head, and the stream holds the
+// head's buffer while its stages run.
+func TestALiveStreamKeepsNoneOfItsHeadsBufferOnceItsStagesRun(t *testing.T) {
+	t.Parallel()
+	tail := "password: "
+	text := strings.Repeat("ok\n", (wholeBytes-len(tail))/3)
+	text += strings.Repeat("x", wholeBytes-len(tail)-len(text)) + tail
+	var out bytes.Buffer
+	s := NewLiveStream(&out)
+	s.head = make([]byte, 0, wholeBytes+4<<10)
+	head := s.head[:cap(s.head)]
+	_, _ = s.Write([]byte(text))
+	if _, held, err := s.Flush(); err != nil || held < len(tail) || s.p != nil {
+		t.Fatalf("a flush of the head answered %d held and %v, the stages started %v", held, err, s.p != nil)
+	}
+	more := "hunter2secretvalue9\nok\npassword: "
+	_, _ = s.Write([]byte(more))
+	if s.p == nil {
+		t.Fatalf("a text of %d bytes is still held whole", len(text)+len(more))
+	}
+	if rest := s.live.raw.text; cap(rest) > 0 {
+		for i := range head {
+			if &head[i] == &rest[:1][0] {
+				t.Fatalf("the text past the settled point is a view of the head at %d", i)
+			}
+		}
+	}
+	text += more
+	if err := s.Close(); err != nil || out.String() != Secrets(text) {
+		t.Errorf("Close answered %v, and the stream wrote another text than Secrets %s", err, parted(out.String(), Secrets(text)))
 	}
 }
 

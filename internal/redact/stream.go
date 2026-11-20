@@ -146,9 +146,12 @@ type Stream struct {
 // settled point, which its stages have not been handed.
 type live struct {
 	// settled is the settled point in head while the text is held whole,
-	// up to which Flush wrote head's redaction; raw is the text past it,
-	// viewed in head until the stages run, and its own once they do.
+	// up to which Flush wrote head's redaction, and view the settling that
+	// asks of head past it: a settling, not a [growing], so nothing but
+	// Write appends to head or moves its bytes. raw is the text past the
+	// settled point once the stages run, a copy, so head's buffer goes.
 	settled int
+	view    settling[[]byte]
 	raw     growing
 }
 
@@ -208,8 +211,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 			// stages write ([Settled]), so the end drops it.
 			s.end.skip = s.emitted
 			s.p.feed(s.head[:l.settled])
+			l.raw = growing{l.view}
 			l.raw.text = bytes.Clone(s.head[l.settled:])
-			s.head = nil
+			l.view, s.head = settling[[]byte]{}, nil
 			s.settleIn(p[n:])
 			return len(p), s.err
 		}
@@ -259,11 +263,11 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 	case s.p == nil && l != nil:
 		// One settling across flushes, so a flush with no new line
 		// break asks nothing.
-		l.raw.text = s.head[l.settled:]
-		if n := l.raw.next(); n > 0 {
+		l.view.text = s.head[l.settled:]
+		if n := l.view.next(); n > 0 {
 			s.emit(Secrets(string(s.head[l.settled : l.settled+n])))
 			l.settled += n
-			l.raw.scanned -= n
+			l.view.scanned -= n
 		}
 	case s.p != nil && l != nil:
 		if s.settle(); s.p != nil {
@@ -325,6 +329,9 @@ func (s *Stream) Close() error {
 		return s.err
 	}
 	s.closed = true
+	if s.live != nil {
+		s.live.view.text = nil
+	}
 	if s.err != nil {
 		s.p, s.head = nil, nil
 		return s.err
