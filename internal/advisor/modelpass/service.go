@@ -2,11 +2,13 @@ package modelpass
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/duty"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -106,7 +108,7 @@ func (s *DeepService) Assigned() bool { return s.Models.Assigned() }
 // its record. It concluded only where it submitted within its bounds, so a
 // run cut short leaves earlier model findings as they stand.
 func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
-	progress func(at time.Time, text string)) (duty.ModelRun, error) {
+	io duty.DeepIO) (duty.ModelRun, error) {
 	failed := func(reason string, err error) (duty.ModelRun, error) {
 		run := DeepRun{Pass: advisor.Pass{Status: advisor.PassFailed, Reason: reason + err.Error(),
 			Dropped: map[advisor.Drop]int{}, Unread: []string{}}, Progress: []Progress{}}
@@ -131,11 +133,34 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 	if s.Bounds != nil {
 		bounds = s.Bounds(d.Company)
 	}
-	run := RunDeep(ctx, deps, d, bounds, func(p Progress) {
-		if progress != nil {
-			progress(p.At, p.Text)
+	// A CHECKPOINT THAT CANNOT BE READ starts the run over, as before resume.
+	var resume *Checkpoint
+	if len(io.Resume) > 0 {
+		var c Checkpoint
+		if err := json.Unmarshal(io.Resume, &c); err == nil {
+			resume = &c
 		}
-	})
+	}
+	var keep func(Checkpoint)
+	if io.Checkpoint != nil {
+		keep = func(c Checkpoint) {
+			body, err := json.Marshal(c)
+			if err == nil && len(body) > advisordomain.MaxCheckpointBytes {
+				// PAST ITS BOUND THE READS GO FIRST: the verdicts are what a
+				// takeover keeps.
+				c.Reads = []KeptRead{}
+				body, err = json.Marshal(c)
+			}
+			if err == nil && len(body) <= advisordomain.MaxCheckpointBytes {
+				io.Checkpoint(deps.Now(), body)
+			}
+		}
+	}
+	run := RunDeepFrom(ctx, deps, d, bounds, func(p Progress) {
+		if io.Progress != nil {
+			io.Progress(p.At, p.Text)
+		}
+	}, resume, keep)
 	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone,
 		Partial: run.Status == advisor.PassCeiling && run.Listed > 0}
 	window := advisor.Span{From: now.Add(-advisor.Window), To: now}

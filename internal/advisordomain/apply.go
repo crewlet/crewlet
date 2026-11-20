@@ -385,13 +385,31 @@ func applyRun(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int
 	case RunRecord:
 		return applyRecord(ctx, tx, c, run, p)
 	case RunProgress:
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO advisor_run_progress (run_id, at, text, position) VALUES (?, ?, ?, ?)
-			ON CONFLICT (run_id, position) DO NOTHING`, run, store.EncodeTime(p.At), p.Text, c.packed)
-		if err != nil {
-			return 0, fmt.Errorf("advisordomain: progress of run %s at %s: %w", run, c.position, err)
+		n := 0
+		if p.Text != "" {
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO advisor_run_progress (run_id, at, text, position) VALUES (?, ?, ?, ?)
+				ON CONFLICT (run_id, position) DO NOTHING`, run, store.EncodeTime(p.At), p.Text, c.packed)
+			if err != nil {
+				return 0, fmt.Errorf("advisordomain: progress of run %s at %s: %w", run, c.position, err)
+			}
+			n += affected(res)
 		}
-		return affected(res), nil
+		if len(p.Checkpoint) > 0 {
+			// THE NEWEST CHECKPOINT STANDS, by the log's order: a record
+			// replayed or applied late never puts an older one back.
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO advisor_run_checkpoint (run_id, at, body, position) VALUES (?, ?, ?, ?)
+				ON CONFLICT (run_id) DO UPDATE SET at = excluded.at, body = excluded.body,
+					position = excluded.position
+				WHERE excluded.position > advisor_run_checkpoint.position`,
+				run, store.EncodeTime(p.At), string(p.Checkpoint), c.packed)
+			if err != nil {
+				return 0, fmt.Errorf("advisordomain: checkpoint of run %s at %s: %w", run, c.position, err)
+			}
+			n += affected(res)
+		}
+		return n, nil
 	}
 	return 0, fmt.Errorf("advisordomain: the run record at %s carries a %T", c.position, payload)
 }
@@ -531,6 +549,8 @@ var expiryStatements = []struct {
 			return []any{store.EncodeTime(e.RunsBefore), store.EncodeTime(e.RunsBefore)}
 		}},
 	{`DELETE FROM advisor_run_progress WHERE at < ?`,
+		func(e Expiry, _ int64) []any { return []any{store.EncodeTime(e.RunsBefore)} }},
+	{`DELETE FROM advisor_run_checkpoint WHERE at < ?`,
 		func(e Expiry, _ int64) []any { return []any{store.EncodeTime(e.RunsBefore)} }},
 	{`DELETE FROM advisor_reports WHERE written_at < ?`,
 		func(e Expiry, _ int64) []any { return []any{store.EncodeTime(e.ReportsBefore)} }},

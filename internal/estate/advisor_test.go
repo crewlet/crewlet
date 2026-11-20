@@ -193,6 +193,9 @@ func (advisorDomainReads) Counts(context.Context, statelog.Freshness) (map[advis
 func (advisorDomainReads) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (advisorDomainReads) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return json.RawMessage(`{"agenda":[]}`), true, nil
+}
 func (advisorDomainReads) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }

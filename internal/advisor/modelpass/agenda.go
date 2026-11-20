@@ -142,7 +142,11 @@ func agendaSaid(items []AgendaItem) string {
 	var b strings.Builder
 	b.WriteString("Your agenda. Give every item a verdict with the verdict tool before submit_findings, in any order:\n")
 	for _, it := range items {
-		fmt.Fprintf(&b, "- %s [%s] %s\n", it.ID, it.Source, it.Question)
+		fmt.Fprintf(&b, "- %s [%s] %s", it.ID, it.Source, it.Question)
+		if it.Verdict != "" && it.Verdict != VerdictOpen {
+			fmt.Fprintf(&b, " (answered before: %s, %s)", it.Verdict, it.Note)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

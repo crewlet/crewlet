@@ -2,6 +2,7 @@ package duty
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -23,9 +24,23 @@ type DeepPass interface {
 	// Assigned reports whether the company assigns the Advisor a model.
 	Assigned() bool
 	// Deep is one investigation at now: what it found, grounded, and its
-	// record as a run keeps it, telling progress each line as it writes it.
-	Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
-		progress func(at time.Time, text string)) (ModelRun, error)
+	// record as a run keeps it, telling io each line and each checkpoint as
+	// it writes them, and resuming from io's checkpoint where it has one.
+	Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored, io DeepIO) (ModelRun, error)
+}
+
+// DeepIO is what a deep run tells the log as it goes, and where it resumes
+// from (ADR-0166).
+type DeepIO struct {
+	// Progress is told each line the run writes.
+	Progress func(at time.Time, text string)
+	// Checkpoint is told where the run stands each time that moves (an item
+	// answered, a read asked), so a holder that takes the run over resumes
+	// from the newest.
+	Checkpoint func(at time.Time, body json.RawMessage)
+	// Resume is the newest checkpoint a run taken over wrote, nil for a run
+	// that starts fresh.
+	Resume json.RawMessage
 }
 
 // DeepHours are the hours of the company day a deep run is due at: 03:00
@@ -159,12 +174,28 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 		run.Status = RunFailed
 		return run
 	}
-	// EACH LINE ON THE LOG as it is written, so any node reads the run's
-	// progress while it is in flight.
-	result, err := d.Deep.Deep(ctx, now, dismissed, live, func(at time.Time, text string) {
-		if perr := d.Log.Progress(ctx, id, at, text); perr != nil {
-			log.WarnContext(ctx, "advisor_progress_not_recorded", "run", id, "error", perr.Error())
-		}
+	// A RUN TAKEN OVER RESUMES from the newest checkpoint its request's run
+	// wrote; one that cannot be read starts over, as a run did before.
+	resume, err := d.Log.Resume(ctx, id)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_checkpoint_unread", "run", id, "error", err.Error())
+		resume = nil
+	}
+	// EACH LINE AND EACH CHECKPOINT ON THE LOG as it is written, so any node
+	// reads the run's progress while it is in flight, and the next holder
+	// resumes it.
+	result, err := d.Deep.Deep(ctx, now, dismissed, live, DeepIO{
+		Progress: func(at time.Time, text string) {
+			if perr := d.Log.Progress(ctx, id, at, text); perr != nil {
+				log.WarnContext(ctx, "advisor_progress_not_recorded", "run", id, "error", perr.Error())
+			}
+		},
+		Checkpoint: func(at time.Time, body json.RawMessage) {
+			if cerr := d.Log.Checkpoint(ctx, id, at, body); cerr != nil {
+				log.WarnContext(ctx, "advisor_checkpoint_not_recorded", "run", id, "error", cerr.Error())
+			}
+		},
+		Resume: resume,
 	})
 	run.Model = result.Summary
 	if err != nil {

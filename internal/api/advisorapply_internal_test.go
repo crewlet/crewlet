@@ -69,6 +69,9 @@ func (l *applyLog) LatestRun(context.Context, statelog.Freshness) (advisordomain
 func (l *applyLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
 	return "", nil, false, nil
 }
+func (l *applyLog) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
 func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
