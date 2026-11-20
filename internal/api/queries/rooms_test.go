@@ -525,6 +525,7 @@ var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
+	"advisor_capacity":  "the Advisor's deep run and an admin's script: GET /advisor/capacity (docs/guides/advisor.md)",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

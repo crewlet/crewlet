@@ -120,6 +120,11 @@ type SnapshotInputs struct {
 	// Open is every holder's open items now; WorkUnread where unread.
 	Open       []worklet.HeldOpen
 	WorkUnread bool
+	// Capacity is the hours each model entry was out on its usage limit over
+	// the range, and Before over the range before; CapacityUnread where the
+	// park records could not be read.
+	Capacity, CapacityBefore *Capacity
+	CapacityUnread           bool
 	// Names is each seat's name by handle.
 	Names map[string]string
 }
@@ -175,6 +180,20 @@ func ComputeSnapshot(in SnapshotInputs, asOf time.Time) Snapshot {
 			out.Stats = append(out.Stats, stat)
 		}
 		if c, ok := flowBySeatChart(in.Flow, name); ok {
+			out.Charts = append(out.Charts, c)
+		}
+	}
+	switch {
+	case in.CapacityUnread:
+		out.Unread = append(out.Unread, UnreadCapacity)
+	case in.Capacity != nil:
+		stat := Stat{Key: "capacity_lost_hours", Label: "Seat-hours lost to model limits",
+			Value: hoursOf(in.Capacity.seatHours()), Unit: UnitHours, Better: betterDown()}
+		if in.CapacityBefore != nil {
+			stat.Was = ptr(hoursOf(in.CapacityBefore.seatHours()))
+		}
+		out.Stats = append(out.Stats, stat)
+		if c, ok := capacityChart(*in.Capacity); ok {
 			out.Charts = append(out.Charts, c)
 		}
 	}
@@ -475,4 +494,51 @@ func groupedInt(n int64) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// seatHours is the hours every seat sat parked on any entry.
+func (c Capacity) seatHours() time.Duration {
+	var out time.Duration
+	for _, e := range c.Entries {
+		for _, s := range e.Seats {
+			out += s.Held
+		}
+	}
+	return out
+}
+
+// capacityChart is the hours each entry was out on its usage limit per
+// company day; its note names the worst day.
+func capacityChart(c Capacity) (Chart, bool) {
+	if len(c.Entries) == 0 {
+		return Chart{}, false
+	}
+	axis := ChartAxis{Kind: AxisDay, Keys: make([]string, len(c.Days)), Labels: make([]string, len(c.Days))}
+	for i, d := range c.Days {
+		axis.Keys[i], axis.Labels[i] = d.Format(time.DateOnly), d.Format("Mon 2 Jan")
+	}
+	out := Chart{ID: "capacity_lost", Title: "Hours each model entry was out on its usage limit", Unit: UnitHours,
+		Kind: ChartStackedColumns, X: axis}
+	worst, worstOut := -1, time.Duration(0)
+	for d := range c.Days {
+		var sum time.Duration
+		for _, e := range c.Entries {
+			sum += e.Out[d]
+		}
+		if sum > worstOut {
+			worst, worstOut = d, sum
+		}
+	}
+	for _, e := range c.Entries {
+		series := ChartSeries{ID: e.Entry, Label: e.Entry}
+		for _, h := range e.Out {
+			series.Values = append(series.Values, ptr(hoursOf(h)))
+		}
+		out.Series = append(out.Series, series)
+	}
+	if worst >= 0 {
+		out.Note = ptr(fmt.Sprintf("The worst day was %s: %s entry-hours out.", c.Days[worst].Format("Mon 2 Jan"),
+			hoursSaid(worstOut)))
+	}
+	return out, true
 }

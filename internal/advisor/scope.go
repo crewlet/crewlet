@@ -18,6 +18,7 @@ var sourceWords = map[source]string{
 	sourceFlow:     UnreadFlow,
 	sourceSkips:    UnreadSkips,
 	sourceStaffing: UnreadStaffing,
+	sourceCapacity: UnreadCapacity,
 }
 
 // unreadWordOf is the unread word of the source f's class reads, false for a

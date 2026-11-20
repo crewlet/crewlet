@@ -141,8 +141,8 @@ func TestASnapshotIsReadOverItsRangeAndTheOneBefore(t *testing.T) {
 	if asked.From != "2029-12-03" || asked.To != "2030-01-01" {
 		t.Errorf("the ledger was last read over %s..%s, want the 30 days before", asked.From, asked.To)
 	}
-	if len(snap.Unread) != 1 || snap.Unread[0] != advisor.UnreadWork {
-		t.Errorf("unread = %v, want the work it could not read", snap.Unread)
+	if len(snap.Unread) != 2 || snap.Unread[0] != advisor.UnreadWork || snap.Unread[1] != advisor.UnreadCapacity {
+		t.Errorf("unread = %v, want the work and the park records it could not read", snap.Unread)
 	}
 }
 
