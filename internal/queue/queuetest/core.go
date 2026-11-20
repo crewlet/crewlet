@@ -337,8 +337,8 @@ func (s *suite) runCore(t *testing.T) {
 	// certify a retry before the conversation's newer message, an order
 	// production never gives.
 	//
-	// The mail is HELD while published: both events wait before anything is
-	// fetched, so nothing races the backoff.
+	// The mail is published under a hold the consumer took in (holdTakenIn,
+	// on Parked), so both events wait unfetched and nothing races the backoff.
 	t.Run("a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head", func(t *testing.T) {
 		t.Parallel()
 		quiescing := s.needQuiescing(t)
@@ -356,9 +356,7 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
-				t.Fatalf("PauseTopic: %v", err)
-			}
+			s.holdTakenIn(ctx, t, q, topic, "grp", "test")
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
 			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
@@ -388,9 +386,7 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
-				t.Fatalf("PauseTopic: %v", err)
-			}
+			s.holdTakenIn(ctx, t, q, topic, "grp", "test")
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
 			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
@@ -584,7 +580,7 @@ func (s *suite) runCore(t *testing.T) {
 	//   - that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
 	//     (queue.RetiredTo), not a failure's poison
 	//     (a_subscriptions_retired_event_is_one_more_dead_letter).
-	// The mail is HELD while published, as in the return-order case.
+	// Published under a hold the consumer took in (holdTakenIn), as above.
 	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -602,9 +598,7 @@ func (s *suite) runCore(t *testing.T) {
 			}
 			return queue.Ack()
 		})
-		if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
+		s.holdTakenIn(ctx, t, q, topic, group, "test")
 		publish(ctx, t, q, topic, newEvent("e1"))
 		publish(ctx, t, q, topic, newEvent("e2"))
 		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
