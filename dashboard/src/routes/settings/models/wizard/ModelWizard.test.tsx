@@ -58,6 +58,8 @@ const { getConfig } = await import("~/protocol/configWrite.ts");
 const DOC = {
   name: "Acme",
   providers: {
+    // A COMPANY WITH MODELS has a place to run coding; M-002's case takes it away.
+    sandbox: { local: {}, default_run_in: "direct" },
     llm: {
       default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
       sonnet: {
@@ -237,7 +239,7 @@ async function walkToReview(key = "sonnet-key", { accepted = true } = {}) {
     expect(heading()).toBe(step);
     footers.push(footer());
   }
-  if (accepted) await screen.findByText("The engine accepts this change");
+  if (accepted) await screen.findByText("The configuration is valid");
   return footers;
 }
 
@@ -334,7 +336,7 @@ test("an edit saved returns to where it was opened, never to the model's page", 
   const { onClose } = show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
@@ -352,7 +354,7 @@ test("the review says once that saving makes one revision", async () => {
   show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   expect(document.body.textContent?.match(/one revision/g)).toHaveLength(1);
 });
 
@@ -366,7 +368,7 @@ test("a save names the write it is waiting on while it runs", async () => {
   show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
   fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   let stored!: (value: unknown) => void;
   vi.mocked(api.storeCredential).mockImplementationOnce(() => {
     calls.push("store");
@@ -536,12 +538,12 @@ test.each([
     press("Continue");
     expect(heading()).toBe(step);
   }
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   // NO SEAT MOVES ONTO default: the PM and the designer stay where they are.
   const moves = screen.queryByRole("list", { name: "Seats that change model" });
   const listed = moves ? (moves.textContent ?? "") : "";
   expect(listed).not.toMatch(/Product Manager|Designer/);
-  if (!chooseCoding) expect(screen.getByText("No seat changes model.")).toBeTruthy();
+  if (!chooseCoding) expect(screen.getByText("No seat changes model")).toBeTruthy();
   press("Finish and save");
   await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as unknown as {
@@ -624,7 +626,7 @@ describe.each([
         : unsettled,
     );
     await openReview();
-    await screen.findByText("The engine accepts this change");
+    await screen.findByText("The configuration is valid");
     press("Finish and save");
     expect(await blocked()).toBe(
       `${said} The change may or may not have been stored. Reopen the model before trying again.`,
@@ -636,9 +638,13 @@ test("a place the company never set up says so in plain words, never the configu
   show({ editing: "default", target: { step: "runs" } });
   expect(heading()).toBe("Where it runs");
   expect(document.body.textContent).toContain(
-    "E2B isn't set up for this company. Add it under providers.sandbox to use it.",
+    "E2B isn't set up for this company. Set it up in Configuration.",
   );
-  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set/);
+  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set|providers\.sandbox/);
+  // M-017: THE FACT IS A STATUS, not "Ready" over a reason it is not.
+  expect(
+    screen.queryAllByText("Ready", { selector: "dt, .crewlet-choice-card__fact-label" }),
+  ).toEqual([]);
 });
 
 test("a refused key is said at the key, and the Method step is where it is fixed", async () => {
@@ -753,7 +759,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
   press("Continue");
   press("Continue");
   expect(heading()).toBe("Review");
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   // NOTHING TO TEST BEFORE THE SAVE: the row says when it is.
   expect(screen.getByText("After it is saved")).toBeTruthy();
   press("Finish and save");
@@ -773,7 +779,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
 test("Review lists a job's first model as the change, never as a fallback, and says the test call has not run", async () => {
   show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
   toReview();
-  await screen.findByText("The engine accepts this change");
+  await screen.findByText("The configuration is valid");
   const moves = screen.getByRole("list", { name: "Seats that change model" });
   expect(moves.textContent).toContain("Quality Lead, reviewing and delegations: default → sonnet");
   expect(screen.queryByText(/as a fallback/)).toBeNull();
@@ -1077,4 +1083,148 @@ test("the Advisor is a choice right under Ask Crewlet, in use on its model, with
   expect(seatChangesOf(d, "sonnet", { ...noUses(), advisor: true }, noUses())).toEqual([
     "Advisor: no longer on sonnet, its checks run with no model",
   ]);
+});
+
+// M-015: AN EDIT SHOWS ITS ONE HARNESS, the rule said once, not a refusal on
+// every other harness's card.
+test("an edit's first step shows its one harness and says the rule once", () => {
+  show({ editing: "sonnet", target: { step: "harness" } });
+  const harness = screen.getByRole("radiogroup", { name: "Harness" });
+  expect(within(harness).getAllByRole("radio")).toHaveLength(1);
+  expect(document.body.textContent?.match(/keeps its/g)).toHaveLength(1);
+});
+
+// M-014: A NEW NAME STOPS AT ITS LIMIT, and its one rule is the field's line.
+test("a new name's field stops at 40 characters and says the rule it is held to", () => {
+  show();
+  const name = screen.getByRole("textbox", { name: /Name/ }) as HTMLInputElement;
+  expect(name.maxLength).toBe(40);
+  expect(
+    screen.getByText(
+      "Lowercase letters, digits, dots, hyphens and underscores, up to 40 characters.",
+    ),
+  ).toBeTruthy();
+});
+
+// M-016: A FAILED TEST SAYS ITS FIRST SENTENCE, the engine's chain on hover,
+// and the valid-change callout is not worded as the test passing.
+test("a failed test call says its first sentence, with the engine's chain on hover", async () => {
+  checkModel.mockImplementation(async () =>
+    checked([
+      {
+        check: "sign-in",
+        ok: false,
+        detail: "401",
+        kind: "auth",
+        remedy: "failed: llm harness/claude-code/haiku: auth: Invalid API key",
+      },
+    ]),
+  );
+  show({ editing: "sonnet", target: { step: "limits" } });
+  toReview();
+  await screen.findByText("The configuration is valid");
+  fireEvent.click(screen.getByRole("button", { name: "Run test call" }));
+  const line = await screen.findByText(/^Failed: /);
+  expect(line.textContent).not.toMatch(/llm harness|failed:/);
+  expect(line.getAttribute("title")).toMatch(/llm harness\/claude-code\/haiku/);
+});
+
+// M-019: A RELOAD ASKS FIRST while something is typed, and not before.
+test("a reload asks before it throws a typed draft away, and not before anything is typed", () => {
+  show();
+  const reload = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  expect(reload()).toBe(false);
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "draft" } });
+  expect(reload()).toBe(true);
+});
+
+// M-002: A FIRST CODING MODEL ON A COMPANY WITH NO PLACE TO RUN CODING. The
+// engine checks a draft's test against the company as it stands, which refuses
+// it, so Finish and save sets this host up first, then tests and saves; opening
+// Review writes nothing.
+test("with no sandbox, Finish and save sets up this host, then tests and saves the first coding model", async () => {
+  const doc = structuredClone(DOC) as Record<string, any>;
+  delete doc.providers.sandbox;
+  vi.mocked(getConfig).mockImplementation(async () => {
+    calls.push("read");
+    return { kind: "document", document: structuredClone(doc), etag: '"rev-1"' };
+  });
+  const written: Record<string, any>[] = [];
+  vi.mocked(api.writeDocument).mockImplementation(async (next, options) => {
+    calls.push(options.dryRun ? "dry-run" : `write:${options.summary}`);
+    if (!options.dryRun) {
+      written.push(next as Record<string, any>);
+      Object.assign(doc, structuredClone(next));
+    }
+    return options.dryRun
+      ? { kind: "valid", baseRevisionId: "rev-1", warnings: [], derived: null }
+      : { kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null };
+  });
+  const d = data();
+  render(
+    <Router>
+      <ModelWizard
+        data={{ ...d, doc: structuredClone(doc) as never }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  await walkToReview("sonnet-key", { accepted: true });
+  // OPENING REVIEW TESTED NOTHING AND WROTE NOTHING: the test waits for the save.
+  expect(calls).toEqual(["read", "dry-run", "dry-run"]);
+  expect(screen.getByText("Runs when you save")).toBeTruthy();
+  expect(screen.getByText("On this engine's host, set up by this save")).toBeTruthy();
+  calls.length = 0;
+  press("Finish and save");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:Add model/));
+  expect(calls.slice(0, 4)).toEqual([
+    "read",
+    "dry-run",
+    "write:Set up running coding on this engine's host",
+    "test",
+  ]);
+  expect(written[0]!.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
+});
+
+// M-004: A PROGRAM MISSING ON THE ENGINE HOST flags no step and offers none to
+// fix it in, and Finish and save is held while Review lists it.
+test("a harness missing on the host is said plainly, flags no step, and holds Finish and save", async () => {
+  vi.mocked(api.testCredential).mockResolvedValue({
+    kind: "refused",
+    status: 422,
+    code: "validation_error",
+    sentence: "The configuration this change would produce is not valid, so nothing was stored.",
+    detail: "",
+    hint: "",
+    body: {
+      problems: [
+        {
+          path: "providers.llm.sonnet-key.harness",
+          segments: ["providers", "llm", "sonnet-key", "harness"],
+          kind: "invalid",
+          message:
+            'not on PATH "claude" is not on this host\'s PATH \u2014 the harness runs on the ENGINE host, so it must be installed here',
+        },
+      ],
+    },
+  } as never);
+  show();
+  await walkToReview("sonnet-key", { accepted: false });
+  await screen.findByText(/^Failed: /);
+  expect(document.body.textContent).toContain(
+    "Install claude on the engine host: the harness runs there.",
+  );
+  expect(document.body.textContent).not.toMatch(/PATH|ENGINE host/);
+  expect(screen.queryByRole("button", { name: /^Fix in/ })).toBeNull();
+  const steps = screen.getByRole("list", { name: /^Steps to/ });
+  expect(within(steps).queryByText("Needs attention")).toBeNull();
+  const finish = screen.getByRole("button", { name: "Finish and save" });
+  expect(finish.hasAttribute("disabled") || finish.getAttribute("aria-disabled") === "true").toBe(
+    true,
+  );
 });

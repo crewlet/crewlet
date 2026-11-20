@@ -5,7 +5,7 @@
  * transport's, held here so each moment can be read.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -59,10 +59,13 @@ function mount() {
   );
 }
 
+/** Chooses a model and confirms it: every model picker on its page asks once. */
 async function choose(key: string) {
   fireEvent.click(screen.getByRole("combobox", { name: "Ask Crewlet's model" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: new RegExp(key) }));
+  const confirm = screen.getByRole("dialog", { name: new RegExp(`Move Ask Crewlet to ${key}`) });
   await act(async () => {
-    fireEvent.mouseDown(screen.getByRole("option", { name: new RegExp(key) }));
+    fireEvent.click(within(confirm).getByRole("button", { name: "Move" }));
   });
 }
 
