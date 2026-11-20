@@ -44,15 +44,16 @@ var counterexampleShapes = [][3]string{
 }
 
 // settlingTexts is every text Settled is read in pieces over: transcripts of
-// every shape; the keys' corpus ([streamCorpus], each wrapping once and its
-// text between keys cut short), a text of every shape a stage carries and six
-// hold shapes, their lines of `ok` cut to 30; the counterexamples past a reach
-// and a megabyte, at both parities; chains of keys each decided by the next
-// key's line in every wrapping, and long lines of keys before a key pending
-// at their end; random short shapes of keys, armours, escaped breaks and
-// gutters; and a key 64 KiB and a byte, and 128 KiB, into a line under a
-// pipe's, a word's and a quote's gutter and in a string with its breaks
-// escaped.
+// every shape; the keys' corpus ([streamCorpus], each wrapping once and a
+// transcript's line between keys), a text of every shape a stage carries, and
+// the hold shapes' armours beside password's keys and runs, at a run of 32 KiB
+// ([redact.HoldShapes]); the counterexamples past a reach and a megabyte, at
+// both parities; chains of keys each decided by the next key's line in every
+// wrapping, and long lines of keys before a key pending at their end; random
+// short shapes of keys, armours, escaped breaks and gutters, and three where
+// a password's key follows an END on its line; and a key 64 KiB and a byte,
+// and 128 KiB, into a line under a pipe's, a word's and a quote's gutter and
+// in a string with its breaks escaped.
 func settlingTexts(r *rand.Rand) []settlingText {
 	var texts []settlingText
 	add := func(name, text string, every bool) { texts = append(texts, settlingText{name, text, every}) }
@@ -69,21 +70,18 @@ func settlingTexts(r *rand.Rand) []settlingText {
 		var b strings.Builder
 		for j, wname := range slices.Sorted(maps.Keys(forms)) {
 			if j%4 == i {
-				b.WriteString(redact.StreamText(r, r.IntN(2<<10)) + "\n" + forms[wname].wrap(keys[kname]).text + "\n")
+				b.WriteString(transcriptLines[r.IntN(len(transcriptLines))] + "\n" + forms[wname].wrap(keys[kname]).text + "\n")
 			}
 		}
 		add("the keys' corpus, "+kname, b.String(), false)
 	}
 	add("every shape a stage carries", redact.StreamText(r, 256<<10), false)
-	for _, s := range redact.HoldShapes(300 << 10) {
-		if slices.Contains([]string{"a1", "b1", "e1", "g1", "p1", "pa1"}, s[0]) {
-			text := s[1]
-			for strings.HasSuffix(text, "\nok\n") {
-				text = strings.TrimSuffix(text, "ok\n")
-			}
-			add("hold shape "+s[0], text+strings.Repeat("ok\n", 30), false)
-		}
-	}
+	head := "k: -----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n\n"
+	run := strings.Repeat("Ab3Cd4ef", 4<<10)
+	ok := strings.Repeat("ok\n", 30)
+	add("an armour, password's keys and a run", head+strings.Repeat("pwd:\n", 1200)+"sk-"+run+"\n"+ok, false)
+	add("armours among tokens and password's keys", strings.Repeat(head+strings.Repeat("sk-"+run[:40]+" pwd:x\n", 64), 16)+ok, false)
+	add("an armour, a run and its END", head+run+"\n-----END RSA PRIVATE KEY-----\n"+ok, false)
 	for _, sh := range counterexampleShapes {
 		for _, k := range []int{7000, 7001} {
 			add(fmt.Sprintf("a 70 KiB line ending %q, then %q and %q x %d", sh[0], sh[1], sh[2], k),
@@ -115,6 +113,13 @@ func settlingTexts(r *rand.Rand) []settlingText {
 		}
 		b.WriteString([]string{"hunter2secretvalue9\n", "ok\n", "\n"}[r.IntN(3)])
 		add(fmt.Sprintf("random shape %d", i), b.String(), true)
+	}
+	for i, text := range []string{
+		"\t\"password:\\n\" +\n+-----END RSA PRIVATE KEY-----|passwd:\nAb3f9C2d7E1b pulled\n     2→839201\n[...truncated]\n+-----END RSA PRIVATE KEY-----|passwd:\n",
+		" **Password:**\npwd=\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun-----END RSA PRIVATE KEY-----| Password: | \n",
+		"\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunpwd=\\n\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun-----END RSA PRIVATE KEY----- password: \n",
+	} {
+		add(fmt.Sprintf("a password's key after an END on its line, %d", i), text+"hunter2secretvalue9\nok\n", true)
 	}
 	for _, at := range []int{64<<10 + 1, 128 << 10} {
 		pad := func(prefix string) string { return prefix + strings.Repeat("x", at-len(prefix)-1) + " " }
