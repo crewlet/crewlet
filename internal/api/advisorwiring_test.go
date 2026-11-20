@@ -44,6 +44,15 @@ func (m *memAdvisor) Finding(_ context.Context, id string, _ statelog.Freshness)
 func (*memAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
 	return nil, nil
 }
+func (*memAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (*memAdvisor) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
+func (*memAdvisor) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
 func (*memAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }
@@ -92,6 +101,9 @@ func (m *memAdvisor) RecordRun(context.Context, advisordomain.Call, advisordomai
 	return statelog.Result{}, nil
 }
 func (*memAdvisor) Expire(context.Context, advisordomain.Call, time.Time, advisordomain.Expiry) (statelog.Result, error) {
+	return statelog.Result{}, nil
+}
+func (*memAdvisor) Progress(context.Context, advisordomain.Call, advisordomain.RunProgress) (statelog.Result, error) {
 	return statelog.Result{}, nil
 }
 func (m *memAdvisor) RequestRun(_ context.Context, _ advisordomain.Call, r advisordomain.RunRequest) (statelog.Result, error) {
@@ -174,8 +186,20 @@ func TestAnAdministratorsRunNowAndDecisionsAreRecorded(t *testing.T) {
 	a := newApp(t, api.Options{Runtime: advisorNode{
 		fakeRuntime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}, log: log}})
 	status, answer := writeAs(t, a, "/advisor/runs", "")
-	if status != http.StatusAccepted || answer["run_id"] == nil || len(log.asked) != 1 {
-		t.Fatalf("Run now answered %d %v, asked %d runs; want 202 and one run asked for", status, answer, len(log.asked))
+	if status != http.StatusAccepted || answer["run_id"] == nil || len(log.asked) != 1 || log.asked[0].RunKind != "" {
+		t.Fatalf("Run now answered %d %v, asked %+v; want 202 and one run of the rules asked for", status, answer, log.asked)
+	}
+	// AN API TOKEN HOLDS NO SEAT, and its run still names who asked: the
+	// log refuses a run asked by nobody.
+	if by := log.asked[0].By; by == "" || strings.TrimSpace(by) != by {
+		t.Errorf("a token's Run now is asked by %q, want the token's own name", by)
+	}
+	if status, answer := writeAs(t, a, "/advisor/runs", `{"kind":"everything"}`); status != http.StatusBadRequest {
+		t.Errorf("a run of an unknown kind answered %d %v, want 400", status, answer)
+	}
+	if status, _ := writeAs(t, a, "/advisor/runs", `{"kind":"deep"}`); status != http.StatusAccepted ||
+		len(log.asked) != 2 || log.asked[1].RunKind != advisordomain.RunKindDeep {
+		t.Errorf("Run deep answered %d, asked %+v; want a deep run asked for", status, log.asked)
 	}
 	for _, decision := range []string{`{"decision":"snooze"}`, `{"decision":"useful"}`,
 		`{"decision":"dismiss","reason":"known"}`} {

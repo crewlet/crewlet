@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,10 +57,38 @@ func TestAFindingLeadsWithItsHeadlineNumbersAndOnePrimaryAction(t *testing.T) {
 	if a := actionsOf(advisor.Fix{Kind: advisor.FixNone}); a.Primary != nil {
 		t.Errorf("a fix that is nobody's offers %+v", a.Primary)
 	}
+	moved := actionsOf(advisor.Fix{Kind: advisor.FixOpenPage, Page: advisor.PageSeat, Target: "dev",
+		Reassign: &advisor.Reassign{Items: []string{"ENG-1", "ENG-2"}, To: "dev-2"}})
+	if p := moved.Primary; p == nil || p.Kind != ActionReassign || p.To == nil || *p.To != "dev-2" ||
+		!slices.Equal(p.Items, []string{"ENG-1", "ENG-2"}) || len(moved.Secondary) != 1 ||
+		moved.Secondary[0].Kind != ActionOpen {
+		t.Errorf("a fix that moves work offers %+v, want the move first and the seat's page beside it", moved)
+	}
 	raw, err := json.Marshal(AdvisorAction{Kind: ActionAsk, Label: "x"})
 	if err != nil || string(raw) != `{"kind":"ask","label":"x","option":null,"items":null,"to":null,"page":null,`+
 		`"target":null,"setting":null,"url":null,"question":null}` {
 		t.Errorf("an action is sent as %s (%v), want every key", raw, err)
+	}
+}
+
+// A PAGE FIX'S PRESS SAYS WHAT IT DOES, by the page it opens: "Take a
+// backup", "Open ENG-1", never "Open it", which names neither the act nor
+// its object. Mutation: label every page alike, and a row's one press tells
+// the reader nothing until it is pressed.
+func TestAPageFixIsLabelledWithWhatItDoes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		page, target, want string
+	}{
+		{"backups", "", "Take a backup"},
+		{"item", "ENG-1", "Open ENG-1"},
+		{"item", "", "Open the item"},
+		{"seat", "dev", "Open the seat"},
+	} {
+		a := actionsOf(advisor.Fix{Kind: advisor.FixOpenPage, Page: advisor.Page(c.page), Target: c.target})
+		if a.Primary == nil || a.Primary.Label != c.want {
+			t.Errorf("%s %q: primary = %+v, want %q", c.page, c.target, a.Primary, c.want)
+		}
 	}
 }
 

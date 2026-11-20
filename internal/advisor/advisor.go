@@ -169,6 +169,19 @@ type Fact struct {
 	Key   string `json:"key"`
 	Value int64  `json:"value"`
 	Label string `json:"label,omitempty"`
+	// Unit is what the number counts, where the finding says it rather than
+	// its key's words ([FactUnit]); an investigation's numbers say theirs.
+	Unit Unit `json:"unit,omitempty"`
+	// Was is the same number over the range before, where it was read.
+	Was *int64 `json:"was,omitempty"`
+}
+
+// Counts is what the fact's number counts: its own unit, else its key's.
+func (f Fact) Counts() Unit {
+	if f.Unit != "" {
+		return f.Unit
+	}
+	return FactUnit(f.Key)
 }
 
 // Said is how the fact is labelled: its own words where it carries them, else
@@ -233,6 +246,9 @@ type Finding struct {
 	// class or the investigation wrote one; the title stands in for it
 	// otherwise (ADR-0166).
 	Headline string `json:"headline,omitempty"`
+	// Premise is the fact the finding rests on, asked again every hour; a
+	// premise that no longer holds resolves the finding (ADR-0166).
+	Premise *Premise `json:"premise,omitempty"`
 	// Seats are the seats a finding about one cause is about, each with its
 	// share of the number, where the class states them (ADR-0166).
 	Seats []SeatShare `json:"seats,omitempty"`
@@ -269,6 +285,10 @@ type Answer struct {
 	// Silent is each class that read its sources and still could not judge
 	// all of the company, with why (ADR-0166).
 	Silent []Silence `json:"silent,omitempty"`
+	// Shared are the findings of classes the Advisor no longer lists that
+	// the usage insights still share by their published class ([Shared]);
+	// never listed, never kept.
+	Shared []Finding `json:"-"`
 }
 
 // SeatShare is one seat a finding is about, and its share of the number.
@@ -319,6 +339,16 @@ type Inputs struct {
 
 // Read is every finding the company document and its integrations raise.
 func Read(in Inputs) Answer {
+	answer := readEach(in)
+	answer.Findings = groupCauses(in.Company, answer.Findings)
+	stateHeadlines(in.Company, answer.Findings)
+	sortFindings(answer.Findings)
+	return answer
+}
+
+// readEach is [Read] before its causes are grouped: one finding per warning,
+// which the evidence's schedule judgement reads schedule by schedule.
+func readEach(in Inputs) Answer {
 	findings := []Finding{}
 	for _, w := range in.Company.Warnings() {
 		findings = append(findings, fromWarning(in.Company, w))
@@ -362,6 +392,9 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 	f.Item = w.Item
 	f.Focus = staticFocus(w)
 	f.Fix = entry.fix(c, place, w)
+	if class == ClassHealthUnheld {
+		f.Evidence = append(f.Evidence, Fact{Key: "agents", Value: int64(len(agentSeats(c)))})
+	}
 	return f
 }
 

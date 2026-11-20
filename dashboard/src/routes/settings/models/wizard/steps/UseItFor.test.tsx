@@ -330,3 +330,13 @@ test("the summary of Everything with no seat picked says no seat uses it", () =>
     "No seat uses haiku yet. Every seat stays on the model it has now.",
   ]);
 });
+
+// M-018: PAST A FEW SEATS, a line counts them; the names stay a press away.
+test("the summary counts the seats past a few, and names them all when asked", () => {
+  const many = { ...emptyDraft(), key: "haiku", intent: "coding" as const, uses: noUses() };
+  many.uses.jobs.executor = ["backend-engineer", "designer", "pm"];
+  expect(summaryOf(split, many, 2)).toEqual(["3 seats will code with haiku."]);
+  expect(summaryOf(split, many)[0]).toBe(
+    "Backend Engineer, Product Manager, and Designer will code with haiku.",
+  );
+});

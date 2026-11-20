@@ -75,6 +75,8 @@ type fakeEngine struct {
 	device  coord.DeviceSignIn
 	devErr  error
 	running int
+	// verified is each model a test said answered, by when ([llmapi.Engine.Verified]).
+	verified map[string]time.Time
 	// onCheck runs as a check returns: a test cancels the request there.
 	onCheck func()
 	// started are the checks asked to start; startErr refuses a start, and
@@ -154,6 +156,15 @@ func (f *fakeEngine) CancelDeviceSignIn(_ context.Context, id uuid.UUID, _ iam.A
 }
 
 func (f *fakeEngine) RunningRunsOn(context.Context, []string) (int, error) { return f.running, nil }
+
+func (f *fakeEngine) Verified(key string, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.verified == nil {
+		f.verified = map[string]time.Time{}
+	}
+	f.verified[key] = at
+}
 
 // fakeConfig is the config surface over one document: a draft is spliced into
 // a copy of it and the whole document validated, as the entity route's dry
@@ -662,6 +673,52 @@ func TestADraftIsValidatedAndTested(t *testing.T) {
 		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}", "token": "${T}"}}}`, nil)
 	if code != http.StatusUnprocessableEntity || got["error"] != "validation_error" || got["problems"] == nil {
 		t.Errorf("an invalid draft = %d %v, want 422 with problems", code, got)
+	}
+}
+
+// A PASSED TEST IS THE MODEL'S ANSWER until its own calls say more: a model
+// added after its test passed read "Not tested". A refused one records none.
+func TestAPassedCredentialTestIsRecordedAsTheModelsAnswer(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	body := `{"values": {"OPUS_KEY": "sk-ant-api03-a-brand-new-key-0000"},
+		"entity": {"harness": "claude-code", "model": "opus",
+		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}"}}}`
+	r.engine.check = llmapi.Check{At: clock, Node: "node-a", Failure: "auth", Said: "401"}
+	r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true", body, nil)
+	if _, ok := r.engine.verified["opus"]; ok {
+		t.Fatal("a refused test was recorded as an answer")
+	}
+	r.engine.check = llmapi.Check{At: clock, Node: "node-a"}
+	if code, got := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true", body, nil); code != http.StatusOK {
+		t.Fatalf("a passing draft test = %d %v", code, got)
+	}
+	if at := r.engine.verified["opus"]; !at.Equal(clock) {
+		t.Errorf("the passed test's answer = %v, want %v", at, clock)
+	}
+}
+
+// A MODEL BEING ADDED HAS NO CURRENT CREDENTIAL: its refused key is said as
+// refused and nothing stored, never as one it "still uses", which told a
+// person adding their first model that a key was already in use.
+func TestARefusedKeyOnAModelBeingAddedNamesNoCurrentCredential(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.engine.check = llmapi.Check{At: clock, Node: "node-a", Failure: "auth",
+		Said: "401 invalid x-api-key"}
+	body := `{"values": {"OPUS_KEY": "sk-ant-api03-a-brand-new-key-0000"},
+		"entity": {"harness": "claude-code", "model": "opus",
+		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}"}}}`
+	code, got := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true", body, nil)
+	if code != http.StatusUnprocessableEntity || got["error"] != "credential_rejected" {
+		t.Fatalf("a new model's refused key = %d %v", code, got)
+	}
+	if _, message := problemAt(t, got); strings.Contains(message, "still uses") ||
+		!strings.HasSuffix(message, "Nothing was stored.") {
+		t.Errorf("a new model's refusal = %q, want it to end at nothing stored", message)
+	}
+	if said, _ := got["message"].(string); strings.Contains(said, "still uses") {
+		t.Errorf("the refusal's sentence = %q names a current credential", said)
 	}
 }
 

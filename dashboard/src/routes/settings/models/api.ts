@@ -359,6 +359,25 @@ export function referencesOf(body: unknown): ModelReference[] {
 }
 
 /**
+ * `GET /config/llm-providers/{key}/references`: every written reference to the
+ * model, read with no write asked, from which a removal draws its list. Asked
+ * as a dry run with no repoint, the list came back as a 422 that every
+ * browser logs as a failed request.
+ */
+export async function modelReferences(
+  key: string,
+  signal?: AbortSignal,
+): Promise<{ references: ModelReference[] } | { refused: ConfigCheckOutcome }> {
+  const answer = await answerOf(
+    rest.request("GET", `/config/llm-providers/${pathSegment(key)}/references`, {
+      ...(signal ? { signal } : {}),
+    }),
+  );
+  if (answer.status === 200) return { references: referencesOf(answer.body) };
+  return { refused: outcomeOf(answer) };
+}
+
+/**
  * `DELETE /config/llm-providers/{key}`: the model removed and every dependant
  * repointed in one revision, or with `dryRun` the same checked and stored
  * nowhere. A refusal for repoints that miss a reference carries every

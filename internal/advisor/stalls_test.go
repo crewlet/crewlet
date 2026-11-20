@@ -311,10 +311,10 @@ func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
 		byClass[f.Class] = append(byClass[f.Class], f)
 	}
 	for _, class := range []advisor.Class{advisor.ClassPersonRequestsWithoutAsk, advisor.ClassNoticeLoad,
-		advisor.ClassReviewIdle, advisor.ClassApprovalRubberStamp, advisor.ClassNoopShare,
+		advisor.ClassReviewIdle,
 		advisor.ClassRedeliveredSeen, advisor.ClassAuxiliaryShare, advisor.ClassSandboxOutOfMemory,
 		advisor.ClassRoundCap, advisor.ClassBudgetStopped, advisor.ClassWorkBottleneck,
-		advisor.ClassWorkHeldByPerson, advisor.ClassMergeNoChecks, advisor.ClassAuxiliaryModel} {
+		advisor.ClassWorkHeldByPerson, advisor.ClassMergeNoChecks} {
 		found := byClass[class]
 		if len(found) < 2 {
 			t.Errorf("%s: %d findings, want two or more to compare", class, len(found))
