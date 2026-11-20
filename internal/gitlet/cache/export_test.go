@@ -357,9 +357,10 @@ func SetMaintenanceBudget(c *Cache, n int64) {
 }
 
 // MemoryReserve is what a node of memory bytes, whose git pool admits
-// transfers transfers and has cores read slots, keeps from background work.
-func MemoryReserve(transfers, cores int, memory int64) int64 {
-	return memoryReserve(transfers, cores, memory)
+// transfers transfers and has cores read slots and keeps engine bytes beside
+// Gitlet, keeps from background work.
+func MemoryReserve(transfers, cores int, memory, engine int64) int64 {
+	return memoryReserve(transfers, cores, memory, engine)
 }
 
 // MemoryReserved is what c keeps of the node's memory from background work,

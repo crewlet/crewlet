@@ -2665,6 +2665,10 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
+Every figure here is a node that serves Gitlet without seats: one that runs
+seats too keeps the executor's 1 216 MiB of pools first and sizes Gitlet by
+what is left ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), so
+give it that much more.
 
 The node that publishes also holds:
 

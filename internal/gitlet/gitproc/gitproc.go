@@ -150,7 +150,8 @@
 // handful of slow clients would refuse every clone on an idle node; so
 // transfers have a lane of their own, [Options.MaxTransfers] wide, bounded by
 // what each holds in MEMORY: four a core by default, and no more than one for
-// every [TransferShare] of the node's memory.
+// every [TransferShare] of what the node's memory leaves Gitlet once the
+// engine's pools beside it are kept ([Options.Reserve]).
 //
 // The transfer lane is SHARED BY WHO ASKED (share.go), where the other lanes
 // grant in arrival order: every transfer carries [Cmd.Share] — its
@@ -359,6 +360,14 @@ type Options struct {
 	// of its machine; negative is refused.
 	Memory int64
 
+	// Reserve is what the node keeps of its memory, given the memory read,
+	// for holders beside Gitlet before the lanes are sized: the engine's
+	// pools on a node that runs seats too (internal/sandbox/executor's
+	// MemoryPools). nil keeps nothing; a negative answer is refused. The
+	// TRANSFER lane's default and the cache's budget are sized by what it
+	// leaves ([Pool.Reserved]).
+	Reserve func(memory int64) int64
+
 	// Home is HOME for every process: absolute; created when absent; its
 	// mode is set to hostbox.DirMode; it must be EMPTY.
 	Home string
@@ -409,6 +418,8 @@ type Pool struct {
 	// the node.
 	memory      nodememory.Memory
 	fixedMemory bool
+	// reserved is what Options.Reserve kept of memory ([Pool.Reserved]).
+	reserved int64
 
 	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
 	// KillGrace, TransferStall (Remote.config derives a remote run's TCP
@@ -529,13 +540,17 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	reserved, err := resolveReserve(o, memory.Bytes)
+	if err != nil {
+		return nil, err
+	}
 	cpuSlots := int64(o.MaxProcesses)
 	if cpuSlots == 0 {
 		cpuSlots = int64(runtime.GOMAXPROCS(0))
 	}
 	transferSlots := int64(o.MaxTransfers)
 	if transferSlots == 0 {
-		transferSlots = defaultTransfers(cpuSlots, memory.Bytes)
+		transferSlots = defaultTransfers(cpuSlots, max(0, memory.Bytes-reserved))
 	}
 
 	home, err := prepareHome(o.Home)
@@ -604,6 +619,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		},
 		memory:      memory,
 		fixedMemory: o.Memory > 0,
+		reserved:    reserved,
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
 		// THE TRANSFER LANE GRANTS BY SHARE (share.go): a held slot is
@@ -650,7 +666,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	p.version = found
 	p.log.Info("code_git_ready", "path", git, "version", found.String(),
 		"read_slots", p.read.size, "maintenance_slots", p.maint.size, "transfer_slots", p.transfer.size,
-		"home", home, "memory", memory.Bytes, "memory_from", memory.From,
+		"home", home, "memory", memory.Bytes, "memory_from", memory.From, "reserved", reserved,
 		"trace_evt", res.Trace.EventVersion)
 	return p, nil
 }

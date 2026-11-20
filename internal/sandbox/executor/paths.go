@@ -356,22 +356,12 @@
 // flight at once: one per seat collecting on this node and up to the box host's
 // boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its worst,
 // 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
-// scrub's base and its meter's at once, each measured apart (one case a process
-// on a dedicated two-core slot, in bytes, the most of nine runs) and
-// summed, each with its benchmark's own heap, so the sum over-counts. The
-// scrub, streaming each text through redact's stages, each holding its window,
-// 8.2 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
-// a text file each at [scrubPieceBaseBytes], the line's and the string's of
-// bytes the decode triples, each ending in a key both readings redact, its
-// meter beside it; 0.11 s). The meter, 3.3 MiB
-// (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
-// verbatim, so a string decodes to three bytes a byte, its facts at the base
-// and the strings a charge covers decoded beside them; 2 MiB on a record line,
-// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past the
-// scrub's base, so the two never meet on one line, but the scrub may read on at
-// its base while the meter is still on it. So every take holds one of
-// [SessionTakesAtOnce] (29), a pool of its own sized so the takes at their base
-// hold at most those 341 MiB.
+// scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
+// (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
+// sum over-counts: the meter's worst line is past the scrub's base, but the
+// scrub may read on at its base while the meter is still on it. So every take
+// holds one of [SessionTakesAtOnce] (29), a pool of its own sized so the takes
+// at their base hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
@@ -399,6 +389,19 @@
 // ends with [errLargeWait] and reads as no reading (count unread), the safe
 // side, as a read past MainThreadReadWait already is. The wait is spent inside
 // that wait, never added to it.
+//
+// # The memory a node keeps for these pools
+//
+// [MemoryPools] adds up the base tier, the takes at their base and the large
+// tier, each at its worst, declared here beside the figures they are measured
+// by: a node running seats beside Gitlet keeps them before it sizes its git
+// lanes and background budget (internal/gitlet/gitproc's Options.Reserve),
+// which the engine passes, as it alone reads the node's roles. Gitlet
+// importing this package could not tell a node running seats from one that
+// does not, and a registry filled at run time would size the lanes by
+// whichever pools had started first.
+// A new pool is one more term of MemoryPools; one whose worst is a share of
+// the node's memory reads its argument.
 //
 // # A hook's note, confirmed off its job's main thread
 //

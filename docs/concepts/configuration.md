@@ -323,8 +323,9 @@ gitlet:
   a core only now and then, so size it to memory rather than cores. A figure
   set by hand is taken as written, and the node keeps 224 MiB of its memory
   for every transfer it names whatever they serve, beside 896 MiB for each
-  core its memory backs at 2 GiB a core; the caches' background indexing has
-  what is left. So a figure well short of what the memory holds at 224 MiB
+  core its memory backs at 2 GiB a core, and on a node running seats too the
+  executor's 1 216 MiB of pools before both; the caches' background indexing
+  has what is left. So a figure well short of what the memory holds at 224 MiB
   each already leaves it nothing — as little as 56% of that, where the node
   has a core for every 2 GiB of memory or more: on 16 GiB and eight cores,
   42 transfers, of the 73 that 16 GiB holds — every repository's bitmap is

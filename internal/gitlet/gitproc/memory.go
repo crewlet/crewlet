@@ -62,9 +62,10 @@ const TransferMemory int64 = 224 << 20
 const TransferBytesPerObject = 240
 
 // defaultTransfers is the TRANSFER lane's size when Options.MaxTransfers is 0
-// on a pool of cores read slots over a node of memory bytes:
-// TransfersPerProcess a core, and no more than one for every TransferShare of
-// the memory — at least one, since a node with no transfer serves no clone.
+// on a pool of cores read slots over memory bytes, the node's less what
+// Options.Reserve keeps: TransfersPerProcess a core, and no more than one for
+// every TransferShare of the memory — at least one, since a node with no
+// transfer serves no clone, so a node whose reserve takes its memory runs one.
 func defaultTransfers(cores, memory int64) int64 {
 	return min(TransfersPerProcess*cores, max(1, memory/TransferShare))
 }
@@ -86,6 +87,25 @@ func resolveMemory(o Options, read func() (nodememory.Memory, error)) (nodememor
 	}
 	return m, nil
 }
+
+// resolveReserve is what o.Reserve keeps of a node of memory bytes: nothing
+// without one, and a refusal for a negative answer, which would size the lanes
+// past the memory read.
+func resolveReserve(o Options, memory int64) (int64, error) {
+	if o.Reserve == nil {
+		return 0, nil
+	}
+	kept := o.Reserve(memory)
+	if kept < 0 {
+		return 0, fmt.Errorf("gitproc: Options.Reserve kept %d bytes of a node of %d: what the node keeps "+
+			"beside Gitlet is never negative", kept, memory)
+	}
+	return kept, nil
+}
+
+// Reserved is what New kept of the node's memory beside Gitlet before sizing
+// the lanes (Options.Reserve), fixed for the pool's life as the lanes are.
+func (p *Pool) Reserved() int64 { return p.reserved }
 
 // Memory is the node's memory as New read it — or as Options.Memory gave
 // it — and what the pool's lanes were sized by.

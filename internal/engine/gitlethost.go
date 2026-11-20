@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -172,6 +173,18 @@ func (e *Engine) hostsGit(built builtWith) bool {
 	return built.runsCode() && e.profile.Roles.Has(placement.RoleGitlet)
 }
 
+// gitReserve is what this node keeps beside Gitlet before its git lanes and
+// background budget are sized: the executor's pools where it runs seats too
+// (executor.MemoryPools, whose package doc says why they are declared there),
+// and nothing on a node that serves Gitlet without seats, whose share of each
+// core already covers the engine's other work (cache.ServingMemoryPerCore).
+func (e *Engine) gitReserve() func(memory int64) int64 {
+	if !e.profile.RunsSeats() {
+		return nil
+	}
+	return executor.MemoryPools
+}
+
 // gitHook is the argv the cache's proc-receive hook execs: [Options.GitHook]
 // where it is given, and otherwise THIS binary as host.HookCommand names it —
 // `crewlet gitlet hook proc-receive` — with its symbolic links resolved, since
@@ -228,10 +241,11 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	defer layout.Release()
 
 	// 2. GIT, the node's own: the pool resolves its lanes once (code_git_ready),
-	// sized by the node's memory ([Options.gitMemory] in this package's tests).
+	// sized by the node's memory ([Options.gitMemory] in this package's tests)
+	// less what this node keeps beside Gitlet ([Engine.gitReserve]).
 	pool, err := gitproc.New(ctx, gitproc.Options{
 		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers,
-		Memory: e.gitMemory, Home: layout.Home, Metrics: e.metrics,
+		Memory: e.gitMemory, Reserve: e.gitReserve(), Home: layout.Home, Metrics: e.metrics,
 	})
 	if err != nil {
 		return gitletHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+

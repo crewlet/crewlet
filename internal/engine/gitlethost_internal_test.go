@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -156,6 +157,33 @@ func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 			t.Errorf("a node without the gitlet role advertises %d bytes of background budget, want no key", got)
 		}
 	})
+}
+
+// A NODE RUNNING SEATS BESIDE GITLET KEEPS THE EXECUTOR'S POOLS FIRST: its
+// cache gives its background work what a node without seats gives on the
+// memory executor.MemoryPools leaves, and a node without seats keeps nothing
+// beside Gitlet. The transfer lane is pinned, so no budget moves with it.
+//
+// Mutations, each red: pass no reserve; pass it whatever the node's roles.
+func TestANodeRunningSeatsKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
+	t.Parallel()
+	const memory = int64(16) << 30
+	withoutSeats := []string{"data", "gitlet", "ingress", "workers"}
+	budget := func(roles []string, memory int64) int64 {
+		e := bootSizedCodeNode(t, roles, memory)
+		n := e.native.Load()
+		if n == nil || n.gitCache == nil {
+			t.Fatalf("the premise: a node with roles %v, for a company hosting code, built no git cache", roles)
+		}
+		return n.gitCache.BackgroundBudget()
+	}
+	pools := executor.MemoryPools(memory)
+	seats, left, alone := budget(nil, memory), budget(withoutSeats, memory-pools), budget(withoutSeats, memory)
+	if seats != left || alone <= seats {
+		t.Errorf("a %d-byte node running seats gives its background work %d; want %d, what a node without "+
+			"seats gives on the %d bytes the executor's %d leave, and less than the %d it gives without seats",
+			memory, seats, left, memory-pools, pools, alone)
+	}
 }
 
 // bootSizedCodeNode boots a node with roles (nil: every role) for
