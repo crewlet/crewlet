@@ -194,6 +194,17 @@ func (d delegatedDesk) Answer(ctx context.Context, run sandbox.PendingRun, choic
 	return err
 }
 
+// answerAsEngine answers run's held call not carried out, as the engine, with
+// said as its reason ([mergedAlready]).
+func (d delegatedDesk) answerAsEngine(ctx context.Context, run sandbox.PendingRun, said string) error {
+	_, err := d.answers().Deliver(ctx, types.ExecutorAnswerGiven{
+		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
+		Answer: said, Choice: sandbox.HeldDeny, AnsweredBy: engineActor, AnsweredByKind: string(iam.ActorSystem),
+		LaunchID: run.LaunchID, Approval: run.HeldCall.ID,
+	})
+	return err
+}
+
 func (d delegatedDesk) RecordVerdict(ctx context.Context, v builtin.DelegatedVerdict) (bool, error) {
 	return sshServers(d).RecordVerdict(ctx, v)
 }
@@ -236,6 +247,9 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	d := held.Delegation
+	if e.answerMergedAlready(ctx, run) {
+		return
+	}
 	if word, said := ownRequest(run); word != "" {
 		// A DELEGATE'S OWN REQUEST goes to people now, not at its deadline
 		// (ownRequest).
@@ -270,6 +284,73 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 				"error", err.Error(), "detail", "the request goes to people at its deadline")
 		}
 	}
+}
+
+// answerMergedAlready answers run's held merge as the engine where its pull
+// request has already merged, so no delegate's turn is spent on it
+// ([mergedAlready]). Reports whether it answered.
+func (e *Engine) answerMergedAlready(ctx context.Context, run sandbox.PendingRun) bool {
+	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
+		return false
+	}
+	desk := delegatedDesk{engine: e}
+	return mergedAlready(ctx, run, desk.Arguments, builtin.ReleaseDeps{Pulls: releasePulls{engine: e}}.MergedAlready,
+		sshServers{engine: e}, desk.answerAsEngine)
+}
+
+// mergedAlready answers run's held merge, still waiting on its delegates, as
+// the engine where merged says its pull request merged before anybody decided
+// it: recorded in the access log as the engine's denial
+// ([delegated.OverruledAlreadyMerged]), then answered not carried out, with
+// the reason. A second request of a merge, held while the first was carried
+// out, is the case: its delegate was woken for a merge already made and denied
+// it as a duplicate. Anything it cannot read or record leaves the request to
+// its delegates. Reports whether it answered.
+func mergedAlready(ctx context.Context, run sandbox.PendingRun,
+	open func(sandbox.PendingRun) (map[string]any, error),
+	merged func(ctx context.Context, requester string, args map[string]any) (string, error),
+	audit delegatedRecorder, answer func(ctx context.Context, run sandbox.PendingRun, said string) error) bool {
+
+	held := run.HeldCall
+	if held == nil || !held.Delegated() || delegated.Kind(held.Act) != delegated.KindPRMerge {
+		return false
+	}
+	args, err := open(run)
+	if err != nil {
+		return false
+	}
+	said, err := merged(ctx, run.AgentHandle, args)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "delegated_merge_unread", "request", held.ID, "error", err.Error(),
+			"detail", "whether its pull request merged could not be read; its delegates decide it")
+		return false
+	case said == "":
+		return false
+	}
+	host, subject, stdin := builtin.RequestSubject(delegated.KindPRMerge, args)
+	item := ""
+	if run.WorkItem != nil {
+		item = cmp.Or(run.WorkItem.Key, run.WorkItem.ID)
+	}
+	// RECORDED BEFORE IT ACTS, as every verdict is.
+	if _, err := audit.RecordVerdict(ctx, builtin.DelegatedVerdict{
+		At: held.HeldAt, Request: held.ID, Kind: held.Act, Rule: held.Delegation.Rule, Handle: run.AgentHandle,
+		Turn: run.TurnID, ByKind: builtin.VerdictByEngine, Through: builtin.VerdictThroughDelegation,
+		Verdict: string(delegated.Deny), Final: true, Overruled: []string{delegated.OverruledAlreadyMerged},
+		Digest: held.Delegation.Digest, Host: host, Subject: subject, Stdin: stdin, Item: item,
+	}); err != nil {
+		log.WarnContext(ctx, "delegated_merge_unrecorded", "request", held.ID, "error", err.Error(),
+			"detail", "the engine's answer could not be recorded in the access log; its delegates decide it")
+		return false
+	}
+	if err := answer(ctx, run, said); err != nil {
+		log.WarnContext(ctx, "delegated_merge_unanswered", "request", held.ID, "error", err.Error(),
+			"detail", "the engine's answer did not reach the run; its delegates decide it")
+		return false
+	}
+	log.InfoContext(ctx, "delegated_merge_already_merged", "request", held.ID, "seat", run.AgentHandle)
+	return true
 }
 
 // readDelegatedRequests reads every delegated review among a seat's delivery
@@ -313,6 +394,12 @@ func (e *Engine) delegatedRequest(ctx context.Context, handle string,
 		return nil, false
 	case !slices.Contains(run.HeldCall.Delegation.Delegates, handle) ||
 		slices.ContainsFunc(run.HeldCall.Delegation.Given, func(g sandbox.HeldVerdict) bool { return g.By == handle }):
+		return nil, false
+	}
+	// THE MERGE CAN LAND WHILE THE WAKE WAITS: a request held while the same
+	// merge was being carried out reaches its delegate after it, with nothing
+	// left to decide.
+	if e.answerMergedAlready(ctx, run) {
 		return nil, false
 	}
 	args, err := desk.Arguments(run)
