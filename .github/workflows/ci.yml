@@ -1234,10 +1234,10 @@ jobs:
           key: golangci-lint-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             golangci-lint-${{ runner.os }}-
-      # `latest` is deliberate, and it is one of the five floating versions
-      # in this repository: the others are the `node-version: latest` in the
-      # `dashboard gates` (which the unit shards reuse) and `end-to-end gates`
-      # jobs above and in
+      # `latest` is deliberate, and it is one of the six floating versions in
+      # this repository: the others are the `node-version: latest` in the
+      # `dashboard gates` (which the dashboard unit shards reuse),
+      # `test (race)` and `end-to-end gates` jobs above and in
       # dependabot-dashboard.yml's `build` job, and goreleaser's `~> v2` in
       # release.yml, each held that way for its own reason stated at its own
       # line.

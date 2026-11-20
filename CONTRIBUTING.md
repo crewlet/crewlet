@@ -1090,8 +1090,10 @@ it exactly.** Find the newest in the registry, not memory, and write a literal
 version (`4.2.4`), never a floating tag: `latest` and `@main` leave Dependabot
 nothing to bump, and make a green run a claim about a build nobody can name
 afterwards. A version may be held back for a reason, in a comment at the pin, as
-the Compose stack's Postgres image does. The one deliberately unpinned place is
-what a shipped example fetches (see below).
+the Compose stack's Postgres image does. Two kinds of version float on purpose:
+what a shipped example fetches (see below), and the tool versions a workflow
+names in `with:`, which Dependabot never bumps, each for the reason at its line
+(`ci.yml`'s `golangci-lint` job lists them).
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, with the commit prefix its bumps carry,
