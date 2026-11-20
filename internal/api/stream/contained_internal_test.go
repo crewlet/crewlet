@@ -162,19 +162,16 @@ func (s *served) answerTo(t *testing.T, id int64) map[string]any {
 }
 
 // A PANIC ON A GOROUTINE A SOCKET SERVES ITS CLIENT ON IS CONTAINED, as
-// net/http contains a request handler's, and answered as each such goroutine
-// can be: [panics] hears it once, in [panics.ScopeAPI], and the process, the
-// node's other sockets and (where its goroutine lives on) the socket go on.
-//   - A frame its read loop handles (a watch whose chart panics) ends the socket
-//     as an internal error, so its own teardown runs.
-//   - A decision of its credential closes it [CloseUndecided], so the tab's
-//     handshake decides: a socket nobody decides again may not stay open.
-//   - A frame its writer writes ends the socket, as a failed write does.
-//   - A room frame (a join whose decision panics, a presence frame, a leave)
-//     answers a join as failed, naming the artifact, and the socket goes on.
+// net/http contains a request handler's: [panics] hears it once, in
+// [panics.ScopeAPI], the process and the node's other sockets go on, and each
+// goroutine answers as it can. A frame the read loop handles (a watch whose
+// chart panics) ends the socket as an internal error; a decision of its
+// credential closes it [CloseUndecided], since a socket nobody decides again
+// may not stay open; a frame the writer writes ends it, as a failed write
+// does; a room frame answers a join as failed, naming the artifact, and the
+// socket goes on.
 //
-// Mutation: drop the containment of any of these goroutines, and the panic ends
-// the test binary.
+// Mutation: drop any of these containments, and the panic ends the binary.
 func TestAPanicOnASocketsOwnGoroutineIsContained(t *testing.T) {
 	t.Parallel()
 	ana := person("ana")
