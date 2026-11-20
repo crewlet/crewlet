@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -163,12 +162,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	}
 	p.track(c.Class, +1)
 
-	errs := &stderrSink{}
 	var known *strings.Replacer
 	if c.Remote != nil {
 		known = c.Remote.known()
-		errs.known = known
 	}
+	errs := newStderrSink(c.Remote != nil, known)
 	trace := newTraceSink(c.Dir)
 	var capt *capture
 	dst := c.Stdout
@@ -243,12 +241,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	if c.Remote != nil {
 		// A REMOTE RUN'S LINES ARE REDACTED BEFORE ANYTHING READS THEM (its
 		// ExitError, the observer, a caller's log): stderr lost the remote's
-		// secrets in the sink, the damage loses them here, and both then go
-		// through internal/redact, as a remote's text is from outside. Stdout
-		// lost them in lineRedactor and no more: it is the run's ANSWER (an
-		// ls-remote's refs, a push's statuses), which its caller parses, so no
-		// guess at a credential's shape may rewrite it.
-		res.Stderr = redact.Secrets(res.Stderr)
+		// secrets and went through internal/redact whole in the sink, before
+		// its tail was cut, as a remote's text is from outside; the damage
+		// loses them here. Stdout lost them in lineRedactor and no more: it
+		// is the run's ANSWER (an ls-remote's refs, a push's statuses), which
+		// its caller parses, so no guess at a credential's shape may rewrite it.
 		res.Damage = redactDamage(res.Damage, known)
 	}
 	// A CRASH IS A SIGNAL NOBODY HERE SENT. The pool's own kill (w.ended)
