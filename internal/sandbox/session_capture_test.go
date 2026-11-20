@@ -49,8 +49,8 @@ func TestTheSwitchOffAsksNoHostForALostRunsSession(t *testing.T) {
 // makes its own: flock locks conflict across descriptors, so one test process
 // plays both.
 //
-// Mutation: sweep a directory whatever its lock, or sweep once a coordinator,
-// and a check below goes red.
+// Mutation: sweep a directory whatever its lock, or sweep only as a
+// coordinator starts, and a check below goes red.
 func TestASpoolDirectoryIsSweptOnlyOnceItsProcessHasLetGo(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -100,6 +100,61 @@ func TestASpoolDirectoryIsSweptOnlyOnceItsProcessHasLetGo(t *testing.T) {
 		gone("a process's spool directory once it let go", live)
 		if _, err := os.Stat(filepath.Join(own, spoolLockName)); err != nil {
 			t.Errorf("the coordinator's own spool directory was swept while it lives: %v", err)
+		}
+	})
+}
+
+// EVERY START SWEEPS WHAT A GONE PROCESS SPOOLED, before it takes anything, so
+// a node restarted after a crash that then takes nothing for hours holds none
+// of its spools that long: a coordinator built over a spool directory holding
+// a crashed process's directory, a staging one a crash left half made, and a
+// live process's, removes the first two and keeps the live one's spool.
+//
+// Mutation: drop the sweep from NewCoordinator, or sweep a directory whatever
+// its lock, and a check below goes red.
+func TestEveryStartSweepsTheSpoolsOfAProcessThatLetGo(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig := newCoordRig(t)
+		parent := t.TempDir()
+		other := func() (string, string, func()) {
+			dir, lock, err := makeSpoolDir(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spool := filepath.Join(dir, spoolPrefix+"under-way")
+			if err := os.WriteFile(spool, []byte("sealed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return dir, spool, lock.Release
+		}
+		_, liveSpool, ends := other()
+		defer ends()
+		crashed, _, crash := other()
+		crash()
+		half := filepath.Join(parent, spoolDirPrefix+"half-made"+spoolStaging)
+		if err := os.Mkdir(half, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		c, err := NewCoordinator(CoordinatorOptions{
+			Answers: rigAnswers(), Leads: rigLeads(),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Pushes: &pushSpy{},
+			Lease:    leased(rigLease),
+			SpoolDir: parent,
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		defer c.Stop()
+		for what, dir := range map[string]string{"a crashed process's spool directory": crashed,
+			"a staging directory a crash left": half} {
+			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s was left by the start (%v)", what, err)
+			}
+		}
+		if _, err := os.Stat(liveSpool); err != nil {
+			t.Errorf("a live process's spool was swept by the start: %v", err)
 		}
 	})
 }

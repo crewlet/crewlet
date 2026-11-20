@@ -37,16 +37,23 @@ func finalTake(t *testing.T, rig *coordRig, run PendingRun, runner Runner) (*spo
 
 // FOUR SAVES AT THE SEALED BOUND LEAVE A FINAL TAKE ITS ROOM. Saves take room
 // for a session at its bound and never wait for it, so with every one of a
-// node's saves under way a final take still spools at once, and a fifth save
-// finds none.
+// node's saves under way a final take of a session at its bound still spools
+// at once, and a fifth save finds none.
 //
-// Mutation: size the room at four sessions at the bound, and the final waits
-// out its minute and keeps nothing.
+// Mutation: size the room at four sessions at the bound, or at four and a
+// mebibyte, and the final waits out its minute and keeps nothing.
 func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 	t.Parallel()
+	if counted := countedFor(executorkeep.SessionMaxBytes); counted != executorkeep.SealedMaxBytes {
+		t.Fatalf("a session at its bound is counted at %d, want the sealed bound %d", counted,
+			executorkeep.SealedMaxBytes)
+	}
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := keepingRig(t)
 		run := rig.launchKept(t, "t1")
+		rig.runner.mu.Lock()
+		rig.runner.Session.Archive.Size = executorkeep.SessionMaxBytes
+		rig.runner.mu.Unlock()
 		for save := range maxConcurrentSaves {
 			hold := rig.coordinator.trySpoolRoom(executorkeep.SealedMaxBytes)
 			if hold == nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -44,6 +45,9 @@ type keptRestore struct {
 	// noRowFound answers a turn it holds no row for as the engine's restore
 	// does, [ErrTurnRowNotFound], rather than as [errNoRow].
 	noRowFound bool
+	// reading, when set, is called before every read of a streamed object,
+	// so a case sees the node's disk while the session is read.
+	reading func()
 }
 
 // errNoRow and errUnreadable stand for the executor log's answers of a row it
@@ -91,7 +95,20 @@ func (k *keptRestore) Open(_ context.Context, row executorkeep.TurnRow) (io.Read
 	if k.readAgain != nil && k.streamed > 1 {
 		body = k.readAgain(slices.Clone(body))
 	}
-	return io.NopCloser(bytes.NewReader(body)), nil
+	return io.NopCloser(&watchedRead{r: bytes.NewReader(body), reading: k.reading}), nil
+}
+
+// watchedRead calls reading, where set, before each read of r.
+type watchedRead struct {
+	r       io.Reader
+	reading func()
+}
+
+func (w *watchedRead) Read(p []byte) (int, error) {
+	if w.reading != nil {
+		w.reading()
+	}
+	return w.r.Read(p)
 }
 
 // streams is how many objects [keptRestore.Open] was asked to stream.
@@ -191,16 +208,57 @@ func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req La
 	return c.Launch(t.Context(), rig.manager, req)
 }
 
-// restoreSpools is every spool in any coordinator's own directory under the
-// rig's spool directory: a restore spools none.
+// restoreSpools is every file under the rig's spool directory but a spool
+// directory's lock, whatever it is named: a restore spools none.
 func restoreSpools(t *testing.T, rig *coordRig) []string {
 	t.Helper()
-	left, err := filepath.Glob(filepath.Join(rig.coordinator.spoolDirectory(), spoolDirPrefix+"*",
-		spoolPrefix+"*"))
+	left, err := spoolFiles(rig.coordinator.spoolDirectory())
 	if err != nil {
 		t.Fatalf("listing the restore spools: %v", err)
 	}
 	return left
+}
+
+// spoolFiles is every file under dir but a spool directory's lock.
+func spoolFiles(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			return err
+		case !d.IsDir() && d.Name() != spoolLockName:
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
+}
+
+// spoolsWhileRead records, on every read of a session restore streams, the
+// files under the rig's spool directory, and returns what it recorded: a
+// restore that spools the session, even one it removes before the launch
+// returns, is seen.
+func spoolsWhileRead(rig *coordRig, restore *keptRestore) func() []string {
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	restore.reading = func() {
+		found, err := spoolFiles(rig.coordinator.spoolDirectory())
+		if err != nil {
+			found = []string{err.Error()}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, found...)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
 }
 
 // A TURN'S KEPT SESSION IS CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS. The
@@ -218,6 +276,7 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, restore, kept := keptTurn(t)
+		whileRead := spoolsWhileRead(rig, restore)
 		req := continuingKept(kept)
 		var decided []LaunchDecision
 		req.Decided = func(d LaunchDecision) { decided = append(decided, d) }
@@ -252,6 +311,9 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 		if left := restoreSpools(t, rig); len(left) != 0 {
 			t.Errorf("the launch left the spool it carried the session in: %v", left)
 		}
+		if spooled := whileRead(); len(spooled) != 0 {
+			t.Errorf("the launch spooled the session while it read it: %v", spooled)
+		}
 	})
 }
 
@@ -277,6 +339,7 @@ func TestAKeptSessionReadAgainOtherwiseFailsTheLaunch(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
 				rig, restore, kept := keptTurn(t)
 				restore.readAgain = again
+				whileRead := spoolsWhileRead(rig, restore)
 				started := len(rig.runner.Started())
 				if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err == nil {
 					t.Fatal("the relaunch started on a second read that was not the first, want it failed")
@@ -289,6 +352,9 @@ func TestAKeptSessionReadAgainOtherwiseFailsTheLaunch(t *testing.T) {
 				}
 				if left := restoreSpools(t, rig); len(left) != 0 {
 					t.Errorf("the launch spooled the session: %v", left)
+				}
+				if spooled := whileRead(); len(spooled) != 0 {
+					t.Errorf("the launch spooled the session while it read it: %v", spooled)
 				}
 			})
 		})
@@ -416,6 +482,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": row},
 				archives: map[string][]byte{key.String(): []byte("the transcript")}, unreadable: tc.unreadable,
 				failOpen: tc.failOpen}
+			whileRead := spoolsWhileRead(rig, restore)
 			rig.coordinator.restore = restore
 			newest := kept
 			if tc.newerUnkept {
@@ -457,6 +524,12 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			// NO SPOOL, while the run is handed what it carries as after.
 			if left := restoreSpools(t, rig); len(left) != 0 {
 				t.Errorf("the launch spooled the session: %v", left)
+			}
+			if got.carried != nil {
+				_, _ = io.Copy(io.Discard, got.carried.Body)
+			}
+			if spooled := whileRead(); len(spooled) != 0 {
+				t.Errorf("the launch spooled the session while it read it: %v", spooled)
 			}
 		})
 	}
