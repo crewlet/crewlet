@@ -23,7 +23,15 @@ import { useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-ho
 import { useQuery } from "~/lib/useQuery.ts";
 import { RunStatus, runTitle } from "~/routes/live/Executors.tsx";
 import { mergeRuns } from "~/lib/runs.ts";
-import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+  useHomeRange,
+} from "~/routes/home/board/kit.tsx";
+import { rangeSince } from "~/routes/home/model.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 
 const ROWS = 5;
 
@@ -128,22 +136,25 @@ function LatestEvents({ params }: { params: Readonly<Record<string, string>> }) 
 }
 
 const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 
 function FailedTurns() {
   const now = useNow();
-  // THE WINDOW MOVES BY THE HOUR, so the question changes once an hour rather
-  // than with every tick of the clock.
+  // HOME'S WINDOW, from the company's midnight its range opens on; its end
+  // moves by the hour, so the question changes once an hour rather than with
+  // every tick of the clock.
+  const range = useHomeRange();
+  const zone = useCompanyZone();
   const edge = Math.ceil(now / HOUR) * HOUR;
+  const since = rangeSince(range, now, zone);
   const params = useMemo(
     () => ({
-      since: new Date(edge - DAY).toISOString(),
+      since: new Date(since).toISOString(),
       until: new Date(edge).toISOString(),
       limit: ROWS,
       sort: "-started",
       failed: "true",
     }),
-    [edge],
+    [since, edge],
   );
   const { data, loading, error, refusal } = useQuery("turns", params, { pollMs: 60_000 });
   const rows = data?.turns ?? [];
@@ -156,7 +167,13 @@ function FailedTurns() {
         gaps={gapsOf([data])}
         empty={
           data && rows.length === 0
-            ? { title: "No failed turns", hint: "No turn failed in the last 24 hours." }
+            ? {
+                title: "No failed turns",
+                hint:
+                  range.days === 1
+                    ? "No turn failed today."
+                    : `No turn failed in the last ${range.words}.`,
+              }
             : undefined
         }
       >
@@ -226,7 +243,7 @@ export const widgets = defineWidgets([
     key: "live.failed-turns",
     from: "live-turns",
     label: "Failed turns",
-    description: "Turns that failed in the last 24 hours",
+    description: "Turns that failed over Home's range",
     icon: BrainGlyph,
     hue: "rose",
     size: { w: 4, minW: 3, minH: 8, vertical: true },
