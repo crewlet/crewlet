@@ -232,16 +232,17 @@ test("a model just added reads as being added until the reading holds it", async
   expect(location.hash).not.toContain("added=");
 });
 
-// ONE PAGE, NO LENSES: under the table of models, Ask Crewlet's and the
-// Advisor's rows, then every seat's jobs, in that order.
-test("the page has no lens tabs, and under the models come the helpers, then every seat's jobs", async () => {
+// ONE PAGE, NO LENSES: under the table of models, Ask Crewlet and the
+// Advisor, then the seats, in that order.
+test("the page has no lens tabs, and under the models come the helpers, then the seats", async () => {
   current = company(true);
   await mountAt({ hash: "#/settings/models" });
   expect(screen.queryByRole("tablist", { name: "Lens" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "By job" })).toBeNull();
   const models = screen.getByRole("columnheader", { name: /Usage limits/ });
   const helpers = screen.getByRole("list", { name: "Ask Crewlet and the Advisor" });
-  const seats = screen.getByText("Every seat, every job");
+  // THE SEATS' TABLE, the last with a Model column: the models' own comes first.
+  const seats = screen.getAllByRole("columnheader", { name: "Model" }).at(-1)!;
   const follows = (a: Node, b: Node) =>
     (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
   expect(follows(models, helpers)).toBe(true);
@@ -253,6 +254,6 @@ test("an address for the old By job lens opens the one page", async () => {
   current = company(true);
   await mountAt({ hash: "#/settings/models?view=jobs" });
   expect(location.hash).not.toContain("view=");
-  expect(screen.getByText("Every seat, every job")).toBeTruthy();
+  expect(screen.getAllByRole("columnheader", { name: "Model" })).toHaveLength(2);
   expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
 });

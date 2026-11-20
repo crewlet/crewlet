@@ -139,39 +139,82 @@
   align-self: stretch;
 }
 
-/* Ask Crewlet and the Advisor under the list: a compact row each, its name, picker and a few words. */
+/* Ask Crewlet and the Advisor on one line under the list: each its mark, name and picker. */
 .models-helpers {
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3) var(--spacing-8);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .models-helpers__row {
-  display: grid;
-  grid-template-columns: 9rem minmax(10rem, 13rem) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--spacing-2) var(--spacing-4);
-}
-
-.models-helpers__picker {
-  min-width: 0;
-}
-
-.models-helpers__about {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
+  gap: var(--spacing-2) var(--spacing-3);
   min-width: 0;
+}
+
+/* A seat's model: one picker and its Split control, or a picker per category, on one line that wraps. */
+.models-seat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+
+.models-seat__job {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.models-seat__label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.models-seat__value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/*
+ * A SEAT'S PICKER IS AS WIDE AS ITS MODEL'S NAME, and its list is not cut to
+ * it (QA M1): an auto picker's list is at least as wide as the trigger and
+ * otherwise as wide as its options, up to the kit's reading measure.
+ */
+.models-seat__select {
+  --crewlet-select-auto-min-width: 8rem;
+}
+
+/* A model's harness mark before its key, in a picker, an option or a menu item. */
+.models-option-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* An option's condition in a word, and a fast model's mark beside it. */
+.models-option-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-option-fast {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
 }
 
 @media (width < 640px) {
   .models-doctor__line,
   .models-repoint__row,
-  .models-helpers__row,
   .models-choices {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -252,15 +295,6 @@
   padding: var(--spacing-3);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-}
-
-/* The seats' grid's seat cell: the seat, and under it "Everything" where one model runs every job. */
-.models-seat-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-1);
-  min-width: 0;
 }
 
 /* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
@@ -377,45 +411,6 @@
 .models-uses:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
-}
-
-/* A seat's job cell: the picker the column's width, its notes under it. */
-.models-jobs__cell {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  inline-size: 100%;
-  min-width: 0;
-}
-
-/*
- * THE PICKER FILLS ITS CELL AND ITS LIST DOES NOT (QA M1). An auto-width
- * picker's list is at least as wide as the trigger and otherwise as wide as
- * its options, up to the kit's reading measure for a described list, so a
- * model's name, condition and id are never cut to the column; the bounds are
- * the kit's own properties for an auto picker.
- */
-.models-jobs__picker .models-jobs__select {
-  --crewlet-select-auto-min-width: 100%;
-  --crewlet-select-auto-max-width: 100%;
-}
-
-.models-jobs__notes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-}
-
-/* A cell whose model will not answer says so in the warning ink (QA M19). */
-/* A slow model under a timed job: a quiet mark, its words on hover. */
-.models-jobs__slow {
-  display: inline-flex;
-  color: var(--color-text-tertiary);
-}
-
-.models-jobs__cell--alarm .models-jobs__health {
-  color: var(--color-feedback-warning-ink);
 }
 
 /*
