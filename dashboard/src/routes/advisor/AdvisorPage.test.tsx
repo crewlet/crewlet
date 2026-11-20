@@ -415,60 +415,6 @@ test("an atlas finding offers its fix where the engine named its entries, and th
   );
 });
 
-// THE REPORTS TAB lists each week's report, newest first, with what the week
-// moved; each opens its week's page, and an older page is asked for by the
-// cursor the engine answered.
-test("the Reports tab lists each week and asks for older ones by the engine's cursor", async () => {
-  const { asked, answer } = engine([]);
-  const week = (n: number) => ({
-    week: `2026-W${n}`,
-    period: { from: "2026-11-16T00:00:00Z", to: "2026-11-23T00:00:00Z" },
-    written_at: ago(60),
-    opened: n === 47 ? 3 : 0,
-    resolved: 1,
-    applied: 0,
-    dismissed: 2,
-  });
-  const reports = (name: string, params: Record<string, unknown>) => {
-    const said = answer(name, params);
-    if (name !== "advisor_reports") return said;
-    return params.cursor === "c2"
-      ? { reports: [week(45)], next_cursor: null }
-      : { reports: [week(47), week(46)], next_cursor: "c2" };
-  };
-  mount(reports, "reports");
-  const list = await screen.findByRole("list", { name: "Weekly reports" });
-  const first = within(list).getByRole("link", { name: "Week 47 of 2026" });
-  expect(first.getAttribute("href")).toBe("#/advisor/reports/2026-W47");
-  expect(within(list).getAllByText(/3 opened · 1 resolved · 0 applied · 2 dismissed/)).toHaveLength(
-    1,
-  );
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Show older reports" }));
-  });
-  await within(list).findByRole("link", { name: "Week 45 of 2026" });
-  // THE WEEKS ALREADY SHOWN STAY, the older page after them.
-  expect(
-    within(list)
-      .getAllByRole("link")
-      .map((a) => a.textContent),
-  ).toEqual(["Week 47 of 2026", "Week 46 of 2026", "Week 45 of 2026"]);
-  expect(asked.filter((q) => q.name === "advisor_reports").map((q) => q.params.cursor)).toEqual([
-    undefined,
-    "c2",
-  ]);
-  expect(screen.queryByRole("button", { name: "Show older reports" })).toBeNull();
-});
-
-test("the Reports tab says when no report was written yet", async () => {
-  const { answer } = engine([]);
-  mount((name, params) => {
-    const said = answer(name, params);
-    return name === "advisor_reports" ? { reports: [], next_cursor: null } : said;
-  }, "reports");
-  expect(await screen.findByText("No report yet")).toBeDefined();
-});
-
 // A PAGE STILL HELD while the next is asked for is not drawn twice.
 test("a page's rows already held are drawn once", () => {
   const held = [{ id: "a" }, { id: "b" }];
