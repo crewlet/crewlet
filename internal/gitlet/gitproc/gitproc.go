@@ -323,6 +323,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -406,7 +407,7 @@ type Pool struct {
 	// memory is the node's memory the lanes were sized by; fixedMemory says
 	// Options.Memory gave it, so ReadMemory answers it rather than reading
 	// the node.
-	memory      Memory
+	memory      nodememory.Memory
 	fixedMemory bool
 
 	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
@@ -524,7 +525,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if o.MaxTransfers < 0 {
 		return nil, fmt.Errorf("gitproc: gitlet.max_transfers %d is negative: 0 is %d for each process slot", o.MaxTransfers, TransfersPerProcess)
 	}
-	memory, err := resolveMemory(o, readNodeMemory)
+	memory, err := resolveMemory(o, nodememory.Read)
 	if err != nil {
 		return nil, err
 	}

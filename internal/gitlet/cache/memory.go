@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -15,13 +16,13 @@ import (
 // node's memory is OOM-killed, and the kernel may as well pick the engine. So
 // each git process the cache starts or admits is charged by what it covers
 // (chargeOver, Write.charge) and runs only while its charge, beside everything
-// in flight (maintFlight), fits the BUDGET: the node's memory (gitproc.Memory,
-// re-read every pass: rereadMemory) less memoryReserve. A step whose charge
-// alone is past it never starts here, and the repository is served slower,
-// never wrong: a refused bitmap leaves an index without one (maintain.go), a
-// refused compaction lets packs gather (code_compaction_behind). Each refusal
-// is logged and counted once an incarnation and gauged while it stands
-// (noteRefusals); the alarm's threshold is the budget, never a knob.
+// in flight (maintFlight), fits the BUDGET: the node's memory
+// (nodememory.Memory, re-read every pass: rereadMemory) less memoryReserve. A
+// step whose charge alone is past it never starts here, and the repository is
+// served slower, never wrong: a refused bitmap leaves an index without one
+// (maintain.go), a refused compaction lets packs gather (code_compaction_behind).
+// Each refusal is logged and counted once an incarnation and gauged while it
+// stands (noteRefusals); the alarm's threshold is the budget, never a knob.
 
 // chargeOver is what a git process the cache starts or admits is charged at:
 // perObject bytes an object of the stepObjects it covers, and room for one
@@ -125,7 +126,7 @@ func (c *Cache) rereadMemory() {
 func (c *Cache) BackgroundBudget() int64 { return c.maint.budgetNow() }
 
 // nodeMemory is the node's memory as the cache last read it.
-func (c *Cache) nodeMemory() gitproc.Memory {
+func (c *Cache) nodeMemory() nodememory.Memory {
 	c.memMu.Lock()
 	defer c.memMu.Unlock()
 	return c.memory

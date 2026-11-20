@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/nodememory"
 )
 
 // A POOL KNOWS THE MEMORY ITS LANES WERE SIZED BY: the node's own, positive
@@ -24,7 +25,7 @@ func TestAPoolKnowsTheMemoryItsLanesWereSizedBy(t *testing.T) {
 	}
 
 	given := fakePool(t, "exit 0", gitproc.Options{Memory: 3 << 30})
-	want := gitproc.Memory{Bytes: 3 << 30, From: "gitproc.Options.Memory"}
+	want := nodememory.Memory{Bytes: 3 << 30, From: "gitproc.Options.Memory"}
 	if m := given.Memory(); m != want {
 		t.Errorf("a pool given 3 GiB sized its lanes by %+v, want %+v", m, want)
 	}
@@ -38,14 +39,14 @@ func TestAPoolKnowsTheMemoryItsLanesWereSizedBy(t *testing.T) {
 // OOM the bound exists to prevent.
 func TestAMemoryThatCannotBeReadRefusesThePool(t *testing.T) {
 	t.Parallel()
-	_, err := gitproc.ResolveMemory(gitproc.Options{}, func() (gitproc.Memory, error) {
-		return gitproc.Memory{}, errors.New("reading /proc/meminfo: no such file")
+	_, err := gitproc.ResolveMemory(gitproc.Options{}, func() (nodememory.Memory, error) {
+		return nodememory.Memory{}, errors.New("reading /proc/meminfo: no such file")
 	})
 	if err == nil || !strings.Contains(err.Error(), "/proc/meminfo") || !strings.Contains(err.Error(), "transfer lane") {
 		t.Fatalf("a node whose memory cannot be read = %v, want a refusal naming what and the lane it sizes", err)
 	}
-	m, err := gitproc.ResolveMemory(gitproc.Options{Memory: 1 << 30}, func() (gitproc.Memory, error) {
-		return gitproc.Memory{}, errors.New("never asked")
+	m, err := gitproc.ResolveMemory(gitproc.Options{Memory: 1 << 30}, func() (nodememory.Memory, error) {
+		return nodememory.Memory{}, errors.New("never asked")
 	})
 	if err != nil || m.Bytes != 1<<30 {
 		t.Errorf("a figure the options give = %+v, %v; want it, the node never read", m, err)

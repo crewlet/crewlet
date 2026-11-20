@@ -127,6 +127,7 @@
 | `flock` | The one exclusive cross-process file lock (`store`, `queue/jetstream`, `hostbox`, `gitlet/cache`), plus a pin: a lock on a file description a child inherits, held while any process holds it. |
 | `sockcount` | What a TCP socket's kernel holds unacknowledged and has had acknowledged, read from the connection's own descriptor (Linux and darwin). |
 | `procgroup` | Signals a child process tree as one process group, tells whether a recorded group is still the same one, and sums a group's CPU |
+| `nodememory` | The memory this node's processes may hold, the least of the machine's and every cgroup limit above the process: the one reader for every bound that is a share of it. |
 | `gitlet/gitproc` | The one wrapper that starts git: every git process the engine runs, with its built environment and configuration, lane slot, process-tree end and classified failure, plus the git version floors (ADR-0087). |
 | `gitlet/cache` | Each Gitlet node's disposable bare repositories, one a repository it serves, derived by convergence from the code log's rows and the object store, from which real git upload-pack answers clones and fetches. |
 | `gitlet/compact` | The maintainer's three loops over a repository's packs: compaction bounds their count, publication writes its bitmap layers, expunge drops what no ref reaches. |

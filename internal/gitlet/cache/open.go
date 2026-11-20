@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -151,8 +152,8 @@ type Cache struct {
 	// and said so. refusals is what the maintainer's latest walk found refused.
 	memReserve int64
 	memMu      sync.Mutex
-	memory     gitproc.Memory
-	memSource  func() (gitproc.Memory, error)
+	memory     nodememory.Memory
+	memSource  func() (nodememory.Memory, error)
 	memFailing bool
 	refusals   memoryRefusals
 	// mark is the code log as this process has seen it answered, and rereads
