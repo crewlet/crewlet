@@ -146,6 +146,17 @@ type RunRequest struct {
 	RunKind RunKind `json:"run_kind,omitempty"`
 }
 
+// RunProgress is one line of a deep run's progress (op `progress` on the run),
+// readable from any node while the run is in flight.
+type RunProgress struct {
+	Run  string    `json:"run"`
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
+// MaxProgressBytes bounds one progress line.
+const MaxProgressBytes = 512
+
 // RunRecord is a run's end (op `record` on the run).
 type RunRecord struct {
 	Run     string  `json:"run"`
@@ -254,6 +265,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[RunRequest](rec)
 	case k == KindRun && op == OpRecord:
 		return decodePayload[RunRecord](rec)
+	case k == KindRun && op == OpProgress:
+		return decodePayload[RunProgress](rec)
 	case k == KindReport && op == OpWrite:
 		return decodePayload[Report](rec)
 	case k == KindAlarm && op == OpRaise:

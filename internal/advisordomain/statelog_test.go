@@ -232,10 +232,14 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 // carryingSuiteField is a valid record carrying the named versioned field
 // alone, its version left to the encoder: a Run deep request for the run's kind.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	if field.Name != "Run.RunKind" {
-		return nil, fmt.Errorf("no suite record carries %s", field.Name)
+	run := uuid.NewSHA1(uuid.NameSpaceOID, []byte("run/"+field.Name)).String()
+	switch field.Name {
+	case "Run.RunKind":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-kind", advisordomain.OpRequest, sentinel(),
+			advisordomain.RunRequest{Run: run, By: "owner", RunKind: advisordomain.RunKindDeep})
+	case "Op progress":
+		return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-progress", advisordomain.OpProgress,
+			sentinel(), advisordomain.RunProgress{Run: run, At: suiteStamped, Text: "reading capacity"})
 	}
-	run := uuid.NewSHA1(uuid.NameSpaceOID, []byte("run/kind")).String()
-	return rawRecord(advisordomain.RunSubject(run), "suite-node", "op-run-kind", advisordomain.OpRequest, sentinel(),
-		advisordomain.RunRequest{Run: run, By: "owner", RunKind: advisordomain.RunKindDeep})
+	return nil, fmt.Errorf("no suite record carries %s", field.Name)
 }

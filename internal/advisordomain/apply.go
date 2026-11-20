@@ -384,6 +384,14 @@ func applyRun(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int
 		return affected(res), nil
 	case RunRecord:
 		return applyRecord(ctx, tx, c, run, p)
+	case RunProgress:
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO advisor_run_progress (run_id, at, text, position) VALUES (?, ?, ?, ?)
+			ON CONFLICT (run_id, position) DO NOTHING`, run, store.EncodeTime(p.At), p.Text, c.packed)
+		if err != nil {
+			return 0, fmt.Errorf("advisordomain: progress of run %s at %s: %w", run, c.position, err)
+		}
+		return affected(res), nil
 	}
 	return 0, fmt.Errorf("advisordomain: the run record at %s carries a %T", c.position, payload)
 }
@@ -522,6 +530,8 @@ var expiryStatements = []struct {
 		func(e Expiry, _ int64) []any {
 			return []any{store.EncodeTime(e.RunsBefore), store.EncodeTime(e.RunsBefore)}
 		}},
+	{`DELETE FROM advisor_run_progress WHERE at < ?`,
+		func(e Expiry, _ int64) []any { return []any{store.EncodeTime(e.RunsBefore)} }},
 	{`DELETE FROM advisor_reports WHERE written_at < ?`,
 		func(e Expiry, _ int64) []any { return []any{store.EncodeTime(e.ReportsBefore)} }},
 	{`DELETE FROM advisor_alarm_episodes WHERE cleared_at IS NOT NULL AND cleared_at < ?`,

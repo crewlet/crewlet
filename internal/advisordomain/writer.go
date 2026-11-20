@@ -343,6 +343,25 @@ func (w *Writer) Release(ctx context.Context, c Call, key string, ifMatch uint64
 
 // ---- runs, reports and alarms ------------------------------------------- //
 
+// Progress writes one line of a deep run's progress, readable from any node
+// while the run is in flight ([Reader.LiveProgress]).
+func (w *Writer) Progress(ctx context.Context, c Call, p RunProgress) (statelog.Result, error) {
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	switch {
+	case !IsUUID(p.Run):
+		return statelog.Result{}, invalid("run is a uuid in its canonical lowercase form, and %q is not", p.Run)
+	case p.At.IsZero():
+		return statelog.Result{}, invalid("a progress line says when it was written (at)")
+	}
+	if err := printable("text", p.Text, MaxProgressBytes); err != nil {
+		return statelog.Result{}, err
+	}
+	return w.write(ctx, c, RunSubject(p.Run), ScopeSet{Subject: true}, statelog.PatternArbitrated,
+		OpProgress, p, func(*sql.Tx) (int64, error) { return 0, nil })
+}
+
 // RequestRun writes a person's press of Run now. A run already requested or
 // recorded answers [ErrExists].
 func (w *Writer) RequestRun(ctx context.Context, c Call, r RunRequest) (statelog.Result, error) {

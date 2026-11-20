@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DEEP RUN ASKS AS THE ADVISOR: the engine's own principal holding an
@@ -81,5 +83,37 @@ func TestAPremiseIsAskedAgainAsTheAdvisor(t *testing.T) {
 	}
 	if _, err := o.Holds(t.Context(), advisor.Premise{Read: "iam_sessions", Path: "n", Op: advisor.PremiseGe}); err == nil {
 		t.Error("a premise off the allowlist was asked")
+	}
+}
+
+// liveLog is an advisor log with a deep run in flight, asked for or not.
+type liveLog struct {
+	noticeLog
+	pending []advisordomain.RunRow
+}
+
+func (liveLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "run-1", []advisordomain.ProgressLine{{At: time.Unix(100, 0).UTC(), Text: "reading capacity"}}, true, nil
+}
+
+func (l liveLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
+	return l.pending, nil
+}
+
+// A DEEP RUN IN FLIGHT IS THE LATEST RUN, WITH ITS PROGRESS: a person's press
+// shows its lines while it runs, and a run at its slot that nobody pressed
+// shows as running from its first line. Mutation: answer the last run that
+// ended, and the page says nothing until the investigation is done.
+func TestADeepRunInFlightIsTheLatestRunWithItsProgress(t *testing.T) {
+	t.Parallel()
+	got, err := Sources{Advisor: liveLog{}}.latestRun(t.Context())
+	if err != nil || got == nil || got.RunID != "run-1" || got.Status != RunRunning || got.Kind != "deep" ||
+		len(got.Progress) != 1 || got.Trigger != string(advisordomain.TriggerSchedule) {
+		t.Fatalf("latest = %+v (%v), want the slot's deep run running with its line", got, err)
+	}
+	pressed := liveLog{pending: []advisordomain.RunRow{{ID: "run-1", By: "ada", Kind: advisordomain.RunKindDeep}}}
+	got, err = Sources{Advisor: pressed}.latestRun(t.Context())
+	if err != nil || got.By != "ada" || got.Kind != "deep" || len(got.Progress) != 1 {
+		t.Errorf("latest = %+v (%v), want ada's deep run with its line", got, err)
 	}
 }

@@ -22,10 +22,12 @@ type fakeDeep struct {
 
 func (f *fakeDeep) Assigned() bool { return f.assigned }
 
-func (f *fakeDeep) Deep(ctx context.Context, _ time.Time, _, _ []advisor.Stored) (duty.ModelRun, error) {
+func (f *fakeDeep) Deep(ctx context.Context, now time.Time, _, _ []advisor.Stored,
+	progress func(time.Time, string)) (duty.ModelRun, error) {
 	f.mu.Lock()
 	f.runs++
 	f.mu.Unlock()
+	progress(now, "reading capacity")
 	select {
 	case <-f.release:
 		return duty.ModelRun{Summary: map[string]any{"status": "done"}, Concluded: true}, nil
@@ -64,6 +66,9 @@ func TestADeepRunRunsBesideTheTick(t *testing.T) {
 	}
 	if deep.runs != 1 {
 		t.Errorf("the deep run ran %d times, want once", deep.runs)
+	}
+	if len(l.progress) != 1 || l.progress[0] != "pressed: reading capacity" {
+		t.Errorf("progress on the log = %v, want the run's line under its id", l.progress)
 	}
 }
 

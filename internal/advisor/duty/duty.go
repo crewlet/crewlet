@@ -132,6 +132,8 @@ type Log interface {
 	Tally(ctx context.Context, from, to time.Time) (advisor.Tally, error)
 	// WriteReport writes a week's report, once.
 	WriteReport(ctx context.Context, r advisor.Report) error
+	// Progress writes one line of a deep run's progress.
+	Progress(ctx context.Context, run string, at time.Time, text string) error
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error

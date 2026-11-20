@@ -589,3 +589,31 @@ func TestARunSaysWhatItDoes(t *testing.T) {
 		t.Errorf("latest = %+v (%v, %v), want the deep run, its kind kept from its request", latest, found, err)
 	}
 }
+
+// A DEEP RUN'S PROGRESS IS READ WHILE IT RUNS: each line is on the log as it is
+// written, the run in flight is the newest with lines and no record, and once
+// its record is written it is no longer live. Mutation: read only the run's
+// record, and nothing shows until it ends.
+func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "8a1b6cd5-7f9e-4da4-8c5b-3e6f1a0b9c8d"
+	for i, text := range []string{"reading capacity", "testing: releases pile up behind one seat"} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Text: text}); err != nil {
+			t.Fatalf("progress: %v", err)
+		}
+	}
+	live, lines, found, err := n.reader().LiveProgress(t.Context(), stale)
+	if err != nil || !found || live != run || len(lines) != 2 || lines[1].Text != "testing: releases pile up behind one seat" {
+		t.Fatalf("live = %s %+v (%v, %v), want the run's two lines", live, lines, found, err)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: run,
+		Trigger: advisordomain.TriggerSchedule, StartedAt: writerClock, EndedAt: writerClock.Add(time.Hour),
+		Status: advisordomain.RunDone, Classes: json.RawMessage(`[]`), RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if _, _, found, err := n.reader().LiveProgress(t.Context(), stale); err != nil || found {
+		t.Errorf("after its record the run is still live (%v, %v)", found, err)
+	}
+}

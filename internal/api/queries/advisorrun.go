@@ -92,17 +92,39 @@ func (s Sources) advisorRun(ctx context.Context, _ Params) (any, error) {
 	return *run, nil
 }
 
-// latestRun is the run a person reads as the latest, nil where none ran.
+// latestRun is the run a person reads as the latest: a deep run in flight
+// with its progress so far, a Run now waiting for the duty's next tick, which
+// reads as running, or the run that ended last; nil where none ran.
 func (s Sources) latestRun(ctx context.Context) (*AdvisorRunSummary, error) {
+	live, lines, flying, err := s.Advisor.LiveProgress(ctx, advisorFresh)
+	if err != nil {
+		return nil, advisorUnreadable(err)
+	}
 	pending, err := s.Advisor.PendingRequests(ctx, advisorFresh)
 	if err != nil {
 		return nil, advisorUnreadable(err)
 	}
+	progress := func(out *AdvisorRunSummary) *AdvisorRunSummary {
+		if flying && out.RunID == live {
+			out.Kind = string(advisordomain.RunKindDeep)
+			for _, l := range lines {
+				out.Progress = append(out.Progress, AdvisorProgress{At: l.At, Text: l.Text})
+			}
+		}
+		return out
+	}
 	if len(pending) > 0 {
 		p := pending[0]
-		return &AdvisorRunSummary{RunID: p.ID, Trigger: string(advisordomain.TriggerPerson), By: p.By,
+		return progress(&AdvisorRunSummary{RunID: p.ID, Trigger: string(advisordomain.TriggerPerson), By: p.By,
 			StartedAt: p.RequestedAt, Status: RunRunning, Unread: []string{}, Kind: string(p.Kind.OrRules()),
-			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}, nil
+			Progress: []AdvisorProgress{}, Classes: []AdvisorClassOutcome{}}), nil
+	}
+	if flying && len(lines) > 0 {
+		// A DEEP RUN AT ITS SLOT, which nobody asked for: its first line is
+		// as early as the log says it began.
+		return progress(&AdvisorRunSummary{RunID: live, Trigger: string(advisordomain.TriggerSchedule),
+			StartedAt: lines[0].At, Status: RunRunning, Unread: []string{}, Progress: []AdvisorProgress{},
+			Classes: []AdvisorClassOutcome{}}), nil
 	}
 	row, found, err := s.Advisor.LatestRun(ctx, advisorFresh)
 	if err != nil {

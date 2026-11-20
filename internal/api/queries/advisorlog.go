@@ -32,6 +32,8 @@ type AdvisorLog interface {
 	Finding(ctx context.Context, id string, fresh statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error)
 	Episodes(ctx context.Context, key string, fresh statelog.Freshness) ([]advisordomain.FindingRow, error)
 	LatestRun(ctx context.Context, fresh statelog.Freshness) (advisordomain.RunRow, bool, error)
+	// LiveProgress is the deep run in flight and its progress lines.
+	LiveProgress(ctx context.Context, fresh statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error)
 	PendingRequests(ctx context.Context, fresh statelog.Freshness) ([]advisordomain.RunRow, error)
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Reports(ctx context.Context, cursor string, limit int, fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)

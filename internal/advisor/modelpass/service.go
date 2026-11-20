@@ -95,8 +95,6 @@ type DeepService struct {
 	Read func(ctx context.Context, now time.Time) (DeepData, error)
 	// Bounds are the run's bounds for company c.
 	Bounds func(c *config.Company) DeepBounds
-	// Progress is told each line as the run writes it, nil where nobody listens.
-	Progress func(Progress)
 }
 
 var _ duty.DeepPass = (*DeepService)(nil)
@@ -107,7 +105,8 @@ func (s *DeepService) Assigned() bool { return s.Models.Assigned() }
 // Deep is one deep run at now: what it found, grounded, as observations, and
 // its record. It concluded only where it submitted within its bounds, so a
 // run cut short leaves earlier model findings as they stand.
-func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored) (duty.ModelRun, error) {
+func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
+	progress func(at time.Time, text string)) (duty.ModelRun, error) {
 	failed := func(reason string, err error) (duty.ModelRun, error) {
 		run := DeepRun{Pass: advisor.Pass{Status: advisor.PassFailed, Reason: reason + err.Error(),
 			Dropped: map[advisor.Drop]int{}, Unread: []string{}}, Progress: []Progress{}}
@@ -132,7 +131,11 @@ func (s *DeepService) Deep(ctx context.Context, now time.Time, dismissed, live [
 	if s.Bounds != nil {
 		bounds = s.Bounds(d.Company)
 	}
-	run := RunDeep(ctx, deps, d, bounds, s.Progress)
+	run := RunDeep(ctx, deps, d, bounds, func(p Progress) {
+		if progress != nil {
+			progress(p.At, p.Text)
+		}
+	})
 	out := duty.ModelRun{Summary: run, Concluded: run.Status == advisor.PassDone && run.StoppedBy == StoppedDone}
 	window := advisor.Span{From: now.Add(-advisor.Window), To: now}
 	for _, f := range run.Findings {

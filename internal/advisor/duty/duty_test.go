@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ type fakeLog struct {
 	order   []string
 	// explained is every explanation written.
 	explained []advisor.Explained
+	// progress is every deep run's progress line, as "run: text".
+	mu       sync.Mutex
+	progress []string
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -46,6 +50,13 @@ func (l *fakeLog) LastDone(context.Context) (map[string]time.Time, error) {
 		}
 	}
 	return out, nil
+}
+
+func (l *fakeLog) Progress(_ context.Context, run string, _ time.Time, text string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.progress = append(l.progress, run+": "+text)
+	return nil
 }
 
 func (l *fakeLog) Record(_ context.Context, t advisor.Transition, _ time.Time) error {

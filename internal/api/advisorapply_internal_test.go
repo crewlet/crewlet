@@ -66,6 +66,9 @@ func (l *applyLog) Episodes(context.Context, string, statelog.Freshness) ([]advi
 func (l *applyLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }
+func (l *applyLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
 func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
 	return nil, nil
 }
@@ -113,6 +116,9 @@ func (l *applyLog) Move(_ context.Context, _ advisordomain.Call, _ string, m adv
 	}
 	l.moves = append(l.moves, m)
 	l.row.State, l.row.KeyVersion = m.State, l.row.KeyVersion+1
+	return statelog.Result{}, nil
+}
+func (*applyLog) Progress(context.Context, advisordomain.Call, advisordomain.RunProgress) (statelog.Result, error) {
 	return statelog.Result{}, nil
 }
 func (l *applyLog) RecordRun(context.Context, advisordomain.Call, advisordomain.RunRecord) (statelog.Result, error) {

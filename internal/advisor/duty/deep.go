@@ -23,8 +23,9 @@ type DeepPass interface {
 	// Assigned reports whether the company assigns the Advisor a model.
 	Assigned() bool
 	// Deep is one investigation at now: what it found, grounded, and its
-	// record as a run keeps it.
-	Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored) (ModelRun, error)
+	// record as a run keeps it, telling progress each line as it writes it.
+	Deep(ctx context.Context, now time.Time, dismissed, live []advisor.Stored,
+		progress func(at time.Time, text string)) (ModelRun, error)
 }
 
 // DeepHours are the hours of the company day a deep run is due at: 03:00
@@ -158,7 +159,13 @@ func (d *Duty) runDeep(ctx context.Context, now time.Time, trigger Trigger, by, 
 		run.Status = RunFailed
 		return run
 	}
-	result, err := d.Deep.Deep(ctx, now, dismissed, live)
+	// EACH LINE ON THE LOG as it is written, so any node reads the run's
+	// progress while it is in flight.
+	result, err := d.Deep.Deep(ctx, now, dismissed, live, func(at time.Time, text string) {
+		if perr := d.Log.Progress(ctx, id, at, text); perr != nil {
+			log.WarnContext(ctx, "advisor_progress_not_recorded", "run", id, "error", perr.Error())
+		}
+	})
 	run.Model = result.Summary
 	if err != nil {
 		log.WarnContext(ctx, "advisor_deep_run_failed", "error", err.Error())

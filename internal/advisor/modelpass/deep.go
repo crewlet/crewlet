@@ -273,8 +273,11 @@ func (s *deepSurface) ToolDefs() []llm.ToolDef {
 	}
 }
 
-// maxProgressRunes bounds one progress line.
-const maxProgressRunes = 120
+// maxProgressRunes bounds one progress line, and maxProgressLines a run's.
+const (
+	maxProgressRunes = 120
+	maxProgressLines = 60
+)
 
 func (s *deepSurface) Revision() uint64 { return 0 }
 
@@ -391,6 +394,13 @@ func (s *deepSurface) read(ctx context.Context, args map[string]any) (toolloop.T
 func (s *deepSurface) say(args map[string]any) toolloop.ToolResult {
 	text, _ := args["text"].(string)
 	text = strings.TrimSpace(text)
+	s.mu.Lock()
+	full := len(s.lineList) >= maxProgressLines
+	s.mu.Unlock()
+	if full {
+		return toolloop.ToolResult{Failed: true, Cause: mcp.RefusalNotRunning,
+			Output: "this run has said enough progress lines; go on without them"}
+	}
 	if text == "" || len([]rune(text)) > maxProgressRunes || strings.Contains(text, "://") ||
 		strings.ContainsAny(text, "<>`\n") {
 		return toolloop.ToolResult{Failed: true, Cause: mcp.RefusalInvalid,

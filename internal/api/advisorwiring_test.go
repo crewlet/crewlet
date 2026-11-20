@@ -44,6 +44,9 @@ func (m *memAdvisor) Finding(_ context.Context, id string, _ statelog.Freshness)
 func (*memAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
 	return nil, nil
 }
+func (*memAdvisor) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
 func (*memAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
 }
@@ -92,6 +95,9 @@ func (m *memAdvisor) RecordRun(context.Context, advisordomain.Call, advisordomai
 	return statelog.Result{}, nil
 }
 func (*memAdvisor) Expire(context.Context, advisordomain.Call, time.Time, advisordomain.Expiry) (statelog.Result, error) {
+	return statelog.Result{}, nil
+}
+func (*memAdvisor) Progress(context.Context, advisordomain.Call, advisordomain.RunProgress) (statelog.Result, error) {
 	return statelog.Result{}, nil
 }
 func (m *memAdvisor) RequestRun(_ context.Context, _ advisordomain.Call, r advisordomain.RunRequest) (statelog.Result, error) {

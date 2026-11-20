@@ -18,7 +18,8 @@ import (
 //
 //   - 1: the base format: every op of package doc's "Ops", and the
 //     framework's eviction, generation, barrier and trimmed record.
-//   - 2: a run's kind (`run_kind`) on its request and its record (ADR-0166).
+//   - 2: a run's kind (`run_kind`) on its request and its record, and a deep
+//     run's progress lines (op `progress`) (ADR-0166).
 const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format.
@@ -37,6 +38,7 @@ const GateRecordVersion = 1
 // the record rather than retain it.
 var versionedFields = statelog.RecordFields{
 	{Name: "Run.RunKind", Since: 2, Path: []string{"mutation", "run_kind"}},
+	{Name: "Op progress", Since: 2, Path: []string{"op"}, Equals: string(OpProgress)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -95,12 +97,15 @@ const (
 
 	// OpTrimmed is the trim's payload-free record (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
+
+	// OpProgress is one line of a deep run's progress ([RunProgress]).
+	OpProgress OpKind = "progress"
 )
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpOpen, OpRevise, OpRefresh, OpMove, OpExplain, OpRelease, OpRequest, OpRecord, OpWrite,
-	OpRaise, OpClear, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpRaise, OpClear, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpProgress,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
