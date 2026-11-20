@@ -190,3 +190,60 @@ func TestAHeldCallIsOpenFromItsRecordingToItsAnswer(t *testing.T) {
 		t.Fatal("a run parked on its own question reads as holding an open call")
 	}
 }
+
+// A HELD CALL IS IN FLIGHT UNTIL ITS ANSWER IS CARRIED OUT, read off the row
+// the store keeps at each step: answered and not yet taken, claimed for its
+// answer, and allowed and being made, a repeat of the same request joins it;
+// once made, or once a denial was taken by the turn that asked, it is over
+// (ADR-0125). A second request asked while the first was being carried out
+// reached its delegate after the first was made.
+//
+// Mutation: end the flight at the answer (HeldOpen's reading), and the
+// answered, claimed and calling steps read as over.
+func TestAHeldCallIsInFlightUntilItsAnswerIsCarriedOut(t *testing.T) {
+	t.Parallel()
+	for _, choice := range []string{HeldOnce, HeldDeny} {
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		id := parksOnAHeldCall(t, rig, "t1")
+		step := func(name string, want bool) {
+			t.Helper()
+			if got := rig.get("t1"); got.HeldInFlight() != want {
+				t.Fatalf("%s, %s: the run is %q, in flight %v, want %v", choice, name, got.Status,
+					got.HeldInFlight(), want)
+			}
+		}
+		step("parked", true)
+		given, ev := givenAgainst(t, rig, "t1")
+		given.Choice, given.Approval = choice, id
+		if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerConsumed {
+			t.Fatalf("%s: the answer = %q, %v, want consumed", choice, d, err)
+		}
+		if rig.get("t1").HeldOpen() {
+			t.Fatalf("%s: an answered call reads as open", choice)
+		}
+		step("answered", true)
+		launch := rig.get("t1").LaunchID
+		if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), rigLease); err != nil || !won {
+			t.Fatalf("%s: the claim = %v, %v", choice, won, err)
+		}
+		step("claimed for its answer", true)
+		if took, err := rig.pending.TakeAnswer(t.Context(), "t1", launch, rigLease); err != nil || !took {
+			t.Fatalf("%s: taking the answer = %v, %v", choice, took, err)
+		}
+		if choice == HeldDeny {
+			step("its denial taken", false)
+			continue
+		}
+		if _, first, err := rig.pending.MarkHeldCall(t.Context(), "t1", launch, rigLease); err != nil || !first {
+			t.Fatalf("marking the call = %v, %v", first, err)
+		}
+		step("being made", true)
+		if _, err := rig.pending.RecordHeldResult(t.Context(), "t1", launch, HeldMade{Result: "sealed",
+			Call: BridgeCall{Name: "tr_close_issue"}}, rigLease); err != nil {
+			t.Fatalf("recording the result: %v", err)
+		}
+		step("made", false)
+	}
+}

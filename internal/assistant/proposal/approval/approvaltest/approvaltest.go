@@ -534,7 +534,7 @@ func (f *Fleet) Propose(t testing.TB, owner iam.Principal, mutate func(*proposal
 		Tool: "create_task", Act: "create_work_item", Scope: wire.ScopeServer, Now: f.Now(),
 		Preview: proposal.Preview{
 			Title: "Create task", ApproveLabel: "Approve and create",
-			Changes:        []wire.Change{proposal.Added("title", "Title", "Payroll review", false)},
+			Changes:        []wire.Change{proposal.Added("title", "Title", wire.Plain("Payroll review"), false)},
 			SourceRevision: "task:ENG-1@3",
 			Request: exec.Request{Method: http.MethodPost, Path: "/operator/act/create_work_item",
 				Body: []byte(`{"args":{"title":"Payroll review"}}`)},

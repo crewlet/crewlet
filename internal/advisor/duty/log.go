@@ -116,7 +116,7 @@ func (l advisorLog) LastDone(ctx context.Context) (map[string]time.Time, error) 
 	return l.reads.LastRunOfClasses(ctx, fresh)
 }
 
-// Requested is every Run now no run has answered yet.
+// Requested is every Run no run has answered yet.
 func (l advisorLog) Requested(ctx context.Context) ([]Request, error) {
 	rows, err := l.reads.PendingRequests(ctx, fresh)
 	if err != nil {

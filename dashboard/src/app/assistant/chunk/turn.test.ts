@@ -282,7 +282,7 @@ describe("one row per move of the state machine", () => {
     expect(phase(view)).toBe("working");
     const settled = view.turns[0]!.cards[0]!.card.proposal;
     expect(settled?.state).toBe("applied");
-    expect(settled?.receipt?.summary).toBe("Applied to Worklet › Tasks.");
+    expect(settled?.receipt?.summary).toEqual([{ text: "Applied to Worklet › Tasks." }]);
   });
 
   test("applying, the page refused it: working, the card failed in the screen's own words", () => {

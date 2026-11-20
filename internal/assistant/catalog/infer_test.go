@@ -159,9 +159,9 @@ func realAnswers(t *testing.T) map[string]any {
 // rows" of whichever list was longer. One role is an entity titled "Role ·
 // <handle>"; the roster is a table titled "Agents"; a page of the event log,
 // a list beside a cursor, is the table of its events; a project in full,
-// which names itself, is one record over its statuses. Mutation: draw a record
-// by its largest list again, or title a card by its route pattern, and a case
-// here fails.
+// which names itself, is one record over its statuses, headed and linked as
+// the project it is. Mutation: draw a record by its largest list again, or
+// title a card by its route pattern, and a case here fails.
 func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable(readRoutes)
@@ -216,10 +216,16 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 					t.Errorf("the page has %d rows, want its 2 events", card.Table.RowCount)
 				}
 			}},
+		// A RECORD OF A KNOWN KIND is that record: headed by its own name,
+		// with its key and its page.
 		{route: "GET /worklet/projects/{key}", path: map[string]any{"key": "ENG"},
-			kind: wire.CardEntity, title: "Project · ENG",
+			kind: wire.CardEntity, title: "Engineering",
 			check: func(t *testing.T, card wire.Card) {
 				e := card.Entity
+				if e.Kind != wire.ResourceProject || e.ID != "ENG" || e.Key != "ENG" ||
+					e.Open == nil || e.Open.Href != "#/worklet/ENG" {
+					t.Errorf("the project is %s %q keyed %q, opening %+v", e.Kind, e.ID, e.Key, e.Open)
+				}
 				if len(e.Items) != 3 || e.ItemsNoun == nil || e.ItemsNoun.One != "status" {
 					t.Errorf("the project's statuses are not its list, counted as statuses: %+v %+v",
 						e.Items, e.ItemsNoun)

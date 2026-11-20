@@ -42,7 +42,9 @@ function card(over: Partial<AssistantProposalCard> = {}): AssistantProposalCard 
     scope: "page",
     tool: "propose_page_change",
     title: "Filter this list",
-    changes: [{ kind: "changed", field: "status", label: "status", from: "", to: "blocked" }],
+    changes: [
+      { kind: "changed", field: "status", label: "status", from: [], to: [{ text: "blocked" }] },
+    ],
     digest: `sha256:${"a".repeat(64)}`,
     expires_at: "2026-10-24T10:41:00Z",
     state: "proposed",

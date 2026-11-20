@@ -69,7 +69,9 @@ import { openInApp, type InAppTarget } from "./openInApp.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
-import { drawValue } from "./changeValue.tsx";
+import { drawPhrase, drawValue } from "./changeValue.tsx";
+import { phraseText } from "./phrase.ts";
+import { Phrase, Phrases } from "./refs.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { cautionOf } from "./taint.ts";
 import { recordWord } from "../brief.ts";
@@ -393,14 +395,18 @@ export function ProseBlock({
 /**
  * A proposal's change rows in `ChangeList`'s grammar (D10): the facts first,
  * then WHO WILL SEE THE RESULT where its visibility changes (a share, a
- * comment others are told of, D09), as one more fact, then the changes.
+ * comment others are told of, D09), as one more fact, then the changes. A
+ * record a row names is drawn as itself, opened with `open`.
  */
-export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
+export function changeRowsOf(
+  proposal: AssistantProposalCard,
+  open: (target: InAppTarget) => void,
+): ChangeListRow[] {
   const rows = proposal.changes.map((change): ChangeListRow => {
     const note = change.note;
     const base = note === undefined ? { label: change.label } : { label: change.label, note };
-    const to = drawValue(change.to ?? "", change.items);
-    const from = drawValue(change.from ?? "", change.from_items);
+    const to = drawPhrase(change.to, change.items, open);
+    const from = drawPhrase(change.from, change.from_items, open);
     switch (CHANGE_KIND[change.kind]) {
       case "fact": {
         const value = change.to === undefined && change.from !== undefined ? from : to;
@@ -423,8 +429,8 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         // a line diff the way the page's own History draws it: a word diff
         // ran its headings and bullets into one paragraph and read a line
         // break as a word removed and added again.
-        const before = change.from ?? "";
-        const after = change.to ?? "";
+        const before = phraseText(change.from);
+        const after = phraseText(change.to);
         if (before.includes("\n") || after.includes("\n")) {
           return {
             ...base,
@@ -467,7 +473,11 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
   const at = facts < 0 ? rows.length : facts;
   return [
     ...rows.slice(0, at),
-    { kind: "fact", label: "Who will see it", value: audience.join(", ") },
+    {
+      kind: "fact",
+      label: "Who will see it",
+      value: <Phrases phrases={audience} sep=", " open={open} />,
+    },
     ...rows.slice(at),
   ];
 }
@@ -585,8 +595,9 @@ function Proposal({
 }: {
   proposal: AssistantProposalCard;
   local: ProposalLocal | undefined;
-  on: ProposalHandlers;
+  on: CardHandlers;
 }) {
+  const open = on.openHere;
   // THE PAGE UNDER THE DRAWER IS READ AGAIN AS IT MOVES, so the card's rows
   // and its gate are the screen's as it is now.
   usePageSnapshot();
@@ -612,9 +623,9 @@ function Proposal({
       // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
       // what a destructive change takes away (ADR-0055), never only a
       // struck-through row among the others.
-      summary={proposal.summary}
-      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
-      note={proposal.note}
+      summary={proposal.summary ? <Phrase phrase={proposal.summary} open={open} /> : undefined}
+      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal, open)}
+      note={proposal.note ? <Phrase phrase={proposal.note} open={open} /> : undefined}
       // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
       // presses anything; the page checks it again when it applies the change.
       approveBlocked={screen?.blocked ?? undefined}
@@ -630,7 +641,9 @@ function Proposal({
         state === "expired" || state === "stale" ? () => on.prepareAgain(proposal) : undefined
       }
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
-      receipt={proposal.receipt?.summary}
+      receipt={
+        proposal.receipt ? <Phrase phrase={proposal.receipt.summary} open={open} /> : undefined
+      }
       failure={failure}
       failureOutcome={unknown ? "unknown" : undefined}
       // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the

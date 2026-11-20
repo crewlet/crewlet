@@ -414,7 +414,7 @@ func (n *node) say(c assistantdomain.Call, turn uuid.UUID, idx int, role wire.Me
 func proposalCard(proposal uuid.UUID) wire.Card {
 	return wire.Card{Type: wire.CardProposal, Proposal: &wire.ProposalCard{
 		ProposalID: proposal, Scope: wire.ScopeServer, Tool: "create_task",
-		Title: "Create task", Changes: []wire.Change{{Kind: wire.ChangeFact, Field: "project", Label: "Project", To: "ENG"}},
+		Title: "Create task", Changes: []wire.Change{{Kind: wire.ChangeFact, Field: "project", Label: "Project", To: wire.Plain("ENG")}},
 		Digest:    "sha256:" + hex64("d"),
 		ExpiresAt: monday.Add(15 * time.Minute), State: wire.ProposalProposed,
 		ApproveLabel: "Approve and create",

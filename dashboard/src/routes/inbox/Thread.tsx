@@ -36,13 +36,12 @@ import { moment, whoOf } from "./model.ts";
 
 /** What the thread is around. */
 export type ThreadOf =
-  | { kind: "ask"; comment: string; options?: readonly { id: string; label: string }[] }
+  | { kind: "ask"; comment: string }
   | {
       kind: "comment";
       comment: string;
       /** The pane quotes the comment whole, so it is not listed again here. */
       whole: boolean;
-      options?: readonly { id: string; label: string }[];
     }
   | { kind: "item" };
 
@@ -170,11 +169,6 @@ function ThreadPage({
               key={c.id}
               comment={c}
               root={of.kind === "comment" && c.id === of.comment}
-              chose={
-                c.choice && of.kind !== "item"
-                  ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
-                  : ""
-              }
               index={index}
               now={now}
             />
@@ -188,15 +182,12 @@ function ThreadPage({
 function ThreadEntry({
   comment,
   root,
-  chose,
   index,
   now,
 }: {
   comment: WorkComment;
   /** The comment the thread is around, listed with its replies: marked as it. */
   root: boolean;
-  /** The option this answer chose, by its words, or "". */
-  chose: string;
   index: OrgIndex;
   now: number;
 }) {
@@ -223,18 +214,15 @@ function ThreadEntry({
             {moment(comment.created_at, now)}
           </time>
           {root && <span className="t-caption">The comment</span>}
-          {chose && comment.body.trim() && <span className="t-caption">{`chose “${chose}”`}</span>}
         </div>
+        {/* AN ANSWER THAT CHOSE SAYS SO in its own words, which the engine
+            opens with the option's label ("Chose “Hold release”: …"). */}
         <div className="inbox-thread-text prose md">
           {comment.removed ? (
             <span className="muted">(this comment was removed)</span>
-          ) : comment.body.trim() ? (
+          ) : (
             renderMarkdown(comment.body, CHECKED_WORDS)
-          ) : chose ? (
-            // AN ANSWER THAT IS ONLY A CHOICE has no words, and the choice
-            // is the whole of what it said.
-            <p>{`Chose “${chose}”.`}</p>
-          ) : null}
+          )}
         </div>
       </div>
     </li>

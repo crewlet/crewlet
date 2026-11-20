@@ -1,6 +1,6 @@
 /**
  * The Advisor's run, at the head of its page: when every check last ran and
- * what it moved, Run now, and while a run is going, how long it has run and
+ * what it moved, Run, and while a run is going, how long it has run and
  * what it is doing.
  *
  * A RUN IS FOLLOWED, NEVER WAITED ON: the page under it stays in use while it
@@ -11,10 +11,14 @@
  * A SOURCE IT COULD NOT READ IS SAID, so a short list never reads as nothing
  * to do.
  *
- * A DEEP RUN IS ITS OWN PRESS (Run deep): it investigates with the Advisor's
- * model and can take many minutes. Its line says it is one, what it spent of
- * its bounds, the bound it stopped at (so a short list is read as one), and,
- * where it could not run, why.
+ * ONE PRESS, ONE RUN: Run runs every check at once (the findings update in
+ * seconds), then goes on into the deep investigation on the Advisor's model,
+ * which can take many minutes, under the same line. Its line says what it
+ * spent of its bounds and the bound it stopped at (so a short list is read as
+ * one); where an investigation concluded lately it says that one is kept and
+ * from when, and where none could run, why. What its model found and the
+ * engine mended, or left out, is counted, so an empty list never reads as
+ * nothing found.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
@@ -55,6 +59,13 @@ export interface ViewRun {
   reason: string | null;
   /** The findings its model submitted that the engine left out, ungrounded. */
   dropped: number;
+  /** Those left out, by why. */
+  droppedWhy: Record<string, number>;
+  /** The findings listed after a repair, by the repair. */
+  repaired: Record<string, number>;
+  /** Why a press's deep part did not run, and when the one it keeps ran. */
+  deepSkipped: string | null;
+  keptFrom: string | null;
 }
 
 /** One class a run ran, and why it could not judge where it could not. */
@@ -81,6 +92,10 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
       budget: null,
       reason: null,
       dropped: 0,
+      droppedWhy: {},
+      repaired: {},
+      deepSkipped: null,
+      keptFrom: null,
     };
   }
   const status = run.status === "running" ? "running" : run.status === "failed" ? "failed" : "done";
@@ -98,7 +113,57 @@ export function runView(run: AdvisorRunSummary | null): ViewRun {
     budget: run.budget,
     reason: run.model?.reason || null,
     dropped: Object.values(run.model?.dropped ?? {}).reduce((n, d) => n + d, 0),
+    droppedWhy: run.model?.dropped ?? {},
+    repaired: run.model?.repaired ?? {},
+    deepSkipped: run.deep_skipped ?? null,
+    keptFrom: run.deep_kept_from ?? null,
   };
+}
+
+/** Why the model's findings were left out, in words. */
+const DROPPED: Readonly<Record<string, string>> = {
+  no_evidence: "cited nothing",
+  unread_record: "cited a record it had not read",
+  wrong_number: "cited a number not where it said",
+  repeats_a_rule: "said what a check already says",
+  answered: "was already answered",
+  tokens_unsplit: "blamed tokens without their cache reads",
+  too_many: "was past the ten a run lists",
+  words: "broke the wording rule",
+  fix_not_built: "had a fix that could not be built",
+  explanation_ungrounded: "explained a finding with numbers it did not cite",
+};
+
+/** How the model's findings were mended to be listed, each with its count. */
+function repairedWords(repaired: Record<string, number>): string[] {
+  const n = (k: string) => repaired[k] ?? 0;
+  return [
+    n("fix_not_built") > 0
+      ? `listed ${plural(n("fix_not_built"), "finding")} with no fix it could build`
+      : "",
+    n("reworded") > 0
+      ? `reworded ${plural(n("reworded"), "finding")} the wording rule refused`
+      : "",
+    n("worded_by_engine") > 0
+      ? `worded ${plural(n("worded_by_engine"), "finding")} from its numbers`
+      : "",
+    n("subject_widened") > 0
+      ? `said ${plural(n("subject_widened"), "finding")} about the company, its seat gone`
+      : "",
+  ].filter(Boolean);
+}
+
+/** What the model's findings came to: those mended and those left out, and why. */
+function modelWords(run: ViewRun): string[] {
+  const why = Object.entries(run.droppedWhy)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${DROPPED[k] ?? "could not be grounded"}`);
+  return [
+    ...repairedWords(run.repaired),
+    run.dropped > 0
+      ? `left out ${plural(run.dropped, "finding")} it could not ground in what it read${why.length > 0 ? ` (${why.join("; ")})` : ""}`
+      : "",
+  ].filter(Boolean);
 }
 
 /** The bound a deep run stopped at, in words. */
@@ -137,8 +202,19 @@ export function runWords(run: ViewRun, now: number): string {
     run.resolved > 0 ? `closed ${plural(run.resolved, "finding")}` : "",
   ].filter(Boolean);
   if (!deep) {
-    const found = moved.length > 0 ? ` It ${moved.join(" and ")}.` : "";
+    const did = [moved.length > 0 ? moved.join(" and ") : "", ...modelWords(run)].filter(Boolean);
+    const found = did.length > 0 ? ` It ${did.join(", and ")}.` : "";
     return `All checks ran ${ago(run.endedAt ?? run.startedAt, now)}.${found}`;
+  }
+  // A DEEP PART THAT DID NOT RUN is said, with why: the checks ran all the same.
+  if (run.deepSkipped) {
+    const did = [moved.length > 0 ? moved.join(" and ") : "", ...modelWords(run)].filter(Boolean);
+    const found = did.length > 0 ? ` It ${did.join(", and ")}.` : "";
+    const part =
+      run.deepSkipped === "kept" && run.keptFrom
+        ? ` The deep investigation from ${ago(run.keptFrom, now)} is kept.`
+        : ` The deep investigation could not run.${run.reason ? ` ${run.reason}` : ""}`;
+    return `All checks ran ${ago(run.endedAt ?? run.startedAt, now)}.${found}${part}`;
   }
   const b = run.budget;
   const spent = b
@@ -149,16 +225,15 @@ export function runWords(run: ViewRun, now: number): string {
     ? `The deep run ended ${ago(run.endedAt ?? run.startedAt, now)} at ${bound}, so its list may be short.`
     : `The deep run ended ${ago(run.endedAt ?? run.startedAt, now)}.`;
   // A FINDING IT COULD NOT GROUND IS COUNTED, so an empty list is read as
-  // one it found and could not stand behind, never as nothing found.
+  // one it found and could not stand behind, never as nothing found; one it
+  // mended to list is counted too.
   const did = [
     moved.length > 0
       ? `${moved.join(" and ")}${spent ? `, using ${spent}` : ""}`
       : spent
         ? `used ${spent}`
         : "",
-    run.dropped > 0
-      ? `left out ${plural(run.dropped, "finding")} it could not ground in what it read`
-      : "",
+    ...modelWords(run),
   ].filter(Boolean);
   return did.length > 0 ? `${head} It ${did.join(", and ")}.` : head;
 }
@@ -215,7 +290,7 @@ export function RunLine({ run, now }: { run: ViewRun; now: number }) {
   );
 }
 
-/** When the checks last ran, Run now, and a running run's progress. */
+/** When the checks last ran, Run, and a running run's progress. */
 export function RunHead({ onEnded, children }: { onEnded: () => void; children?: ReactNode }) {
   const [started, setStarted] = useState(false);
   // FOLLOWED WHILE IT RUNS, whoever started it: a run the schedule began is
@@ -235,17 +310,14 @@ export function RunHead({ onEnded, children }: { onEnded: () => void; children?:
     setStarted(false);
     onEnded();
   }, [ended, onEnded]);
-  const start = (kind: "rules" | "deep") => {
+  const start = () => {
     setStarted(true);
-    void runNow(kind).then(
+    void runNow().then(
       () => latest.refetch(),
       () =>
         toast.show({
           variant: "danger",
-          title:
-            kind === "deep"
-              ? "The deep run could not be started"
-              : "The checks could not be started",
+          title: "The run could not be started",
           message: "Try again in a moment.",
         }),
     );
@@ -259,17 +331,9 @@ export function RunHead({ onEnded, children }: { onEnded: () => void; children?:
           size="small"
           variant="secondary"
           disabledReason={running ? "A run is going" : undefined}
-          onClick={() => start("rules")}
+          onClick={start}
         >
-          {running ? "Running" : "Run now"}
-        </Button>
-        <Button
-          size="small"
-          variant="ghost"
-          disabledReason={running ? "A run is going" : undefined}
-          onClick={() => start("deep")}
-        >
-          Run deep
+          {running ? "Running" : "Run"}
         </Button>
       </div>
     </div>

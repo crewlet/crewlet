@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -337,6 +338,9 @@ func (r room) called() string {
 	return "Unnamed room"
 }
 
+// ref is the room as a card names it: a record linked to the room.
+func (r room) ref() wire.Phrase { return naming(wire.ResourceRoom, r.id, r.called()) }
+
 // handles are the room's members' handles.
 func (r room) handles() []string { return handlesOf(r.members) }
 
@@ -347,12 +351,12 @@ func (r room) member(handle string) bool {
 
 // readers are who reads the room once a write leaves members in it, as a card
 // names them (D09): the whole company for a room anybody may read, and
-// otherwise the members, each as name says them.
-func (r room) readers(name func(handle string) string, members []string) []string {
+// otherwise the members, each a seat.
+func (r room) readers(seats company, members []string) []wire.Phrase {
 	if r.readByAll() {
-		return []string{audienceLabel("company")}
+		return []wire.Phrase{seats.audience(string(artifacts.AudienceCompany))}
 	}
-	return namedOnCard(name, members)
+	return namedOnCard(seats, members)
 }
 
 // bound is the revision a change of the room binds: the room as a card shows
@@ -425,19 +429,35 @@ func handlesOf(members []roomMember) []string {
 	return out
 }
 
-// namedOnCard is handles as a card names them: each as name says it, the
-// first [listNamed] one by one and how many more after, and nobody for none.
-func namedOnCard(name func(handle string) string, handles []string) []string {
+// namedOnCard is handles as a card names them: the first [listNamed] each a
+// seat, how many more after, and nobody for none.
+func namedOnCard(seats company, handles []string) []wire.Phrase {
 	if len(handles) == 0 {
-		return []string{"Nobody"}
+		return []wire.Phrase{wire.Plain("Nobody")}
 	}
-	out := make([]string, 0, min(len(handles), listNamed)+1)
+	out := make([]wire.Phrase, 0, min(len(handles), listNamed)+1)
 	for i, h := range handles {
 		if i == listNamed {
-			out = append(out, fmt.Sprintf("and %d more", len(handles)-listNamed))
+			out = append(out, wire.Plain(fmt.Sprintf("and %d more", len(handles)-listNamed)))
 			break
 		}
-		out = append(out, name(h))
+		out = append(out, seats.seat(h))
+	}
+	return out
+}
+
+// andPhrases is phrases as a sentence lists them: "a", "a and b", "a, b and c".
+func andPhrases(phrases []wire.Phrase) wire.Phrase {
+	var out wire.Phrase
+	for i, p := range phrases {
+		switch {
+		case i == 0:
+		case i == len(phrases)-1:
+			out = out.Plain(" and ")
+		default:
+			out = out.Plain(", ")
+		}
+		out = out.Then(p)
 	}
 	return out
 }
@@ -485,14 +505,14 @@ func (m chatMessage) bound() string {
 		ID: url.PathEscape(m.room) + "/" + url.PathEscape(m.id), Version: m.version}.String()
 }
 
-// quote is the message a reply answers, as its card names it: whose words, as
-// name says the author, and the words on one line.
-func (m chatMessage) quote(name func(handle string) string) string {
+// quote is the message a reply answers, as its card names it: its author, a
+// seat, and the words on one line.
+func (m chatMessage) quote(seats company) wire.Phrase {
 	if m.deleted {
-		return name(m.author) + ": a message that was taken back"
+		return seats.seat(m.author).Plain(": a message that was taken back")
 	}
 	said := strings.Join(strings.Fields(redact.Secrets(m.body)), " ")
-	return name(m.author) + ": " + textcut.Within(said, cardLineBytes)
+	return seats.seat(m.author).Plain(": " + textcut.Within(said, cardLineBytes))
 }
 
 // chatRevision re-reads a room's or a message's revision now, for [Revision].
@@ -566,19 +586,19 @@ func chatPostPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		reaches, err := readReach(ctx, read, r.id, "", a.String("body"), seats.seatName)
+		reaches, err := readReach(ctx, read, r.id, "", a.String("body"), seats)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("reaches", "Reaches", reaches)
+		c.factOf("room", "Room", r.ref())
+		c.factOf("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Post in room", Target: r.called(),
-			Note: "Everyone it names with @ is told, and so is everyone who follows the " +
-				"whole room.",
+			Note: wire.Plain("Everyone it names with @ is told, and so is everyone who " +
+				"follows the whole room."),
 			ApproveLabel: "Approve and post", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -604,19 +624,20 @@ func chatReplyPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		reaches, err := readReach(ctx, read, r.id, answered.id, a.String("body"), seats.seatName)
+		reaches, err := readReach(ctx, read, r.id, answered.id, a.String("body"), seats)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("reply_to", "Replying to", answered.quote(seats.seatName))
-		c.fact("reaches", "Reaches", reaches)
+		c.factOf("room", "Room", r.ref())
+		c.factOf("reply_to", "Replying to", answered.quote(seats))
+		c.factOf("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Reply in thread", Target: r.called(),
-			Note:         "Everyone in the thread is told, and so is everyone it names with @.",
+			Note: wire.Plain("Everyone in the thread is told, and so is everyone it names " +
+				"with @."),
 			ApproveLabel: "Approve and reply", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -639,12 +660,11 @@ var quietWords = map[string]string{
 	"addressed_to_people": "No agent. It names only people, so it is for them.",
 }
 
-// readReach is whom a draft would reach, as a card says it: each seat by its
-// name, with why where the message alone would not say, or why it reaches no
-// agent. It reads the post's own decision run dry ([chatReachRoute]), so the
-// card says what the approved post will do.
+// readReach is whom a draft would reach, each a seat with why, read from the
+// post's own decision run dry ([chatReachRoute]), so the card says what the
+// approved post will do.
 func readReach(ctx context.Context, read proposal.Read, roomID, replyTo, body string,
-	name func(handle string) string) (string, error) {
+	seats company) (wire.Phrase, error) {
 
 	q := url.Values{"body": {body}}
 	if replyTo != "" {
@@ -652,24 +672,24 @@ func readReach(ctx context.Context, read proposal.Read, roomID, replyTo, body st
 	}
 	doc, err := readGet(ctx, read, chatReachRoute, map[string]string{"channel_id": roomID}, q)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if words, ok := quietWords[value(doc, "quiet")]; ok {
-		return words, nil
+		return wire.Plain(words), nil
 	}
 	list, _ := cards.Lookup(doc, "reach.recipients").([]any)
 	if len(list) == 0 {
-		return "Nobody", nil
+		return wire.Plain("Nobody"), nil
 	}
-	out := make([]string, 0, len(list))
+	out := make([]wire.Phrase, 0, len(list))
 	for _, item := range list {
-		who := name(value(item, "handle"))
+		who := seats.seat(value(item, "handle"))
 		if why, ok := reachReasons[value(item, "reason")]; ok {
-			who += " " + why
+			who = who.Plain(" " + why)
 		}
 		out = append(out, who)
 	}
-	return strings.Join(out, ", "), nil
+	return wire.Join(out, ", "), nil
 }
 
 // chatDirectPreview names who a direct message reaches. It reads no room: a
@@ -691,25 +711,27 @@ func chatDirectPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		self := value(viewer, "handle")
-		var others, named []string
+		var others []string
 		for _, h := range a.Strings("to") {
 			if h != self && !slices.Contains(others, h) {
 				others = append(others, h)
-				named = append(named, seats.seatName(h))
 			}
 		}
-		to := strings.Join(named, ", ")
+		named := seats.seatsOf(others)
+		to := wire.Join(named, ", ")
 		if len(others) == 0 {
-			to = "Only you"
+			to = wire.Plain("Only you")
 		}
 		row := proposal.Fact("to", "To", to)
-		row.Items = named
+		if len(named) > 0 {
+			row.Items = named
+		}
 		c := changes{row}
 		c.said(a)
-		return proposal.Preview{Title: "Send direct message", Target: to,
-			Note:         "Everyone it goes to is told.",
+		return proposal.Preview{Title: "Send direct message", Target: to.Text(),
+			Note:         wire.Plain("Everyone it goes to is told."),
 			ApproveLabel: "Approve and send", Changes: c.rows(), Request: req,
-			Audience: namedOnCard(seats.seatName, append([]string{self}, others...))}, nil
+			Audience: namedOnCard(seats, append([]string{self}, others...))}, nil
 	}
 }
 
@@ -751,8 +773,8 @@ func chatEditPreview(t Tool) proposal.Previewer {
 				seats.seatName(m.author))
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("author", "Written by", seats.seatName(m.author))
+		c.factOf("room", "Room", r.ref())
+		c.factOf("author", "Written by", seats.seat(m.author))
 		c.move("body", "Message", redact.Secrets(m.body), redact.Secrets(a.String("body")))
 		if _, given := args["links"]; given {
 			row, moved := proposal.List("links", "Links", redactAll(m.links),
@@ -766,10 +788,10 @@ func chatEditPreview(t Tool) proposal.Previewer {
 				"it is", ErrInvalidArguments)
 		}
 		return proposal.Preview{Title: "Edit message", Target: r.called(),
-			Note: "Anybody the new words name with @ who was not named before is told. " +
-				"Nobody else is woken again.",
+			Note: wire.Plain("Anybody the new words name with @ who was not named before is " +
+				"told. Nobody else is woken again."),
 			ApproveLabel: "Approve and edit", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: m.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: m.bound()}, nil
 	}
 }
 
@@ -800,8 +822,8 @@ func chatDeletePreview(t Tool) proposal.Previewer {
 				ErrInvalidArguments)
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("author", "Written by", seats.seatName(m.author))
+		c.factOf("room", "Room", r.ref())
+		c.factOf("author", "Written by", seats.seat(m.author))
 		c.move("body", "Message", redact.Secrets(m.body), "")
 		if row, removed := proposal.List("links", "Links", redactAll(m.links), nil); removed {
 			c = append(c, row)
@@ -809,13 +831,13 @@ func chatDeletePreview(t Tool) proposal.Previewer {
 		// WHAT GOES LEADS THE CARD, as the generic change's deletion does:
 		// the words are blanked for good, so it is destructive.
 		return proposal.Preview{Title: "Delete message", Target: r.called(),
-			Summary: "This deletes the message " + seats.seatName(m.author) + " wrote in " +
-				r.called() + ", for everyone who can read it.",
-			Note: "Its place stays, so a thread under it keeps its first message. Nobody is " +
-				"told, and its words cannot be brought back.",
+			Summary: wire.Plain("This deletes the message ").Then(seats.seat(m.author)).
+				Plain(" wrote in ").Then(r.ref()).Plain(", for everyone who can read it."),
+			Note: wire.Plain("Its place stays, so a thread under it keeps its first message. " +
+				"Nobody is told, and its words cannot be brought back."),
 			Risk:         wire.RiskDestructive,
 			ApproveLabel: "Approve and delete", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: m.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: m.bound()}, nil
 	}
 }
 
@@ -838,7 +860,7 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
+		c.factOf("room", "Room", r.ref())
 		if _, given := args["topic"]; given {
 			c.move("topic", "Topic", redact.Secrets(r.topic), redact.Secrets(a.String("topic")))
 		}
@@ -846,14 +868,14 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 			c.move("purpose", "Purpose", redact.Secrets(r.purpose),
 				redact.Secrets(a.String("purpose")))
 		}
-		note := "Everyone who can read " + r.called() + " sees the change."
+		note := wire.Plain("Everyone who can read ").Then(r.ref()).Plain(" sees the change.")
 		if archive, given := args["archived"].(bool); given && archive != r.archived {
-			c = append(c, proposal.Changed("archived", "State", roomState(r.archived),
-				roomState(archive)))
-			note = "People can post in " + r.called() + " again."
+			c = append(c, proposal.Changed("archived", "State", wire.Plain(roomState(r.archived)),
+				wire.Plain(roomState(archive))))
+			note = wire.Plain("People can post in ").Then(r.ref()).Plain(" again.")
 			if archive {
-				note = "Nobody can post in " + r.called() + " until it is opened again. " +
-					"Everything said in it stays readable and searchable."
+				note = wire.Plain("Nobody can post in ").Then(r.ref()).Plain(" until it is " +
+					"opened again. Everything said in it stays readable and searchable.")
 			}
 		}
 		if len(c) < 2 {
@@ -862,7 +884,7 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 		}
 		return proposal.Preview{Title: "Update room", Target: r.called(), Note: note,
 			ApproveLabel: "Approve and update", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -944,49 +966,52 @@ func chatMembersPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
+		c.factOf("room", "Room", r.ref())
 		for _, m := range next {
 			was := slices.IndexFunc(r.members, func(held roomMember) bool {
 				return held.handle == m.handle
 			})
-			name := seats.seatName(m.handle)
 			switch {
 			case was < 0:
-				shown := name
+				shown := seats.seat(m.handle)
 				if m.followAll {
-					shown += " (follows the whole room)"
+					shown = shown.Plain(following(true))
 				}
 				c = append(c, proposal.Added("members."+m.handle, "Member", shown, false))
 			case r.members[was].followAll != m.followAll:
-				c = append(c, proposal.Changed("members."+m.handle, name,
-					following(r.members[was].followAll), following(m.followAll)))
+				// THE SEAT IS THE VALUE, with how it follows the room: a
+				// row's label is words, and a seat is drawn as itself.
+				c = append(c, proposal.Changed("members."+m.handle, "Member",
+					seats.seat(m.handle).Plain(following(r.members[was].followAll)),
+					seats.seat(m.handle).Plain(following(m.followAll))))
 			}
 		}
 		var removes []string
+		var gone []wire.Phrase
 		for _, h := range removed {
-			name := seats.seatName(h)
-			removes = append(removes, name)
-			c = append(c, proposal.Removed("members."+h, "Member", name))
+			removes = append(removes, seats.seatName(h))
+			gone = append(gone, seats.seat(h))
+			c = append(c, proposal.Removed("members."+h, "Member", seats.seat(h)))
 		}
 		if len(c) < 2 {
 			return proposal.Preview{}, fmt.Errorf("%w: the change leaves who is in %s exactly "+
 				"as it is", ErrInvalidArguments, r.called())
 		}
-		note := "Anybody in the company can read " + r.called() + " either way. Its members " +
-			"are told about what is said in it."
+		note := wire.Plain("Anybody in the company can read ").Then(r.ref()).Plain(" either " +
+			"way. Its members are told about what is said in it.")
 		if !r.readByAll() {
-			note = "Only its members can read " + r.called() + ", so whoever is taken out can " +
-				"no longer read it and whoever is added can read all of it."
+			note = wire.Plain("Only its members can read ").Then(r.ref()).Plain(", so whoever " +
+				"is taken out can no longer read it and whoever is added can read all of it.")
 		}
 		p := proposal.Preview{Title: "Change room members", Target: r.called(), Note: note,
 			ApproveLabel: "Approve and change", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, handlesOf(next)), SourceRevision: r.bound(),
+			Audience: r.readers(seats, handlesOf(next)), SourceRevision: r.bound(),
 			Removes: removes}
 		if len(removes) > 0 {
 			// WHAT GOES LEADS THE CARD (ADR-0055), as a member the generic
-			// change removes does: everyone it takes out, by name, above
-			// every row.
-			p.Summary = "This removes " + inWords(removes) + " from " + r.called() + "."
+			// change removes does: everyone it takes out, above every row.
+			p.Summary = wire.Plain("This removes ").Then(andPhrases(gone)).Plain(" from ").
+				Then(r.ref()).Plain(".")
 			p.Risk = wire.RiskDestructive
 		}
 		return p, nil
@@ -1120,12 +1145,12 @@ func isNotIn(n int) string {
 	return "are not in"
 }
 
-// following is how a member follows a room, as a card shows it.
+// following is how a member follows a room, as a card says it after the seat.
 func following(all bool) string {
 	if all {
-		return "Follows the whole room"
+		return " (follows the whole room)"
 	}
-	return "Follows only what names them"
+	return " (follows only what names them)"
 }
 
 func chatLeavePreview(t Tool) proposal.Previewer {
@@ -1170,19 +1195,19 @@ func chatLeavePreview(t Tool) proposal.Previewer {
 			}
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c = append(c, proposal.Removed("member", "Member", seats.seatName(self)))
-		note := "You can join " + r.called() + " again at any time."
+		c.factOf("room", "Room", r.ref())
+		c = append(c, proposal.Removed("member", "Member", seats.seat(self)))
+		note := wire.Plain("You can join ").Then(r.ref()).Plain(" again at any time.")
 		if !r.readByAll() {
-			note = "You can no longer read " + r.called() + ", and only a member can add " +
-				"you back."
+			note = wire.Plain("You can no longer read ").Then(r.ref()).Plain(", and only a " +
+				"member can add you back.")
 		}
 		// A MEMBER TAKEN OUT, the person themself: destructive as any
 		// member's removal is, what goes leading the card.
 		return proposal.Preview{Title: "Leave room", Target: r.called(),
-			Summary: "This removes you from " + r.called() + ".", Note: note,
+			Summary: wire.Plain("This removes you from ").Then(r.ref()).Plain("."), Note: note,
 			Risk:         wire.RiskDestructive,
 			ApproveLabel: "Approve and leave", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, stay), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, stay), SourceRevision: r.bound()}, nil
 	}
 }

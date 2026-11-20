@@ -243,7 +243,7 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 	if t.Title != nil {
 		title = t.Title(args)
 	}
-	if spec, rows, ok := cards.Infer(doc, title); ok {
+	if spec, rows, ok := cards.Infer(doc, title, readRecord(args.String("route"))); ok {
 		encoded, err := json.Marshal(rows)
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)

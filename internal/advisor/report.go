@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -45,6 +46,20 @@ type Report struct {
 	Top []ReportFinding `json:"top"`
 	// Summary is the model's summary of the report, nil where none was written.
 	Summary *string `json:"summary"`
+	// Days is the week day by day, Monday first: what a report draws across
+	// the week. A report written before it was kept, or whose ledger could
+	// not be read day by day, has none.
+	Days []Day `json:"days,omitempty"`
+}
+
+// Day is one company day of a week: the turns its seats started, those that
+// committed nothing, and their tokens, counted as the week's totals are.
+type Day struct {
+	// Day is the company day's label, such as 2026-11-09.
+	Day          string `json:"day"`
+	Turns        int64  `json:"turns"`
+	TurnsNothing int64  `json:"turns_nothing"`
+	Tokens       int64  `json:"tokens"`
 }
 
 // Tally is how many findings a week opened, resolved, had a fix applied to,
@@ -170,12 +185,13 @@ func WeekMetrics(ev Evidence, flow *WeekFlow) ([]Metric, []string) {
 		}
 	}
 	for _, r := range ev.Ledger {
-		if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		ran, nothing := turnOf(r)
+		if !ran {
 			continue
 		}
 		values["turns"] += r.Turns
 		values["tokens"] += r.Tokens()
-		if types.TurnOutcome(r.Outcome) != types.OutcomeNothing {
+		if !nothing {
 			continue
 		}
 		values["turns_nothing"] += r.Turns
@@ -209,6 +225,62 @@ func WeekMetrics(ev Evidence, flow *WeekFlow) ([]Metric, []string) {
 		}
 	}
 	return metrics, unread
+}
+
+// turnOf is whether a ledger row is turns its seat started, and whether they
+// committed nothing: the one test a week's totals and its days both count by.
+func turnOf(r usage.TurnLedgerRow) (ran, nothing bool) {
+	if types.WakeDisposition(r.Disposition) != types.DispositionStarted {
+		return false, false
+	}
+	return true, types.TurnOutcome(r.Outcome) == types.OutcomeNothing
+}
+
+// DayOf is the company day labelled day, from its turn ledger rows: counted
+// as [WeekMetrics] counts the week, so the days sum to its totals.
+func DayOf(day string, rows []usage.TurnLedgerRow) Day {
+	out := Day{Day: day}
+	for _, r := range rows {
+		ran, nothing := turnOf(r)
+		if !ran {
+			continue
+		}
+		out.Turns += r.Turns
+		out.Tokens += r.Tokens()
+		if nothing {
+			out.TurnsNothing += r.Turns
+		}
+	}
+	return out
+}
+
+// WeekDays is the company days of [from, to) by their labels, Monday first,
+// as the company's clock in zone names them.
+func WeekDays(from, to time.Time, zone *time.Location) []string {
+	start := from.In(zone)
+	out := []string{}
+	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, zone); day.Before(to); {
+		out = append(out, day.Format(time.DateOnly))
+		day = day.AddDate(0, 0, 1)
+	}
+	return out
+}
+
+// headlineKeys is the numbers a list of reports says of each week, in order.
+var headlineKeys = []string{"turns", "turns_nothing", "tokens", "wait_h"}
+
+// Headline is a week's headline numbers of metrics, each beside the week
+// before where the report has it: its turns, those that committed nothing,
+// its tokens and the hours work waited for a seat, those it measured, in that
+// order. Never nil.
+func Headline(metrics []Metric) []Metric {
+	out := []Metric{}
+	for _, key := range headlineKeys {
+		if at := slices.IndexFunc(metrics, func(m Metric) bool { return m.Key == key }); at >= 0 {
+			out = append(out, metrics[at])
+		}
+	}
+	return out
 }
 
 // heldByCause is each cause work was held for over the week, an hour or more,

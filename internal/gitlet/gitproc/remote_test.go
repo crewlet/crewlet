@@ -520,9 +520,8 @@ func TestARemotesHeaderIsOneLineAndPrintsNowhere(t *testing.T) {
 // however the writes split it) and the returned error, before the observer, a
 // log line or a caller reads them.
 //
-// Mutation: hand stdout on unredacted, and the stdout rows go red. Redacting
-// stderr's tail only once cut changes nothing here (it is never cut); the
-// sink's own case is a run ending without a line feed.
+// Mutation: hand stdout on unredacted, and the stdout rows go red. Its stderr
+// is never cut: the cut's own case is the next test.
 func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 	t.Parallel()
 	password := secretHex(t, "pw-")
@@ -570,6 +569,56 @@ func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 				!strings.Contains(err.Error(), "the last line names "+redact.Marker) {
 				t.Errorf("the lines do not say where a secret was taken out:\nstderr %s\nstdout %s\nerror %v",
 					res.Stderr, res.Stdout, err)
+			}
+		})
+	}
+}
+
+// A CREDENTIAL ACROSS A REMOTE RUN'S STDERR CUT IS SHOWN IN NO PART: the tail
+// a Result keeps is the end of the redaction of all the remote wrote, never a
+// redaction of the end. Cut first, the tail began inside a password's key or a
+// token, so what was left of it read as no credential and was shown. Each row
+// puts the cut (StderrTail from the end, with no buffer trim before it) inside
+// one.
+//
+// Mutation: cut the tail first and redact it after, and both rows go red.
+func TestACredentialAcrossARemoteRunsStderrCutIsShownInNoPart(t *testing.T) {
+	t.Parallel()
+	token := secretHex(t, "ghp_") + "a1B2" // thirty-six letters and digits
+	password := secretHex(t, "pw-")
+	for _, tc := range []struct {
+		name, line, secret string
+		at                 int // where in line the cut falls
+	}{
+		{"a password's key", `remote: password: "` + password + `"`, password, len("remote: pass")},
+		{"a token", "remote: token " + token, token, len("remote: token ") + len(token)/2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			last := "fatal: the remote hung up\n"
+			after := tc.line[tc.at:] + "\n"
+			after += strings.Repeat("remote: counting objects\n", (gitproc.StderrTail-len(after)-len(last)-1)/25)
+			after += strings.Repeat("-", gitproc.StderrTail-len(after)-len(last)-1) + "\n" + last
+			text := strings.Repeat("remote: compressing objects\n", 8<<10/28) + tc.line[:tc.at] + after
+			if len(after) != gitproc.StderrTail || len(text) > 2*gitproc.StderrTail {
+				t.Fatalf("the cut falls %d bytes from the end in %d, want %d in at most %d",
+					len(after), len(text), gitproc.StderrTail, 2*gitproc.StderrTail)
+			}
+			res, err := remoteRun(t, "printf '%s' "+quote(text)+" >&2\nexit 128\n",
+				resolve(t, gitproc.RemoteEnv{Resolver: publicDNS()}, "https://"+remoteHost+"/r.git", false))
+			if err == nil {
+				t.Fatal("the stand-in's exit 128 answered no error")
+			}
+			if !strings.HasPrefix(res.Stderr, "…") || !strings.HasSuffix(res.Stderr, last) {
+				t.Fatalf("stderr is not the cut tail of what the remote wrote:\n%.200s", res.Stderr)
+			}
+			for what, shown := range map[string]string{"stderr": res.Stderr, "the error": err.Error()} {
+				for i := 0; i+8 <= len(tc.secret); i++ {
+					if strings.Contains(shown, tc.secret[i:i+8]) {
+						t.Errorf("%s shows %q of the secret", what, tc.secret[i:i+8])
+						break
+					}
+				}
 			}
 		})
 	}

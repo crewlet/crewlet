@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -167,12 +168,14 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 
 	whose := "the company's"
 	target := "The company"
+	var who wire.Phrase
 	if seat != "" {
 		name := strings.TrimSpace(cards.Text(doc["name"]))
 		if name == "" {
 			name = seat
 		}
 		whose, target = name+"'s", name
+		who = naming(wire.ResourceSeat, seat, name)
 	}
 	summary := ceilingSummary(whose, window, held, ceiling)
 
@@ -200,16 +203,22 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		return proposal.Preview{}, err
 	}
 
+	// A SEAT IS ITS OWN ROW, a ref a label (words) cannot hold; the company is words.
 	label := strings.ToUpper(whose[:1]) + whose[1:] + " " + windowAdjective[window] + " token budget"
 	var c changes
+	if who != nil {
+		c.factOf("seat", "Seat", who)
+		adjective := windowAdjective[window]
+		label = strings.ToUpper(adjective[:1]) + adjective[1:] + " token budget"
+	}
 	switch {
 	case held == nil:
-		c = append(c, proposal.Added("token_budget."+window, label, tokensWords(*ceiling), false))
+		c = append(c, proposal.Added("token_budget."+window, label, wire.Plain(tokensWords(*ceiling)), false))
 	case ceiling == nil:
-		c = append(c, proposal.Removed("token_budget."+window, label, tokensWords(*held)))
+		c = append(c, proposal.Removed("token_budget."+window, label, wire.Plain(tokensWords(*held))))
 	default:
-		c = append(c, proposal.Changed("token_budget."+window, label, tokensWords(*held),
-			tokensWords(*ceiling)))
+		c = append(c, proposal.Changed("token_budget."+window, label, wire.Plain(tokensWords(*held)),
+			wire.Plain(tokensWords(*ceiling))))
 	}
 	for i, warning := range warnings {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
@@ -222,8 +231,8 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		title = "Remove a token budget"
 	}
 	return proposal.Preview{Title: title, Target: target,
-		Note: "Turns are counted against the new ceiling once this node applies it; " +
-			"nothing already spent is reset.",
+		Note: wire.Plain("Turns are counted against the new ceiling once this node applies it; " +
+			"nothing already spent is reset."),
 		ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 		StepUp:         recency == iam.RecencyStepUp,
 		SourceRevision: rep.revision}, nil

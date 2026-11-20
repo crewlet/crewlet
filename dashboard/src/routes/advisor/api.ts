@@ -55,10 +55,13 @@ export function useLatestRun(watching: boolean) {
   return useQuery("advisor_run", undefined, watching ? { pollMs: RUN_POLL_MS } : {});
 }
 
-/** Run every check and the model pass now; a run already going is the one this asked for. */
-export async function runNow(kind: "rules" | "deep" = "rules"): Promise<void> {
+/**
+ * Run the Advisor now: every check, then the deep investigation where none
+ * concluded lately. A run already going is the one this asked for.
+ */
+export async function runNow(): Promise<void> {
   try {
-    await rest.request("POST", "/advisor/runs", { body: { kind } });
+    await rest.request("POST", "/advisor/runs", { body: {} });
   } catch (err) {
     if (err instanceof RestError && err.status === 409) return;
     throw err;

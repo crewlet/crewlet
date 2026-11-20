@@ -71,23 +71,24 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 	}
 	got := rows(p)
 	if added := got["members.engineer"]; added.Kind != wire.ChangeAdded ||
-		added.To != "Backend engineer (engineer)" {
+		added.To.Text() != "Backend engineer" {
 		t.Errorf("the engineer joins as %+v", added)
 	}
 	if removed := got["members.ada"]; removed.Kind != wire.ChangeRemoved ||
-		removed.From != "Ada Lovelace (ada)" {
+		removed.From.Text() != "Ada Lovelace" {
 		t.Errorf("ada leaves as %+v", removed)
 	}
 	if kept, shown := got["members.pm"]; shown {
 		t.Errorf("pm stays as they follow the room and is a row: %+v", kept)
 	}
 	if !slices.Equal(p.Removes, []string{"Ada Lovelace (ada)"}) ||
-		p.Summary != "This removes Ada Lovelace (ada) from #launch." ||
+		p.Summary.Text() != "This removes Ada Lovelace from #launch." ||
 		p.Risk != wire.RiskDestructive {
-		t.Errorf("the card leads with %q (%q) at risk %q", p.Summary, p.Removes, p.Risk)
+		t.Errorf("the card leads with %q (%q) at risk %q", p.Summary.Text(), p.Removes, p.Risk)
 	}
-	if !slices.Equal(p.Audience, []string{"Product manager (pm)", "Backend engineer (engineer)"}) {
-		t.Errorf("the private room's readers after the change are %q", p.Audience)
+	if got := chatTexts(p.Audience); !slices.Equal(got, []string{"Product manager",
+		"Backend engineer"}) {
+		t.Errorf("the private room's readers after the change are %q", got)
 	}
 	sent := sentArgs(t, p)
 	want := []any{map[string]any{"handle": "pm", "follow_all": true},
@@ -137,11 +138,12 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	if moved := rows(p)["members.pm"]; moved.Kind != wire.ChangeChanged ||
-		moved.From != "Follows the whole room" || moved.To != "Follows only what names them" {
+		moved.From.Text() != "Product manager (follows the whole room)" ||
+		moved.To.Text() != "Product manager (follows only what names them)" {
 		t.Errorf("pm's following moves as %+v", moved)
 	}
-	if p.Risk != "" || p.Summary != "" {
-		t.Errorf("a change that takes nobody out reads %q at risk %q", p.Summary, p.Risk)
+	if p.Risk != "" || len(p.Summary) != 0 {
+		t.Errorf("a change that takes nobody out reads %q at risk %q", p.Summary.Text(), p.Risk)
 	}
 	// A SEAT THE CHART NO LONGER LISTS STAYS AS THE ROOM HOLDS IT, and a
 	// handle no seat holds does not join.
@@ -349,16 +351,16 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	// WHOM IT WOULD REACH is the post's own decision run dry, read from
 	// the room's reach: pm follows the room whole.
 	p, err := preview("post_chat_message", assistanttest.World(), nil)
-	if err != nil || p.Target != "#launch" || rows(p)["room"].To != "#launch" ||
-		rows(p)["body"].To != "Ship it on Friday." ||
-		rows(p)["reaches"].To != "Product manager (pm) following every message" ||
-		!slices.Equal(p.Audience, []string{"Product manager (pm)", "Ada Lovelace (ada)"}) {
+	if err != nil || p.Target != "#launch" || rows(p)["room"].To.Text() != "#launch" ||
+		rows(p)["body"].To.Text() != "Ship it on Friday." ||
+		rows(p)["reaches"].To.Text() != "Product manager following every message" ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Product manager", "Ada Lovelace"}) {
 		t.Errorf("a post previews %+v, %v", p, err)
 	}
 	public := chatWorld(func(room map[string]any) { room["kind"] = "public" }, nil)
 	if p, err := preview("post_chat_message", public, nil); err != nil ||
-		!slices.Equal(p.Audience, []string{"The whole company"}) {
-		t.Errorf("a post in a public room names %q, %v", p.Audience, err)
+		!slices.Equal(chatTexts(p.Audience), []string{"The whole company"}) {
+		t.Errorf("a post in a public room names %q, %v", chatTexts(p.Audience), err)
 	}
 	archived := chatWorld(func(room map[string]any) {
 		room["archived_at"] = "2031-04-01T09:00:00Z"
@@ -406,8 +408,8 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	}
 
 	if p, err := preview("reply_in_chat_thread", assistanttest.World(), nil); err != nil ||
-		rows(p)["reply_to"].To != "Product manager (pm): The old words." ||
-		rows(p)["reaches"].To != "Product manager (pm) following every message" {
+		rows(p)["reply_to"].To.Text() != "Product manager: The old words." ||
+		rows(p)["reaches"].To.Text() != "Product manager following every message" {
 		t.Errorf("a reply previews %+v, %v", p, err)
 	}
 	// A DRAFT THAT WOULD REACH NO AGENT SAYS SO, and why, before the person
@@ -416,18 +418,18 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	quiet[roomPath+"/reach"] = map[string]any{"channel_id": assistanttest.RecordID,
 		"reach": map[string]any{}, "quiet": "no_agent"}
 	if p, err := preview("post_chat_message", quiet, nil); err != nil ||
-		!strings.HasPrefix(rows(p)["reaches"].To, "No agent.") {
-		t.Errorf("a post that reaches no agent previews %q, %v", rows(p)["reaches"].To, err)
+		!strings.HasPrefix(rows(p)["reaches"].To.Text(), "No agent.") {
+		t.Errorf("a post that reaches no agent previews %q, %v", rows(p)["reaches"].To.Text(), err)
 	}
 	if p, err := preview("send_direct_message", assistanttest.World(), nil); err != nil ||
-		!slices.Equal(rows(p)["to"].Items, []string{"Ada Lovelace (ada)"}) ||
-		!slices.Equal(p.Audience, []string{"Product manager (pm)", "Ada Lovelace (ada)"}) {
+		!slices.Equal(chatTexts(rows(p)["to"].Items), []string{"Ada Lovelace"}) ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Product manager", "Ada Lovelace"}) {
 		t.Errorf("a direct message previews %+v, %v", p, err)
 	}
 
 	p, err = preview("edit_chat_message", assistanttest.World(), nil)
 	if body := rows(p)["body"]; err != nil || body.Kind != wire.ChangeChanged ||
-		body.From != "The old words." || body.To != "The new words." {
+		body.From.Text() != "The old words." || body.To.Text() != "The new words." {
 		t.Errorf("an edit previews %+v, %v", p.Changes, err)
 	}
 	if _, shown := rows(p)["links"]; shown {
@@ -447,17 +449,18 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	})
 	p, err = preview("delete_chat_message", leaked, nil)
 	if body := rows(p)["body"]; err != nil || body.Kind != wire.ChangeRemoved ||
-		strings.Contains(body.From, secret) || !strings.Contains(body.From, "[REDACTED") {
+		strings.Contains(body.From.Text(), secret) ||
+		!strings.Contains(body.From.Text(), "[REDACTED") {
 		t.Errorf("a delete previews %+v, %v", p.Changes, err)
 	}
 	if links := rows(p)["links"]; links.Kind != wire.ChangeRemoved ||
-		!slices.Equal(links.FromItems, []string{"https://example.com/plan"}) {
+		!slices.Equal(chatTexts(links.FromItems), []string{"https://example.com/plan"}) {
 		t.Errorf("a delete takes down the links as %+v", links)
 	}
 	if p.Risk != wire.RiskDestructive ||
-		p.Summary != "This deletes the message Product manager (pm) wrote in #launch, for "+
+		p.Summary.Text() != "This deletes the message Product manager wrote in #launch, for "+
 			"everyone who can read it." {
-		t.Errorf("a delete leads with %q at risk %q", p.Summary, p.Risk)
+		t.Errorf("a delete leads with %q at risk %q", p.Summary.Text(), p.Risk)
 	}
 	taken := chatWorld(nil, func(root map[string]any) {
 		message := root["message"].(map[string]any)
@@ -470,10 +473,94 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	}
 
 	p, err = preview("leave_chat_room", assistanttest.World(), nil)
-	if err != nil || rows(p)["member"].From != "Product manager (pm)" ||
-		!slices.Equal(p.Audience, []string{"Ada Lovelace (ada)"}) ||
-		!strings.Contains(p.Note, "no longer read") ||
-		p.Summary != "This removes you from #launch." || p.Risk != wire.RiskDestructive {
+	if err != nil || rows(p)["member"].From.Text() != "Product manager" ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Ada Lovelace"}) ||
+		!strings.Contains(p.Note.Text(), "no longer read") ||
+		p.Summary.Text() != "This removes you from #launch." || p.Risk != wire.RiskDestructive {
 		t.Errorf("leaving previews %+v, %v", p, err)
+	}
+}
+
+// chatTexts are phrases as their words.
+func chatTexts(phrases []wire.Phrase) []string {
+	out := make([]string, 0, len(phrases))
+	for _, p := range phrases {
+		out = append(out, p.Text())
+	}
+	return out
+}
+
+// chatRefs are every record a preview's card names: in its rows, its summary,
+// its note and its audience.
+func chatRefs(p proposal.Preview) []wire.Ref {
+	var out []wire.Ref
+	add := func(phrases ...wire.Phrase) {
+		for _, ph := range phrases {
+			out = append(out, ph.Refs()...)
+		}
+	}
+	for _, c := range p.Changes {
+		add(c.From, c.To)
+		add(c.Items...)
+		add(c.FromItems...)
+	}
+	add(p.Summary, p.Note)
+	add(p.Audience...)
+	return out
+}
+
+// A CHAT CARD NAMES ITS ROOM AND ITS PEOPLE AS RECORDS: the room by its id,
+// every author, member, recipient and reader a seat by its chart name, linked.
+// Mutation: name a seat by its handle, or write it into a sentence's words.
+func TestAChatCardNamesItsRoomAndItsPeopleAsRecords(t *testing.T) {
+	t.Parallel()
+	names := map[string]string{"pm": "Product manager", "ada": "Ada Lovelace",
+		"engineer": "Backend engineer"}
+	roomHref := "#/chatlet/" + assistanttest.RecordID
+	for tool, want := range map[string]struct {
+		room  int
+		seats []string
+	}{
+		// How often the card names the room, and whom it names, in order.
+		"post_chat_message":     {1, []string{"pm", "pm", "ada"}},
+		"reply_in_chat_thread":  {1, []string{"pm", "pm", "pm", "ada"}},
+		"send_direct_message":   {0, []string{"ada", "ada", "pm", "ada"}},
+		"edit_chat_message":     {1, []string{"pm", "pm", "ada"}},
+		"delete_chat_message":   {2, []string{"pm", "pm", "pm", "ada"}},
+		"update_chat_room":      {2, []string{"pm", "ada"}},
+		"set_chat_room_members": {3, []string{"engineer", "ada", "ada", "pm", "engineer"}},
+		"leave_chat_room":       {3, []string{"pm", "ada"}},
+	} {
+		write, _ := catalog.Lookup(tool)
+		p, err := write.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+			assistanttest.ProposalArgs[tool])
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		rooms := 0
+		var seats []string
+		for _, r := range chatRefs(p) {
+			switch r.Kind {
+			case wire.ResourceRoom:
+				rooms++
+				if r.ID != assistanttest.RecordID || r.Name != "#launch" || r.Open == nil ||
+					r.Open.Href != roomHref {
+					t.Errorf("%s names the room as %+v (open %+v)", tool, r, r.Open)
+				}
+			case wire.ResourceSeat:
+				seats = append(seats, r.ID)
+				if r.Name != names[r.ID] || r.Open == nil ||
+					r.Open.Href != "#/company/org/seats/"+r.ID {
+					t.Errorf("%s names the seat %s as %q (open %+v), want %q linked to the seat",
+						tool, r.ID, r.Name, r.Open, names[r.ID])
+				}
+			default:
+				t.Errorf("%s names a %s, which no chat card names", tool, r.Kind)
+			}
+		}
+		if rooms != want.room || !slices.Equal(seats, want.seats) {
+			t.Errorf("%s names the room %d times and the seats %q, want %d and %q", tool,
+				rooms, seats, want.room, want.seats)
+		}
 	}
 }

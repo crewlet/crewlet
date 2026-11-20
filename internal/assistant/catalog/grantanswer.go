@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -87,9 +88,10 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 	if !g.grants {
 		return declineCard(req, thread, a, "the request for "+name+" "+where, view.Name), nil
 	}
+	agent := naming(wire.ResourceSeat, view.Handle, view.Name)
 	var c changes
-	c.fact("task", "Task", value(thread, "key")+" "+value(thread, "title"))
-	c.fact("agent", "Agent", view.Name)
+	c.factOf("task", "Task", taskLine(value(thread, "key"), value(thread, "title")))
+	c.factOf("agent", "Agent", agent)
 	switch {
 	case !listed && view.LookupNote != "":
 		return proposal.Preview{}, fmt.Errorf("%w: %s cannot be granted now: %s", ErrInvalidArguments,
@@ -116,8 +118,8 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 	c.move("body", "Comment", "", a.String("body"))
 	recency, _ := authz.RecencyOf(authz.ActionSetupAccessWrite)
 	return proposal.Preview{Title: "Grant an agent's request", Target: view.Name + " on " + view.Integration,
-		Note: "Saved as one change to the company configuration, then " + view.Name + " is told yes. " +
-			view.Integration + " applies it on the next sync.",
+		Note: wire.Plain("Saved as one change to the company configuration, then ").Then(agent).Plain(
+			" is told yes. " + view.Integration + " applies it on the next sync."),
 		ApproveLabel: "Approve and grant", Changes: c.rows(), Request: req,
 		StepUp: recency == iam.RecencyStepUp || entry.Write}, nil
 }
@@ -125,11 +127,11 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 // declineCard is the card for declining a grant request, which changes no access.
 func declineCard(req exec.Request, thread any, a Args, what, agent string) proposal.Preview {
 	var c changes
-	c.fact("task", "Task", value(thread, "key")+" "+value(thread, "title"))
+	c.factOf("task", "Task", taskLine(value(thread, "key"), value(thread, "title")))
 	c.add("choice", "Answer", "Not now: decline "+what)
 	c.move("body", "Comment", "", a.String("body"))
 	return proposal.Preview{Title: "Decline an agent's request", Target: agent,
-		Note:         "The agent is told no and may ask again. Nothing about its access changes.",
+		Note:         wire.Plain("The agent is told no and may ask again. Nothing about its access changes."),
 		ApproveLabel: "Approve and decline", Changes: c.rows(), Request: req}
 }
 

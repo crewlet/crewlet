@@ -45,7 +45,7 @@ func TestARunAnswersReceiptIsReadAtTheRunsTrust(t *testing.T) {
 		var reads []told
 		read := resultOf(approval.Resumption{State: wire.ProposalApplied,
 			Answer:  []byte(`{"turn_id":"t1","question":"Which database?","outcome":"pending"}`),
-			Receipt: &wire.Receipt{Summary: "Applied on the page."}, ClientReported: tc.reported,
+			Receipt: &wire.Receipt{Summary: wire.Plain("Applied on the page.")}, ClientReported: tc.reported,
 			Card: wire.Card{Proposal: &wire.ProposalCard{Tool: tc.tool, Title: "Answer"}}}, b,
 			func(source provenance.Source, trust provenance.Trust) {
 				reads = append(reads, told{source, trust})

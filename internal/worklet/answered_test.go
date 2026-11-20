@@ -61,7 +61,7 @@ func TestAnsweredAsksListWhatWasPutToThePersonAndClosed(t *testing.T) {
 		c.Task, c.Author, c.AuthorKind, c.CreatedAt = "a", "bo", worklet.AuthorAgent, asked
 		askOn(t, r, "op-"+c.ID, "a", c)
 	}
-	answerOn(t, r, "op-ans-1", "a", "c-ans-1", "jane", "c-choice", "ship", "Ship it",
+	answerOn(t, r, "op-ans-1", "a", "c-ans-1", "jane", "c-choice", "ship", worklet.ChoiceWords("Ship it", ""),
 		wednesday.Add(-2*time.Hour))
 	// SOMEBODY ELSE ANSWERS FOR JANE, in words.
 	answerOn(t, r, "op-ans-2", "a", "c-ans-2", "dana", "c-words", "", "Call it Ledger",
@@ -162,7 +162,7 @@ func TestAnsweredAsksSayWhatTheAskerDidNext(t *testing.T) {
 	askOn(t, r, "op-ask", "a", worklet.Comment{ID: "c-1", Task: "a", Author: "bo",
 		AuthorKind: worklet.AuthorAgent, Body: "ship?", Ask: "jane", Decision: shipOrHold,
 		CreatedAt: wednesday.Add(-3 * time.Hour)})
-	answerOn(t, r, "op-ans", "a", "c-2", "jane", "c-1", "ship", "Ship it",
+	answerOn(t, r, "op-ans", "a", "c-2", "jane", "c-1", "ship", worklet.ChoiceWords("Ship it", ""),
 		wednesday.Add(-2*time.Hour))
 	if got := r.answered("jane"); len(got.Asks) != 1 || got.Asks[0].FollowedUp != nil {
 		t.Fatalf("before the asker acts the answered ask is %+v, want no follow-up", got.Asks)

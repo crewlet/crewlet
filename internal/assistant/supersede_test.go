@@ -69,7 +69,7 @@ func TestApprovingASupersededTurnsProposalShowsItWithoutTheLoop(t *testing.T) {
 	at, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 		Conversation: f.Conversation, Turn: parked.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
-		Receipt:    &wire.Receipt{Summary: "Created ENG-7."},
+		Receipt:    &wire.Receipt{Summary: wire.Plain("Created ENG-7.")},
 		Invalidate: &wire.Invalidate{Domain: "CREWLET_WORK", Position: "CREWLET_WORK@4"},
 		Card:       cardAt(p, wire.ProposalApplied)})
 	if err != nil {

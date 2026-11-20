@@ -10,7 +10,7 @@
 // reads changes: a new revision of the company, a seat paused or resumed, an
 // integration's reconcile. The model pass runs once a day at [ModelPassHour]
 // on the company clock where the company assigns the Advisor a model. A
-// person's Run now is a request on the log, which the holder takes on its next
+// person's Run is a request on the log, which the holder takes on its next
 // tick, so a press on any node runs on the one that holds the duty.
 //
 // # What it never does
@@ -76,6 +76,13 @@ type Reader interface {
 	Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error)
 }
 
+// DayReader is a [Reader] that reads a week day by day as well: each company
+// day's turns, those that committed nothing and their tokens, which a report
+// draws across its week. A reader without it writes reports with no days.
+type DayReader interface {
+	Days(ctx context.Context, from, to time.Time) ([]advisor.Day, error)
+}
+
 // Observed is one reading of the company.
 type Observed struct {
 	Observations []advisor.Observation
@@ -122,7 +129,7 @@ type Log interface {
 	Dismissed(ctx context.Context) ([]advisor.Stored, error)
 	// LastDone is when a run last concluded about each scope, and each group.
 	LastDone(ctx context.Context) (map[string]time.Time, error)
-	// Requested is every Run now nobody has run yet.
+	// Requested is every Run nobody has run yet.
 	Requested(ctx context.Context) ([]Request, error)
 	// Record publishes one transition decided at now.
 	Record(ctx context.Context, t advisor.Transition, now time.Time) error
@@ -148,7 +155,7 @@ type Log interface {
 	Explain(ctx context.Context, e advisor.Explained) error
 }
 
-// Request is a person's Run now.
+// Request is a person's Run.
 type Request struct {
 	Run string
 	By  string
@@ -273,37 +280,8 @@ func (d *Duty) Step(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the requested runs: %w", err)
 	}
-	var requests, deep []Request
-	for _, r := range all {
-		if r.Kind == advisordomain.RunKindDeep {
-			deep = append(deep, r)
-			continue
-		}
-		requests = append(requests, r)
-	}
-	if len(requests) == 0 && len(deep) > 0 {
-		return d.pressedDeep(ctx, now, deep)
-	}
-	// A PRESS THIS HOLDER ALREADY RAN is recorded again, never run again.
-	if pressed := len(requests); pressed > 0 {
-		if requests, err = d.recordAgain(ctx, requests); len(requests) == 0 {
-			return err
-		}
-		if err != nil {
-			log.WarnContext(ctx, "advisor_run_not_recorded", "error", err.Error())
-		}
-	}
-	if len(requests) > 0 {
-		// EVERY PRESS WAITING IS ANSWERED BY ONE RUN of everything, recorded
-		// under each press's own id, so a press during a run joins the next.
-		model := d.Model != nil && d.Model.Assigned()
-		run := d.run(ctx, now, true, model, TriggerPerson, requests[0].By, requests[0].Run)
-		var errs []error
-		for _, r := range requests {
-			run.ID, run.By = r.Run, r.By
-			errs = append(errs, d.conclude(ctx, run))
-		}
-		return errors.Join(append(errs, d.Log.Expire(ctx, now))...)
+	if len(all) > 0 {
+		return d.pressed(ctx, now, all)
 	}
 	last, err := d.Log.LastDone(ctx)
 	if err != nil {
@@ -320,7 +298,7 @@ func (d *Duty) Step(ctx context.Context) error {
 		rules, trigger = true, TriggerEvent
 	}
 	if d.deepDue(now, last) {
-		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()})
+		d.startDeep(ctx, now, TriggerSchedule, "", []string{d.NewID()}, nil)
 		return nil
 	}
 	model := d.Model != nil && d.Model.Assigned() && last[string(advisor.GroupModel)].Before(d.slot(now))
@@ -375,7 +353,7 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("read the report of %s: %w", before, err)
 	}
 	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
-		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to)}
+		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to), Days: d.days(ctx, week, from, to)}
 	// THE MODEL'S SUMMARY, where the company assigns one, from the report
 	// alone: a report is written without it rather than not at all.
 	if d.Model != nil && d.Model.Assigned() {
@@ -390,6 +368,22 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 	}
 	d.reported = week
 	return nil
+}
+
+// days is the week [from, to) day by day, where the reader reads days: a
+// picture of the week's totals, so a report is written without it rather than
+// not at all.
+func (d *Duty) days(ctx context.Context, week string, from, to time.Time) []advisor.Day {
+	reader, ok := d.Read.(DayReader)
+	if !ok {
+		return nil
+	}
+	days, err := reader.Days(ctx, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_report_days_unread", "week", week, "error", err.Error())
+		return nil
+	}
+	return days
 }
 
 // slot is the latest model pass start at or before now, on the company clock.

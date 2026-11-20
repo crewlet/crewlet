@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,7 +116,7 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 		kinds[c.Field] = c.Kind
 	}
 	if kinds["status"] != wire.ChangeChanged || kinds["body"] != wire.ChangeChanged ||
-		kinds["task"] != wire.ChangeFact || p.SourceRevision != "task:ENG-42@3" || p.Note == "" {
+		kinds["task"] != wire.ChangeFact || p.SourceRevision != "task:ENG-42@3" || len(p.Note) == 0 {
 		t.Errorf("the update previews %+v at %q", p.Changes, p.SourceRevision)
 	}
 }
@@ -211,7 +210,7 @@ func TestAMarkInboxCardNamesEveryNotice(t *testing.T) {
 	}
 	var got []string
 	for _, c := range p.Changes {
-		got = append(got, c.Label+": "+c.To)
+		got = append(got, c.Label+": "+c.To.Text())
 	}
 	want := []string{"Mark read: ENG-42: Ship it moved to review.",
 		"Mark read: SEC-7: Rotate the signing key.",
@@ -228,7 +227,7 @@ func TestAMarkInboxCardNamesEveryNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Changes) != 11 || p.Changes[10].To != "And 3 more" {
+	if len(p.Changes) != 11 || p.Changes[10].To.Text() != "And 3 more" {
 		t.Errorf("thirteen notices preview as %d rows ending %+v", len(p.Changes),
 			p.Changes[len(p.Changes)-1])
 	}
@@ -248,18 +247,19 @@ func TestATaskCardShowsWhatTheWriteCarries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := map[string]string{}
+	rows := map[string]wire.Phrase{}
 	for _, c := range p.Changes {
 		rows[c.Field] = c.To
 	}
-	if rows["due"] != "Wednesday 23 April 2031" ||
-		rows["assignee"] != "Backend engineer (engineer)" {
-		t.Errorf("the card reads due %q and assignee %q", rows["due"], rows["assignee"])
+	if rows["due"].Text() != "Wednesday 23 April 2031" || !isSeat(rows["assignee"], "engineer",
+		"Backend engineer") {
+		t.Errorf("the card reads due %+v and assignee %+v", rows["due"], rows["assignee"])
 	}
 	// THE WORLD HOLDS NO LIVE STATE FOR engineer, so the card promises only
 	// the assignment (TestTheHandoverNoteSaysWhatTheSeatsStateSupports).
-	if p.Note != "Backend engineer (engineer) is assigned the new task once this is approved." {
-		t.Errorf("the note reads %q", p.Note)
+	if p.Note.Text() != "Backend engineer is assigned the new task once this is approved." ||
+		!isSeat(p.Note[:1], "engineer", "Backend engineer") {
+		t.Errorf("the note reads %+v", p.Note)
 	}
 	var body struct {
 		Args map[string]any `json:"args"`
@@ -270,8 +270,9 @@ func TestATaskCardShowsWhatTheWriteCarries(t *testing.T) {
 
 	p, err = create.Preview(t.Context(), reader(assistanttest.World()), wednesday,
 		map[string]any{"title": "Review it", "assignee": "ada"})
-	if err != nil || p.Note != "Ada Lovelace (ada) is notified of the new task once this is approved." {
-		t.Errorf("a person's task notes %q, %v", p.Note, err)
+	if err != nil || p.Note.Text() != "Ada Lovelace is notified of the new task once this is approved." ||
+		!isSeat(p.Note[:1], "ada", "Ada Lovelace") {
+		t.Errorf("a person's task notes %+v, %v", p.Note, err)
 	}
 	if _, err := create.Preview(t.Context(), reader(assistanttest.World()), wednesday,
 		map[string]any{"title": "Never", "due": "someday"}); !errors.Is(err, catalog.ErrInvalidArguments) {
@@ -292,12 +293,13 @@ func TestAPageChangeReadsAsWords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := map[string]string{}
+	rows := map[string]wire.Phrase{}
 	for _, c := range p.Changes {
 		rows[c.Label] = c.To
 	}
-	if rows["Assignee"] != "Backend engineer (engineer)" || rows["Due before"] != "2031-04-30" {
-		t.Errorf("the page change reads %v", rows)
+	if !isSeat(rows["Assignee"], "engineer", "Backend engineer") ||
+		rows["Due before"].Text() != "2031-04-30" {
+		t.Errorf("the page change reads %+v", rows)
 	}
 }
 
@@ -319,8 +321,9 @@ func TestAPageChangeIsNeverLabelledWithARawPath(t *testing.T) {
 		if strings.Contains(c.Label, ".") || strings.Contains(c.Label, "_") {
 			t.Errorf("row %s is labelled %q", c.Field, c.Label)
 		}
-		if c.Field == "voice.write_like" && !slices.Equal(c.Items, []string{"Short", "Plain"}) {
-			t.Errorf("the list row carries the items %q", c.Items)
+		if c.Field == "voice.write_like" && !reflect.DeepEqual(c.Items,
+			[]wire.Phrase{wire.Plain("Short"), wire.Plain("Plain")}) {
+			t.Errorf("the list row carries the items %+v", c.Items)
 		}
 	}
 }
@@ -348,8 +351,8 @@ func TestAPrinciplesChangeIsADiffOfTheStoredPrinciples(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(p.Changes) != 1 || p.Changes[0].Field != "mission" ||
-		p.Changes[0].Kind != wire.ChangeText || p.Changes[0].From != assistanttest.WorldMission ||
-		p.Changes[0].To != "Help friends share costs fairly." {
+		p.Changes[0].Kind != wire.ChangeText || p.Changes[0].From.Text() != assistanttest.WorldMission ||
+		p.Changes[0].To.Text() != "Help friends share costs fairly." {
 		t.Fatalf("the mission change previews %+v", p.Changes)
 	}
 	struck := false
@@ -389,7 +392,7 @@ func TestAPrinciplesChangeIsADiffOfTheStoredPrinciples(t *testing.T) {
 	p, err = tool.Preview(t.Context(), reader(world), wednesday, map[string]any{
 		"policies": []any{"Keep it.", "Old wording."}})
 	if err != nil || len(p.Changes) != 1 || p.Changes[0].Kind != wire.ChangeRemoved ||
-		p.Changes[0].From != "Gone soon." {
+		p.Changes[0].From.Text() != "Gone soon." {
 		t.Errorf("a policy removed previews %+v, %v", p.Changes, err)
 	}
 	if _, err := tool.Preview(t.Context(), reader(world), wednesday,
@@ -407,7 +410,7 @@ func TestAPrinciplesChangeIsADiffOfTheStoredPrinciples(t *testing.T) {
 func TestTheHandoverNoteSaysWhatTheSeatsStateSupports(t *testing.T) {
 	t.Parallel()
 	create, _ := catalog.Lookup("create_task")
-	const assigned = "Backend engineer (engineer) is assigned the new task once this is approved."
+	const assigned = "Backend engineer is assigned the new task once this is approved."
 	for name, tc := range map[string]struct {
 		live any
 		want string
@@ -418,13 +421,13 @@ func TestTheHandoverNoteSaysWhatTheSeatsStateSupports(t *testing.T) {
 			"last_turn": map[string]any{"outcome": "failed"}},
 			assigned + " Its last turn failed, so check it before relying on it to start."},
 		"paused": {map[string]any{"activity": "stopped", "stopped_reason": "paused"},
-			assigned + " Backend engineer (engineer) is paused, so it does not start until " +
+			assigned + " Backend engineer is paused, so it does not start until " +
 				"somebody resumes it."},
 		"out of budget": {map[string]any{"activity": "stopped", "stopped_reason": "budget"},
-			assigned + " Backend engineer (engineer) has used its token budget, so it does " +
+			assigned + " Backend engineer has used its token budget, so it does " +
 				"not start until the budget resets or is raised."},
 		"stopped for a reason this build does not know": {map[string]any{"activity": "stopped",
-			"stopped_reason": "eclipse"}, assigned + " Backend engineer (engineer) cannot take " +
+			"stopped_reason": "eclipse"}, assigned + " Backend engineer cannot take " +
 			"work right now, so it does not start until it can."},
 		"unreadable": {nil, assigned},
 	} {
@@ -434,8 +437,8 @@ func TestTheHandoverNoteSaysWhatTheSeatsStateSupports(t *testing.T) {
 		}
 		p, err := create.Preview(t.Context(), reader(world), wednesday,
 			map[string]any{"title": "File the report", "assignee": "engineer"})
-		if err != nil || p.Note != tc.want {
-			t.Errorf("%s: the note reads %q (%v), want %q", name, p.Note, err, tc.want)
+		if err != nil || p.Note.Text() != tc.want {
+			t.Errorf("%s: the note reads %q (%v), want %q", name, p.Note.Text(), err, tc.want)
 		}
 	}
 }
@@ -519,5 +522,65 @@ func TestARunsAnswerIsPreviewedAgainstItsQuestion(t *testing.T) {
 		if _, err := tool.Preview(t.Context(), read, wednesday, args); !errors.Is(err, catalog.ErrInvalidArguments) {
 			t.Errorf("%s previewed (%v), want it refused", name, err)
 		}
+	}
+}
+
+// isSeat reports a phrase that is the seat handle, shown by name, linked to its page.
+func isSeat(p wire.Phrase, handle, name string) bool {
+	return len(p) == 1 && p[0].Ref != nil && p[0].Ref.Kind == wire.ResourceSeat &&
+		p[0].Ref.ID == handle && p[0].Ref.Name == name && p[0].Ref.Open != nil &&
+		p[0].Ref.Open.Href == "#/company/org/seats/"+handle
+}
+
+// A SHARE CARD NAMES ITS ARTIFACT AND WHO IT REACHES AS RECORDS: the artifact
+// by title and kind, the seat by its chart name in the row, audience and note.
+// Mutation: name the audience by its handle, or the artifact by its title alone.
+func TestAShareCardNamesItsArtifactAndItsAudienceAsRecords(t *testing.T) {
+	t.Parallel()
+	share, _ := catalog.Lookup("share_artifact")
+	p, err := share.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"artifact": assistanttest.RecordID, "to": "qa", "role": "commenter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]wire.Phrase{}
+	for _, c := range p.Changes {
+		rows[c.Field] = c.To
+	}
+	artifact := rows["artifact"].Refs()
+	if len(artifact) != 1 || artifact[0].Kind != wire.ResourceArtifact ||
+		artifact[0].ID != assistanttest.RecordID || artifact[0].Name != "Q3 deck" ||
+		artifact[0].ArtifactKind != "slides" || artifact[0].Open == nil ||
+		artifact[0].Open.Href != "#/artifacts/"+assistanttest.RecordID {
+		t.Errorf("the artifact row names %+v", artifact)
+	}
+	if shared := rows["audience"]; shared.Text() != "QA Engineer as commenter" ||
+		!isSeat(shared[:1], "qa", "QA Engineer") {
+		t.Errorf("the shared with row reads %+v", shared)
+	}
+	if len(p.Audience) != 1 || !isSeat(p.Audience[0], "qa", "QA Engineer") {
+		t.Errorf("the audience is %+v", p.Audience)
+	}
+	if p.Note.Text() != "QA Engineer can open it." || !isSeat(p.Note[:1], "qa", "QA Engineer") {
+		t.Errorf("the note reads %+v", p.Note)
+	}
+
+	unshare, _ := catalog.Lookup("unshare_artifact")
+	p, err = unshare.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"artifact": assistanttest.RecordID, "from": "seat:ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := p.Changes[len(p.Changes)-1]
+	if removed.Kind != wire.ChangeRemoved || !isSeat(removed.From, "ada", "Ada Lovelace") ||
+		!strings.HasPrefix(p.Note.Text(), "Ada Lovelace can no longer open it") {
+		t.Errorf("the withdrawal reads %+v, note %+v", removed, p.Note)
+	}
+
+	p, err = share.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		assistanttest.ProposalArgs["share_artifact"])
+	if err != nil || len(p.Audience) != 1 || p.Audience[0].Text() != "The whole company" ||
+		len(p.Audience[0].Refs()) != 0 {
+		t.Errorf("a company-wide share's audience is %+v, %v", p.Audience, err)
 	}
 }

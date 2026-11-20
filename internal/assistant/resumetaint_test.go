@@ -104,7 +104,7 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 			resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 				Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 				Read: f.Grant("approve"), State: wire.ProposalApplied,
-				Receipt: &wire.Receipt{Summary: "Done."}, Answer: []byte(tc.answer),
+				Receipt: &wire.Receipt{Summary: wire.Plain("Done.")}, Answer: []byte(tc.answer),
 				Card: cardAt(p, wire.ProposalApplied)})
 			if err != nil {
 				t.Fatal(err)
