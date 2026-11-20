@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -23,7 +24,8 @@ import (
 //
 // Mutation: ask a question under the socket's context alone, or stream a value
 // past its read's context, and the reads run on past their wait to the read
-// budget, answered.
+// budget, answered; keep a slot past a read its wait ended, and the reads asked
+// next never read.
 func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 	t.Parallel()
 	type ended struct {
@@ -63,12 +65,12 @@ func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 			"params": map[string]any{"archive": "endless"}, "wait_ms": 1000})
 	}
 	for range executor.TranscriptReadsAtOnce {
-		e := <-ends
+		e := awaited(t, ends, "a read past its wait had not ended")
 		if !errors.Is(e.err, context.DeadlineExceeded) || !e.opened {
 			t.Fatalf("a read past its wait ended %v (its archive opened: %t), want its wait's deadline, "+
 				"read once it had begun", e.err, e.opened)
 		}
-		<-e.closed
+		awaited(t, e.closed, "a read past its wait had not closed its archive")
 	}
 
 	// EVERY SLOT FREE: each read asked next reads its archive, which it could
@@ -78,23 +80,39 @@ func TestAReadPastItsClientsWaitEndsAtTheEngineAndFreesItsSlots(t *testing.T) {
 			"params": map[string]any{"archive": "stalled"}, "wait_ms": 600_000})
 	}
 	for range executor.TranscriptReadsAtOnce {
-		<-inside
+		awaited(t, inside, "a read asked next had not read its archive: a slot a read past its wait held "+
+			"is kept")
 	}
 	for i := range executor.TranscriptReadsAtOnce {
 		write(t, conn, map[string]any{"kind": "query_cancel", "id": 10 + i})
 	}
 	for range executor.TranscriptReadsAtOnce {
-		e := <-ends
+		e := awaited(t, ends, "a read its client cancelled had not ended")
 		if !errors.Is(e.err, context.Canceled) {
 			t.Fatalf("a read its client cancelled ended %v, want cancelled", e.err)
 		}
-		<-e.closed
+		awaited(t, e.closed, "a read its client cancelled had not closed its archive")
 	}
 	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
 	if got := next(t, conn); kindOf(got) != stream.KindResult || got["id"] != float64(100) {
 		t.Fatalf("the frame after the reads that ended = %v, want the next question's answer and none of "+
 			"theirs", got)
 	}
+}
+
+// awaited is what c hands over, or the test's end naming what never came, so a
+// read that runs on or a slot kept fails saying which rather than hanging the
+// package to its timeout.
+func awaited[T any](t *testing.T, c <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-c:
+		return v
+	case <-time.After(time.Minute): //fixedwait:liveness
+		t.Fatalf("a minute on, %s", what)
+	}
+	var none T
+	return none
 }
 
 // endlessArchive is an OpenCode session whose one message's text never ends,
