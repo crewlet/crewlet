@@ -1112,29 +1112,33 @@ decides whether it lands. Ten things to know:
   the group (its react peers are `^18.0.0 || ^19.0.0`, which ride a React
   minor), and `@vitejs/plugin-react` because it declares no react peer, only
   `vite: ^8.0.0`.
-- **`vite`, `vitest` and `@vitejs/plugin-react` are grouped, one major out.**
-  `vite` is a *required* peer of the other two (`^8.0.0` from the plugin,
-  `^6.4.0 || ^7.0.0 || ^8.0.0` from vitest), so a lone `vite` 9 bump breaks both
-  ceilings. Minors were never the problem (8.2.2 → 8.3.0 landed alone), so the
-  group buys nothing until the major. Its cost: a `vitest`-only bump is titled
-  for the group, with the packages it moved in the body.
-- **The design system's three packages are grouped, because they pin each
-  other.** `@crewlethq/ui` depends on `@crewlethq/tokens` and `@crewlethq/icons`
-  at an *exact* version, and the three release together. A lone bump installs
-  cleanly and wrongly: a newer `ui` beside the direct `tokens` nests a second
-  copy of the tokens, so components and the dashboard's stylesheets paint from
-  different palettes, which no install error or test sees. The pattern is
-  `@crewlethq/*`, because the pinning is the scope's convention, not a fact
-  about three names.
+- **`vite`, `vitest`, `@vitest/*` and `@vitejs/plugin-react` are grouped.**
+  `vite` is a *required* peer of the plugin (`^8.0.0`) and of vitest
+  (`^6.4.0 || ^7.0.0 || ^8.0.0`), so a lone `vite` 9 bump breaks both ceilings;
+  minors were never the problem (8.2.2 → 8.3.0 landed alone). And `vitest` and
+  `@vitest/browser-playwright`, the layout suites' browser provider, peer each
+  other at the *exact* same version, so every vitest release needs both in one
+  pull request. Its cost: a bump of `vite` or the plugin alone is titled for the
+  group, with the packages it moved in the body.
+- **The design system's four packages are grouped, because its components pin
+  its tokens and icons.** `@crewlethq/ui` depends on `@crewlethq/tokens` and
+  `@crewlethq/icons` at an *exact* version, and all four release together. A
+  lone bump of one of those three installs cleanly and wrongly: a newer `ui`
+  beside the direct `tokens` nests a second copy of the tokens, so components
+  and the dashboard's stylesheets paint from different palettes, which no
+  install error or test sees. The pattern is `@crewlethq/*`, because the pinning
+  is the scope's convention, so a package `ui` comes to pin is grouped with no
+  edit. It also takes `@crewlethq/artifact-kit`, which nothing pins, so a
+  design-system release arrives as one pull request.
 - **Nothing else is grouped; that is the rule.** The only other *required* edges
-  are `@testing-library/react`'s (react and react-dom at `^18.0.0 || ^19.0.0`,
-  which ride a minor, and `@testing-library/dom`, a transitive Dependabot moves
-  with it). Every remaining vite peer (`@vitest/mocker`'s, vite's own on
-  `@types/node` and the bundlers) is optional, and npm does not fail on an
-  unsatisfied optional peer. A group raises its members together under a title
-  naming the group, so it costs a vaguer subject and puts one member's bad
-  release in front of the rest. Pay that only where a split bump is genuinely
-  broken, not for neatness.
+  a bump could split are `@testing-library/react`'s (react and react-dom at
+  `^18.0.0 || ^19.0.0`, which ride a minor, and `@testing-library/dom`, a
+  transitive Dependabot moves with it). Every remaining vite peer
+  (`@vitest/mocker`'s, vite's own on `@types/node` and the bundlers) is
+  optional, and npm does not fail on an unsatisfied optional peer. A group
+  raises its members together under a title naming the group, so it costs a
+  vaguer subject and puts one member's bad release in front of the rest. Pay
+  that only where a split bump is genuinely broken, not for neatness.
 - **A dashboard bump that changes the emitted bytes needs a rebuilt bundle, and
   gets one.** The output is committed (`static/dashboard`, `static/artifacts` and
   `static/protocol`, the Makefile's `UI_OUT`) and the `dashboard gates` job

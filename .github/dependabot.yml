@@ -129,28 +129,34 @@ updates:
   # vite group below and not to this one. Its name is the only React-shaped
   # thing about it.
   #
-  # THE VITE FAMILY IS GROUPED FOR THE SAME REASON, one major out. `vite` is
-  # peered REQUIRED by two direct dependencies — `@vitejs/plugin-react@6.1.1`
-  # at `^8.0.0` and `vitest@5.0.0` at `^6.4.0 || ^7.0.0 || ^8.0.0` — so a lone
+  # THE VITE FAMILY IS GROUPED FOR THE SAME REASON, twice over. `vite` is
+  # peered REQUIRED by two direct dependencies — `@vitejs/plugin-react@6.3.0`
+  # at `^8.0.0` and `vitest@5.1.0` at `^6.4.0 || ^7.0.0 || ^8.0.0` — so a lone
   # `vite` 9 bump violates both ceilings at once and ERESOLVEs exactly as the
-  # react-dom half did. Minors are fine and always were (8.2.2 -> 8.3.0 landed
-  # on its own), so this buys nothing until the major, and then it buys the
-  # whole thing. The cost is paid in the meantime and is worth stating: a
-  # `vitest`-only bump now arrives titled for the group rather than for
-  # `vitest`, and the packages it moved are in the body instead of the subject.
+  # react-dom half did; minors are fine and always were (8.2.2 -> 8.3.0 landed
+  # on its own). And `vitest` and `@vitest/browser-playwright`, the layout
+  # suites' browser provider, peer each other at the EXACT version (each 5.1.0
+  # asks for the other at `5.1.0`), so every vitest release needs both in one
+  # pull request, which `@vitest/*` gives it. The cost is worth stating: a
+  # bump of `vite` or `@vitejs/plugin-react` alone arrives titled for the
+  # group rather than for the package, and the packages it moved are in the
+  # body instead of the subject.
   #
   # THE DESIGN SYSTEM IS GROUPED, for a reason that is not a peer at all.
   # `@crewlethq/ui` pins `@crewlethq/tokens` and `@crewlethq/icons` as
-  # DEPENDENCIES at an EXACT version (0.5.0 depends on both at `0.5.0`), and
-  # the three are released together from one repository. So a lone bump of
-  # any one of them installs cleanly and wrongly: `ui` 0.5.1 beside a direct
-  # `tokens` 0.5.0 nests a second copy of the tokens under `ui`, and the
+  # DEPENDENCIES at an EXACT version (0.163.1 depends on both at `0.163.1`),
+  # and the scope's four packages, `@crewlethq/artifact-kit` with them, are
+  # released together from one repository. So a lone bump of `ui`, `tokens`
+  # or `icons` installs cleanly and wrongly: `ui` 0.163.2 beside a direct
+  # `tokens` 0.163.1 nests a second copy of the tokens under `ui`, and the
   # components paint from one palette while the dashboard's own stylesheets
   # read the other — a split no install error reports and no test that reads
   # the INSTALLED package (palette.test.ts, tokens.test.ts) can see, because
   # each reads the top-level copy. `@crewlethq/*` is a pattern rather than
-  # three names because the pinning is the whole scope's convention, and a
-  # fourth package from it would be pinned the same way.
+  # names because the pinning is the whole scope's convention, so a package
+  # `ui` comes to pin is grouped with no edit here. It also takes the kit,
+  # which nothing pins, so a design-system release arrives as one pull
+  # request.
   #
   # NOTHING ELSE IS GROUPED, and the peer graph is why rather than taste. The
   # only other REQUIRED edges a bump here could split are
@@ -166,9 +172,10 @@ updates:
   # security advisory must not wait for the rest of a family to have a
   # release.
   #
-  # Of fifteen direct dependencies, ten are grouped (react 4, vite 3,
-  # crewlethq 3); the remaining five — @testing-library/react, @types/node,
-  # jsdom, prettier, typescript — arrive one pull request each.
+  # Of twenty direct dependencies, twelve are grouped (react 4, vite 4,
+  # crewlethq 4); the remaining eight — @testing-library/react, @types/node,
+  # jsdom, jsqr, playwright, prettier, typescript, uqr — arrive one pull
+  # request each.
   - package-ecosystem: npm
     directory: "/dashboard"
     schedule:
