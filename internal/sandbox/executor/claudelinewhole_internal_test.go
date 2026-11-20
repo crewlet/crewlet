@@ -116,7 +116,7 @@ var errLineBound = errors.New("executor: a line of the session runs past the bou
 // read as its bytes stream past ([lineBytes]).
 func lineBytesOf(raw []byte) threadBytes {
 	var l lineBytes
-	l.write(raw)
+	_, _ = l.Write(raw)
 	return l.facts()
 }
 

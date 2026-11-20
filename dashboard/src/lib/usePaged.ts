@@ -267,8 +267,9 @@ export function usePaged<A, T, E = unknown>(
   /** The first page's parameters, a window's name but never its edges: the later pages belong
    *  to this question. */
   params: Record<string, unknown>,
-  /** Ask for the page after `cursor`, at this tab's read floor, at the window's `edges`. */
-  page: (cursor: string, edges: E | null) => Promise<A>,
+  /** Ask for the page after `cursor`, at this tab's read floor, at the window's `edges`,
+   *  given up on once `signal` aborts: the reading it is for is no longer asked. */
+  page: (cursor: string, edges: E | null, signal: AbortSignal) => Promise<A>,
   pick: (answer: A) => readonly T[],
   idOf: (entry: T) => string,
   /** The cursor to the page after this answer, or "" where there is none. */
@@ -309,6 +310,41 @@ export function usePaged<A, T, E = unknown>(
   restarts.current = options.restartWhenRefused === true;
   const latest = useRef(first);
   latest.current = first;
+
+  // A READ FOR A READING NO LONGER ASKED IS GIVEN UP ON, at the engine too
+  // where the caller hands the signal on: a transcript page may read for
+  // minutes, holding the socket's slot and the node's, and every change queued
+  // here behind it, for nobody.
+  // A change for a reading since left behind is given a signal already
+  // aborted, never one that ends the reading asked now.
+  const reads = useRef<{ era: string; stop: AbortController } | null>(null);
+  const given = (q: string): AbortSignal => {
+    if (asked.current !== q) {
+      const gone = new AbortController();
+      gone.abort();
+      return gone.signal;
+    }
+    if (reads.current?.era !== q) {
+      reads.current?.stop.abort();
+      reads.current = { era: q, stop: new AbortController() };
+    }
+    return reads.current.stop.signal;
+  };
+  const giveUp = useRef(given);
+  giveUp.current = given;
+  useEffect(() => {
+    if (reads.current && reads.current.era !== era) {
+      reads.current.stop.abort();
+      reads.current = null;
+    }
+  }, [era]);
+  useEffect(
+    () => () => {
+      reads.current?.stop.abort();
+      reads.current = null;
+    },
+    [],
+  );
 
   // WHAT IS HELD NOW, written the moment a change applies, so the next change
   // reads it rather than a render's copy: a change built from `kept` put back
@@ -353,6 +389,7 @@ export function usePaged<A, T, E = unknown>(
     /** Read the range between `from` and the held page `to`: at most `bound`
      *  pages of it, at the window's `edges`. */
     const bridge = async (
+      q: string,
       from: A,
       to: HeldPage<A>,
       bound: number,
@@ -362,7 +399,7 @@ export function usePaged<A, T, E = unknown>(
       let cursor = reading.current.cursorOf(from);
       try {
         for (let read = 0; cursor && read < bound; read++) {
-          const answer = await ask.current(cursor, edges);
+          const answer = await ask.current(cursor, edges, giveUp.current(q));
           gap.push({ cursor, answer });
           if (meets(answer, to, reading.current))
             return { outcome: "met", pages: gap, error: null };
@@ -400,7 +437,7 @@ export function usePaged<A, T, E = unknown>(
         return;
       }
       // BOUNDED BY EVERYTHING HELD, all of which is below this gap.
-      const gap = await bridge(answer, anchor, kept.pages.length, edges);
+      const gap = await bridge(q, answer, anchor, kept.pages.length, edges);
       if (holding(q) !== kept) return;
       if (gap.error === REFUSED_CURSOR && restarts.current) {
         restart(q);
@@ -425,7 +462,7 @@ export function usePaged<A, T, E = unknown>(
       let failure: QueryErrorCode | null = null;
       const fresh = await Promise.all(
         kept.pages.map((held) =>
-          ask.current(held.cursor, edges).then(
+          ask.current(held.cursor, edges, giveUp.current(q)).then(
             (read): A | null | typeof REFUSED => read,
             (err: unknown) => {
               const code = errorOf(err);
@@ -451,7 +488,7 @@ export function usePaged<A, T, E = unknown>(
         if (!read || read === REFUSED) break;
         const placed: HeldPage<A> = { cursor: held.cursor, answer: read };
         if (!meets(above, placed, reading.current)) {
-          const gap = await bridge(above, placed, kept.pages.length - i, edges);
+          const gap = await bridge(q, above, placed, kept.pages.length - i, edges);
           if (holding(q) !== kept) return;
           pages.push(...gap.pages);
           if (gap.outcome !== "met") break;
@@ -479,7 +516,7 @@ export function usePaged<A, T, E = unknown>(
       // are independent, and what they change is not.
       const fresh = await Promise.all(
         chosen.map((held) =>
-          ask.current(held.cursor, kept.edges).then(
+          ask.current(held.cursor, kept.edges, giveUp.current(q)).then(
             (answer): A | null | typeof REFUSED => answer,
             // A PAGE THAT COULD NOT BE READ AGAIN keeps what it last said:
             // the next change that reaches it asks again. One whose cursor
@@ -515,7 +552,7 @@ export function usePaged<A, T, E = unknown>(
         // in its range — so what it let go of is read before it is drawn,
         // bounded by the pages after it: they are what a gap left unfilled
         // drops.
-        const gap = await bridge(answer, after, pages.length - at - 1, kept.edges);
+        const gap = await bridge(q, answer, after, pages.length - at - 1, kept.edges);
         if (holding(q) !== kept) return;
         if (gap.error) continue;
         if (gap.outcome === "met") pages = [...above, placed, ...gap.pages, ...pages.slice(at + 1)];
@@ -533,7 +570,7 @@ export function usePaged<A, T, E = unknown>(
       const edges = kept ? kept.edges : (latest.current.edges ?? null);
       const cursor = tail ? reading.current.cursorOf(tail) : "";
       if (!tail || !cursor) return;
-      const answer = await ask.current(cursor, edges);
+      const answer = await ask.current(cursor, edges, giveUp.current(q));
       if (asked.current !== q || holding(q) !== kept) return;
       commit(
         kept

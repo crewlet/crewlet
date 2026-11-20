@@ -94,7 +94,7 @@ func realAnswers(t *testing.T) map[string]any {
 			},
 			"from": 0,
 			"bounds": map[string]any{"entries": 200, "bytes": 1 << 20, "entry_bytes": 16 << 10,
-				"line_bytes": 32 << 20, "read_bytes": 256 << 20},
+				"read_lines": 1 << 20, "read_bytes": 256 << 20},
 			"read_level": "stale",
 			"position":   map[string]any{"stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 42},
 			"complete":   true,
