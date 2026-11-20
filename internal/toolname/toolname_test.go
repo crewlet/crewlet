@@ -46,11 +46,15 @@ var spelledElsewhere = map[string]map[string]string{
 	// pinned byte for byte by the envelope gate: a fleet mid-upgrade runs two
 	// builds, and a tool renamed in one must not rename the operation the
 	// other serves.
-	"internal/estate/ops.go": {
+	"internal/estate/ops_chat.go": {
 		"create_channel": "an estate operation's wire name",
-		"mark_inbox":     "an estate operation's wire name",
-		"my_work":        "an estate operation's wire name",
-		"write_project":  "an estate operation's wire name",
+	},
+	"internal/estate/ops_tracker_reads.go": {
+		"my_work": "an estate operation's wire name",
+	},
+	"internal/estate/ops_tracker_writes.go": {
+		"mark_inbox":    "an estate operation's wire name",
+		"write_project": "an estate operation's wire name",
 	},
 	"internal/estate/artifacts.go": {
 		"mark_inbox": "an estate operation's wire name",
