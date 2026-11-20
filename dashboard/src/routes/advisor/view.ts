@@ -299,16 +299,19 @@ export function firstSentence(why: string): string {
 export function findingView(f: AdvisorKeptFinding): ViewFinding {
   const routed = (a: AdvisorAction | null) => (a ? actionView(a, f) : null);
   const open = f.state === "open";
+  const secondary = f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null);
+  // ONE PRESS A ROW, one this page can take: a primary it does not route
+  // gives its place to the first secondary it does.
+  const primary = routed(f.actions.primary);
   return {
     finding: f,
     headline: f.headline,
     why: firstSentence(f.why),
     stats: f.stats.slice(0, 3),
-    actions: {
-      primary: open ? routed(f.actions.primary) : null,
-      secondary: open
-        ? f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null)
-        : [],
-    },
+    actions: !open
+      ? { primary: null, secondary: [] }
+      : primary
+        ? { primary, secondary }
+        : { primary: secondary[0] ?? null, secondary: secondary.slice(1) },
   };
 }

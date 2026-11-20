@@ -271,6 +271,26 @@ test("a row is the engine's headline, one line of why, three numbers and its pre
   expect(firstSentence("No full stop")).toBe("No full stop");
 });
 
+// ONE PRESS A ROW, ALWAYS ONE THIS PAGE CAN TAKE: a primary it does not route
+// (a reassignment, until the route that sends it is settled) gives its place
+// to the first secondary it does, never leaving the row without a press.
+test("a primary this page does not route gives its place to the first secondary it does", () => {
+  const f = finding({
+    actions: {
+      primary: action({ kind: "reassign", label: "Move the work", items: ["ENG-1"], to: "dev-2" }),
+      secondary: [
+        action({ kind: "reassign", label: "Move one item" }),
+        action({ label: "Open the seat", page: "seat", target: "dev" }),
+        action({ kind: "ask", label: "Ask Crewlet", question: "Why?" }),
+      ],
+    },
+  });
+  expect(findingView(f).actions).toEqual({
+    primary: { kind: "open", label: "Open the seat", href: "#/company/org/seats/dev" },
+    secondary: [{ kind: "ask", label: "Ask Crewlet", question: "Why?" }],
+  });
+});
+
 test("a figure links the open finding that explains it, the most costly first", () => {
   const note = finding({ id: "n", severity: "note" });
   const cost = finding({ id: "c", severity: "costs" });
