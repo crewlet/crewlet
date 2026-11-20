@@ -1224,8 +1224,32 @@ func seatsBesideGitlet(t *testing.T) []string {
 		}
 	}
 	return append(want,
+		fmt.Sprintf("so every Gitlet node keeps the transcript reads' pool, with seats or without: at %s a core "+
+			"that costs it %s transfer", amount(t, gitproc.CoreMemory), word(t, readsCost(t))),
 		fmt.Sprintf("logs `code_cache_memory_short` once at boot with the figures; give a node running seats "+
 			"beside Gitlet %s or more", amount(t, seatsFloor(t))))
+}
+
+// readsCost is how many transfers the transcript reads' pool, which every
+// Gitlet node keeps as every one serves ingress, costs a node of
+// gitproc.CoreMemory a core: the same at every shape the table sizes, or the
+// docs could not state it once.
+func readsCost(t *testing.T) int {
+	t.Helper()
+	transfers := func(cores int, memory, reserve int64) int64 {
+		return min(int64(gitproc.TransfersPerProcess*cores), max(1, (memory-reserve)/gitproc.TransferShare))
+	}
+	cost := -1
+	for _, cores := range []int{1, 2, 4, 8} {
+		memory := int64(cores) * gitproc.CoreMemory
+		n := int(transfers(cores, memory, 0) - transfers(cores, memory, executorPools(false, memory)))
+		if cost >= 0 && n != cost {
+			t.Fatalf("the transcript reads' pool costs %d cores %d transfers and fewer cores %d: say each", cores,
+				n, cost)
+		}
+		cost = n
+	}
+	return cost
 }
 
 // seatsFloor is the least memory, at gitproc.CoreMemory a core, at which a

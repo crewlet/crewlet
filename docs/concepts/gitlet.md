@@ -2164,7 +2164,10 @@ twice that for the heap's growth at Go's default `GOGC`: 116 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
 and on a node running seats too 1 980 MiB at the default `node.max_concurrent`
 (its collections of runs and reads of its boxes for its peers, 10.6 MiB a
-turn, the sessions it takes from boxes, and its seats' reads). Every figure in
+turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
+always serves ingress (git is served on the API listener, which only an
+ingress node mounts), so every Gitlet node keeps the transcript reads' pool,
+with seats or without: at 2 GiB a core that costs it one transfer. Every figure in
 this section but the table below is of the memory those pools leave. They are the executor's
 in-process pools alone: a node running seats also holds its harness calls and
 boxes ([Replica count](../guides/deployment.md#replica-count)).
