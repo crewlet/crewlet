@@ -130,11 +130,14 @@ function mount(
   model: AssistantModelProblem | null = null,
   admin = false,
   attach: AttachClosed | null = null,
+  viewer: unknown = {},
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
+  // THE VIEWER, where a case says who reads the panel; every other question answers nothing.
+  (socket as unknown as { query: (name: string) => Promise<unknown> }).query = (name) =>
+    Promise.resolve(name === "viewer" ? viewer : {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -930,4 +933,47 @@ test("a restored question the reader deleted stays deleted when the drawer opens
   await act(async () => {});
   expect(box().value).toBe("");
   expect(document.body.textContent).toContain("Your question is back in the box below.");
+});
+
+// ASK CREWLET'S MODEL IS CHOSEN IN SETTINGS › MODELS ALONE: the panel offers no
+// picker and names no model; with none, a reader who may choose it is sent
+// there, and anybody else reads why with no way there.
+const NO_MODEL_HERE: AssistantUnavailable = {
+  reason: "no_model",
+  short: "No model is assigned to Ask Crewlet yet.",
+  title: "Ask Crewlet has no model for Nimbus yet",
+  body: "An admin has not chosen the model Ask Crewlet runs on.",
+};
+
+test("with no model, the panel sends a reader who may choose one to Settings › Models", async () => {
+  engine();
+  const opened: unknown[] = [];
+  const off = onBus("assistant.navigation.open", (target) => opened.push(target));
+  mount(NO_MODEL_HERE, null, true, null, {
+    login: "ada",
+    grants: ["admin"],
+    assistant: {
+      available: false,
+      reason: "no_model",
+      model: null,
+      notice: null,
+      can_assign: true,
+      reads_images: true,
+    },
+  });
+  await screen.findByText(/Ask Crewlet needs a model to answer/);
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Choose its model" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Model settings" }));
+  expect(opened).toEqual([{ path: ["settings", "models"], query: {}, mode: "here" }]);
+  off();
+});
+
+test("with no model, anybody else reads why in the panel, with no way to choose one", async () => {
+  engine();
+  mount(NO_MODEL_HERE);
+  expect(await screen.findByText("Ask Crewlet has no model for Nimbus yet")).toBeDefined();
+  expect(screen.getByText("An admin has not chosen the model Ask Crewlet runs on.")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
 });

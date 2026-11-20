@@ -12,7 +12,6 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import {
-  AdvisorModelLine,
   AdvisorPage,
   type AdvisorSection,
   goLiveSteps,
@@ -20,17 +19,14 @@ import {
   runWords,
 } from "./AdvisorPage.tsx";
 import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
-
-// THE HEAD READS THE ADVISOR'S MODEL from the company document, which the
-// frame's viewer gates; a suite without the frame says it has none.
-vi.mock("~/components/HelperModel.tsx", () => ({
-  useHelperModel: () => ({ current: null, choices: [], canAssign: true, reload: () => {} }),
-}));
 import { ranked } from "./words.ts";
 
 vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>Review what each agent can do</p> }));
 
-const NOW = Date.now();
+// A FIXED MIDDAY: a row words its instants by the reader's calendar day, so a
+// fixture taken from the real clock read "3 days ago" for two days near
+// midnight. Every case's clock is held here (beforeEach).
+const NOW = Date.parse("2026-06-10T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 
 let serial = 0;
@@ -163,10 +159,12 @@ function mount(
 
 beforeEach(() => {
   serial = 0;
+  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // THE OWNER'S ORDER: the most costly severity first, then the largest
@@ -564,19 +562,18 @@ test("a dismissal's toast offers Undo, which reopens it", async () => {
   );
 });
 
-// THE ADVISOR'S MODEL IS CHOSEN IN SETTINGS › MODELS: the head names it, or
-// says there is none, and links there; it offers no picker of its own.
-test("the head names the Advisor's model, or its absence, and links to Settings › Models", () => {
-  const { unmount } = render(<AdvisorModelLine current="fast" />);
-  expect(screen.getByText(/Explains with fast\./)).toBeDefined();
-  expect(screen.getByRole("link", { name: "Model settings" }).getAttribute("href")).toBe(
-    "#/settings/models",
-  );
-  unmount();
-  render(<AdvisorModelLine current={null} />);
-  expect(screen.getByText(/No model explains its findings\./)).toBeDefined();
-  expect(
-    screen.getByRole("link", { name: "Choose one in Model settings" }).getAttribute("href"),
-  ).toBe("#/settings/models");
+// THE HEAD NAMES NO MODEL: the Advisor's model is chosen in Settings › Models,
+// and the page neither says it nor reads it (no model list, no company
+// document), so it offers no model line, no link to it and no picker.
+test("the head shows no model line, no model link and no picker, and reads no model", async () => {
+  const { asked, answer } = engine([finding({ title: "Slow" })]);
+  mount(answer);
+  await screen.findByText("Slow");
+  const head = document.querySelector<HTMLElement>(".advisor-head")!;
+  expect(head.textContent).not.toMatch(/Explains with|No model explains|Model settings/);
+  expect(within(head).queryByRole("link")).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
+  expect(document.querySelector('a[href="#/settings/models"]')).toBeNull();
+  expect(asked.map((q) => q.name)).not.toContain("llm_entries");
+  expect(asked.map((q) => q.name)).not.toContain("config");
 });
