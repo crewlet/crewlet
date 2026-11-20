@@ -63,6 +63,27 @@ func TestAFindingLeadsWithItsHeadlineNumbersAndOnePrimaryAction(t *testing.T) {
 	}
 }
 
+// A PAGE FIX'S PRESS SAYS WHAT IT DOES, by the page it opens: "Take a
+// backup", "Open ENG-1", never "Open it", which names neither the act nor
+// its object. Mutation: label every page alike, and a row's one press tells
+// the reader nothing until it is pressed.
+func TestAPageFixIsLabelledWithWhatItDoes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		page, target, want string
+	}{
+		{"backups", "", "Take a backup"},
+		{"item", "ENG-1", "Open ENG-1"},
+		{"item", "", "Open the item"},
+		{"seat", "dev", "Open the seat"},
+	} {
+		a := actionsOf(advisor.Fix{Kind: advisor.FixOpenPage, Page: advisor.Page(c.page), Target: c.target})
+		if a.Primary == nil || a.Primary.Label != c.want {
+			t.Errorf("%s %q: primary = %+v, want %q", c.page, c.target, a.Primary, c.want)
+		}
+	}
+}
+
 // A RUN'S SUMMARY NAMES WHAT IT CONCLUDED ABOUT EACH CLASS, apart from its
 // scopes: a class's line is listed in `classes` with its reason, and never
 // counted as a scope run. Mutation: count the classes' lines as scopes, and

@@ -17,38 +17,31 @@
  */
 
 import { useCallback, useState } from "react";
-import {
-  Button,
-  Callout,
-  DescriptionList,
-  Link,
-  Tag,
-  Text,
-  Timeline,
-  TimelineItem,
-  type DescriptionListEntry,
-} from "@crewlethq/ui";
+import { Button, Callout, Link, Tag, Text, Timeline, TimelineItem } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtAt, fmtDateTime } from "~/lib/format.ts";
+import { fmtAt, fmtDateCompact, fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { ApplyDialog } from "./ApplyDialog.tsx";
+import { ApplyPanel } from "./ApplyPanel.tsx";
 import { useFinding } from "./api.ts";
 import { useAskAbout, useDecisions } from "./decisions.tsx";
 import {
+  ActionButton,
   AtlasFix,
   FindingMenu,
   RecordLinks,
-  appliable,
-  fixAction,
   freshness,
+  marks,
+  statWords,
   snoozed,
+  type OpenApply,
   type RowActions,
 } from "./rows.tsx";
 import type { AdvisorFindingDetail } from "~/protocol/advisorFindings.ts";
-import { CLOSE_REASONS, STATE_WORDS, factWords, severityWord, toneOf } from "./words.ts";
+import { CLOSE_REASONS, STATE_WORDS, severityWord, toneOf } from "./words.ts";
+import { findingView } from "./view.ts";
 
 /** What each transition is called on the timeline; one this build does not know is said by its name. */
 const EVENTS: Readonly<Record<string, string>> = {
@@ -88,20 +81,17 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
   const now = useNow();
   const askAbout = useAskAbout();
   const decisions = useDecisions(reload);
-  const [applying, setApplying] = useState(false);
+  const [applying, setApplying] = useState<OpenApply | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const view = findingView(f);
   const actions: RowActions = {
-    apply: () => setApplying(true),
+    apply: (_, option) => setApplying({ id: f.id, option }),
     review: () => setReviewing(true),
     ask: askAbout,
     snooze: decisions.snooze,
     wake: decisions.wake,
     dismiss: decisions.dismiss,
   };
-  const facts: DescriptionListEntry[] = f.evidence.facts.map((fact) => [
-    fact.label,
-    factWords(fact),
-  ]);
   const asleep = snoozed(f, now);
   // A DISMISSAL ALREADY LIFTED is not offered again: its last move is the lift.
   const lifted = f.history.at(-1)?.event === "released";
@@ -132,8 +122,10 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         <Text as="h2" variant="heading">
           {marked(f.title)}
         </Text>
-        <Text as="p" variant="caption" tone="secondary">
-          {freshness(f, now).join(" · ")}
+        {/* EVERY NUMBER ONCE, on one line under the headline: the facts it
+            rests on and what became of it. */}
+        <Text as="p" className="advisor-finding__stats">
+          {[...f.stats.map(statWords), ...marks(f, now)].join(" · ")}
         </Text>
         {f.close_reason ? (
           <Callout variant="neutral">
@@ -159,18 +151,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         </section>
       ) : null}
 
-      {facts.length > 0 ? (
-        <section className="col gap-1" aria-labelledby="advisor-facts">
-          <Text as="h3" variant="label" id="advisor-facts">
-            What it rests on, {fmtDateTime(f.evidence.window.from)} to{" "}
-            {fmtDateTime(f.evidence.window.to)}
-          </Text>
-          <DescriptionList items={facts} />
-          <RecordLinks records={f.evidence.records} />
-        </section>
-      ) : (
-        <RecordLinks records={f.evidence.records} />
-      )}
+      {/* WHEN AND OVER WHAT: the window it was measured over, when it was
+          found and checked, and the records it cites, in one quiet line. */}
+      <Text as="p" variant="caption" tone="secondary">
+        Measured {fmtDateCompact(f.evidence.window.from, now)} to{" "}
+        {fmtDateCompact(f.evidence.window.to, now)} · {freshness(f, now)}
+      </Text>
+      <RecordLinks records={f.evidence.records} />
 
       <section className="col gap-2" aria-labelledby="advisor-fix">
         <Text as="h3" variant="label" id="advisor-fix">
@@ -181,13 +168,9 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         <div className="advisor-fix-line">
           <Text as="p">{marked(f.fix.sentence)}</Text>
           <span className="advisor-row-actions">
-            {appliable(f) ? (
-              <Button variant="primary" onClick={() => setApplying(true)}>
-                Apply
-              </Button>
-            ) : (
-              fixAction(f, actions)
-            )}
+            {view.actions.primary ? (
+              <ActionButton f={f} action={view.actions.primary} actions={actions} />
+            ) : null}
             {asleep ? (
               <Button size="small" variant="secondary" onClick={() => decisions.wake(f)}>
                 End the snooze
@@ -201,6 +184,18 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
             ) : null}
           </span>
         </div>
+        {/* APPLY CONFIRMS IN PLACE, under the fix it was pressed on. */}
+        {applying ? (
+          <section className="advisor-apply-place" aria-label="Apply">
+            <ApplyPanel
+              key={applying.option}
+              finding={f}
+              option={applying.option}
+              onClose={() => setApplying(null)}
+              onSettled={reload}
+            />
+          </section>
+        ) : null}
       </section>
 
       {f.history.length > 0 ? (
@@ -247,9 +242,6 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         </section>
       ) : null}
 
-      {applying ? (
-        <ApplyDialog finding={f} onClose={() => setApplying(false)} onSettled={reload} />
-      ) : null}
       <AtlasFix
         finding={reviewing ? f : null}
         onClose={() => {

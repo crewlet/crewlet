@@ -75,28 +75,17 @@
   margin: 0;
 }
 
+/* A finding's numbers, once, under its headline: in the figures' own digits. */
+.advisor-finding__stats {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .advisor-finding__tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-}
-
-/* The facts a re-check read now: each label beside its number. */
-.advisor-facts {
-  display: grid;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.advisor-facts__label {
-  color: var(--color-text-secondary);
-}
-
-.advisor-facts__value {
-  font-variant-numeric: tabular-nums;
 }
 
 /* Reports and closed findings, one row each. */
@@ -134,4 +123,86 @@
   border-bottom: 1px solid var(--color-border-default);
   text-align: start;
   font-variant-numeric: tabular-nums;
+}
+
+/* The range's charts, side by side where they fit (three on a laptop's
+   width) and one a row on a phone. */
+/*
+ * The charts, in rows as even as they go (`chartColumns`: five are three and
+ * two), each at least 15rem, so a narrow window takes fewer a row; a short
+ * last row's charts share its width.
+ */
+.advisor-charts {
+  --advisor-chart-columns: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+.advisor-charts[data-columns="1"] {
+  --advisor-chart-columns: 1;
+}
+
+.advisor-charts[data-columns="2"] {
+  --advisor-chart-columns: 2;
+}
+
+.advisor-charts[data-columns="3"] {
+  --advisor-chart-columns: 3;
+}
+
+.advisor-chart,
+.advisor-chart__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.advisor-chart {
+  flex: 1 1
+    max(
+      15rem,
+      calc(
+        (100% - (var(--advisor-chart-columns) - 1) * var(--spacing-3)) /
+          var(--advisor-chart-columns)
+      )
+    );
+}
+
+/* Apply, in place: the state's line, the change, its effect, and the presses. */
+.advisor-apply {
+  display: grid;
+  gap: var(--spacing-2);
+}
+
+.advisor-apply:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.advisor-apply__state,
+.advisor-apply__effect {
+  margin: 0;
+}
+
+.advisor-apply__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* On a finding's page the panel stands under its fix on the quiet ground. */
+.advisor-apply-place {
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+/* A running run's steps so far, under its line, the newest last. */
+.advisor-run__steps {
+  display: grid;
+  gap: var(--spacing-1);
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
 }

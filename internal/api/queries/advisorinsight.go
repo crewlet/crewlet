@@ -99,6 +99,22 @@ func insightOf(f advisor.Finding, facts []AdvisorFact) AdvisorFindingInsight {
 	return out
 }
 
+// pageLabel is what a page fix's press does, by the page it opens: the act
+// where the page is for one ("Take a backup"), else what it opens.
+func pageLabel(page advisor.Page, target string) string {
+	switch {
+	case page == advisor.PageBackups:
+		return "Take a backup"
+	case page == advisor.PageItem && target != "":
+		return "Open " + target
+	case page == advisor.PageItem:
+		return "Open the item"
+	case page == advisor.PageSeat:
+		return "Open the seat"
+	}
+	return "Open the page"
+}
+
 // actionsOf is a fix's actions: the first option of a configuration change
 // primary and the others beside it, or the one step its kind takes.
 func actionsOf(fix advisor.Fix) AdvisorActions {
@@ -122,8 +138,8 @@ func actionsOf(fix advisor.Fix) AdvisorActions {
 	case advisor.FixOpenSetting:
 		out.Primary = &AdvisorAction{Kind: ActionOpen, Label: "Open the setting", Setting: some(fix.Setting)}
 	case advisor.FixOpenPage:
-		out.Primary = &AdvisorAction{Kind: ActionOpen, Label: "Open it", Page: some(string(fix.Page)),
-			Target: some(fix.Target)}
+		out.Primary = &AdvisorAction{Kind: ActionOpen, Label: pageLabel(fix.Page, fix.Target),
+			Page: some(string(fix.Page)), Target: some(fix.Target)}
 	case advisor.FixExternalStep:
 		out.Primary = &AdvisorAction{Kind: ActionStep, Label: "Take the step", Setting: some(fix.Setting),
 			URL: some(fix.URL)}
