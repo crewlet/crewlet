@@ -103,6 +103,16 @@ func premiseOf(p SubmittedPremise, served *Served) (Premise, bool) {
 // ReadPath is the number at path in a decoded JSON answer (open_work.blockers[0].blocks
 // without its tool's name), false where there is none.
 func ReadPath(v any, path string) (float64, bool) {
+	v, ok := partAt(v, path)
+	if !ok {
+		return 0, false
+	}
+	n, ok := v.(float64)
+	return n, ok
+}
+
+// partAt is the part of a decoded JSON answer at path, false where none is.
+func partAt(v any, path string) (any, bool) {
 	for path != "" {
 		var step string
 		step, path, _ = strings.Cut(path, ".")
@@ -110,23 +120,22 @@ func ReadPath(v any, path string) (float64, bool) {
 		if name != "" {
 			m, ok := v.(map[string]any)
 			if !ok {
-				return 0, false
+				return nil, false
 			}
 			if v, ok = m[name]; !ok {
-				return 0, false
+				return nil, false
 			}
 		}
 		if indexed {
 			list, ok := v.([]any)
 			i, err := strconv.Atoi(index)
 			if !ok || err != nil || i < 0 || i >= len(list) {
-				return 0, false
+				return nil, false
 			}
 			v = list[i]
 		}
 	}
-	n, ok := v.(float64)
-	return n, ok
+	return v, true
 }
 
 // DecodeAnswer is an answer as ReadPath reads it: its JSON, decoded.

@@ -50,6 +50,10 @@ type AdvisorRecheck struct {
 	PreviousFix *advisor.Fix    `json:"previous_fix"`
 	Preview     *RecheckPreview `json:"preview"`
 	Send        *RecheckSend    `json:"send"`
+	// Sends is every request the option makes, Send first, sent in order:
+	// a finding about one cause on many seats changes each of them
+	// (ADR-0166). [] where nothing is sent.
+	Sends []RecheckSend `json:"sends"`
 	// Digest binds the answer to the finding's revision and the option it sends.
 	Digest    string          `json:"digest"`
 	CheckedAt time.Time       `json:"checked_at"`
@@ -116,7 +120,8 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	if s.State != advisor.StateOpen {
 		return AdvisorRecheck{}, notOpenOf(row)
 	}
-	out := AdvisorRecheck{Moved: []advisor.Moved{}, CheckedAt: now, ExpiresAt: now.Add(RecheckFor)}
+	out := AdvisorRecheck{Moved: []advisor.Moved{}, Sends: []RecheckSend{}, CheckedAt: now,
+		ExpiresAt: now.Add(RecheckFor)}
 	outcome, step, f, err := rc.rederive(ctx, s, now)
 	if err != nil {
 		return AdvisorRecheck{}, err
@@ -185,41 +190,52 @@ func (rc rechecker) build(ctx context.Context, out *AdvisorRecheck, id string, r
 	if option < 0 || option >= len(f.Fix.Options) {
 		return fmt.Errorf("%w: option %d is not one of the fix's %d", advisordomain.ErrInvalid, option, len(f.Fix.Options))
 	}
-	ch := f.Fix.Options[option].Change
-	entity, tag, err := rc.config.EntityAndTag(ctx, ch.Entity, ch.ID)
-	if errors.Is(err, configapi.ErrNoSuchEntity) {
-		return rc.retire(ctx, out, s, by, now, advisor.ReasonSubjectGone)
+	out.Preview = &RecheckPreview{Rows: []PreviewRow{}, Notes: []string{}}
+	chs := f.Fix.Options[option].Changes()
+	for _, ch := range chs {
+		entity, tag, err := rc.config.EntityAndTag(ctx, ch.Entity, ch.ID)
+		if errors.Is(err, configapi.ErrNoSuchEntity) {
+			return rc.retire(ctx, out, s, by, now, advisor.ReasonSubjectGone)
+		}
+		if err != nil {
+			return err
+		}
+		after, err := advisor.Changed(entity, ch)
+		if err != nil {
+			return err
+		}
+		body, err := json.Marshal(after)
+		if err != nil {
+			return err
+		}
+		_, err = rc.config.CheckEntity(ctx, ch.Entity, ch.ID, body, false, by)
+		var managed *configapi.ManagedError
+		switch {
+		case errors.As(err, &managed):
+			out.Refusal = &RecheckRefusal{Reason: "This company's configuration is managed outside the dashboard, " +
+				"so the change is made where it is kept.", WhoCan: "Whoever keeps the company's configuration source."}
+			out.Send, out.Sends, out.Preview = nil, []RecheckSend{}, nil
+			return nil
+		case err != nil:
+			return rc.retire(ctx, out, s, by, now, advisor.ReasonFixUnbuildable)
+		}
+		path := "/config/" + ch.Entity + "/" + ch.ID
+		dryRun := path + "?dry_run=true"
+		out.Sends = append(out.Sends, RecheckSend{Method: http.MethodPut, Path: path, Body: after,
+			Headers: map[string]string{"If-Match": tag, "X-Summary": ch.Summary}, DryRunPath: &dryRun})
+		rows, err := previewRows(entity, body)
+		if err != nil {
+			return err
+		}
+		// SEVERAL CHANGES SAY WHOSE field each row is.
+		for _, row := range rows {
+			if len(chs) > 1 {
+				row.Field = ch.ID + ": " + row.Field
+			}
+			out.Preview.Rows = append(out.Preview.Rows, row)
+		}
 	}
-	if err != nil {
-		return err
-	}
-	after, err := advisor.Changed(entity, ch)
-	if err != nil {
-		return err
-	}
-	body, err := json.Marshal(after)
-	if err != nil {
-		return err
-	}
-	_, err = rc.config.CheckEntity(ctx, ch.Entity, ch.ID, body, false, by)
-	var managed *configapi.ManagedError
-	switch {
-	case errors.As(err, &managed):
-		out.Refusal = &RecheckRefusal{Reason: "This company's configuration is managed outside the dashboard, " +
-			"so the change is made where it is kept.", WhoCan: "Whoever keeps the company's configuration source."}
-		return nil
-	case err != nil:
-		return rc.retire(ctx, out, s, by, now, advisor.ReasonFixUnbuildable)
-	}
-	path := "/config/" + ch.Entity + "/" + ch.ID
-	dryRun := path + "?dry_run=true"
-	out.Send = &RecheckSend{Method: http.MethodPut, Path: path, Body: after,
-		Headers: map[string]string{"If-Match": tag, "X-Summary": ch.Summary}, DryRunPath: &dryRun}
-	rows, err := previewRows(entity, body)
-	if err != nil {
-		return err
-	}
-	out.Preview = &RecheckPreview{Rows: rows, Notes: []string{}}
+	out.Send = &out.Sends[0]
 	out.Digest = advisor.ApplyDigest(id, revision, advisor.OptionDigest(f.Fix.Options[option]))
 	return nil
 }
@@ -232,7 +248,7 @@ func (rc rechecker) retire(ctx context.Context, out *AdvisorRecheck, s advisor.S
 	if err := duty.RecordFor(ctx, rc.log, rc.log, by, t, now); err != nil && !errors.Is(err, advisordomain.ErrIllegalMove) {
 		return movedOr(err)
 	}
-	out.Outcome, out.Send, out.Preview, out.Digest = advisor.RecheckNotApplicable, nil, nil, ""
+	out.Outcome, out.Send, out.Sends, out.Preview, out.Digest = advisor.RecheckNotApplicable, nil, []RecheckSend{}, nil, ""
 	return nil
 }
 
@@ -323,13 +339,17 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 		return errRecheckAgain
 	}
 	option := f.Fix.Options[at]
-	entity, _, err := rc.config.EntityAndTag(ctx, option.Change.Entity, option.Change.ID)
-	if err != nil {
-		return err
-	}
-	holds, err := advisor.Holds(entity, option.Change)
-	if err != nil || !holds {
-		return errors.Join(errRecheckAgain, err)
+	// APPLIED ONLY ONCE EVERY CHANGE HOLDS: one still to send is a send not
+	// finished.
+	for _, ch := range option.Changes() {
+		entity, _, readErr := rc.config.EntityAndTag(ctx, ch.Entity, ch.ID)
+		if readErr != nil {
+			return readErr
+		}
+		holds, holdsErr := advisor.Holds(entity, ch)
+		if holdsErr != nil || !holds {
+			return errors.Join(errRecheckAgain, holdsErr)
+		}
 	}
 	_, err = rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor_applied")}, row.Key,
 		advisordomain.Move{Episode: id, Event: advisordomain.EventApplied, State: advisordomain.StateApplied,

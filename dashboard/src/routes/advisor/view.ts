@@ -299,16 +299,18 @@ export function firstSentence(why: string): string {
 export function findingView(f: AdvisorKeptFinding): ViewFinding {
   const routed = (a: AdvisorAction | null) => (a ? actionView(a, f) : null);
   const open = f.state === "open";
+  const secondary = open
+    ? f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null)
+    : [];
+  // A PRIMARY THIS PAGE DOES NOT ROUTE (a reassignment) leaves the first
+  // press it does route leading, so a finding the engine offers a step for
+  // never reads as one with nothing to do.
+  const primary = open ? (routed(f.actions.primary) ?? secondary.shift() ?? null) : null;
   return {
     finding: f,
     headline: f.headline,
     why: firstSentence(f.why),
     stats: f.stats.slice(0, 3),
-    actions: {
-      primary: open ? routed(f.actions.primary) : null,
-      secondary: open
-        ? f.actions.secondary.map(routed).filter((a): a is ViewAction => a !== null)
-        : [],
-    },
+    actions: { primary, secondary },
   };
 }

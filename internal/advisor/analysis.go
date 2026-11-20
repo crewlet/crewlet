@@ -75,6 +75,10 @@ const (
 	DropFix        Drop = "fix_not_built"
 	DropWords      Drop = "words"
 	DropAnswered   Drop = "answered"
+	// DropTokensUnsplit is an investigation's finding about a token total
+	// that does not say how much of it was cache reads: a jump in tokens is
+	// most often the cache, so the split is read before a seat is blamed.
+	DropTokensUnsplit Drop = "tokens_unsplit"
 )
 
 // Submitted is one finding as the model submits it.
@@ -103,6 +107,10 @@ type CitedFact struct {
 	Label string `json:"label"`
 	Value int64  `json:"value"`
 	From  string `json:"from"`
+	// Unit is what the number counts (tokens, turns, hours), one of [Units].
+	Unit Unit `json:"unit,omitempty"`
+	// WasFrom cites the same number over the range before, where it was read.
+	WasFrom string `json:"was_from,omitempty"`
 }
 
 // FixBuilder names a change the engine builds for an analyst finding.
@@ -162,6 +170,27 @@ func (s *Served) Serve(tool string, answer any, records []Record) error {
 		s.records[r] = true
 	}
 	return nil
+}
+
+// Number is the whole number at from in the answers (read_3.entries[0].hits),
+// false where none is.
+func (s *Served) Number(from string) (int64, bool) { return s.read(from) }
+
+// Part is the part of an answer at from (read_3.entries[0], snapshot.stats),
+// a whole answer where from names no path, false where there is none.
+func (s *Served) Part(from string) (any, bool) {
+	tool, path, _ := strings.Cut(from, ".")
+	v, ok := s.answers[tool]
+	if !ok {
+		return nil, false
+	}
+	return partAt(v, path)
+}
+
+// Has reports whether name was served.
+func (s *Served) Has(name string) bool {
+	_, ok := s.answers[name]
+	return ok
 }
 
 // read is the number at from in the answers, false where none is.
@@ -271,10 +300,19 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		}
 		// A NUMBER IS SAID WHAT IT COUNTS: a model's key is its own, and
 		// drawn as the label it read as "blocks 1" on the finding's page.
-		if strings.TrimSpace(c.Label) == "" || !plainWords(c.Label, MaxAnalystFactLabel) {
+		if strings.TrimSpace(c.Label) == "" || !plainWords(c.Label, MaxAnalystFactLabel) ||
+			(c.Unit != "" && !c.Unit.Valid()) {
 			return Finding{}, DropWords
 		}
-		facts = append(facts, Fact{Key: c.Key, Value: c.Value, Label: strings.TrimSpace(c.Label)})
+		fact := Fact{Key: c.Key, Value: c.Value, Label: strings.TrimSpace(c.Label), Unit: c.Unit}
+		if c.WasFrom != "" {
+			was, ok := served.read(c.WasFrom)
+			if !ok {
+				return Finding{}, DropWrongFact
+			}
+			fact.Was = &was
+		}
+		facts = append(facts, fact)
 	}
 	if !plainWords(s.Headline, MaxAnalystTitle) || !plainWords(s.Title, MaxAnalystTitle) || !plainWords(s.Why, MaxAnalystWhy) ||
 		!plainWords(s.Item, MaxAnalystTitle) || (s.Severity != SeverityCosts && s.Severity != SeverityNote) {
@@ -299,7 +337,7 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		f.Premise = &premise
 	}
 	f.Focus = Fingerprint(f)
-	if repeats(f, g.Rules) {
+	if repeats(f, g.Rules) || slices.ContainsFunc(g.Rules, func(r Finding) bool { return Restates(f, r) }) {
 		return Finding{}, DropRepeat
 	}
 	if g.Answered[Fingerprint(f)] {

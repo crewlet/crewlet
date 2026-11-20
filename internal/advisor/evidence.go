@@ -25,10 +25,14 @@ const (
 	ClassAskOvertaken             Class = "ask.overtaken"
 	ClassReviewIdle               Class = "review.idle"
 	ClassNoticeLoad               Class = "person.notice_load"
-	ClassNoopShare                Class = "wake.noop_share"
-	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
-	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
-	ClassRedeliveredSeen          Class = "wake.redelivered_seen"
+	// ClassNoopShare is no longer listed: wake.reason_waste says the same by
+	// what woke the turns, with its numbers, and its findings resolve on the
+	// next run. It is still read for the usage insights, whose published
+	// catalogue shares it ([Shared]).
+	ClassNoopShare          Class = "wake.noop_share"
+	ClassPickupStillWaiting Class = "work.pickup_still_waiting"
+	ClassAuxiliaryShare     Class = "spend.auxiliary_share"
+	ClassRedeliveredSeen    Class = "wake.redelivered_seen"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
@@ -295,7 +299,12 @@ func classesOf(src source) []Class {
 	return out
 }
 
-// Detect is every evidence finding ev raises, the most costly first.
+// Shared reports a class the Advisor no longer lists and the usage insights
+// still share: [Detect] raises it, and [ReadWithEvidence] keeps it apart.
+func Shared(c Class) bool { return c == ClassNoopShare }
+
+// Detect is every evidence finding ev raises, the most costly first, the
+// [Shared] classes' included.
 func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 	out := []Finding{}
 	for _, d := range detectors {
@@ -313,7 +322,7 @@ func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 
 // ReadWithEvidence is [Read] with the findings ev raises beside the document's.
 func ReadWithEvidence(in Inputs, ev Evidence) Answer {
-	answer := Read(in)
+	answer := readEach(in)
 	c := in.Company
 	kinds := map[string]SeatKind{}
 	for role := range c.EachRole() {
@@ -322,11 +331,16 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			kinds[role.Seat().Handle()] = SeatPerson
 		}
 	}
-	found := Detect(ev, func(h string) SeatKind { return kinds[h] })
-	for i := range found {
-		if s := &found[i].Subject; s.Kind == SubjectSeat {
+	var found []Finding
+	for _, f := range Detect(ev, func(h string) SeatKind { return kinds[h] }) {
+		if s := &f.Subject; s.Kind == SubjectSeat {
 			s.Name = seatName(c, s.Seat)
 		}
+		if Shared(f.Class) {
+			answer.Shared = append(answer.Shared, f)
+			continue
+		}
+		found = append(found, f)
 	}
 	for _, d := range documented {
 		if ev.unread(d.source) {
@@ -339,7 +353,8 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			}
 		}
 	}
-	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
+	answer.Findings = groupCauses(c, scheduleEvidence(c, ev, append(answer.Findings, found...)))
+	stateHeadlines(c, answer.Findings)
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)
@@ -706,7 +721,8 @@ const (
 	scheduleWake = types.OriginSchedule + ":"
 )
 
-// noopShare is one finding per agent whose started turns often committed nothing.
+// noopShare is one finding per agent whose started turns often committed
+// nothing, for the usage insights alone ([Shared]).
 func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, s := range seatsOf(ev.Ledger) {

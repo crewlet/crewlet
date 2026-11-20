@@ -271,6 +271,19 @@ test("a row is the engine's headline, one line of why, three numbers and its pre
   expect(firstSentence("No full stop")).toBe("No full stop");
 });
 
+test("a primary this page does not route leaves the first press it routes leading", () => {
+  const f = finding({
+    actions: {
+      primary: action({ kind: "reassign", label: "Move the work", items: ["ENG-1"], to: "dev-2" }),
+      secondary: [action({ label: "Open it", page: "seat", target: "dev" })],
+    },
+  });
+  expect(findingView(f).actions).toEqual({
+    primary: { kind: "open", label: "Open it", href: "#/company/org/seats/dev" },
+    secondary: [],
+  });
+});
+
 test("a figure links the open finding that explains it, the most costly first", () => {
   const note = finding({ id: "n", severity: "note" });
   const cost = finding({ id: "c", severity: "costs" });

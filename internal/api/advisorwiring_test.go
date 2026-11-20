@@ -183,6 +183,11 @@ func TestAnAdministratorsRunNowAndDecisionsAreRecorded(t *testing.T) {
 	if status != http.StatusAccepted || answer["run_id"] == nil || len(log.asked) != 1 || log.asked[0].RunKind != "" {
 		t.Fatalf("Run now answered %d %v, asked %+v; want 202 and one run of the rules asked for", status, answer, log.asked)
 	}
+	// AN API TOKEN HOLDS NO SEAT, and its run still names who asked: the
+	// log refuses a run asked by nobody.
+	if by := log.asked[0].By; by == "" || strings.TrimSpace(by) != by {
+		t.Errorf("a token's Run now is asked by %q, want the token's own name", by)
+	}
 	if status, answer := writeAs(t, a, "/advisor/runs", `{"kind":"everything"}`); status != http.StatusBadRequest {
 		t.Errorf("a run of an unknown kind answered %d %v, want 400", status, answer)
 	}
