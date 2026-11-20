@@ -10,9 +10,10 @@ import (
 // wherever it appears (the activity feed, a task's history, an inbox):
 //   - A CHANGE'S EXCERPT (a comment, a filed description, a hand-off's or a
 //     purge's note) is fenced under the change's maker, as the surface its kind
-//     says ([worklet.ExcerptSource]); a line summing up a choosing answer quotes
-//     the asker's option, so names the answerer one writer of several
-//     ([worklet.ExcerptQuotesAChoice]).
+//     says ([worklet.ExcerptSource]), and a comment under its author. An answer
+//     that chose opens with the asker's option ([worklet.ChoiceWords]), so its
+//     body and excerpt name the answerer one writer of several
+//     ([worklet.QuotesAChoice]).
 //   - A NAME (a title, a project's name and purpose, a file path, a checklist
 //     line, the values a change moved) records no writer, since anybody may
 //     have edited it: neutralised in place, its envelope crediting unnamed
@@ -33,7 +34,7 @@ func fenceExcerpt(read *foreignRead, path fieldPath, kind worklet.ChangeKind,
 
 	read.fence(path, worklet.ExcerptSource(kind),
 		[]provenance.Author{read.writer(actor, iam.ActorKind(actorKind))},
-		worklet.ExcerptQuotesAChoice(excerpt), excerpt)
+		worklet.QuotesAChoice(excerpt), excerpt)
 }
 
 // rowNames records the names a page of task rows carries: each row's title,

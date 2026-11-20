@@ -44,7 +44,7 @@ func TestASeatsOwnOpenAsksToAPersonAreReadNewestFirst(t *testing.T) {
 	ask("c-cy", "a", "cy", "jane", 2*time.Hour)
 	ask("c-kim", "c", "bo", "kim", time.Hour)
 	ask("c-answered", "c", "bo", "jane", 2*time.Hour)
-	answerOn(t, r, "op-answer", "c", "c-answer", "jane", "c-answered", "ship", "Ship it",
+	answerOn(t, r, "op-answer", "c", "c-answer", "jane", "c-answered", "ship", worklet.ChoiceWords("Ship it", ""),
 		wednesday.Add(-time.Hour))
 	ask("c-gone", "d", "bo", "jane", 2*time.Hour)
 	bo := r.writer.As("bo", worklet.AuthorAgent, aTurnNobodyWoke())
