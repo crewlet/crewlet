@@ -7,11 +7,13 @@
  * figure, its second line links to that finding ("Why"), so the reader goes
  * from the number to the change that moves it in one press.
  *
- * ONE RENDERER FOR EVERY CHART, by its kind: a series over days is a line
- * (`TimeSeries`), columns across labelled values are the kit's
- * `StackedColumns`, and bars down (long labels, such as what woke a turn) are
- * its `BarList`. Each is named by what it shows, so a reader who cannot see
- * one is told its window and its peak.
+ * ONE RENDERER FOR EVERY CHART, by its shape (`chartShape`): NAMES GO DOWN A
+ * LIST, DAYS GO ACROSS. A chart over seats, entries or reasons is the kit's
+ * `BarList`, each row its full name and split by its series; one series over
+ * days is a line (`TimeSeries`) and several are `StackedColumns`, whose first,
+ * middle and last days are short enough to stand under the plot. Each is
+ * named by what it shows, so a reader who cannot see one is told its window
+ * and its peak.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -33,12 +35,13 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
+import type { AdvisorChart, AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
 import {
   RANGES,
   amount,
   amountWords,
   chartColumns,
+  chartShape,
   explainer,
   snapshotView,
   type RangeDays,
@@ -255,9 +258,39 @@ export function ChartCard({
   );
 }
 
+/**
+ * A chart over names as the kit's bar list draws it: a row per name, RANKED,
+ * the most first, split by its series where there are several, and every
+ * number, a part's as the row's, in the chart's unit.
+ */
+export function barRows(chart: AdvisorChart): BarDatum[] {
+  const format = valueWords(chart.unit);
+  const several = chart.series.length > 1;
+  // A SHARE OF THE WHOLE where the engine drew bars of one kind ("47 of 47"
+  // changed nothing); the row's whole where a chart over names is split.
+  const share = chart.kind === "bars" && several;
+  return chart.x.labels
+    .map((label, i): BarDatum => {
+      const parts = chart.series.map((s) => {
+        const value = s.values[i] ?? 0;
+        return { id: s.id, label: s.label, value, display: format(value) };
+      });
+      const value = several ? parts.reduce((n, p) => n + p.value, 0) : (parts[0]?.value ?? 0);
+      return {
+        id: chart.x.keys[i] ?? `${chart.id}:${i}`,
+        label,
+        value,
+        display: share ? `${fmtCount(parts[0]!.value)} of ${format(value)}` : format(value),
+        ...(several ? { parts } : {}),
+      };
+    })
+    .sort((a, b) => b.value - a.value);
+}
+
 function ChartBody({ chart, from, to }: { chart: ViewChart; from: number; to: number }) {
   const format = valueWords(chart.unit);
-  if (chart.kind === "columns" && chart.x.kind === "day" && chart.at) {
+  const shape = chartShape(chart);
+  if (shape === "line" && chart.at) {
     const at = chart.at;
     return (
       <TimeSeries
@@ -276,24 +309,8 @@ function ChartBody({ chart, from, to }: { chart: ViewChart; from: number; to: nu
       />
     );
   }
-  if (chart.kind === "bars") {
-    const several = chart.series.length > 1;
-    const data: BarDatum[] = chart.x.labels.map((label, i) => {
-      const parts = chart.series.map((s) => ({
-        id: s.id,
-        label: s.label,
-        value: s.values[i] ?? 0,
-      }));
-      const value = several ? parts.reduce((n, p) => n + p.value, 0) : (parts[0]?.value ?? 0);
-      return {
-        id: chart.x.keys[i] ?? `${chart.id}:${i}`,
-        label,
-        value,
-        display: several ? `${fmtCount(parts[0]!.value)} of ${format(value)}` : format(value),
-        ...(several ? { parts } : {}),
-      };
-    });
-    return <BarList data={data} limit={8} emptyLabel="Nothing to show in the range" />;
+  if (shape === "bars") {
+    return <BarList data={barRows(chart)} limit={5} emptyLabel="Nothing to show in the range" />;
   }
   return (
     <StackedColumns
