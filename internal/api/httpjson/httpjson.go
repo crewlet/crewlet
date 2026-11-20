@@ -1661,7 +1661,7 @@ var codes = map[Code]string{
 		"nothing was sent. Ask Crewlet to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
 	CodeCredentialRejected: "This credential did not sign the model in, so nothing was " +
-		"stored. The model still uses its current credential.",
+		"stored.",
 	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
 		"Try again.",
 	CodeValueTestFailed: "The server did not work with this value, so nothing was stored. " +

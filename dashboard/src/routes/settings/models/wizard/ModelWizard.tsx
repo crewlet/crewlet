@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
-import { useNavigator } from "~/app/router.tsx";
+import { useNavigator, useUnloadGuard } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
@@ -365,7 +365,7 @@ export function ModelWizard({
     route: routeOf(draft.method, editing?.entry.sign_in.route ?? "none"),
     expiresAt: null,
   };
-  const local = draftProblems(draft, existing, kept);
+  const local = draftProblems(draft, existing, kept, !!original);
   const shown = [...local.filter((p) => attempted.has(stepOf(p, draft.key))), ...engineProblems];
   const listedProblems = distinctProblems(local, engineProblems, draft.key);
   const errorWhere = (match: (s: (string | number)[]) => boolean) => {
@@ -725,6 +725,9 @@ export function ModelWizard({
     focusWhenShown(() => findOpener(opener));
   };
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  // A RELOAD OR A CLOSED TAB ASKS FIRST while something is typed: the draft
+  // lives here alone, and a reload on its second step threw it away unasked.
+  useUnloadGuard(dirty);
   const cancel = () => (dirty ? setDiscarding(true) : close());
 
   /**
@@ -760,7 +763,10 @@ export function ModelWizard({
     "After it is saved"
   ) : (
     <span className="models-test-row">
-      <span>{storedFor === signature ? "Passed" : testWords(test, signature)}</span>
+      {/* ONE LINE, the whole of what the engine said on hover. */}
+      <span {...(test.kind === "failed" && test.for === signature ? { title: test.message } : {})}>
+        {storedFor === signature ? "Passed" : testWords(test, signature)}
+      </span>
       {!passed ? (
         <Button
           size="small"
@@ -776,12 +782,15 @@ export function ModelWizard({
   );
 
   const reviewing = step === "review";
+  // REVIEW'S PROBLEMS BLOCK ITS SAVE until a step changes the draft: pressing
+  // it again only asked the engine the same question.
+  const blocked = reviewing && check.kind === "problems" && listedProblems.length > 0;
   const finishButton = (variant: "primary" | "secondary") => (
     <Button
       variant={variant}
       onClick={() => void finishAndSave()}
       loading={finish.kind === "running"}
-      disabled={finish.kind === "running" || saving !== false}
+      disabled={finish.kind === "running" || saving !== false || blocked}
     >
       Finish and save
     </Button>

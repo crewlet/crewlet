@@ -7,7 +7,7 @@
  * harness's mark, its key and the model it runs by name, the id where nothing
  * names it); a seat on one model shows one picker, which sets all three
  * categories; "Split by job" and "Use one model" live in the row's menu, and a
- * seat whose jobs differ shows its three, a hand split reading "Split"; no
+ * seat whose jobs differ shows its three, a hand split naming its models; no
  * callout and no sentence repeated per row, a fast model marked inside the
  * Routines picker alone; coding (and the one picker) offers only a harness that
  * can code; every pick opens the picked model's wizard on Use it for with
@@ -33,17 +33,30 @@ import {
 import { WhoRuns } from "./SeatJobs.tsx";
 import { nameKey } from "./modelNames.ts";
 import type { ModelsData } from "./data.ts";
-import { WIZARD_STEPS } from "./parts.tsx";
 import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
 
 // A HELPER'S MODEL IS WRITTEN IN ONE STEP, by the configuration transport:
 // held here so the line can be read before and after the write.
-const writes = vi.hoisted(() => ({ patches: [] as unknown[] }));
+const writes = vi.hoisted(() => ({
+  patches: [] as unknown[],
+  docs: [] as { doc: Record<string, any>; dryRun: boolean; summary: string }[],
+  current: { assistant: { model: "guarded" } } as Record<string, unknown>,
+}));
+// A SEAT'S MOVE WRITES THE WHOLE NEXT DOCUMENT, checked first, as Finish and save does.
+vi.mock("./api.ts", async (actual) => ({
+  ...(await actual<typeof import("./api.ts")>()),
+  writeDocument: async (doc: Record<string, any>, o: { dryRun: boolean; summary: string }) => {
+    writes.docs.push({ doc, dryRun: o.dryRun, summary: o.summary });
+    return o.dryRun
+      ? { kind: "valid", baseRevisionId: "r1", warnings: [], derived: null }
+      : { kind: "saved", revisionId: "r2", epoch: 2, warnings: [], derived: null };
+  },
+}));
 vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   ...(await actual<typeof import("~/protocol/configWrite.ts")>()),
   getConfig: async () => ({
     kind: "document",
-    document: { assistant: { model: "guarded" } },
+    document: structuredClone(writes.current),
     etag: '"r1"',
   }),
   dryRunPatch: async () => ({ kind: "valid", baseRevisionId: "r1", warnings: [], derived: null }),
@@ -117,17 +130,17 @@ function company({ admin = true } = {}): ModelsData {
 }
 
 function mount(data: ModelsData = company()) {
-  const onFlow = vi.fn();
+  writes.current = (data.doc as Record<string, unknown> | null) ?? {};
+  writes.docs = [];
   render(
     <TestClient>
       <LayerHost>
         <Router>
-          <WhoRuns data={data} onFlow={onFlow} />
+          <WhoRuns data={data} />
         </Router>
       </LayerHost>
     </TestClient>,
   );
-  return onFlow;
 }
 
 const seatName = (handle: string) => MODELS_SEATS.find((s) => s.handle === handle)!.name;
@@ -209,24 +222,34 @@ test("a picker names the model in full from its id, and an unknown id as itself"
   expect(routines.find((t) => t.startsWith("codex-review"))).toContain("codex-review · gpt-6.1");
 });
 
-// ONE PICKER FOR A SEAT ON ONE MODEL: it sets all three categories, and the
-// write is still per job, through the model's wizard.
-test("a seat on one model shows one picker, which sets all three categories", () => {
-  const onFlow = mount();
+// ONE PICKER FOR A SEAT ON ONE MODEL: it sets all three categories. M-012:
+// EVERY PICKER ASKS ONCE AND SAVES IN PLACE, a seat's as a helper's, never the
+// wizard for one and a save for the other; the write is still job by job.
+test("a seat on one model shows one picker, which asks once and moves all three categories", async () => {
+  mount();
   expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);
   const options = optionsOf(one("backend-engineer"));
   // IT SETS CODING TOO: only a harness that can code is offered.
   expect(options.some((o) => o.textContent?.startsWith("codex-review"))).toBe(false);
   fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
-  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
-    step: "assign",
-    add: CATEGORY_ORDER.map((job) => ({ job, seat: "backend-engineer" })),
+  const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
+  expect(writes.docs).toEqual([]);
+  expect(within(dialog).getByRole("list", { name: "What moves" }).textContent).toContain(
+    "Backend Engineer, coding: default → haiku",
+  );
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
+  expect(writes.docs.map((w) => w.dryRun)).toEqual([true, false]);
+  expect(writes.docs[1]!.summary).toBe(
+    "Move Backend Engineer to haiku for coding, reviews, and routines",
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 // SPLIT AND MERGE FROM THE ROW'S MENU, never a button on every row.
-test("the row's menu splits a seat by job and uses one model again", () => {
-  const onFlow = mount();
+test("the row's menu splits a seat by job and uses one model again", async () => {
+  mount();
   expect(screen.queryByRole("button", { name: /Split by job/ })).toBeNull();
   fromMenu("backend-engineer", "Split by job");
   for (const category of CATEGORY_ORDER)
@@ -235,16 +258,17 @@ test("the row's menu splits a seat by job and uses one model again", () => {
   expect(
     [...rowOf("backend-engineer").querySelectorAll(".models-run__label")].map((l) => l.textContent),
   ).toEqual(["Coding", "Reviews", "Routines"]);
-  // A PICK IN ONE CATEGORY adds that category alone.
+  // A PICK IN ONE CATEGORY moves that category alone.
   fireEvent.mouseDown(
     optionsOf(picker("reviews", "backend-engineer")).find((o) =>
       o.textContent?.startsWith("haiku"),
     )!,
   );
-  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
-    step: "assign",
-    add: [{ job: "reviews", seat: "backend-engineer" }],
-  });
+  const dialog = await screen.findByRole("dialog", { name: "Move Backend Engineer to haiku?" });
+  const moves = within(dialog).getByRole("list", { name: "What moves" }).textContent ?? "";
+  expect(moves).toContain("reviewing and delegations");
+  expect(moves).not.toContain("coding");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   fromMenu("backend-engineer", "Use one model");
   expect(within(rowOf("backend-engineer")).getAllByRole("combobox")).toHaveLength(1);
 });
@@ -254,10 +278,11 @@ test("a seat already split shows its three pickers, and a category split by hand
   expect(picker("coding", "pm").textContent).toContain("default");
   expect(picker(TIMED, "pm").textContent).toContain("haiku");
   expect(picker("coding", "qa").textContent).toContain("sonnet");
-  expect(picker(UNTIMED, "qa").textContent).toContain("Split");
+  // M-011: A HAND SPLIT NAMES ITS MODELS, never a bare "Split".
+  expect(picker(UNTIMED, "qa").textContent).toContain("sonnet + codex-review");
   // ITS MENU OFFERS ONE MODEL; the next pick on it sets all three.
   fromMenu("pm", "Use one model");
-  expect(one("pm").textContent).toContain("Split");
+  expect(one("pm").textContent).toContain("Different per job");
 });
 
 test("every model in a picker carries its harness's mark, on the trigger and on each option", () => {
@@ -305,13 +330,12 @@ test("each option names the model and its condition in a word, and coding offers
 });
 
 /**
- * THE DEEP-LINK WALK: every category picker of a split seat, picked to another
- * model, opens THAT model's wizard on Use it for with this seat and this
- * category, and the address carries nothing else. Picking the model it already
- * runs opens nothing.
+ * EVERY CATEGORY PICKER of a split seat, picked to another model, asks to move
+ * this seat's category to it, by name; picking the model it already runs asks
+ * nothing.
  */
-test("every pick opens the picked model's wizard at Use it for, with only the seat and its categories", () => {
-  const onFlow = mount();
+test("every pick asks to move that seat's category to the model picked, and the same model asks nothing", async () => {
+  mount();
   const keys = company().models.map((m) => m.key);
   const keyOf = (text: string | null) => keys.find((k) => text?.startsWith(k)) ?? "";
   for (const seat of MODELS_SEATS.filter((s) => s.handle !== "backend-engineer")) {
@@ -320,44 +344,39 @@ test("every pick opens the picked model's wizard at Use it for, with only the se
       const current = keyOf(trigger.textContent?.trim() ?? "");
       const other = optionsOf(trigger).find((o) => keyOf(o.textContent) !== current)!;
       const key = keyOf(other.textContent);
-      onFlow.mockClear();
       fireEvent.mouseDown(other);
-      expect(onFlow).toHaveBeenCalledTimes(1);
-      expect(onFlow).toHaveBeenCalledWith("edit", key, {
-        step: "assign",
-        add: [{ job: category, seat: seat.handle }],
-      });
-      const at = onFlow.mock.calls[0]![2] as Record<string, unknown>;
-      expect(Object.keys(at).sort()).toEqual(["add", "step"]);
-      expect(WIZARD_STEPS).toContain(at.step);
+      const dialog = await screen.findByRole("dialog", { name: `Move ${seat.name} to ${key}?` });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     }
   }
   // THE MODEL ALREADY THERE is no change.
-  onFlow.mockClear();
   fireEvent.mouseDown(
     optionsOf(picker("coding", "pm")).find((o) => o.textContent?.startsWith("default"))!,
   );
-  expect(onFlow).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(writes.docs).toEqual([]);
 });
 
 // ANY MODEL A HELPER CAN RUN ON, as the engine says of each: an ordinary entry
 // qualifies as it is, and one whose harness keeps a tool that cannot be turned
 // off is listed disabled beside the engine's reason. CHOOSING ONE WRITES
-// `assistant.model` IN ONE STEP, as the helpers' own pickers do: it never
-// opens the model wizard, which has nothing more to ask of a company-wide helper.
-test("Ask Crewlet's picker writes its one model in a step, never the wizard", async () => {
+// `assistant.model` IN ONE STEP once confirmed, as every picker on the page asks
+// once: a pick saved at once changed Ask Crewlet's model by a stray choice.
+test("Ask Crewlet's picker asks once, then writes its one model in a step", async () => {
   writes.patches = [];
-  const onFlow = mount(company());
+  mount(company());
   const trigger = screen.getByRole("combobox", { name: "Ask Crewlet's model" });
   expect(trigger.textContent).toContain("guarded");
   const options = optionsOf(trigger);
   const codex = options.find((o) => o.textContent?.startsWith("codex-review"))!;
   expect(codex.getAttribute("aria-disabled")).toBe("true");
   expect(codex.textContent).toContain("cannot turn off");
+  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
+  const dialog = await screen.findByRole("dialog", { name: "Move Ask Crewlet to haiku?" });
+  expect(writes.patches).toEqual([]);
   await act(async () => {
-    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("haiku"))!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
-  expect(onFlow).not.toHaveBeenCalled();
   expect(await screen.findByText(/Ask Crewlet now runs on haiku/)).toBeDefined();
   expect(writes.patches).toEqual([{ assistant: { model: "haiku" } }]);
 });
@@ -367,14 +386,15 @@ test("Ask Crewlet's picker writes its one model in a step, never the wizard", as
 // run without one.
 test("the Advisor has a line of its own, chosen in a step like Ask Crewlet's", async () => {
   writes.patches = [];
-  const onFlow = mount({ ...company(), advisor: { key: null } });
+  mount({ ...company(), advisor: { key: null } });
   const trigger = screen.getByRole("combobox", { name: "Advisor's model" });
   expect(trigger.textContent).toContain("None");
   const options = optionsOf(trigger);
+  fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+  const dialog = await screen.findByRole("dialog", { name: "Move Advisor to default?" });
   await act(async () => {
-    fireEvent.mouseDown(options.find((o) => o.textContent?.startsWith("default"))!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   });
-  expect(onFlow).not.toHaveBeenCalled();
   expect(await screen.findByText(/Advisor now runs on default/)).toBeDefined();
   expect(writes.patches).toEqual([{ advisor: { model: "default" } }]);
   cleanup();

@@ -220,6 +220,42 @@ func removalDraft(id string, req RemovalRequest, expect string) draft {
 	}
 }
 
+// referencesOf is every written reference to the model id in c, as a
+// removal's refusal lists them and its repoint answers them.
+func referencesOf(c *config.Company, id string) []RemovalReference {
+	references := []RemovalReference{}
+	for _, ref := range c.ProviderReferences(id) {
+		references = append(references, RemovalReference{At: addressOf(ref),
+			Segments: ref.Segments, Chain: slices.Clone(ref.Chain)})
+	}
+	return references
+}
+
+// modelReferences serves `GET /config/llm-providers/{id}/references`: every
+// written reference to the model, read with no write asked. A removal's page
+// draws its list from it; asked as a dry run with no repoint, the same list
+// came back as a 422, which every browser logs as a failed request.
+func (s *Service) modelReferences(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	company, revision, err := s.activeCompany(r.Context())
+	switch {
+	case errors.Is(err, ErrNoActiveRevision):
+		refuseNoCompany(w)
+		return
+	case err != nil:
+		s.fail(w, r, "read the active revision", err)
+		return
+	}
+	if _, held := company.Providers.LLM[id]; !held {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+			map[string]string{"hint": NotFound(EntityLLMProviders, id)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revision": revision.ID, "references": referencesOf(company, id),
+	})
+}
+
 // repoint answers every written reference to id in c with the request's
 // repoints, refusing one left unanswered and one that answers nothing.
 func repoint(c *config.Company, id string, req RemovalRequest) error {

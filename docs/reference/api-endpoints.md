@@ -2499,6 +2499,7 @@ Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
+| `GET` | `/config/llm-providers/{key}/references` | Every written field that names the model, by a seat's handle and job, Ask Crewlet's chat or the Advisor's findings, with the field and its whole chain: the list a removal answers, read with no write asked (`{"revision", "references"}`; 404 for a model the company does not declare) |
 | `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything that names it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
 | `DELETE` | `/config/mcp-servers/{name}` | Remove one MCP server and clear everything that names it, in one revision, deleting the stored values only it read where asked. See [below](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) |
 

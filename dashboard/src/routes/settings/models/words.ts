@@ -193,8 +193,7 @@ export const EVERYTHING = {
  * does less, it does not stall a turn.
  */
 export const FAST_NOTE: Partial<Record<JobCategory, string>> = {
-  routines:
-    "Evaluations run under a 30 s limit and routines under 30 s and 60 s limits; a fast model is recommended.",
+  routines: "These run on a deadline (30 to 60 s), so pick a fast model.",
 };
 
 /** Whether a model name reads as a vendor's fast tier. */
