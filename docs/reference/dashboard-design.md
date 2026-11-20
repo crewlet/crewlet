@@ -3259,8 +3259,10 @@ company did.** That is Home until its reader arranges it (see
   "Needs you" group (opened on the one when there is one). A reader
   nobody bound is told nothing about decisions at all, and before the first
   state arrives nothing about who is working. The **Today · 7 days · 30 days** control
-  (`range=`) sets the window the figures below read over; Today is one company
-  day, cut at the company's midnight by the engine. The choice is kept for
+  (`range=`) sets the window every period on Home reads over, the figures,
+  Tasks completed, Tokens by team and a section widget's own (Failed turns);
+  Today is one company day, cut at the company's midnight by the engine, and
+  a longer window opens on the company's midnight that many days back. The choice is kept for
   its reader, so Home opens on it however they come back (see
   [`window=`](#window--one-vocabulary-for-every-time-range)).
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
@@ -3277,7 +3279,8 @@ company did.** That is Home until its reader arranges it (see
   into the Inbox's decisions view; a stopped seat the reader can do neither
   about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
   nobody); *Tasks in progress* (`work_flow.now.active`, its change over the
-  week and what is blocked or overdue, with the fortnight's sparkline);
+  window's length and what is blocked or overdue, with the window's sparkline,
+  a fortnight at least);
   *Completed* over the window, against the window before it; and *Tokens* over
   the window, with the **week's** budget meter captioned as the week's ("63% of
   this week's budget · resets Mon") in the engine's own state — or "No weekly
@@ -3287,7 +3290,7 @@ company did.** That is Home until its reader arranges it (see
   text for anybody else. The Tokens tile draws no delta:
   its second line is the budget's, and a bare change in front of it read as a
   claim about the budget. A second line is whole FACTS, so a narrow tile breaks
-  between them ("+17 vs last week" / "· 2 blocked"), never inside one. Each
+  between them ("+17 vs 7 days ago" / "· 2 blocked"), never inside one. Each
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
@@ -3373,8 +3376,8 @@ company did.** That is Home until its reader arranges it (see
   were asked and both ended with nothing, the card says it once, one empty
   state ("Nothing waits on a person") in place of the two halves, rather than
   a line under one half beside a full empty state under the other.
-- **Tasks completed** per company day over the last fourteen (today in the
-  accent), **Tokens by team** over the window (tokens, never money), each
+- **Tasks completed** per company day over the window, with the window's total
+  (today in the accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
   engine's `parts`; a team of more than four seats names its three biggest and
   draws the rest as one part in the residual hue), and
