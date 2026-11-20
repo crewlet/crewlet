@@ -175,6 +175,13 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 // work".
 func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRead bool) (PendingRun, error) {
 	collection := StopCollection{Ending: run.Ending.ID}
+	// ONE OF THE NODE'S COLLECTIONS, as a completion's read holds
+	// ([Coordinator.collectionSlot]); a wait it cannot finish keeps the ending.
+	collecting, err := c.collectionSlot(ctx, run.TurnID)
+	if err != nil {
+		return PendingRun{}, err
+	}
+	defer collecting()
 	result, read, unread, err := c.readStopped(ctx, run, rowRead)
 	if err != nil {
 		return PendingRun{}, err

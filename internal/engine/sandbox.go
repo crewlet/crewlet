@@ -2862,6 +2862,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// as it admits a mailbox's: the seat owned fresh, a slot under
 		// node.max_concurrent, and no drain. See [Engine.admitResume].
 		Gate: e.turnGate(),
+		// AND EVERY READ OF ITS RUNS' BOXES, the ones that gate does not admit
+		// included, holds one of as many collections as it runs turns. See
+		// [sandbox.CoordinatorOptions.Collections].
+		Collections: e.turns,
 		// A recorded answer that leaves its run — taken by a turn, on the
 		// inline attempt as on a retry, or handed back — is recorded as
 		// worked in the same completion ledger the dispatcher records a

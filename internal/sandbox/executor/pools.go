@@ -8,9 +8,10 @@ type NodeWork struct {
 	// sessions hold, and its seats read their transcripts.
 	Boxes bool
 	// Turns is how many turns the node runs at once (node.max_concurrent),
-	// each collecting at most its seat's run, and PeerReads how many reads of
-	// its boxes it makes at once for its peers (the engine's boxReadsHeld):
-	// the base tier's count, on a node hosting boxes.
+	// which bounds its reads of its runs' boxes too (internal/sandbox's
+	// collections), and PeerReads how many reads of its boxes it makes at
+	// once for its peers (the engine's boxReadsHeld): the base tier's count,
+	// on a node hosting boxes.
 	Turns, PeerReads int
 	// PersonReads is whether the node answers people's reads of transcripts,
 	// as its API does on a node serving ingress.

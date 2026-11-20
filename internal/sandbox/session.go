@@ -2187,8 +2187,14 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	if !c.capturesLoss(run) {
 		return nil
 	}
+	// ONE OF THE NODE'S COLLECTIONS, as a completion's read holds
+	// ([Coordinator.collectionSlot]); a wait it cannot finish keeps the ending.
+	collecting, err := c.collectionSlot(ctx, run.TurnID)
+	if err != nil {
+		return err
+	}
+	defer collecting()
 	asked, local := c.now(), c.hosts(run)
-	var err error
 	if local {
 		var spooled *spooledCapture
 		spooled, _, err = c.readLost(ctx, run)

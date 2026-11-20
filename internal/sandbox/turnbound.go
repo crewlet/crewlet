@@ -71,6 +71,13 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {
+	// ONE OF THE NODE'S COLLECTIONS, NO SLOT OF ITS TURNS: outside the gate,
+	// this read was bounded by the seats the node holds ([Coordinator.collectionSlot]).
+	collecting, err := c.collectionSlot(ctx, ev.TurnID)
+	if err != nil {
+		return err
+	}
+	defer collecting()
 	// A CLAIM OF THE JOB LIKE ANY OTHER, held to what this node still owes
 	// the job's last claim and to the seat's recovery gate
 	// ([Coordinator.claimCompletion]): asking no admission is not asking no

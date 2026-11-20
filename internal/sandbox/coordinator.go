@@ -519,6 +519,14 @@ type CoordinatorOptions struct {
 	// budget holds it then ([ErrResumeHeld]).
 	Gate TurnGate
 
+	// Collections is how many of its runs' boxes this node reads at once
+	// ([Coordinator.collectionSlot]): its turns, node.max_concurrent as its gate
+	// resolves it, so the reads the gate does not admit (a completion ended at
+	// its turn's deadline, a stop's, a loss's) stay within them. Zero bounds
+	// none, as a nil Gate admits every turn. See the package doc, "A node's
+	// collections".
+	Collections int
+
 	// Lease is the seat lease this node holds a seat under, stamped on the row by
 	// a launch ([PendingStore.BeginLaunch]) and carried back by every later
 	// write. It lets the seat's next holder FENCE this node out: a write under
@@ -738,6 +746,10 @@ type Coordinator struct {
 	endWait time.Duration
 	endPoll time.Duration
 	now     func() time.Time
+
+	// collections is [CoordinatorOptions.Collections] as a semaphore, nil for
+	// none ([Coordinator.collectionSlot]).
+	collections chan struct{}
 
 	// saves is this node's part in saving its runs' sessions as they work
 	// (save.go).
@@ -1044,6 +1056,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if c.now == nil {
 		c.now = time.Now
 	}
+	if opts.Collections > 0 {
+		c.collections = make(chan struct{}, opts.Collections)
+	}
 	if c.after == nil {
 		c.after = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 	}
@@ -1174,6 +1189,28 @@ func (c *Coordinator) packSlot(ctx context.Context, run PendingRun) (give func()
 		return func() { <-c.sharedPack }, nil
 	case <-ctx.Done():
 		return nil, fmt.Errorf("waiting for the node's one pack in a box that shares its memory: %w", ctx.Err())
+	}
+}
+
+// collectionSlot waits on ctx for one of this node's collections
+// ([CoordinatorOptions.Collections]) and returns what gives it back, once
+// however often it is called. Taken before the claim it reads a box for, so a
+// wait its context ends leaves the run as it was, its error the context's
+// ([queue.NodeFault]). See the package doc, "A node's collections".
+func (c *Coordinator) collectionSlot(ctx context.Context, turnID string) (func(), error) {
+	if c.collections == nil {
+		return func() {}, nil
+	}
+	select {
+	case c.collections <- struct{}{}:
+		return sync.OnceFunc(func() { <-c.collections }), nil
+	case <-ctx.Done():
+		log.InfoContext(ctx, "sandbox_collection_unstarted", "turn_id", turnID,
+			"collections", cap(c.collections), "error", ctx.Err().Error(),
+			"detail", "this node was reading as many of its runs' boxes as it runs turns until this read's "+
+				"wait ended; nothing of the run was claimed, and its read is asked again")
+		return nil, fmt.Errorf("sandbox: waiting for one of this node's %d collections to read %s: %w",
+			cap(c.collections), turnID, ctx.Err())
 	}
 }
 
@@ -1496,6 +1533,14 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence, seen map[signal]uint64,
 ) error {
 	ctx := adm.ctx
+	// ONE OF THE NODE'S COLLECTIONS, before the claim and given back before the
+	// resume: the reads its gate does not admit take them too, so its turns
+	// alone would not bound its reads ([Coordinator.collectionSlot]).
+	collecting, err := c.collectionSlot(ctx, ev.TurnID)
+	if err != nil {
+		return err
+	}
+	defer collecting()
 	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
 	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
 	// made again, would give back a claim taken now. The completion comes back on
@@ -1547,12 +1592,14 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	if lost {
 		var carry *lostCarry
 		carry, err = c.carryOnLost(ctx, run)
+		collecting()
 		if err != nil || carry == nil {
 			return err
 		}
 		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome, seen)
 		return err
 	}
+	collecting()
 
 	if run.asked() {
 		return c.park(ctx, run, result)
@@ -4340,8 +4387,8 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 				return errAskAway
 			}
 			if err := c.keepLostSession(ctx, run, rowRead); err != nil {
-				return fmt.Errorf("sandbox: ending run %s, whose lost job's box was read with its served "+
-					"notes' verdict unanswered: %w", run.TurnID, err)
+				return fmt.Errorf("sandbox: ending run %s, whose lost job's box is not read yet: %w",
+					run.TurnID, err)
 			}
 			if run.asksReceipts() {
 				// THE ROW AGAIN, holding the verdict the read wrote, which step 8

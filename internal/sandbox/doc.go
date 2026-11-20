@@ -237,6 +237,17 @@
 // A collection PAUSES the box, for a relaunch, a park or a retry to reuse. A job
 // its turn's cap ended is ended first, its bridge session closed before.
 //
+// # A node's collections
+//
+// Every read of its runs' boxes a node makes (a completion's, a stop's, a
+// loss's) holds one of [CoordinatorOptions.Collections], its turns. The gate
+// is not that bound: a completion past its turn's deadline is ended with no
+// turn, and a stop's or a loss's read starts none, so the gate alone leaves
+// them to the seats the node holds, past what internal/sandbox/executor's base
+// tier counts.
+// Taken before the claim, so a wait its context ends leaves the run unclaimed
+// and the completion comes back; an ending's wait keeps the ending.
+//
 // # Box host failures
 //
 // Four kinds, handled apart: the box gone ([ErrBoxGone]); the host silent
