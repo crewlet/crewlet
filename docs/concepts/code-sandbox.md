@@ -1387,7 +1387,7 @@ can never land after it; and the notes wait for the next step. A launch reads
 the marks off the record as its brief is written, so one landed after the
 segment that launches resumed is counted all the same.
 
-What became of each note is published as `agent_turn_steered`: `delivered` by
+What became of each note is published as `agent_turn_steered`, the note redacted: `delivered` by
 the node whose step read it, with the kind of step (`boundary`: `brief`,
 `tool_batch`, `finish`, `step`, or `round` for the review) and, for a read by
 the run, its job (`launch_id`); a note a Claude Code hook served, by the node
