@@ -95,27 +95,7 @@
   overflow-wrap: anywhere;
 }
 
-/* One seat's places: its name on its own line, wrapping, then a row per job. */
-.models-repoint__seat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-}
-
-.models-repoint__who {
-  font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
-}
-
-.models-repoint__jobs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0 0 0 var(--spacing-3);
-  list-style: none;
-}
-
+/* The per-seat list of a removal: each place's name, then where it moves. */
 .models-repoint__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
@@ -178,6 +158,15 @@
   .models-repoint__row,
   .models-choices {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Stacked, a place's name sits close to its picker and apart from the next place. */
+  .models-repoint {
+    gap: var(--spacing-3);
+  }
+
+  .models-repoint__row {
+    row-gap: var(--spacing-1);
   }
 }
 
@@ -443,8 +432,7 @@
 /* Who runs on it: a category's name, then its seats and backups beside it, as list rows (QA Minor 16). */
 .models-who,
 .models-who__seat-list,
-.models-host__nodes,
-.models-revision {
+.models-host__nodes {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
@@ -489,14 +477,9 @@
   white-space: nowrap;
 }
 
-/* A place a removal moves: one line, the whole place in its title. */
-.models-repoint__place {
+/* A place a removal moves, wrapping where its name is long. */
+.models-repoint__name {
   min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.models-revision {
-  gap: var(--spacing-1);
   overflow-wrap: anywhere;
 }
 
