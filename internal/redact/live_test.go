@@ -264,6 +264,51 @@ func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) 
 	}
 }
 
+// A LIVE STREAM FLUSHED AT EACH LINE WRITES SECRETS OF A KEY'S LINE ABOVE A
+// BLOCK: over [keyLineAboveABlock] and structured texts of blocks, keys and
+// values ([structuredText]), written and flushed a line at a time, and in
+// random pieces flushed at random, Close answers nil and the stream wrote
+// [redact.Secrets]. None is in a layout that can refuse.
+//
+// Mutation: let a key's line above a block go before the block's cut is
+// decided, and the stream writes that line otherwise than Secrets.
+func TestALiveStreamFlushedAtEachLineWritesSecretsOfAKeysLineAboveABlock(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1666, 44))
+	texts := slices.Clone(keyLineAboveABlock)
+	for range 1000 {
+		texts = append(texts, structuredText(r))
+	}
+	for i, text := range texts {
+		want := redact.Secrets(text)
+		lines := readLines(text)
+		pieces := readLive(text, redact.HoldBytes(), r, 40, func() bool { return r.IntN(2) == 0 })
+		for _, got := range []struct {
+			how string
+			run liveRun
+		}{{"a line at a time", lines}, {"in random pieces", pieces}} {
+			if got.run.err != nil || got.run.out != want {
+				t.Errorf("text %d %q, %s: Close answered %v, and the stream wrote another text than Secrets %s", i, text, got.how, got.run.err, streamParted(got.run.out, want))
+			}
+		}
+	}
+}
+
+// readLines is text written to a live stream a line at a time, flushed
+// after each.
+func readLines(text string) liveRun {
+	var run liveRun
+	var out bytes.Buffer
+	s := redact.NewLiveStream(&out)
+	for line := range strings.SplitAfterSeq(text, "\n") {
+		_, _ = s.Write([]byte(line))
+		_, _, _ = s.Flush()
+	}
+	run.err = s.Close()
+	run.out = out.String()
+	return run
+}
+
 // A LIVE STREAM BELOW WHOLEBYTES ASKS ONLY ONCE A LINE HAS ENDED: a text
 // shorter than [redact.WholeBytes] whose lines Settled holds back (an armour,
 // then password's keys), flushed, then flushed after each of 50 one-byte

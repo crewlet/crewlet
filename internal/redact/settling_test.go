@@ -44,16 +44,17 @@ var counterexampleShapes = [][3]string{
 }
 
 // settlingTexts is every text Settled is read in pieces over: transcripts of
-// every shape; the keys' corpus ([streamCorpus], each wrapping once and a
-// transcript's line between keys), a text of every shape a stage carries, and
-// the hold shapes' armours beside password's keys and runs, at a run of 32 KiB
-// ([redact.HoldShapes]); the counterexamples past a reach and a megabyte, at
+// every shape; the keys' corpus ([streamCorpus]'s keys, each in every
+// wrapping, a transcript's line between keys), a text of every shape a stage
+// carries, and an armour beside password's keys and runs of 32 KiB, as the
+// hold shapes set them; the counterexamples past a reach and a megabyte, at
 // both parities; chains of keys each decided by the next key's line in every
 // wrapping, and long lines of keys before a key pending at their end; random
-// short shapes of keys, armours, escaped breaks and gutters, and three where
-// a password's key follows an END on its line; and a key 64 KiB and a byte,
-// and 128 KiB, into a line under a pipe's, a word's and a quote's gutter and
-// in a string with its breaks escaped.
+// short shapes of keys, armours, escaped breaks and gutters, three where a
+// password's key follows an END on its line, [keyLineAboveABlock] and
+// [structuredText]s; and a key 64 KiB and a byte, and 128 KiB, into a line
+// under a pipe's, a word's and a quote's gutter and in a string with its
+// breaks escaped.
 func settlingTexts(r *rand.Rand) []settlingText {
 	var texts []settlingText
 	add := func(name, text string, every bool) { texts = append(texts, settlingText{name, text, every}) }
@@ -66,12 +67,10 @@ func settlingTexts(r *rand.Rand) []settlingText {
 		add(fmt.Sprintf("transcript %d", i), b.String(), true)
 	}
 	keys, forms := realKeys(), wrappings()
-	for i, kname := range slices.Sorted(maps.Keys(keys))[:4] {
+	for _, kname := range slices.Sorted(maps.Keys(keys))[:4] {
 		var b strings.Builder
-		for j, wname := range slices.Sorted(maps.Keys(forms)) {
-			if j%4 == i {
-				b.WriteString(transcriptLines[r.IntN(len(transcriptLines))] + "\n" + forms[wname].wrap(keys[kname]).text + "\n")
-			}
+		for _, wname := range slices.Sorted(maps.Keys(forms)) {
+			b.WriteString(transcriptLines[r.IntN(len(transcriptLines))] + "\n" + forms[wname].wrap(keys[kname]).text + "\n")
 		}
 		add("the keys' corpus, "+kname, b.String(), false)
 	}
@@ -121,6 +120,12 @@ func settlingTexts(r *rand.Rand) []settlingText {
 	} {
 		add(fmt.Sprintf("a password's key after an END on its line, %d", i), text+"hunter2secretvalue9\nok\n", true)
 	}
+	for i, text := range keyLineAboveABlock {
+		add(fmt.Sprintf("a key's line above a block on a password's key's line, %d", i), text, true)
+	}
+	for i := range 2000 {
+		add(fmt.Sprintf("structured text %d", i), structuredText(r), true)
+	}
 	for _, at := range []int{64<<10 + 1, 128 << 10} {
 		pad := func(prefix string) string { return prefix + strings.Repeat("x", at-len(prefix)-1) + " " }
 		add(fmt.Sprintf("a key %d bytes into a line under a pipe", at), pad("| ")+"password: \n| hunter2secretvalue9\n| ok\n", true)
@@ -129,6 +134,97 @@ func settlingTexts(r *rand.Rand) []settlingText {
 		add(fmt.Sprintf("a key %d bytes into a string with its breaks escaped", at), pad(`{"log": "`)+`password:\n hunter2secretvalue9\n ok"}`+"\n", true)
 	}
 	return texts
+}
+
+// keyLineAboveABlock are texts whose line of a password's key sits above a
+// block on another password's key's line, cut apart from it only once the
+// line below gives that key its value: until then the line above may read
+// the gutter the cut leaves as its value.
+var keyLineAboveABlock = []string{
+	"passwd:\n-----BEGIN PRIVATE KEY-----RgeLezV6|passwd:\n-RgeLezV6\n",
+	"passwd:\n-----BEGIN PRIVATE KEY-----RgeLezV6|passwd:\n-6",
+	"Passwd:\n-----BEGIN PRIVATE KEY-----RgeLezV6 passwd:\n-RgeLezV6\n",
+	"Passwd:\n-----BEGIN PRIVATE KEY-----RgeLezV6 passwd:\n-V",
+	"passwd:\n-----BEGIN PRIVATE KEY-----RgeLezV6|passwd:\n-RgeLezV6\nok\n",
+}
+
+// The pieces a [structuredText] is built of.
+var (
+	structuredGutters  = []string{"", "", "| ", "7\u2192", "   32\t", "> ", "  ", "+", `"`, "- "}
+	structuredSuffixes = []string{"", "", "|passwd:", " passwd:", " password: ", "| Password: |", `"`, " pwd=", ` \n`, "|", " Password:"}
+	structuredKeys     = []string{"password: ", "password:", `"password": "`, `{"password": "`, "- **Password:**", "| Password: |", "pwd=", "passwd ", "pwd: ",
+		"passwd:", "Passwd:", "Password: |", "password: >", `\"password\": \"`, "password:\"", "Password:", "export DB_PASSWORD=", "--password "}
+	structuredValues = []string{"hunter2secretvalue9", "Ab3f9C2d7E1b", `""`, "x", "ok", "-", "|", `"hunter2x9"`, "hunter2x9 # rotate", "", "-RgeLezV6", "[REDACTED:password]"}
+	structuredBodies = []string{keyLine, "RgeLezV6", keyLine[:56], keyLine[:56] + " " + keyLine[:56]}
+	structuredLabels = []string{"RSA PRIVATE KEY", "PRIVATE KEY", "OPENSSH PRIVATE KEY"}
+)
+
+// structuredFragment is one piece of a [structuredText], ending in a line
+// break: a block closed or open under a gutter, a one-line key or a BEGIN
+// after other text on its line, each perhaps with a password's key after it;
+// a password's key with its value on its line or below, or above such a
+// block; an END alone, a key's line, a chain of keys, a block value, a
+// marker as a value, or a line of nothing much.
+func structuredFragment(r *rand.Rand) string {
+	pick := func(of []string) string { return of[r.IntN(len(of))] }
+	g, body, label := pick(structuredGutters), pick(structuredBodies), pick(structuredLabels)
+	begin, end := "-----BEGIN "+label+"-----", "-----END "+label+"-----"
+	switch r.IntN(14) {
+	case 0, 1:
+		var b strings.Builder
+		b.WriteString(g + begin + "\n")
+		for range 1 + r.IntN(3) {
+			line := g
+			if r.IntN(4) == 0 {
+				line = pick(structuredGutters)
+			}
+			b.WriteString(line + body + "\n")
+		}
+		return b.String() + g + end + pick(structuredSuffixes) + "\n"
+	case 2:
+		return g + begin + "\n" + strings.Repeat(g+body+"\n", r.IntN(3))
+	case 3:
+		return g + begin + body + pick([]string{end, ""}) + pick(structuredSuffixes) + "\n"
+	case 4:
+		return g + `{"key": "` + begin + `\n` + body + `\n` + end + `\n"}` + "\n"
+	case 5, 6:
+		k := pick(structuredKeys)
+		if r.IntN(2) == 0 {
+			return g + k + pick(structuredValues) + "\n"
+		}
+		return g + k + "\n" + strings.Repeat(g+"\n", r.IntN(2)) + g + pick(structuredValues) + "\n"
+	case 7:
+		return g + pick(structuredKeys) + "\n" + g + pick([]string{"", "x ", body + " "}) + begin + body + pick([]string{end, ""}) + pick(structuredSuffixes) + "\n" + g + pick(structuredValues) + "\n"
+	case 8:
+		return g + end + pick(structuredSuffixes) + "\n"
+	case 9:
+		return g + body + "\n"
+	case 10:
+		return strings.Repeat(g+pick(structuredKeys)+"\n", 1+r.IntN(4))
+	case 11:
+		return g + pick([]string{"x ", "KEY=", pick(structuredKeys)}) + begin + "\n" + g + body + "\n" + pick([]string{g + end + "\n", ""})
+	case 12:
+		return pick([]string{"Password: |\n  hunter2secretvalue9\n  ok\n", "password: [REDACTED:password]\n", "| " + begin + "\n> " + body + "\n7\u2192" + body + "\n   32\t" + end + "|passwd:\n"})
+	}
+	return pick([]string{"ok\n", "\n", "x\n", "  \n"})
+}
+
+// structuredText is a text of [structuredFragment]s, some run together
+// mid-line or written with CRLF breaks, ending in a value, a line or not.
+func structuredText(r *rand.Rand) string {
+	var b strings.Builder
+	for range 2 + r.IntN(10) {
+		f := structuredFragment(r)
+		switch r.IntN(8) {
+		case 0:
+			f = strings.TrimSuffix(f, "\n")
+		case 1:
+			f = strings.ReplaceAll(f, "\n", "\r\n")
+		}
+		b.WriteString(f)
+	}
+	b.WriteString([]string{"hunter2secretvalue9\n", "ok\n", "\n", "", "ok", "x\n"}[r.IntN(6)])
+	return b.String()
 }
 
 // sampled is whether the i-th of n cuts of tx is checked: every one on a text
