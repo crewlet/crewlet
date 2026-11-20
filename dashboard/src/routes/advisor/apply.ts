@@ -34,13 +34,18 @@
  * send came to (`applied`), and checks the change's effect itself.
  */
 
+import type { ActResult } from "~/protocol/act.ts";
 import { RestError, pathSegment, rest } from "~/protocol/rest.ts";
 import type {
   AdvisorAppliedReport,
   AdvisorKeptFinding,
+  AdvisorMove,
   AdvisorRecheck,
   AdvisorSend,
 } from "~/protocol/advisorFindings.ts";
+import { REASSIGN } from "./view.ts";
+
+export { REASSIGN };
 
 /** Where an Apply stands. */
 export type ApplyState =
@@ -101,7 +106,7 @@ async function askRecheck(
   signal?: AbortSignal,
 ): Promise<AdvisorRecheck> {
   const answer = await rest.request("POST", `/advisor/findings/${pathSegment(id)}/recheck`, {
-    body: { option },
+    body: option === REASSIGN ? { action: "reassign" } : { option },
     ...(signal ? { signal } : {}),
   });
   return answer.body as AdvisorRecheck;
@@ -130,6 +135,50 @@ export async function sendFix(send: AdvisorSend, signal?: AbortSignal): Promise<
   } catch (err) {
     if (err instanceof RestError && err.status === 412) throw new MovedSinceRecheck();
     throw err;
+  }
+}
+
+/**
+ * Send every request the re-check built, in order: a fix on several seats
+ * changes each of them, and the engine marks it applied only once every one
+ * holds.
+ */
+export async function sendAll(check: AdvisorRecheck, signal?: AbortSignal): Promise<void> {
+  const sends =
+    check.sends && check.sends.length > 0 ? check.sends : check.send ? [check.send] : [];
+  for (const send of sends) await sendFix(send, signal);
+}
+
+/** A move the work item's own write refused, in the engine's words. */
+export class MoveRefused extends Error {}
+
+/**
+ * One item's move to a seat, made through the work item's own write
+ * (`components/writes.tsx`'s MoveWorkConfirm, the Reassign a work item
+ * offers). Null where nothing was sent.
+ */
+export type MoveItem = (move: AdvisorMove, to: string) => Promise<ActResult | null>;
+
+/**
+ * Move each item the re-check answered to `to`, at the version the re-check
+ * read: an item that moved since is refused as stale and the finding
+ * re-checked.
+ */
+export async function moveAll(
+  moves: readonly AdvisorMove[],
+  to: string,
+  move: MoveItem,
+): Promise<void> {
+  for (const m of moves) {
+    const result = await move(m, to);
+    if (result === null) throw new MoveRefused(`${m.item} was not moved.`);
+    if (result.kind === "refused") {
+      if (result.code === "stale_version") throw new MovedSinceRecheck();
+      throw new MoveRefused(`${m.item} was not moved: ${result.sentence}`);
+    }
+    if (result.kind === "unknown") {
+      throw new MoveRefused(`Whether ${m.item} moved is not known yet: ${result.reason}`);
+    }
   }
 }
 
@@ -172,7 +221,7 @@ export function fresh(check: AdvisorRecheck, now: number): boolean {
 export function sendable(check: AdvisorRecheck): boolean {
   return (
     (check.outcome === "holds" || check.outcome === "changed") &&
-    check.send !== null &&
+    (check.send !== null || (check.moves ?? []).length > 0) &&
     check.refusal === null
   );
 }
@@ -182,7 +231,8 @@ export function failureWords(err: unknown): string {
   if (
     err instanceof MovedSinceRecheck ||
     err instanceof RecheckFirst ||
-    err instanceof SentUntold
+    err instanceof SentUntold ||
+    err instanceof MoveRefused
   ) {
     return err.message;
   }
@@ -208,7 +258,9 @@ export function failureWords(err: unknown): string {
  * (412), or an engine that holds a newer revision of the finding (409), is
  * re-checked once and that answer shown, or the finding as it now stands
  * where it is open no more ([recheck]): the person always decides on what is
- * true now, and is never sent a change they were not shown.
+ * true now, and is never sent a change they were not shown. A reassignment
+ * moves its items through `reassign.move` to `reassign.to`, the seat the
+ * person kept or chose.
  */
 export async function applyFrom(
   id: string,
@@ -217,6 +269,7 @@ export async function applyFrom(
   now: () => number,
   read: ReadFinding,
   signal?: AbortSignal,
+  reassign?: { to: string; move: MoveItem },
 ): Promise<{ kind: "applied"; finding: AdvisorKeptFinding } | Rechecked> {
   let check = pressed;
   if (!fresh(check, now())) {
@@ -226,7 +279,13 @@ export async function applyFrom(
     check = again.check;
   }
   try {
-    await sendFix(check.send!, signal);
+    const moves = check.moves ?? [];
+    if (moves.length > 0) {
+      if (!reassign) throw new MoveRefused("This press moves no work.");
+      await moveAll(moves, reassign.to || moves[0]!.to, reassign.move);
+    } else {
+      await sendAll(check, signal);
+    }
   } catch (err) {
     if (err instanceof MovedSinceRecheck) return recheck(id, option, read, signal);
     throw err;

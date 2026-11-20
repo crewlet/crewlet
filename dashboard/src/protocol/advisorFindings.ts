@@ -355,11 +355,35 @@ export interface AdvisorRecheck {
   previous_fix: AdvisorFix | null;
   preview: { rows: AdvisorPreviewRow[]; notes: string[] } | null;
   send: AdvisorSend | null;
+  /**
+   * Every request the option makes, `send` first, sent in order: a fix on
+   * several seats changes each of them. Absent from an engine that built one.
+   */
+  sends?: AdvisorSend[];
+  /**
+   * Every item a reassignment moves (re-checked with `{"action": "reassign"}`),
+   * each written through the work item's own write. Absent or empty where
+   * nothing moves.
+   */
+  moves?: AdvisorMove[];
   digest: string;
   checked_at: string;
   expires_at: string;
   /** A change that holds and cannot be sent from here; the finding stays open. */
   refusal: { reason: string; who_can: string } | null;
+}
+
+/**
+ * One item a reassignment moves: by its key, from the seat holding it to the
+ * one the finding suggests, at the version the re-check read (`if_match`),
+ * with the line its new holder is woken with.
+ */
+export interface AdvisorMove {
+  item: string;
+  from: string;
+  to: string;
+  version: number;
+  reason: string;
 }
 
 /**

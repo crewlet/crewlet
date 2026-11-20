@@ -20,7 +20,7 @@ func SayNumbers(f Finding) Finding {
 	return f
 }
 
-// tokenValues is every number facts state as a token count, now or before.
+// TokenValues is every number facts state as a token count, now or before.
 func TokenValues(facts []Fact) map[int64]bool {
 	out := map[int64]bool{}
 	for _, f := range facts {
@@ -59,7 +59,7 @@ func NumbersSaid(s string, tokens map[int64]bool) string {
 		if i > 0 {
 			left := s[i-1]
 			joined := (left == '.' || left == ',') && i > 1 && digit(s[i-2])
-			bare = bare && !word(left) && !joined && !strings.ContainsRune("-#/:$", rune(left))
+			bare = bare && !word(left) && !joined && !strings.ContainsRune("-/:$#", rune(left))
 		}
 		if j < len(s) {
 			right := s[j]

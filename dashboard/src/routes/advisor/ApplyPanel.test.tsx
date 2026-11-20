@@ -446,3 +446,31 @@ test("the panel re-checks the option its press named", async () => {
   expect(checked.map((r) => JSON.parse(String(r.init.body)))).toEqual([{ option: 1 }]);
   expect(screen.queryByRole("radio")).toBeNull();
 });
+
+test("a fix on several seats sends every change in order before it is reported applied", async () => {
+  const qa = { ...SEND, path: "/config/units/qa", dry_run_path: "/config/units/qa?dry_run=true" };
+  const sent: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init: RequestInit = {}) => {
+      const url = new URL(input);
+      sent.push(`${init.method ?? "GET"} ${url.pathname}${url.search}`);
+      if (url.pathname.endsWith("/recheck")) return json(answer({ sends: [SEND, qa] }));
+      if (url.pathname.endsWith("/applied")) return json({ ...FINDING, state: "applied" });
+      return json({ result: url.search ? "valid" : "saved" }, 200, '"rev-42"');
+    }),
+  );
+  mount();
+  await screen.findByText("It still holds");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  });
+  await screen.findByText(/checks its effect/);
+  expect(sent.filter((s) => !s.includes("/advisor/"))).toEqual([
+    "PUT /config/units/eng?dry_run=true",
+    "PUT /config/units/eng",
+    "PUT /config/units/qa?dry_run=true",
+    "PUT /config/units/qa",
+  ]);
+  expect(sent.at(-1)).toBe(`POST /advisor/findings/${ID}/applied`);
+});

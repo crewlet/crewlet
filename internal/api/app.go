@@ -74,7 +74,10 @@ type App struct {
 	advisorDuty    *duty.Duty
 	advisorFinding func(ctx context.Context, id string) (queries.AdvisorFinding, error)
 	advisorConfig  AdvisorConfig
-	stopAdvisor    func()
+	// advisorWork is the work items a reassignment's re-check reads, nil
+	// where this node reads none.
+	advisorWork AdvisorWork
+	stopAdvisor func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
 	// through. The App's to mount and never to start or stop.
@@ -982,6 +985,9 @@ func New(opts Options) (*App, error) {
 		a.advisorFinding = sources.AdvisorFindingOf
 		if sources.Config != nil {
 			a.advisorConfig = sources.Config
+		}
+		if sources.Work != nil {
+			a.advisorWork = sources.Work
 		}
 	}
 	a.queries = queries.NewRegistry()

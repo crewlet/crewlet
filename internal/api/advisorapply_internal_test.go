@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var applyAt = time.Date(2030, 1, 7, 12, 0, 0, 0, time.UTC)
@@ -185,7 +186,7 @@ func TestTheSendIsBoundToTheRevisionTheRecheckRead(t *testing.T) {
 	log := newApplyLog(t, capFinding(60))
 	cfg := &applyConfig{entity: map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 30}}}
 	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(60))}, cfg)
-	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || out.Outcome != advisor.RecheckHolds || out.Send == nil {
 		t.Fatalf("re-check = %+v (%v), want holds with a request", out, err)
 	}
@@ -223,7 +224,7 @@ func TestAChangedFixIsShownBeforeItCanBeSent(t *testing.T) {
 	cfg := &applyConfig{entity: map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 30}}}
 	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(90))}, cfg)
 	old := advisor.ApplyDigest("f-1", 1, advisor.OptionDigest(capFinding(60).Fix.Options[0]))
-	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || out.Outcome != advisor.RecheckChanged || out.PreviousFix == nil || log.row.Revision != 2 {
 		t.Fatalf("re-check = %+v (%v), revision %d, want changed and revised", out, err, log.row.Revision)
 	}
@@ -247,7 +248,7 @@ func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 	log := newApplyLog(t, capFinding(60))
 	cfg := &applyConfig{entity: map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 30}}}
 	rc := applyRig(log, nil, cfg)
-	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || out.Outcome != advisor.RecheckResolved || out.Send != nil || log.row.State != advisordomain.StateResolved {
 		t.Fatalf("re-check = %+v (%v), state %s, want resolved with nothing to send", out, err, log.row.State)
 	}
@@ -255,7 +256,7 @@ func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 		advisor.OptionDigest(capFinding(60).Fix.Options[0])), person); !errors.Is(err, errNotOpen) {
 		t.Errorf("a report on a resolved finding answered %v, want it said as no longer open", err)
 	}
-	if _, err := rc.recheck(t.Context(), "f-1", 0, person); !errors.Is(err, errNotOpen) {
+	if _, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person); !errors.Is(err, errNotOpen) {
 		t.Errorf("a re-check of a closed finding answered %v, want it said as no longer open", err)
 	}
 }
@@ -267,12 +268,12 @@ func TestAFixThatNoLongerBuildsIsNotApplicable(t *testing.T) {
 	log := newApplyLog(t, capFinding(60))
 	cfg := &applyConfig{entity: map[string]any{"handle": "dev"}, refuse: &configapi.ManagedError{}}
 	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(60))}, cfg)
-	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || out.Refusal == nil || out.Send != nil || log.row.State != advisordomain.StateOpen {
 		t.Fatalf("a managed configuration answered %+v (%v), want a refusal and the finding open", out, err)
 	}
 	cfg.refuse = errors.New("the change breaks a rule")
-	out, err = rc.recheck(t.Context(), "f-1", 0, person)
+	out, err = rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || out.Outcome != advisor.RecheckNotApplicable || log.row.State != advisordomain.StateRetired {
 		t.Fatalf("a change that breaks a rule answered %+v (%v), state %s, want not applicable", out, err, log.row.State)
 	}
@@ -289,7 +290,7 @@ func TestAFindingAppliedInAnotherWindowIsSaidInWords(t *testing.T) {
 	log.row.State = advisordomain.StateApplied
 	log.row.AppliedAt, log.row.EffectDueAt = applyAt.Add(-time.Minute), applyAt.Add(29*time.Minute)
 	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(60))}, &applyConfig{})
-	_, err := rc.recheck(t.Context(), "f-1", 0, person)
+	_, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	rec := httptest.NewRecorder()
 	refuseApply(rec, httptest.NewRequest(http.MethodPost, "/advisor/findings/f-1/recheck", nil), err)
 	var body map[string]any
@@ -388,7 +389,7 @@ func TestOneCauseOnManySeatsIsSentAsOneActionOfSeveralChanges(t *testing.T) {
 		finding: func(_ context.Context, id string) (queries.AdvisorFinding, error) {
 			return queries.AdvisorFinding{ID: id, State: advisor.State(log.row.State)}, nil
 		}}
-	out, err := rc.recheck(t.Context(), "f-1", 0, person)
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person)
 	if err != nil || len(out.Sends) != 2 || out.Send == nil || out.Send.Path != "/config/roles/dev" ||
 		out.Sends[1].Path != "/config/roles/qa" {
 		t.Fatalf("re-check = %+v (%v), want dev's request then qa's", out, err)
@@ -404,5 +405,66 @@ func TestOneCauseOnManySeatsIsSentAsOneActionOfSeveralChanges(t *testing.T) {
 	cfg.entities["qa"] = out.Sends[1].Body.(map[string]any)
 	if err := rc.applied(t.Context(), "f-1", out.Digest, person); err != nil {
 		t.Fatalf("a report with both sent: %v", err)
+	}
+}
+
+// moveWork is the work items a reassignment's re-check reads, by key.
+type moveWork map[string]worklet.Task
+
+func (w moveWork) Task(_ context.Context, key string, _ worklet.DetailWants, _ statelog.Freshness) (worklet.TaskDetail, error) {
+	t, ok := w[key]
+	if !ok {
+		return worklet.TaskDetail{}, worklet.ErrNoTask
+	}
+	return worklet.TaskDetail{Task: t}, nil
+}
+
+// A REASSIGNMENT IS RE-CHECKED AND MOVED ITEM BY ITEM: asked to move the
+// work, the re-check answers each item the busy seat still holds and nobody
+// has started, at its version, to the seat the finding suggests, with a row
+// for each; an item moved or started since is left where it is. The finding
+// is applied once the busy seat holds none of them, and not before.
+// Mutation: answer a started item, or mark it applied with an item unmoved,
+// and work is taken from under a turn or a fix reads as done.
+func TestAReassignmentIsRecheckedAndMovedItemByItem(t *testing.T) {
+	t.Parallel()
+	f := advisor.Finding{Class: advisor.ClassWorkImbalance, Severity: advisor.SeverityCosts, Actor: advisor.ActorOwner,
+		Source: advisor.SourceEvidence, Area: advisor.AreaWork,
+		Subject:  advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "Dev"},
+		Seats:    []advisor.SeatShare{{Seat: "dev", Name: "Dev", Value: 27}, {Seat: "dev-2", Name: "Dev 2", Value: 2}},
+		Evidence: []advisor.Fact{{Key: "open", Value: 27}},
+		Fix: advisor.Fix{Kind: advisor.FixOpenPage, Page: advisor.PageSeat, Target: "dev", Options: []advisor.Option{},
+			Reassign: &advisor.Reassign{Items: []string{"ENG-1", "ENG-2", "ENG-3", "ENG-4"}, To: "dev-2"}}}
+	log := newApplyLog(t, f)
+	work := moveWork{
+		"ENG-1": {Key: "ENG-1", Title: "Fix the login", Assignee: "dev", StatusGroup: worklet.GroupNotStarted, Version: 4},
+		"ENG-2": {Key: "ENG-2", Assignee: "dev", StatusGroup: worklet.GroupActive, Version: 9},
+		"ENG-3": {Key: "ENG-3", Assignee: "qa", StatusGroup: worklet.GroupNotStarted, Version: 2},
+		"ENG-4": {Key: "ENG-4", Title: "Add the export", Assignee: "dev", StatusGroup: worklet.GroupNotStarted, Version: 6},
+	}
+	rc := applyRig(log, []advisor.Observation{observedNow(f)}, &applyConfig{})
+	rc.work = work
+	out, err := rc.recheck(t.Context(), "f-1", recheckAsk{reassign: true}, person)
+	if err != nil || out.Outcome != advisor.RecheckHolds || out.Send != nil || len(out.Moves) != 2 {
+		t.Fatalf("re-check = %+v (%v), want ENG-1 and ENG-4 to move", out, err)
+	}
+	if m := out.Moves[0]; m.Item != "ENG-1" || m.From != "dev" || m.To != "dev-2" || m.Version != 4 || m.Reason == "" ||
+		out.Moves[1].Item != "ENG-4" || out.Moves[1].Version != 6 {
+		t.Errorf("moves = %+v, want ENG-1 at 4 and ENG-4 at 6, from dev to dev-2", out.Moves)
+	}
+	if r := out.Preview.Rows; len(r) != 2 || r[0].Label != "ENG-1 Fix the login" || *r[0].Before != "Dev" || *r[0].After != "Dev 2" {
+		t.Errorf("preview = %+v, want a row per item, by the seats' names", out.Preview.Rows)
+	}
+	if _, err := rc.recheck(t.Context(), "f-1", recheckAsk{}, person); err != nil {
+		t.Errorf("a re-check of the fix itself: %v", err)
+	}
+	work["ENG-1"] = worklet.Task{Key: "ENG-1", Assignee: "dev-2", StatusGroup: worklet.GroupNotStarted}
+	if err := rc.applied(t.Context(), "f-1", out.Digest, person); !errors.Is(err, errRecheckAgain) {
+		t.Errorf("a report with ENG-4 unmoved answered %v, want a re-check", err)
+	}
+	work["ENG-4"] = worklet.Task{Key: "ENG-4", Assignee: "dev-2", StatusGroup: worklet.GroupNotStarted}
+	if err := rc.applied(t.Context(), "f-1", out.Digest, person); err != nil || len(log.moves) == 0 ||
+		log.moves[len(log.moves)-1].State != advisordomain.StateApplied {
+		t.Fatalf("a report with both moved: %v, moves %+v", err, log.moves)
 	}
 }
