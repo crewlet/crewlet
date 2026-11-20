@@ -261,7 +261,7 @@ func TestAKnownRecordsAnswerIsThatRecordsCard(t *testing.T) {
 		return built.Card
 	}
 	card := draw(`{"page":{"id":"` + id + `","title":"Launch plan","status":"published"},` +
-		`"comments":[{"id":"c1","body":"Looks good"}]}`)
+		`"labels":[{"id":"l1","title":"Runbook"}],"backlinks":[{"id":"b1","title":"Index"}]}`)
 	e := card.Entity
 	switch {
 	case card.Type != wire.CardEntity || e == nil:
@@ -270,8 +270,14 @@ func TestAKnownRecordsAnswerIsThatRecordsCard(t *testing.T) {
 		t.Errorf("the page is %s %q titled %q", e.Kind, e.ID, e.Title)
 	case e.Open == nil || e.Open.Href != "#/doclet/pages/"+id:
 		t.Errorf("the page opens %+v", e.Open)
-	case len(e.Items) != 1:
-		t.Errorf("the page's comments are %+v", e.Items)
+	case len(e.Items) != 2:
+		t.Errorf("the page's lists are %+v", e.Items)
+	}
+	// AN ANSWER THAT WRAPS ONE LIST IS STILL THAT LIST'S TABLE, every column
+	// of it kept (a task's links with each end's status).
+	if wrapped := draw(`{"page":{"id":"` + id + `","title":"Launch plan"},` +
+		`"comments":[{"id":"c1","body":"Looks good","status":"open"}]}`); wrapped.Type != wire.CardTable {
+		t.Errorf("an answer wrapping one list drew %+v, want its table", wrapped)
 	}
 	untyped := draw(`{"title":"Launch plan","status":"published"}`).Entity
 	if untyped == nil || untyped.Kind != "" {

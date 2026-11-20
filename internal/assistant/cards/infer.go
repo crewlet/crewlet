@@ -51,11 +51,11 @@ func Infer(answer any, title string, known *Entity) (Spec, any, bool) {
 	case []any:
 		return list(t, "", title, answer)
 	case map[string]any:
-		if spec, doc, ok := knownRecord(t, title, known); ok {
-			return spec, doc, true
-		}
 		if path, ok := wrappedList(t); ok {
 			return list(t[path].([]any), path, title, answer)
+		}
+		if spec, doc, ok := knownRecord(t, title, known); ok {
+			return spec, doc, true
 		}
 		return entityOf(t, title)
 	}
