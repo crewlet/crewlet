@@ -78,7 +78,7 @@ func TestARefusedRequestsMessageIsRedactedWholeThenClipped(t *testing.T) {
 	for _, at := range []int{events.MaxDiagnosticBytes - 20, events.MaxDiagnosticBytes - 1} {
 		said := failureWords(at)
 		got := refusedMessage(sandbox.RunEnding{Error: said, Refused: true})
-		if want := events.ClipDiagnostic(redact.Secrets(strings.TrimSpace(said))); got != want {
+		if want := events.Diagnostic(redact.Secrets(strings.TrimSpace(said))); got != want {
 			t.Errorf("a token at byte %d: the message ends %q, want %q", at, got[max(0, len(got)-120):],
 				want[max(0, len(want)-120):])
 		}

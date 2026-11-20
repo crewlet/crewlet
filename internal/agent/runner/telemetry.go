@@ -977,7 +977,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// A child's failure text, sized by nothing the parent controls:
 		// redacted, and clipped so the event stays publishable, since one over the queue's
 		// ceiling is refused and the whole record lost (events.MaxDiagnosticBytes).
-		Error:     recordedDiagnostic(res.Error),
+		Error:     events.Diagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -1072,7 +1072,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// the queue's ceiling is refused and the error ABSENT; a tighter cut
 		// would cost the errors worth reading (a wrapped chain's cause is at
 		// its end). See events.MaxDiagnosticBytes.
-		ev.Error = recordedDiagnostic(rec.Err.Error())
+		ev.Error = events.Diagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))

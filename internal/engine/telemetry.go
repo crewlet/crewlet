@@ -542,7 +542,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	if err != nil {
 		// Bounded so the event is publishable (events.MaxDiagnosticBytes):
 		// a refused event is dropped whole.
-		summary.Error = events.ClipDiagnostic(err.Error())
+		summary.Error = events.Diagnostic(err.Error())
 		// The phase's own classifier, so a spent plan and a revoked login
 		// are not the same word on the Turn screen.
 		summary.ErrorKind = runner.ErrorKind(err)
@@ -562,7 +562,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// kind is not read as "error"; the error's text, naming phase and round,
 		// is kept.
 		if summary.Error == "" {
-			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+			summary.Error = events.Diagnostic(res.Breach.Detail)
 		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
@@ -730,7 +730,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			Agent:    t.agentID,
 			RoleName: t.role,
 			Kind:     res.Breach.Kind,
-			Detail:   events.ClipDiagnostic(res.Breach.Detail),
+			Detail:   events.Diagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,
 		}, t.trace), t.role)
@@ -770,7 +770,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			ProviderChain: exhausted.Attempted,
 			AttemptCount:  len(exhausted.Attempted),
 			LastErrorKind: llm.KindOf(exhausted.Err).String(),
-			LastError:     events.ClipDiagnostic(exhausted.Error()),
+			LastError:     events.Diagnostic(exhausted.Error()),
 			TurnID:        t.runID,
 			WorkKey:       t.workKey,
 		}, t.trace), t.role)

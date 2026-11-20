@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -44,14 +43,6 @@ func keptOpening(shown string, whole, share int) string {
 		}
 	}
 	return text
-}
-
-// recordedDiagnostic is a failure's text as a record holds it: redacted, then
-// clipped as every event's diagnostic is ([events.ClipDiagnostic]), keeping
-// only as much of the redaction as the clip reads.
-func recordedDiagnostic(text string) string {
-	opening, _ := redact.Prefix(text, events.MaxDiagnosticBytes+1)
-	return events.ClipDiagnostic(opening)
 }
 
 // recordedPrompt is a prompt as a record holds it: redacted ([redactedPrompt]),

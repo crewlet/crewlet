@@ -115,7 +115,7 @@ func outlined(said string) prompts.Prompt {
 //
 // Mutation: drop the redaction at any one path (recordedText for the answer,
 // recordedPrompt, recordedNarration, recordedOutput, recordedArgs,
-// recordedDiagnostic), and its case holds the plant; misstate a part's size
+// events.Diagnostic), and its case holds the plant; misstate a part's size
 // in redactedPrompt, and the outline is lost.
 func TestAPhasesRecordHoldsNoSecretItsWordsCarried(t *testing.T) {
 	t.Parallel()
@@ -217,11 +217,9 @@ func TestAPhasesRecordHoldsNoSecretWhereverItsCutFalls(t *testing.T) {
 		for name, c := range map[string]struct {
 			rec   phaseRecord
 			field func(*types.AgentPhaseCompleted) string
-			// whole is the text whose redaction's size the cut states, and
-			// clipped a diagnostic's clip, which states none and may end in
-			// a marker in part, as an executor's does.
-			whole   string
-			clipped bool
+			// whole is the text whose redaction's size the cut states; a
+			// diagnostic's clip states none.
+			whole string
 		}{
 			"the answer": {rec: phaseRecord{Phase: phase.Review, Result: toolloop.Result{Text: answer}},
 				field: func(r *types.AgentPhaseCompleted) string { return r.Response }, whole: answer},
@@ -229,7 +227,7 @@ func TestAPhasesRecordHoldsNoSecretWhereverItsCutFalls(t *testing.T) {
 				field: func(r *types.AgentPhaseCompleted) string { return r.Notes }, whole: notes},
 			"the failure": {rec: phaseRecord{Phase: phase.Review, Failed: true,
 				Err: errors.New(dense(events.MaxDiagnosticBytes))},
-				field: func(r *types.AgentPhaseCompleted) string { return r.Error }, clipped: true},
+				field: func(r *types.AgentPhaseCompleted) string { return r.Error }},
 			"a prompt": {rec: phaseRecord{Phase: phase.Review, User: outlined(dense(promptBytes))},
 				field: func(r *types.AgentPhaseCompleted) string { return r.UserPrompt }},
 			"the prose": {rec: phaseRecord{Phase: phase.Review, Result: toolloop.Result{Narration: []toolloop.Narration{
@@ -254,13 +252,7 @@ func TestAPhasesRecordHoldsNoSecretWhereverItsCutFalls(t *testing.T) {
 			if !strings.Contains(got, "not kept on") && !strings.Contains(got, "diagnostic truncated") {
 				t.Errorf("%s: %s was not cut, so no cut was tried", p.name, name)
 			}
-			if c.clipped {
-				// ONLY THE CREDENTIAL: a clip that ends in a marker in part
-				// holds none of it.
-				holdsNone(t, p.name+" in "+name, strings.ReplaceAll(got, "[REDACTED:", ""), p)
-			} else {
-				holdsNone(t, p.name+" in "+name, got, p)
-			}
+			holdsNone(t, p.name+" in "+name, got, p)
 			if c.whole == "" {
 				continue
 			}
