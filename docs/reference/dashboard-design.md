@@ -11872,7 +11872,11 @@ that model's wizard on *Use it for* with the seat's category added. *Use it
 for* offers Everything, each category, Ask Crewlet, the Advisor and Not yet;
 the Advisor, as Ask Crewlet, is company-wide with no seats, tagged *In use*
 on its model, and kept beside seat work by its per-seat switch, which also
-takes it off the model it runs on.
+takes it off the model it runs on. A new model preselects only the seats
+with no model today for any job it will do (the *Seats without a model*
+switch, hidden when every seat has one), so adding a model never moves a
+working seat; a seat that has a model is picked by hand, its chip's tip
+saying the model it is on and that picking it replaces that.
 
 A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
 by whom it was stored, its expiry, and on a harness login each node's state with the
