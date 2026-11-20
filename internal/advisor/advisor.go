@@ -324,6 +324,7 @@ type Inputs struct {
 func Read(in Inputs) Answer {
 	answer := readEach(in)
 	answer.Findings = groupCauses(in.Company, answer.Findings)
+	stateHeadlines(in.Company, answer.Findings)
 	sortFindings(answer.Findings)
 	return answer
 }
@@ -374,6 +375,9 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 	f.Item = w.Item
 	f.Focus = staticFocus(w)
 	f.Fix = entry.fix(c, place, w)
+	if class == ClassHealthUnheld {
+		f.Evidence = append(f.Evidence, Fact{Key: "agents", Value: int64(len(agentSeats(c)))})
+	}
 	return f
 }
 

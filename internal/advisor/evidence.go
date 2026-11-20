@@ -341,6 +341,7 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 		}
 	}
 	answer.Findings = groupCauses(c, scheduleEvidence(c, ev, append(answer.Findings, found...)))
+	stateHeadlines(c, answer.Findings)
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)

@@ -15,8 +15,8 @@ import (
 
 // AdvisorFindingInsight is the part of a finding the Advisor's page leads with.
 type AdvisorFindingInsight struct {
-	// Headline is one line carrying the finding's number; the class's title
-	// where the finding states none.
+	// Headline is one line carrying the finding's number: the finding's own,
+	// else its class's from its facts, else its title.
 	Headline string         `json:"headline"`
 	Stats    []advisor.Stat `json:"stats"`
 	Chart    *advisor.Chart `json:"chart"`
@@ -76,11 +76,8 @@ const (
 
 // insightOf is f's insight, its stats read from facts as the finding shows them.
 func insightOf(f advisor.Finding, facts []AdvisorFact) AdvisorFindingInsight {
-	out := AdvisorFindingInsight{Headline: f.Headline, Stats: []advisor.Stat{}, Seats: []AdvisorSeatShare{},
+	out := AdvisorFindingInsight{Headline: advisor.HeadlineOf(f), Stats: []advisor.Stat{}, Seats: []AdvisorSeatShare{},
 		Actions: actionsOf(f.Fix)}
-	if out.Headline == "" {
-		out.Headline = f.Title
-	}
 	for _, fact := range facts {
 		out.Stats = append(out.Stats, advisor.Stat{Key: fact.Key, Label: fact.Label, Value: float64(fact.Value),
 			Unit: fact.Unit})
