@@ -45,9 +45,9 @@ export function useReports(cursor: string | null = null) {
   return useQuery("advisor_reports", { limit: REPORTS_PAGE, ...(cursor ? { cursor } : {}) });
 }
 
-/** One week's report, by its ISO week (`advisor_report`). */
-export function useReport(week: string) {
-  return useQuery("advisor_report", { week });
+/** One week's report, by its ISO week (`advisor_report`), asked only where `enabled`. */
+export function useReport(week: string, enabled = true) {
+  return useQuery("advisor_report", enabled ? { week } : undefined, { enabled });
 }
 
 /** The latest run, read every few seconds while `watching` (a run this page started). */
@@ -56,9 +56,9 @@ export function useLatestRun(watching: boolean) {
 }
 
 /** Run every check and the model pass now; a run already going is the one this asked for. */
-export async function runNow(): Promise<void> {
+export async function runNow(kind: "rules" | "deep" = "rules"): Promise<void> {
   try {
-    await rest.request("POST", "/advisor/runs", { body: {} });
+    await rest.request("POST", "/advisor/runs", { body: { kind } });
   } catch (err) {
     if (err instanceof RestError && err.status === 409) return;
     throw err;

@@ -98,7 +98,7 @@ type action struct {
 func FixDigest(fix Fix) string {
 	options := make([]Option, len(fix.Options))
 	for i, o := range fix.Options {
-		options[i] = Option{Label: o.Label, Change: asStored(o.Change)}
+		options[i] = Option{Label: o.Label, Change: asStored(o.Change), Also: storedAll(o.Also)}
 	}
 	if fix.Options == nil {
 		options = nil
@@ -107,9 +107,32 @@ func FixDigest(fix Fix) string {
 		Page: fix.Page, Target: fix.Target, Act: fix.Act})
 }
 
+// ReassignDigest is the SHA-256 of a reassignment, in lowercase hex: what a
+// reassignment's Apply moves, and what it is marked applied by.
+func ReassignDigest(r Reassign) string { return digestOf(r) }
+
 // OptionDigest is the SHA-256 of one option's change, in lowercase hex: what an
 // Apply sends, and what an ineffective fix is never offered again by.
-func OptionDigest(o Option) string { return digestOf(asStored(o.Change)) }
+func OptionDigest(o Option) string {
+	// AN OPTION OF ONE CHANGE digests as it always has, so a finding kept
+	// before options made several changes reads as unmoved.
+	if len(o.Also) == 0 {
+		return digestOf(asStored(o.Change))
+	}
+	return digestOf(storedAll(o.Changes()))
+}
+
+// storedAll is each change as a stored finding reads it back, nil for none.
+func storedAll(chs []Change) []Change {
+	if len(chs) == 0 {
+		return nil
+	}
+	out := make([]Change, len(chs))
+	for i, ch := range chs {
+		out[i] = asStored(ch)
+	}
+	return out
+}
 
 // asStored is ch as a stored finding reads it back: its Set and Merge decoded
 // from their own JSON. A DIGEST HASHES WHAT THE LOG KEEPS, not the values as a

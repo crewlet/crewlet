@@ -59,6 +59,10 @@ type Fix struct {
 	Prompt string `json:"prompt,omitempty"`
 	// Act is the atlas tool call an atlas_act fix sends, once per entry.
 	Act *AtlasAct `json:"act,omitempty"`
+	// Reassign, where set, is the items a person may move to another seat
+	// with one press, beside the fix's own kind, which a reader that knows no
+	// reassign still shows.
+	Reassign *Reassign `json:"reassign,omitempty"`
 }
 
 // Page is a dashboard page an open_page fix is taken on, by the name the
@@ -83,7 +87,14 @@ func (p Page) Valid() bool { return slices.Contains(Pages(), p) }
 type Option struct {
 	Label  string `json:"label"`
 	Change Change `json:"change"`
+	// Also are the further changes the option makes with Change, each to
+	// its own entity, re-checked and sent in order after it: a finding about
+	// one cause on many seats changes them all at once (ADR-0166).
+	Also []Change `json:"also,omitempty"`
 }
+
+// Changes is every change the option makes, Change first.
+func (o Option) Changes() []Change { return append([]Change{o.Change}, o.Also...) }
 
 // The entity collections a change writes, as the config surface names them
 // (configapi.EntityRoles and configapi.EntityUnits; a test holds them equal).

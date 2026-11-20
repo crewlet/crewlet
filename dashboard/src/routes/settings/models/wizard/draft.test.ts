@@ -34,6 +34,7 @@ import {
   type Draft,
 } from "./draft.ts";
 import { droppedWords } from "./steps/Review.tsx";
+import { fixable, hasSandbox } from "./draft.ts";
 
 const draft = (patch: Partial<Draft> = {}): Draft => ({
   ...emptyDraft(),
@@ -221,7 +222,9 @@ describe("problems", () => {
       draftProblems(draft({ key }), []).filter((p) => p.path === "key");
     for (const key of ["sonnet-key", "9b", "gpt-5.1_mini"]) expect(named(key), key).toEqual([]);
     for (const key of ["Sonnet", "-sonnet", ".hidden", "son net", "son/net"]) {
-      expect(named(key)[0]?.message, key).toMatch(/^Use lowercase letters, digits, dots/);
+      expect(named(key)[0]?.message, key).toBe(
+        "Lowercase letters, digits, dots, hyphens and underscores, up to 40 characters. It starts with a letter or a digit.",
+      );
     }
     const secret = (variable: string) =>
       draftProblems(draft({ variable }), []).filter((p) => p.path === "variable");
@@ -340,4 +343,52 @@ describe("every harness", () => {
       ),
     ).toBe(false);
   });
+});
+
+// M-001: AN EDIT'S NAME IS NOT ASKED AGAIN. The engine takes 63 characters and
+// the edit shows the name read-only, so the wizard's own cap of 40 for a new
+// name refused every edit of a longer one.
+test("an edit's name is never held to the cap a new name has", () => {
+  const long = "claude-sonnet-for-long-running-code-reviews-and-design-docs";
+  expect(long.length).toBeGreaterThan(40);
+  const keyed = (editing: boolean) =>
+    draftProblems(draft({ key: long }), [], undefined, editing).filter((p) => p.path === "key");
+  expect(keyed(false)[0]?.kind).toBe("out_of_range");
+  expect(keyed(true)).toEqual([]);
+});
+
+// M-002: A FIRST CODING MODEL GETS THIS HOST. The engine refuses any agent
+// seat's executor with no providers.sandbox, and nothing on the page set one
+// up; the save writes the engine's own remedy, and only where none exists.
+test("a coding model on a company with no sandbox block writes this host as the place to run", () => {
+  const doc = { name: "Acme", roles: [{ handle: "pm", name: "PM" }] } as never;
+  expect(hasSandbox(doc)).toBe(false);
+  const next = nextDocument(doc, draft()).doc as Record<string, any>;
+  expect(next.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
+  // A COMPANY THAT HAS ONE keeps it as it is.
+  const own = { name: "Acme", providers: { sandbox: { e2b: {}, default_run_in: "e2b" } } } as never;
+  expect((nextDocument(own, draft()).doc as Record<string, any>).providers.sandbox).toEqual({
+    e2b: {},
+    default_run_in: "e2b",
+  });
+  // A HARNESS THAT RUNS NO CODING needs none.
+  const helperOnly = nextDocument(doc, draft({ harness: "gemini-cli" })).doc as Record<string, any>;
+  expect(helperOnly.providers.sandbox).toBeUndefined();
+  // ITS REFUSAL IS WHERE IT RUNS', not Use it for.
+  expect(stepOf({ segments: ["providers", "sandbox"] }, "sonnet-key")).toBe("runs");
+});
+
+// M-004: A PROGRAM MISSING ON THE ENGINE HOST is said plainly, with no step to
+// fix it in: no step of the wizard installs one.
+test("a harness program missing on the host is said plainly and offers no step", () => {
+  const missing = {
+    path: "providers.llm.sonnet-key.harness",
+    segments: ["providers", "llm", "sonnet-key", "harness"],
+    kind: "invalid" as const,
+    message:
+      'not on PATH "claude" is not on this host\'s PATH \u2014 the harness runs on the ENGINE host, so it must be installed here; set overrides.binary to an absolute path if it lives somewhere unusual',
+  };
+  expect(messageOf(missing)).toBe("Install claude on the engine host: the harness runs there.");
+  expect(fixable(missing)).toBe(false);
+  expect(fixable({ message: "Name the model." })).toBe(true);
 });

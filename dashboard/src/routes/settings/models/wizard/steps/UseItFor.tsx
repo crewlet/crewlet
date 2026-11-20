@@ -220,12 +220,18 @@ const sameSeats = (a: readonly string[], b: readonly string[]) =>
 export function summaryOf(
   data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">,
   draft: Draft,
+  /** Past this many seats a line counts them ("12 seats") rather than naming each. */
+  most = Infinity,
 ) {
   const key = draft.key || "this model";
   const all = data.seats.map((s) => s.handle);
   const name = (h: string) => seatName(data.seats, h);
   const who = (seats: readonly string[]) =>
-    seats.length === all.length && all.length > 1 ? "Every seat" : listed(seats.map(name));
+    seats.length === all.length && all.length > 1
+      ? "Every seat"
+      : seats.length > most
+        ? `${seats.length} seats`
+        : listed(seats.map(name));
   const lines: string[] = [];
   if (draft.intent === "all") {
     const seats = draft.uses.jobs.executor;

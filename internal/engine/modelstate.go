@@ -54,6 +54,10 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 		state := agent.Plan().State(now)
 		row.SittingOut = sitOutFor(state, agent.ModelArgument())
 		row.LastAnswer = state.LastAnswer
+		// A TEST'S ANSWER stands for the model's own until a call of its own is heard.
+		if v := e.verifiedAt(key, now); v.After(row.LastAnswer) {
+			row.LastAnswer = v
+		}
 		if f := state.LastFailure; f != nil {
 			row.LastFailure = &coord.ModelFailure{Kind: f.Kind.String(), At: f.At, Said: f.Said}
 		}

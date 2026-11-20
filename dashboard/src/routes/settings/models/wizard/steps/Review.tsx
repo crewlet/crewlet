@@ -11,7 +11,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Callout, DescriptionList, Link, NoticeList, Text } from "@crewlethq/ui";
+import { Callout, DescriptionList, Disclosure, Link, NoticeList, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
@@ -28,10 +28,12 @@ import {
   CLOUD_FIELDS,
   STEP_LABELS,
   canExecute,
+  hasSandbox,
   factsOf,
   fieldOf,
   messageOf,
   modelId,
+  fixable,
   stepOf,
   type Draft,
 } from "../draft.ts";
@@ -96,7 +98,8 @@ export function Review({
   onGo,
 }: {
   draft: Draft;
-  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor"> &
+    Partial<Pick<ModelsData, "doc">>;
   dropped: readonly Dropped[];
   editing: boolean;
   /** What the model is used for today: none for a model being added. */
@@ -150,10 +153,6 @@ export function Review({
             notices={changes.map((line) => ({ key: line, title: line }))}
           />
         </Callout>
-      ) : editing ? (
-        <Text as="p" variant="caption" tone="secondary">
-          No seat changes model.
-        </Text>
       ) : null}
       <div className="models-review-head">
         <HarnessMark harness={draft.harness} size={MARK_SIZE} named tooltip />
@@ -187,18 +186,18 @@ export function Review({
             ? [
                 [
                   "Where it runs",
-                  draft.runIn ? RUN_IN[draft.runIn] : "Where the company default says",
+                  // NOTHING SET UP: this save sets up this engine's host (`nextDocument`).
+                  data.doc !== undefined && data.doc !== null && !hasSandbox(data.doc)
+                    ? `${RUN_IN.direct}, set up by this save`
+                    : draft.runIn
+                      ? RUN_IN[draft.runIn]
+                      : "Where the company default says",
                 ] as const,
               ]
             : []),
-          [
-            "Used for",
-            <span key="uses" className="col">
-              {summaryOf(data, draft).map((line) => (
-                <span key={line}>{line}</span>
-              ))}
-            </span>,
-          ] as const,
+          ["Used for", <UsedFor key="uses" data={data} draft={draft} />] as const,
+          // NO SEAT MOVES, said in the same list as everything else it saves.
+          ...(editing && changes.length === 0 ? [["Seats", "No seat changes model"] as const] : []),
           [
             "Limits",
             `${draft.concurrent || DEFAULT_HARNESS_MAX_CONCURRENT} processes at once, ${draft.timeout || DEFAULT_HARNESS_TIMEOUT_SECONDS} s without progress`,
@@ -231,11 +230,16 @@ export function Review({
                 key: `${p.path}-${i}`,
                 subject: fieldOf(p, draft.key),
                 title: messageOf(p),
-                action: (
-                  <button type="button" className="t-link" onClick={() => onGo(step, p)}>
-                    Fix in {STEP_LABELS[step]}
-                  </button>
-                ),
+                // A PROBLEM NO STEP CAN FIX (a program missing on the host) offers no step.
+                ...(fixable(p)
+                  ? {
+                      action: (
+                        <button type="button" className="t-link" onClick={() => onGo(step, p)}>
+                          Fix in {STEP_LABELS[step]}
+                        </button>
+                      ),
+                    }
+                  : {}),
               };
             })}
           />
@@ -260,7 +264,8 @@ export function Review({
         </Callout>
       ) : check.kind === "ready" ? (
         <>
-          <Callout variant="success" title="The engine accepts this change">
+          {/* THE CHANGE IS VALID, which is not the test call passing: the row above says that. */}
+          <Callout variant="success" title="The configuration is valid">
             {editing ? "Saving" : "Creating"} it makes one revision, applied at once on every node
             with no restart.
           </Callout>
@@ -288,5 +293,39 @@ export function Review({
         </Text>
       ) : null}
     </div>
+  );
+}
+
+/** Past this many seats, Used for counts them and keeps their names behind a disclosure. */
+const NAMED_SEATS = 3;
+
+/**
+ * What the model is used for: a line per group of jobs, counting the seats
+ * past a few ("12 seats will code with sonnet"), every name a press away.
+ */
+function UsedFor({
+  data,
+  draft,
+}: {
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
+  draft: Draft;
+}) {
+  const short = summaryOf(data, draft, NAMED_SEATS);
+  const whole = summaryOf(data, draft);
+  return (
+    <span className="col">
+      {short.map((line) => (
+        <span key={line}>{line}</span>
+      ))}
+      {whole.join() !== short.join() ? (
+        <Disclosure title="The seats">
+          <span className="col">
+            {whole.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
+          </span>
+        </Disclosure>
+      ) : null}
+    </span>
   );
 }
