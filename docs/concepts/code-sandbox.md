@@ -2219,8 +2219,10 @@ which holds about thirteen times a value of `pwd=x` lines, whose redaction
 lengthens most). Its time is the redaction's, and what harnesses and ordinary
 tools write sets the waits: of that, one value of `password:` lines streamed to
 the 256 MiB budget is the slowest, about 45 seconds on two cores for a person
-and 56 for a seat's words; dense tokens about 42, every credential shape 33, a
-kept session's text 16. A value no harness or tool writes at that density, a
+and 56 for a seat's words; every credential shape 33. Dense tokens and a kept
+session's text are mostly random bytes, which pack to three quarters of their
+size, so no archive within the 32 MiB bound holds the budget's worth of them. A
+value no harness or tool writes at that density, a
 password's value every six or seven bytes the whole budget long (`pwd=x`
 lines), takes 98 to 129 seconds for a person and about 163 for a seat's words,
 sets no wait, and fails closed. A node

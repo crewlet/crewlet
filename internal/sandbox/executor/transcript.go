@@ -408,10 +408,12 @@ const TranscriptReadHeldBytes = 29 << 20
 // PersonTranscriptReadWorst is the longest a person's read takes at its
 // bounds, of what harnesses and ordinary tools write, measured likewise: one
 // value of `password:` lines streamed to the read budget, 41.5 to 42.0 s for
-// 240 MiB, 45 s at the budget (dense tokens 42 s, every credential shape 33, a
-// kept session 16). A value of `pwd=x` lines, a password's value every six
-// bytes the budget long, which no harness or tool writes, takes 98 s (129
-// escaped in a JSON string): it sets no wait, and a read of it fails closed
+// 240 MiB, 45 s at the budget (every credential shape 33). Dense tokens and a
+// kept session's text, mostly random bytes, pack to 179 and 177 MiB of 240
+// ([keptGzipLevel]), so no archive within its 32 MiB bound holds the budget's
+// worth of them. A value of `pwd=x` lines, a password's value every six bytes
+// the budget long, which no harness or tool writes, takes 98 s (129 escaped in
+// a JSON string): it sets no wait, and a read of it fails closed
 // ([TranscriptAnsweredWithin]).
 const PersonTranscriptReadWorst = 45 * time.Second
 

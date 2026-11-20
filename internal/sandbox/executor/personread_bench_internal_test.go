@@ -25,9 +25,9 @@ import (
 // credential shape, the two whose redaction lengthens most, dense tokens, a
 // kept session's lines) and of 64 MiB; one held just within the value bound;
 // what one read holds at once; a seat's read for words; and one value of each
-// slow text to the read budget, the wait set by those a harness writes, never
-// by `pwd=x` lines (pwd, pwd_escaped). One case a process under
-// GODEBUG=gctrace=1: held is the largest live heap at GOGC=10, peak the
+// slow text to the read budget, the wait set by those a stored session holds
+// that long, never by `pwd=x` lines (pwd, pwd_escaped). One case a process
+// under GODEBUG=gctrace=1: held is the largest live heap at GOGC=10, peak the
 // largest heap and the time at the default GOGC.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAPersonsReadAtItsBounds$/^<case>$' -benchtime 1x
