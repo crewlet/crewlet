@@ -79,6 +79,9 @@ const (
 
 // Submitted is one finding as the model submits it.
 type Submitted struct {
+	// Headline is one line leading with the finding's number; every number
+	// it says must be one of its facts.
+	Headline string       `json:"headline,omitempty"`
 	Title    string       `json:"title"`
 	Why      string       `json:"why"`
 	Severity Severity     `json:"severity"`
@@ -202,6 +205,9 @@ type Grounding struct {
 	DryRun func(Change) error
 	// Answered are the fingerprints people answered wrong or already known, still in force.
 	Answered map[string]bool
+	// RecordsOptional lets a finding rest on cited numbers alone, for an
+	// investigation whose reads name no item or turn (a model entry's hours).
+	RecordsOptional bool
 }
 
 // Bounds of an analyst finding's words.
@@ -241,7 +247,7 @@ func Ground(submitted []Submitted, served *Served, g Grounding) ([]Finding, map[
 }
 
 func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
-	if len(s.Records) == 0 || len(s.Facts) == 0 {
+	if (len(s.Records) == 0 && !g.RecordsOptional) || len(s.Facts) == 0 {
 		return Finding{}, DropNoEvidence
 	}
 	records := []Record{}
@@ -265,7 +271,7 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		}
 		facts = append(facts, Fact{Key: c.Key, Value: c.Value, Label: strings.TrimSpace(c.Label)})
 	}
-	if !plainWords(s.Title, MaxAnalystTitle) || !plainWords(s.Why, MaxAnalystWhy) ||
+	if !plainWords(s.Headline, MaxAnalystTitle) || !plainWords(s.Title, MaxAnalystTitle) || !plainWords(s.Why, MaxAnalystWhy) ||
 		!plainWords(s.Item, MaxAnalystTitle) || (s.Severity != SeverityCosts && s.Severity != SeverityNote) {
 		return Finding{}, DropWords
 	}
@@ -278,7 +284,7 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		return Finding{}, DropFix
 	}
 	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
-		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item,
+		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item, Headline: s.Headline,
 		Evidence: facts, Records: records, Fix: fix}
 	f.Focus = Fingerprint(f)
 	if repeats(f, g.Rules) {
@@ -413,6 +419,14 @@ func Fingerprint(f Finding) string {
 	ids := make([]string, 0, len(f.Records))
 	for _, r := range f.Records {
 		ids = append(ids, string(r.Kind)+":"+r.ID)
+	}
+	// A FINDING RESTING ON NUMBERS ALONE (an investigation's, about a model
+	// entry's hours) is told apart by what it counts: the keys of its facts,
+	// which stay the same however its numbers move.
+	if len(ids) == 0 {
+		for _, fact := range f.Evidence {
+			ids = append(ids, "fact:"+fact.Key)
+		}
 	}
 	slices.Sort(ids)
 	sum := sha256.Sum256([]byte(strings.Join(append([]string{string(f.Subject.Kind), f.Subject.Seat,

@@ -73,6 +73,7 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 				"type": "object", "additionalProperties": false,
 				"required": []string{"title", "why", "severity", "subject", "facts", "records", "fix"},
 				"properties": map[string]any{
+					"headline": map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
 					"title":    map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
 					"why":      map[string]any{"type": "string", "maxLength": advisor.MaxAnalystWhy},
 					"item":     map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
@@ -88,7 +89,7 @@ var submitSchema = sync.OnceValue(func() map[string]any {
 						"properties": map[string]any{"key": map[string]any{"type": "string"},
 							"label": map[string]any{"type": "string", "maxLength": advisor.MaxAnalystFactLabel},
 							"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}}}},
-					"records": map[string]any{"type": "array", "minItems": 1, "maxItems": advisor.MaxAnalystRecords,
+					"records": map[string]any{"type": "array", "maxItems": advisor.MaxAnalystRecords,
 						"items": map[string]any{"type": "object", "additionalProperties": false,
 							"required": []string{"kind", "id"}, "properties": map[string]any{
 								"kind": map[string]any{"enum": []string{string(advisor.RecordItem),
