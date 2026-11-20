@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -547,5 +548,134 @@ func TestTheFindingsPageNewestFirstByEveryFilter(t *testing.T) {
 	}
 	if _, _, err := r.Findings(t.Context(), advisordomain.Filter{Limit: advisordomain.MaxPageSize + 1}, stale); !errors.Is(err, advisordomain.ErrInvalid) {
 		t.Errorf("a page past the bound: %v, want ErrInvalid", err)
+	}
+}
+
+// A RUN SAYS WHAT IT DOES: a request for a deep run is pending as one, and the
+// run's record keeps its kind; a run that names none is a run of the rules.
+// Mutation: drop the kind from the request's row, and a press of Run deep runs
+// the rules.
+func TestARunSaysWhatItDoes(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const deep, rules = "5d8e3fa2-4c6b-4a71-9f2e-0b3c8d7e6f5a", "6e9f4ab3-5d7c-4b82-8a3f-1c4d9e8f7a6b"
+	for _, r := range []advisordomain.RunRequest{{Run: deep, By: "ada", RunKind: advisordomain.RunKindDeep},
+		{Run: rules, By: "ada"}} {
+		if _, err := n.writer.RequestRun(t.Context(), personCall("ada"), r); err != nil {
+			t.Fatalf("request %s: %v", r.Run, err)
+		}
+	}
+	if _, err := n.writer.RequestRun(t.Context(), personCall("ada"), advisordomain.RunRequest{
+		Run: "7fa05bc4-6e8d-4c93-9b4a-2d5e0f9a8b7c", By: "ada", RunKind: "everything"}); err == nil {
+		t.Error("a request of a kind no build knows was taken")
+	}
+	pending, err := n.reader().PendingRequests(t.Context(), stale)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending = %+v (%v)", pending, err)
+	}
+	kinds := map[string]advisordomain.RunKind{}
+	for _, p := range pending {
+		kinds[p.ID] = p.Kind
+	}
+	if kinds[deep] != advisordomain.RunKindDeep || kinds[rules] != advisordomain.RunKindRules {
+		t.Errorf("kinds = %v, want the deep press deep and the other the rules", kinds)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: deep,
+		Trigger: advisordomain.TriggerPerson, By: "ada", StartedAt: writerClock, EndedAt: writerClock.Add(time.Minute),
+		Status: advisordomain.RunDone, Classes: json.RawMessage(`[]`)}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	latest, found, err := n.reader().LatestRun(t.Context(), stale)
+	if err != nil || !found || latest.ID != deep || latest.Kind != advisordomain.RunKindDeep {
+		t.Errorf("latest = %+v (%v, %v), want the deep run, its kind kept from its request", latest, found, err)
+	}
+}
+
+// A DEEP RUN'S PROGRESS IS READ WHILE IT RUNS: each line is on the log as it is
+// written, the run in flight is the newest with lines and no record, and once
+// its record is written it is no longer live. Mutation: read only the run's
+// record, and nothing shows until it ends.
+func TestADeepRunsProgressIsReadWhileItRuns(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "8a1b6cd5-7f9e-4da4-8c5b-3e6f1a0b9c8d"
+	for i, text := range []string{"reading capacity", "testing: releases pile up behind one seat"} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Text: text}); err != nil {
+			t.Fatalf("progress: %v", err)
+		}
+	}
+	live, lines, found, err := n.reader().LiveProgress(t.Context(), stale)
+	if err != nil || !found || live != run || len(lines) != 2 || lines[1].Text != "testing: releases pile up behind one seat" {
+		t.Fatalf("live = %s %+v (%v, %v), want the run's two lines", live, lines, found, err)
+	}
+	if _, err := n.writer.RecordRun(t.Context(), engineCall(), advisordomain.RunRecord{Run: run,
+		Trigger: advisordomain.TriggerSchedule, StartedAt: writerClock, EndedAt: writerClock.Add(time.Hour),
+		Status: advisordomain.RunDone, Classes: json.RawMessage(`[]`), RunKind: advisordomain.RunKindDeep}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if _, _, found, err := n.reader().LiveProgress(t.Context(), stale); err != nil || found {
+		t.Errorf("after its record the run is still live (%v, %v)", found, err)
+	}
+}
+
+// A DEEP RUN'S NEWEST CHECKPOINT IS WHAT A TAKEOVER READS: a checkpoint alone
+// writes no progress line, the newest the run wrote stands, and a checkpoint
+// that is not one JSON object, or past its bound, is refused.
+// Mutation: keep the first checkpoint, and a holder taking the run over
+// answers again what was already answered.
+func TestADeepRunsNewestCheckpointIsWhatATakeoverReads(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run = "3c2d1e0f-9a8b-4c7d-8e6f-5a4b3c2d1e0f"
+	if _, found, err := n.reader().Checkpoint(t.Context(), run, stale); err != nil || found {
+		t.Fatalf("a run that wrote none has a checkpoint (%v, %v)", found, err)
+	}
+	for i, body := range []string{`{"agenda":[{"id":"A1","verdict":"confirmed"}]}`,
+		`{"agenda":[{"id":"A1","verdict":"confirmed"},{"id":"A2","verdict":"refuted"}]}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Minute), Checkpoint: json.RawMessage(body)}); err != nil {
+			t.Fatalf("checkpoint %d: %v", i, err)
+		}
+	}
+	body, found, err := n.reader().Checkpoint(t.Context(), run, stale)
+	if err != nil || !found || !strings.Contains(string(body), `"A2"`) {
+		t.Errorf("checkpoint = %s (%v, %v), want the newest", body, found, err)
+	}
+	if _, lines, live, err := n.reader().LiveProgress(t.Context(), stale); err != nil || (live && len(lines) != 0) {
+		t.Errorf("a checkpoint alone said lines %+v (%v, %v)", lines, live, err)
+	}
+	for _, bad := range []string{`[1,2]`, `{"agenda":`, `{"x":"` + strings.Repeat("a", advisordomain.MaxCheckpointBytes) + `"}`} {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run, At: writerClock,
+			Checkpoint: json.RawMessage(bad)}); !errors.Is(err, advisordomain.ErrInvalid) {
+			t.Errorf("checkpoint %.20s... answered %v, want refused", bad, err)
+		}
+	}
+}
+
+// A RUN'S WHOLE TRAIL IS READ, PAST ITS RECORD: every line one run wrote,
+// oldest first, as many as a deep run writes, and no other run's.
+// Mutation: read the old 200 lines, and a long run's last verdicts are lost.
+func TestARunsWholeTrailIsRead(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	const run, other = "6d5c4b3a-2f1e-4d0c-9b8a-7f6e5d4c3b2a", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	const lines = 250
+	for i := range lines {
+		if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: run,
+			At: writerClock.Add(time.Duration(i) * time.Second), Text: fmt.Sprintf("line %d", i)}); err != nil {
+			t.Fatalf("progress %d: %v", i, err)
+		}
+	}
+	if _, err := n.writer.Progress(t.Context(), engineCall(), advisordomain.RunProgress{Run: other,
+		At: writerClock, Text: "another run"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := n.reader().RunProgress(t.Context(), run, stale)
+	if err != nil || len(got) != lines || got[0].Text != "line 0" || got[lines-1].Text != "line 249" {
+		t.Fatalf("trail = %d lines (%v), want all %d, oldest first", len(got), err, lines)
+	}
+	if advisordomain.MaxProgressLines < 400 {
+		t.Errorf("a read answers %d lines, fewer than a deep run writes", advisordomain.MaxProgressLines)
 	}
 }

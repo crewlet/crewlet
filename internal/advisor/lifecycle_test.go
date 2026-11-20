@@ -277,3 +277,24 @@ func TestEveryFactADetectorStatesHasWords(t *testing.T) {
 		t.Fatalf("found %d facts in the detectors' source; the scan reads nothing", found)
 	}
 }
+
+// A PARTIAL READING OPENS WHAT IT SAW AND CLOSES NOTHING: an investigation its bound cut short lists
+// what it found, and what it did not get to stays as it is. Mutation: close the unobserved on a
+// partial reading, and a run that ran out of time resolves findings it never looked at.
+func TestAPartialReadingOpensWhatItSawAndClosesNothing(t *testing.T) {
+	t.Parallel()
+	model := func(seat string) advisor.Finding {
+		f := roundCap(seat, 3)
+		f.Class, f.Source = advisor.ClassModel, advisor.SourceModel
+		return f
+	}
+	old := storedAs(t, observed(model("dev")), advisor.StateOpen)
+	r := advisor.Reading{At: at, Groups: []advisor.Group{advisor.GroupModel}, Partial: true}
+	if got := steps(advisor.Reconcile([]advisor.Stored{old}, []advisor.Observation{observed(model("qa"))}, r)); !slices.Equal(got, []string{"open"}) {
+		t.Errorf("partial steps = %v, want the new one opened and nothing closed", got)
+	}
+	r.Partial = false
+	if got := steps(advisor.Reconcile([]advisor.Stored{old}, []advisor.Observation{observed(model("qa"))}, r)); len(got) != 2 {
+		t.Errorf("whole steps = %v, want the new one opened and the old one closed", got)
+	}
+}

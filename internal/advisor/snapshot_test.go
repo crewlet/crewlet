@@ -127,8 +127,10 @@ func TestEveryClassSaysWhatItConcluded(t *testing.T) {
 		by[o.Class] = o
 	}
 	for _, class := range append(advisor.EvidenceClasses(), advisor.ClassAddSeat, advisor.ClassRemoveSeat) {
-		if _, ok := by[class]; !ok {
+		if _, ok := by[class]; !ok && !advisor.Shared(class) {
 			t.Errorf("%s has no outcome", class)
+		} else if ok && advisor.Shared(class) {
+			t.Errorf("%s is never listed, yet the run says it concluded %s", class, by[class].Outcome)
 		}
 	}
 	for _, c := range []struct {
