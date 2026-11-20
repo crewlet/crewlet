@@ -89,12 +89,13 @@ const settleEvery = 4 * MaxReach
 
 // unsettledBytes is the most text a live stream holds unsettled. Past it the
 // stream hands that text to its stages and settles no more for the rest of
-// its life, trailing its text as a [NewStream] does: its stages keep no map
-// back to the text as written, so the settled point cannot be found again.
-// Settled holds back complete lines only while a key's block or a password's
-// value may still be read across them ([MaxKeyBlockBytes], [MaxReach]), so
-// only a line longer than this, unfinished or held whole by Settled, gets
-// here.
+// its life, trailing its text as a [NewStream] does. [Settled] finds a
+// settled point only reading on from the last one, no longer held, and a
+// window read alone finds none: what a line's last password's key takes as
+// its value turns on every key before it on the line. Settled holds back
+// complete lines only while a key's block or a password's value may still be
+// read across them ([MaxKeyBlockBytes], [MaxReach]), so only a line longer
+// than this, unfinished or held whole by Settled, gets here.
 const unsettledBytes = 1 << 20
 
 // ErrDecidedEarly is what a [Stream] answers, wrapped with the first byte of
