@@ -73,34 +73,30 @@ concurrency:
 # them, 6.69 GB in run 42418325020. So two pushes overran the limit, and the
 # pull requests after them found their jobs' entries gone and started cold
 # (#753: the lint job's among them, and a cold lint then ran into its timeout).
-# Measured from that run's saves, as stored (compressed), an entry is now kept
-# only where it shortens the run's longest wait, or where a second job shares
-# it:
-#   - the race shards (4, 2.20 GB) and the end-to-end shards (then 2, 0.63
-#     GB; the third, added for the reason THE SHARD COUNTS gives, adds about
-#     one shard's 0.25-0.37 GB), the run's longest jobs at 7-15 minutes each;
-#   - `build + vet` (1.15 GB), which `golangci-lint` restores too: loading the
+# An entry is now kept only where it shortens the run's longest wait, or where
+# a second job shares it. As main's run 44827033456 stored them (compressed):
+#   - the race shards (5, 2.58 GB) and the end-to-end shards (3, 0.77 GB), the
+#     run's longest jobs at 7-17 minutes each;
+#   - `build + vet` (0.77 GB), which `golangci-lint` restores too: loading the
 #     packages for the linter compiles what that job's `go build` and `go vet`
 #     compile, and a cold lint took 370-610 s against 110-150 s warm;
 #   - `test plan` (13 MB), which `test weights` restores for the one tool the
-#     two run, and `git recipe (macOS)` (56 MB);
-#   - the linter's own analysis cache (6 MB), kept by its job and saved whole.
+#     two run, and the two macOS jobs' (54 and 72 MB);
+#   - the linter's own analysis cache (0.62 GB), kept by its job, saved whole.
 # The cross-compile legs keep NONE: 1.78 GB between the four, for a leg that
 # built in 19-24 s warm and in 110-167 s with no cache at all (run
 # 42423731626, the first without), beside shards that run ten minutes.
-# By those figures a push saves about 4.04 GB. With each build cache pruned to
-# exactly what its job used (THE EPOCH, below), the first push under this
-# budget saved 2.98 GB (run 42427469948). The entries keyed on what they hold
-# rather than on the commit are saved only when that changes: the modules
-# (0.27 GB), the pinned gits (0.06 GB), the pinned Chromiums (0.30 GB, both
-# linux64 builds as actions/cache stores them, tar and zstd, measured from a
-# development machine's cache) and npm's cache (0.04 GB). `caches`, at the end
-# of the run, then deletes every entry a newer one of its kind supersedes. So
-# the repository holds one set, 3.36 GB in 15 entries after that run and 3.66
-# GB in 16 with the Chromiums', and a push's saves take it to about 6.6 GB
-# until that job runs, 6.9 GB on the push that moves a Chromium pin or the
-# layout of its recipe; the third end-to-end shard puts both about 0.3 GB
-# higher, still clear of the 10 GB.
+# Each build cache is pruned to exactly what its job used (THE EPOCH, below),
+# and a push saves the twelve of them, the linter's and the test weights: 4.89
+# GB in 14 entries. The entries keyed on what they hold rather than on the
+# commit are saved only when that changes: the modules (0.27 GB), the pinned
+# gits (0.06 GB, Linux's and macOS's), the pinned Chromiums (0.36 GB), npm's
+# cache (0.05 GB) and the sshd test images (0.11 GB). `caches`, at the end of
+# the run, then deletes every entry a newer one of its kind supersedes. So the
+# repository holds one set, 5.73 GB in 20 entries, and a push's saves take it
+# to about 10.6 GB until that job runs, 15.5 GB while two pushes' runs
+# overlap: past the 10 GB, so eviction takes entries again, the newest of a
+# kind among them.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -1291,8 +1287,8 @@ jobs:
   # so the repository holds one set rather than whatever eviction leaves. An
   # entry's kind is its key without the last part, which is the commit for an
   # entry saved on every push and the hash of what it holds for the rest (the
-  # modules, the pinned gits, the pinned Chromiums, npm's cache, the test
-  # weights). Only main's entries of the kinds this file saves are listed,
+  # modules, the pinned gits, the pinned Chromiums, npm's cache, the sshd test
+  # images). Only main's entries of the kinds this file saves are listed,
   # newest first, and the first of each kind is kept. So no kind is ever
   # emptied, and a job that failed, and therefore saved nothing, keeps the
   # entry it saved last.
@@ -1330,7 +1326,7 @@ jobs:
           kept=0 count=0
           while IFS=$'\t' read -r id key size; do
             case "$key" in
-              gobuild-*|gomod-*|git-*|chromium-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              gobuild-*|gomod-*|git-*|chromium-*|sshdtest-*|test-weights-*|golangci-lint-*|npm-*) ;;
               *) continue ;;
             esac
             kind="${key%-*}-"
