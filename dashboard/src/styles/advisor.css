@@ -192,6 +192,14 @@
   gap: var(--spacing-2);
 }
 
+/* The seat work moves to: its label beside the picker, on one line. */
+.advisor-apply__to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
 /* On a finding's page the panel stands under its fix on the quiet ground. */
 .advisor-apply-place {
   padding: var(--spacing-3);

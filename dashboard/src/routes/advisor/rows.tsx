@@ -42,7 +42,7 @@ import { marked } from "~/ui/Problems.tsx";
 import type { AdvisorKeptFinding, AdvisorRecordRef } from "~/protocol/advisorFindings.ts";
 import type { DismissReason } from "./decisions.tsx";
 import { figure } from "./Numbers.tsx";
-import { findingView, type ViewAction, type ViewStat } from "./view.ts";
+import { REASSIGN, findingView, type ViewAction, type ViewStat } from "./view.ts";
 import { toneOf } from "./words.ts";
 
 /** A cited record's page and how a list names it; null for one that has no page. */
@@ -225,6 +225,18 @@ export function ActionButton({
           {action.label}
         </Button>
       );
+    case "reassign":
+      // MOVED IN PLACE, as Apply is: re-checked, the moves shown, confirmed.
+      return (
+        <Button
+          size="small"
+          variant="secondary"
+          onClick={() => actions.apply(f, REASSIGN)}
+          {...named}
+        >
+          {action.label}
+        </Button>
+      );
   }
 }
 
@@ -250,6 +262,8 @@ function menuEntry(
         : null;
     case "review":
       return { key: `review-${i}`, label: a.label, onSelect: () => actions.review(f) };
+    case "reassign":
+      return { key: `reassign-${i}`, label: a.label, onSelect: () => actions.apply(f, REASSIGN) };
   }
 }
 
@@ -399,7 +413,11 @@ export function findingItem(
 function optionLabel(f: AdvisorKeptFinding, option: number): string | null {
   const v = findingView(f).actions;
   const all = [v.primary, ...v.secondary];
-  const a = all.find((x) => x?.kind === "apply" && x.option === option);
+  const a = all.find(
+    (x) =>
+      (x?.kind === "apply" && x.option === option) ||
+      (x?.kind === "reassign" && option === REASSIGN),
+  );
   return a ? a.label : null;
 }
 

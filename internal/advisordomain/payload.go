@@ -147,15 +147,26 @@ type RunRequest struct {
 }
 
 // RunProgress is one line of a deep run's progress (op `progress` on the run),
-// readable from any node while the run is in flight.
+// readable from any node while the run is in flight, or its checkpoint, or
+// both.
 type RunProgress struct {
 	Run  string    `json:"run"`
 	At   time.Time `json:"at"`
 	Text string    `json:"text"`
+	// Checkpoint is where the run stands, as the deep run keeps it (its
+	// agenda with each verdict and the reads it asked), so a holder that
+	// takes the run over resumes from it rather than starting over; the
+	// newest one a run wrote stands (ADR-0166). Absent from a line alone.
+	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
 
-// MaxProgressBytes bounds one progress line.
-const MaxProgressBytes = 512
+// MaxProgressBytes bounds one progress line, and MaxCheckpointBytes one
+// checkpoint: an agenda of a few dozen items with their verdicts, and the
+// reads asked, with room.
+const (
+	MaxProgressBytes   = 512
+	MaxCheckpointBytes = 64 << 10
+)
 
 // RunRecord is a run's end (op `record` on the run).
 type RunRecord struct {

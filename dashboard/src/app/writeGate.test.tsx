@@ -487,6 +487,11 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     tool: "update_work_item",
   },
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/, tool: "restore_work_item" },
+  MoveWorkConfirm: {
+    props: { label: "Confirm", onConfirm: () => {} },
+    name: /^Confirm$/,
+    tool: "update_work_item",
+  },
   EditProjectButton: {
     props: { project: "ENG", target: "2026-12-18", lead: "eng-lead" },
     name: /^Edit project$/,

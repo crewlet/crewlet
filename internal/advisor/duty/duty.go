@@ -21,6 +21,7 @@ package duty
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -137,6 +138,11 @@ type Log interface {
 	WriteReport(ctx context.Context, r advisor.Report) error
 	// Progress writes one line of a deep run's progress.
 	Progress(ctx context.Context, run string, at time.Time, text string) error
+	// Checkpoint writes where a deep run stands, which a holder taking it
+	// over resumes from.
+	Checkpoint(ctx context.Context, run string, at time.Time, body json.RawMessage) error
+	// Resume is the newest checkpoint run wrote, nil where it wrote none.
+	Resume(ctx context.Context, run string) (json.RawMessage, error)
 	// Explain writes the model's explanation of a finding's verdict; one
 	// whose verdict moved since is left for the next pass.
 	Explain(ctx context.Context, e advisor.Explained) error
