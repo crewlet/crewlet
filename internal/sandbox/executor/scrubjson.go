@@ -1073,6 +1073,14 @@ func (b *bitList) get(i int) bool {
 // count is how many bits b holds.
 func (b *bitList) count() int { return b.n }
 
+// truncate keeps b's first n bits, letting every block past them go.
+func (b *bitList) truncate(n int) {
+	const per = bitBlockWords * 64
+	keep := (n + per - 1) / per
+	clear(b.blocks[keep:])
+	b.blocks, b.n = b.blocks[:keep], n
+}
+
 // clear empties b, keeping its first block and letting every other go.
 func (b *bitList) clear() {
 	b.n = 0
