@@ -35,7 +35,9 @@
  * reading. Each page states why it ends where it does — the page's
  * own bound, with more to read, the most one read takes, with nothing more to
  * show, or that the rest could not be read, and why — and an entry cut to its
- * bound says how large the whole was.
+ * bound says how large the whole was. A page whose read runs past its wait
+ * (`TRANSCRIPT_QUERY_TIMEOUT_MS`) FAILS CLOSED: nothing of it is shown, and it
+ * says only that it could not be read in time.
  *
  * The account of how the session's turn ended is the LIST'S ROW, which the
  * list's poll keeps current: a turn's end is recorded with no new capture, so
@@ -65,7 +67,7 @@ import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@cr
 import { FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState, TryAgain } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
 import { fmtBytes, fmtDateTime, fmtExact, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
@@ -128,6 +130,15 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
   malformed: "The session is not a readable archive",
   unsupported: "This build does not read this session",
 };
+
+/**
+ * What a transcript page whose read ran past its wait says, the first page
+ * and a later one: that it could not be read in time, and nothing of why,
+ * which the screen cannot know.
+ */
+export const TIMED_OUT_TITLE = "This transcript could not be read in time";
+export const TIMED_OUT_PAGE =
+  "The next page of this transcript could not be read in time. Try again.";
 
 /**
  * A transcript entry with its place among all of the transcript's, in the
@@ -451,7 +462,19 @@ function Transcript({
       {pages.loading && !first && (
         <Skeleton variant="text" rows={6} label="Loading this session's transcript" />
       )}
-      <QueryState error={pages.error} refusal={pages.refusal} loading={pages.loading && !first}>
+      {pages.error === "timeout" && (
+        // A READ PAST ITS WAIT FAILS CLOSED: the engine ended it there
+        // (`TRANSCRIPT_QUERY_TIMEOUT_MS`), so nothing of it is shown, and the
+        // screen cannot know why it ran long, so it says only that.
+        <Callout variant="warning" action={<TryAgain />}>
+          <strong>{TIMED_OUT_TITLE}.</strong>
+        </Callout>
+      )}
+      <QueryState
+        error={pages.error === "timeout" ? null : pages.error}
+        refusal={pages.refusal}
+        loading={pages.loading && !first}
+      >
         {first && latest && (
           <>
             <SessionAccount row={latest} />
@@ -511,17 +534,26 @@ function Transcript({
                       Read it again from the start
                     </Button>
                   </>
-                ) : pages.pageError ? (
-                  <QueryState error={pages.pageError} refusal={null} loading={false} />
                 ) : (
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    onClick={pages.next}
-                    disabled={pages.paging}
-                  >
-                    {pages.paging ? "Loading…" : "Load more of the transcript"}
-                  </Button>
+                  <>
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={pages.next}
+                      disabled={pages.paging}
+                    >
+                      {pages.paging ? "Loading…" : "Load more of the transcript"}
+                    </Button>
+                    {/* BESIDE THE CONTROL, which asks the page again; a page
+                        past its wait fails closed as the first does. */}
+                    {pages.pageError === "timeout" ? (
+                      <span className="t-caption" role="alert">
+                        {TIMED_OUT_PAGE}
+                      </span>
+                    ) : pages.pageError ? (
+                      <PageFailed error={pages.pageError} />
+                    ) : null}
+                  </>
                 )}
               </footer>
             )}

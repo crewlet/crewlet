@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
 import { contactLabel } from "./seat/Settings.tsx";
+import { TIMED_OUT_PAGE, TIMED_OUT_TITLE } from "./seat/Sessions.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
@@ -2902,6 +2903,61 @@ test("every page of a transcript waits as long as a read of a session can take",
   for (const page of pages) expect(page.waitMs).toBe(TRANSCRIPT_QUERY_TIMEOUT_MS);
   // AND THE SESSIONS' LIST, an ordinary question, waits the socket's own.
   expect(askedFor("executor_sessions")[0]?.waitMs).toBeUndefined();
+});
+
+// A TRANSCRIPT READ PAST ITS WAIT FAILS CLOSED: a first page the socket gave up
+// on (`timeout`) shows nothing of the session and says only that it could not
+// be read in time, with Try again, which asks it again.
+// Mutation: draw a timed-out page through the shared banner, and its words say
+// the engine did not answer rather than that the transcript was not read.
+test("a transcript read past its wait says only that it could not be read in time", async () => {
+  let timeouts = 1;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: () =>
+        timeouts-- > 0
+          ? Promise.reject(new Error("timeout"))
+          : transcriptPage({ entries: [said("The session's words.")] }),
+    },
+  });
+  expect(await screen.findByText(`${TIMED_OUT_TITLE}.`)).toBeTruthy();
+  expect(screen.queryByText(/answer in time/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("The session's words.")).toBeTruthy();
+  expect(screen.queryByText(`${TIMED_OUT_TITLE}.`)).toBeNull();
+});
+
+// AND A LATER PAGE PAST ITS WAIT says so beside Load more, which asks it again,
+// the pages read before it kept.
+// Mutation: draw the failure in the control's place, and there is nothing to
+// press but a Try again that asks no page.
+test("a later transcript page past its wait keeps Load more, which asks it again", async () => {
+  let timeouts = 1;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor
+          ? timeouts-- > 0
+            ? Promise.reject(new Error("timeout"))
+            : transcriptPage({ entries: [said("The second page.")], from: 1 })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText(TIMED_OUT_PAGE)).toBeTruthy();
+  expect(screen.getByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("The second page.")).toBeTruthy();
+  expect(screen.queryByText(TIMED_OUT_PAGE)).toBeNull();
 });
 
 // A TRANSCRIPT READ THE SCREEN STOPS WAITING FOR IS GIVEN UP ON: another session
