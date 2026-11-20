@@ -115,7 +115,9 @@ func ruleClasses() map[Class]string {
 		out[class] = ""
 	}
 	for _, d := range detectors {
-		out[d.class] = sourceWords[d.source]
+		if !Shared(d.class) {
+			out[d.class] = sourceWords[d.source]
+		}
 	}
 	for _, d := range documented {
 		out[d.class] = sourceWords[d.source]

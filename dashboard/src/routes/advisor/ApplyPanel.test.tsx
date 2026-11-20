@@ -1,7 +1,7 @@
 /**
- * Apply never sends a change the engine has not just re-derived: every
- * outcome of the re-check, drawn and acted on, over the engine's routes
- * stubbed at `fetch`.
+ * Apply, in place, never sends a change the engine has not just re-derived:
+ * every outcome of the re-check, drawn and acted on, over the engine's
+ * routes stubbed at `fetch`.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { LayerHost } from "@crewlethq/ui";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { ApplyDialog } from "./ApplyDialog.tsx";
+import { ApplyPanel } from "./ApplyPanel.tsx";
 import type { AdvisorKeptFinding, AdvisorRecheck } from "~/protocol/advisorFindings.ts";
 
 afterEach(() => {
@@ -65,6 +65,12 @@ const FINDING: AdvisorKeptFinding = {
     sentence: "Add a second Backend Engineer, cloned from the first.",
     options: [],
   },
+  headline: "Work waits for Backend Engineer every day",
+  stats: [],
+  chart: null,
+  seats: [],
+  actions: { primary: null, secondary: [] },
+  premise_checked_at: null,
 };
 
 /** A fix offering two changes, for the person to pick between. */
@@ -171,8 +177,8 @@ function host(children: ReactNode, standing: AdvisorKeptFinding = FINDING) {
   return asked;
 }
 
-function mount(onSettled = vi.fn(), finding: AdvisorKeptFinding = FINDING) {
-  host(<ApplyDialog finding={finding} onClose={() => {}} onSettled={onSettled} />);
+function mount(onSettled = vi.fn(), finding: AdvisorKeptFinding = FINDING, option = 0) {
+  host(<ApplyPanel finding={finding} option={option} onClose={() => {}} onSettled={onSettled} />);
   return onSettled;
 }
 
@@ -184,14 +190,13 @@ test("a finding that still holds shows the change and sends it under the revisio
   mount();
   expect(screen.getByText("Checking it still holds")).toBeDefined();
   await screen.findByText("It still holds");
-  expect(screen.getByText("Waiting a day")).toBeDefined();
   expect(screen.getByText("Seats in Engineering")).toBeDefined();
   expect(writes(sent)).toEqual([]);
 
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
-  await screen.findByText("The change was applied");
+  await screen.findByText(/checks its effect/);
   const [dry, real] = writes(sent);
   expect(dry!.path).toBe("/config/units/eng?dry_run=true");
   expect(real!.path).toBe("/config/units/eng");
@@ -222,17 +227,15 @@ test("a finding that changed since it was found shows what moved, and sends noth
   ]);
   const settled = mount();
   await screen.findByText("It changed since it was found");
-  expect(screen.getByText("Since this was found")).toBeDefined();
-  const moved = screen.getByRole("region", { name: "What moved since it was found" });
-  expect(within(moved).getByText("5 h")).toBeDefined();
-  expect(within(moved).getByText("9 h")).toBeDefined();
-  const now = screen.getByRole("region", { name: "As checked now" });
-  expect(within(now).getByText("9 h")).toBeDefined();
-  expect(screen.getByRole("button", { name: "Apply the updated change" })).toBeDefined();
-  expect(screen.getByRole("button", { name: "Keep it open" })).toBeDefined();
+  expect(screen.getByText("What moved")).toBeDefined();
+  expect(screen.getByText("5 h")).toBeDefined();
+  expect(screen.getByText("9 h")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Confirm the updated change" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
   expect(writes(sent)).toEqual([]);
-  // THE PAGE IS TOLD: the finding was revised.
-  expect(settled).toHaveBeenCalledTimes(1);
+  // THE PAGE IS TOLD: the finding was revised. Told from an effect after the
+  // render that shows it, so it is waited for, never assumed already done.
+  await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
 });
 
 test("a finding that no longer holds is closed, and nothing is sent", async () => {
@@ -278,8 +281,7 @@ test("a reader the change's route refuses is told who can apply it, and the find
     }),
   ]);
   const settled = mount();
-  await screen.findByText("You can't apply this one");
-  expect(screen.getByText(/An administrator can apply it/)).toBeDefined();
+  await screen.findByText(/An administrator can apply it/);
   expect(screen.queryByRole("button", { name: /Apply/ })).toBeNull();
   expect(writes(sent)).toEqual([]);
   expect(settled).not.toHaveBeenCalled();
@@ -300,7 +302,7 @@ test("a target that moved between the re-check and the send is re-checked, and t
   mount();
   await screen.findByText("It still holds");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
   await screen.findByText("It changed since it was found");
   expect(sent.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2);
@@ -316,7 +318,7 @@ test("an answer older than ten minutes is asked again, and sent only if the engi
   mount();
   await screen.findByText("It still holds");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
   await screen.findByText("It changed since it was found");
   expect(writes(sent)).toEqual([]);
@@ -326,9 +328,9 @@ test("an answer older than ten minutes is asked again, and sent only if the engi
   mount();
   await screen.findByText("It still holds");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
-  await screen.findByText("The change was applied");
+  await screen.findByText(/checks its effect/);
   expect(again.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2);
 });
 
@@ -339,147 +341,24 @@ test("an engine holding a newer revision of the finding answers the send with a 
   mount();
   await screen.findByText("It still holds");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
   await waitFor(() => expect(screen.getByText("It changed since it was found")).toBeDefined());
   expect(sent.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2);
 });
 
-// A FIX WITH SEVERAL CHANGES IS CHOSEN FROM, and each choice is re-checked
-// before it can be sent: the engine builds and checks the change picked.
-test("a fix with several options re-checks the one the person picks", async () => {
-  const sent = engine([answer(), answer({ digest: "sha256:opt1" })]);
-  mount(vi.fn(), TWO_OPTIONS);
-  await screen.findByText("It still holds");
-  // NONE IS CHOSEN FOR THE PERSON: no change is shown or offered until they pick.
-  const radios = screen.getAllByRole("radio");
-  expect(radios.map((r) => (r as HTMLInputElement).checked)).toEqual([false, false]);
-  expect(screen.queryByRole("region", { name: "The change" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Apply change" }).getAttribute("aria-disabled")).toBe(
-    "true",
-  );
-  await act(async () => {
-    fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
-  });
-  await waitFor(() => expect(sent.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2));
-  const bodies = sent
-    .filter((r) => r.path.endsWith("/recheck"))
-    .map((r) => JSON.parse(String(r.init.body)));
-  expect(bodies).toEqual([{ option: 0 }, { option: 1 }]);
-  // THE CHANGE IS NAMED BY THE OPTION PICKED, which says what it changes.
-  const change = await screen.findByRole("region", { name: "The change" });
-  expect(within(change).getByText("Raise the round cap")).toBeDefined();
-  expect(writes(sent)).toEqual([]);
-});
-
-// AN OPTION PICKED WHILE ANOTHER IS STILL BEING RE-CHECKED wins: the earlier
-// answer, however late it lands, is never shown for the option now picked
-// (Apply would send its change), and its cancelled request is no failure.
-test("a re-check answered after the person picked another option is dropped", async () => {
-  let releaseHeld: () => void = () => {};
-  const held = new Promise<void>((resolve) => {
-    releaseHeld = resolve;
-  });
-  let calls = 0;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string) => {
-      if (new URL(input).pathname !== `/advisor/findings/${ID}/recheck`) {
-        return json({ error: "not_found" }, 404);
-      }
-      calls += 1;
-      if (calls === 1) return json(answer({ digest: "sha256:option0" }));
-      // THE SECOND PICK'S ANSWER WAS ALREADY IN HAND when the person picked
-      // again: it lands after the third, whatever the abort.
-      if (calls === 2) {
-        await held;
-        return json(answer({ outcome: "holds", digest: "sha256:option1" }));
-      }
-      return json(answer({ outcome: "not_applicable", send: null, digest: "sha256:option0b" }));
-    }),
-  );
-  mount(vi.fn(), TWO_OPTIONS);
-  await screen.findByText("It still holds");
-  await act(async () => {
-    fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
-  });
-  await act(async () => {
-    fireEvent.click(screen.getByRole("radio", { name: /Add one seat/ }));
-  });
-  await screen.findByText("This no longer applies");
-  await act(async () => {
-    releaseHeld();
-    await held;
-  });
-  expect(screen.getByText("This no longer applies")).toBeDefined();
-  expect(screen.queryByText("It still holds")).toBeNull();
-  expect(screen.queryByRole("alert")).toBeNull();
-});
-
-// THE FIX'S CHOICES BELONG TO AN ANSWER THAT CAN SEND: while the dialog
-// checks, after an answer that sends nothing, after a refusal and after a
-// failure there is nothing to choose, and no choice is drawn.
-test("a fix's choices are drawn only beside an answer that can send", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => new Promise<Response>(() => {})),
-  );
-  mount(vi.fn(), TWO_OPTIONS);
-  expect(screen.getByText("Checking it still holds")).toBeDefined();
-  expect(screen.queryByRole("radio")).toBeNull();
-  cleanup();
-
-  const outcomes: [string, Partial<AdvisorRecheck>][] = [
-    [
-      "No longer needed",
-      {
-        outcome: "resolved",
-        send: null,
-        preview: null,
-        finding: { ...TWO_OPTIONS, state: "resolved", close_reason: "condition_cleared" },
-      },
-    ],
-    [
-      "This no longer applies",
-      {
-        outcome: "not_applicable",
-        send: null,
-        preview: null,
-        finding: { ...TWO_OPTIONS, state: "retired", close_reason: "subject_gone" },
-      },
-    ],
-    ["You can't apply this one", { refusal: { reason: "Needs admin.", who_can: "An admin." } }],
-  ];
-  for (const [said, patch] of outcomes) {
-    engine([answer({ finding: TWO_OPTIONS, ...patch })]);
-    mount(vi.fn(), TWO_OPTIONS);
-    await screen.findByText(said);
-    expect(screen.queryByRole("radio")).toBeNull();
-    cleanup();
-  }
-
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => json({ error: "internal_error", message: "Something went wrong." }, 500)),
-  );
-  mount(vi.fn(), TWO_OPTIONS);
-  await screen.findByText("Nothing was applied");
-  expect(screen.queryByRole("radio")).toBeNull();
-});
-
-// A FAILED RE-CHECK IS TITLED BY WHERE IT STANDS, the finding its subtitle:
-// titled by the finding, the dialog said the finding's title twice.
-test("a re-check that failed is titled by what happened, not by the finding twice", async () => {
+// A FAILED RE-CHECK IS SAID BY WHERE IT STANDS: the row it opened under
+// names the finding, so the panel says only what happened.
+test("a re-check that failed says what happened, never the finding again", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => json({ error: "internal_error", message: "Something went wrong." }, 500)),
   );
   mount();
   await screen.findByText("Couldn't check it");
-  const dialog = screen.getByRole("dialog");
-  expect(within(dialog).getAllByText(new RegExp(FINDING.title))).toHaveLength(1);
-  // WHOM IT IS ABOUT, beside what: the subtitle names the finding's subject.
-  expect(within(dialog).getByText(`${FINDING.subject.name}: ${FINDING.title}`)).toBeDefined();
+  const panel = document.querySelector(".advisor-apply") as HTMLElement;
+  expect(within(panel).queryByText(new RegExp(FINDING.title))).toBeNull();
+  expect(within(panel).getByRole("button", { name: "Close" })).toBeDefined();
 });
 
 // ANOTHER WINDOW APPLIED IT FIRST: the send is refused (412), the re-check
@@ -510,14 +389,17 @@ test("a finding applied from another window says so after this one's send is ref
     return json({ error: "precondition_failed", message: "It moved." }, 412);
   });
   cleanup();
-  const asked = host(<ApplyDialog finding={FINDING} onClose={() => {}} onSettled={() => {}} />, {
-    ...FINDING,
-    state: "applied",
-    effect_due_at: "2026-11-22T09:00:00Z",
-  });
+  const asked = host(
+    <ApplyPanel finding={FINDING} option={0} onClose={() => {}} onSettled={() => {}} />,
+    {
+      ...FINDING,
+      state: "applied",
+      effect_due_at: "2026-11-22T09:00:00Z",
+    },
+  );
   await screen.findByText("It still holds");
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   });
   await screen.findByText("Already applied");
   expect(screen.getByText(/applied from another window or by another person/)).toBeDefined();
@@ -545,7 +427,8 @@ test("the change and what moved are drawn as labelled rows in words", async () =
     }),
   ]);
   mount();
-  const change = await screen.findByRole("region", { name: "The change" });
+  await screen.findByText("The change");
+  const change = document.querySelector(".advisor-apply") as HTMLElement;
   expect(within(change).getByText("Watches the engine's health")).toBeDefined();
   expect(within(change).getByText("No")).toBeDefined();
   expect(within(change).getByText("Yes")).toBeDefined();
@@ -553,11 +436,41 @@ test("the change and what moved are drawn as labelled rows in words", async () =
   expect(within(change).queryByText("health_tools")).toBeNull();
 });
 
-// ON A PHONE THE DIALOG IS A SHEET, its facts, choices and change scrolling
-// between a still head and foot.
-test("the Apply dialog becomes a sheet on a phone", async () => {
-  engine([answer()]);
+// THE CHOICE IS MADE BEFORE THE PANEL OPENS: each change of a fix is its own
+// press, so the panel re-checks and sends exactly the option pressed.
+test("the panel re-checks the option its press named", async () => {
+  const sent = engine([answer({ digest: "sha256:opt1" })]);
+  mount(vi.fn(), TWO_OPTIONS, 1);
+  await screen.findByText("It still holds");
+  const checked = sent.filter((r) => r.path.endsWith("/recheck"));
+  expect(checked.map((r) => JSON.parse(String(r.init.body)))).toEqual([{ option: 1 }]);
+  expect(screen.queryByRole("radio")).toBeNull();
+});
+
+test("a fix on several seats sends every change in order before it is reported applied", async () => {
+  const qa = { ...SEND, path: "/config/units/qa", dry_run_path: "/config/units/qa?dry_run=true" };
+  const sent: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init: RequestInit = {}) => {
+      const url = new URL(input);
+      sent.push(`${init.method ?? "GET"} ${url.pathname}${url.search}`);
+      if (url.pathname.endsWith("/recheck")) return json(answer({ sends: [SEND, qa] }));
+      if (url.pathname.endsWith("/applied")) return json({ ...FINDING, state: "applied" });
+      return json({ result: url.search ? "valid" : "saved" }, 200, '"rev-42"');
+    }),
+  );
   mount();
   await screen.findByText("It still holds");
-  expect(document.querySelector(".crewlet-modal-overlay--phone-sheet")).not.toBeNull();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  });
+  await screen.findByText(/checks its effect/);
+  expect(sent.filter((s) => !s.includes("/advisor/"))).toEqual([
+    "PUT /config/units/eng?dry_run=true",
+    "PUT /config/units/eng",
+    "PUT /config/units/qa?dry_run=true",
+    "PUT /config/units/qa",
+  ]);
+  expect(sent.at(-1)).toBe(`POST /advisor/findings/${ID}/applied`);
 });

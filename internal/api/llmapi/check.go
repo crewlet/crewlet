@@ -80,6 +80,10 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request, _ *types.ModelAc
 		case err != nil:
 			return nil, err
 		}
+		// A SMOKE CHECK THAT ANSWERED is the model's last answer until its own calls say more.
+		if smoke && (checked.Failure == "" || checked.Failure == "rate_limit") {
+			s.engine.Verified(key, checked.At)
+		}
 		return boundedAnswer(answerOf(checked))
 	})
 	var running *ModelCheckInProgressError

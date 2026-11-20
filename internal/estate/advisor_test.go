@@ -131,6 +131,11 @@ func (d *advisorDesk) RecordRun(_ context.Context, c advisordomain.Call,
 	return d.wrote("record:"+r.Run+":"+string(r.Classes), c)
 }
 
+func (d *advisorDesk) Progress(_ context.Context, c advisordomain.Call,
+	p advisordomain.RunProgress) (statelog.Result, error) {
+	return d.wrote("progress:"+p.Run+":"+p.Text, c)
+}
+
 func (d *advisorDesk) WriteReport(_ context.Context, c advisordomain.Call,
 	r advisordomain.Report) (statelog.Result, error) {
 	return d.wrote("report:"+r.Week+":"+r.From.Format(time.RFC3339), c)
@@ -184,6 +189,15 @@ func (advisorDomainReads) Key(context.Context, string, statelog.Freshness) (advi
 }
 func (advisorDomainReads) Counts(context.Context, statelog.Freshness) (map[advisordomain.Severity]int, error) {
 	return map[advisordomain.Severity]int{advisordomain.SeverityCosts: 1}, nil
+}
+func (advisorDomainReads) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (advisorDomainReads) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
+func (advisorDomainReads) Checkpoint(context.Context, string, statelog.Freshness) (json.RawMessage, bool, error) {
+	return json.RawMessage(`{"agenda":[]}`), true, nil
 }
 func (advisorDomainReads) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
 	return advisordomain.RunRow{}, false, nil
