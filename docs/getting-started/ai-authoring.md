@@ -1,15 +1,12 @@
 # Authoring Your Company with an AI Assistant
 
-A Crewlet company is described in YAML: a mission, an org chart, seats
-with backstories, policies, integrations. That is a lot of surface to
-write from a blank file — so Crewlet ships the pieces an AI assistant
-needs to write it *with* you and check its own work.
-
-Three things make this work, and you can use any of them on their own:
+A Crewlet company is YAML: a mission, an org chart, seats with backstories,
+policies, integrations. Crewlet ships the pieces an AI assistant needs to write
+it *with* you and check its own work. Each works on its own:
 
 | Piece | What it gives you |
 |---|---|
-| **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
+| **`crewlet schema`** | JSON Schema generated from the models: the authoritative field list, for your editor, CI or an agent |
 | **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, their text as written, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
@@ -17,9 +14,8 @@ Three things make this work, and you can use any of them on their own:
 
 ## Walkthrough
 
-End to end, from nothing to a running company. The
-[quickstart](quickstart.md) builds the same shape by hand if you'd
-rather see every field explained first.
+From nothing to a running company. The [quickstart](quickstart.md) builds the
+same shape by hand, every field explained.
 
 ### 1. Give your assistant the skill
 
@@ -30,10 +26,9 @@ mkdir -p ~/.claude/skills && cp -r skills/company-architect ~/.claude/skills/
 ```
 
 No checkout, or a different assistant? The skill is one self-contained
-markdown file with absolute links —
+markdown file with absolute links:
 [fetch it](https://github.com/crewlet/crewlet/blob/main/skills/company-architect/SKILL.md)
-and paste or attach it. See [Installing the skill](#the-company-architect-skill)
-for per-tool detail.
+and paste or attach it. See [Installing the skill](#the-company-architect-skill).
 
 ### 2. Say what you want
 
@@ -42,42 +37,41 @@ for per-tool detail.
 
 ### 3. Answer the interview
 
-It won't dump YAML at you first. It asks what the company does, who's on
-it, where *you* sit in the chart, which surfaces the work lives on, and
-what model and budget to use — whose models, and whether you pay with a plan
-or a key, since every model runs through that vendor's own harness (Claude
-Code, Codex, or OpenCode for open models; only Claude Code and OpenCode can run
-a seat's executor, in a box from `providers.sandbox`, which the company then
-needs; see [LLM Backends](../concepts/llm-backends.md#picking-a-harness)). Give rough answers — it proposes a
-concrete org chart and you correct it. It should also, without being
-asked:
+It asks what the company does, who is on it, where *you* sit in the chart,
+which surfaces the work lives on, and what model and budget to use: whose
+models, and whether you pay with a plan or a key, since every model runs
+through that vendor's own harness (Claude Code, Codex, or OpenCode for open
+models; only Claude Code and OpenCode can run a seat's executor, in a box from
+`providers.sandbox`, which the company then needs; see
+[LLM Backends](../concepts/llm-backends.md#picking-a-harness)). Rough answers
+are fine: it proposes an org chart and you correct it. Unasked, it should:
 
-- put you in the chart as a **human seat** managing the top agent — the
-  seat you join the company on, since every person holds one
+- put you in the chart as a **human seat** managing the top agent (the seat
+  you join the company on, since every person holds one)
 - keep every secret as a `${VAR}`, never a literal
 - **skip integrations on the first pass** (step 8 adds them)
 - warn you that handles are effectively permanent
 
 ### 4. It writes and checks its own work
 
-You get `company.yaml` (Tier B — the company) and `crewlet.yaml`
-(Tier A — the infrastructure). After every edit it runs:
+You get `company.yaml` (Tier B, the company) and `crewlet.yaml` (Tier A, the
+infrastructure). After every edit it runs:
 
 ```bash
 crewlet validate company.yaml -json
 ```
 
-and fixes each reported `path` until `valid` is true. It should tell you
-which rung of the [validation ladder](#without-crewlet-installed) it
-used — full `crewlet` fidelity, a plain JSON Schema validator, or
-reading the schema. **None of this needs your API keys**, so the whole
-design pass happens before you set up a single account.
+and fixes each reported `path` until `valid` is true. It should say which rung
+of the [validation ladder](#without-crewlet-installed) it used: full `crewlet`
+fidelity, a plain JSON Schema validator, or reading the schema. **None of this
+needs your API keys**, so the whole design pass happens before you set up an
+account.
 
 ### 5. Fill in the environment
 
-The config references variables; you supply the values. Ask the
-assistant to list every `${VAR}` it used — a missing one resolves to an
-empty string and fails later, deep in a turn.
+The config references variables; you supply the values. Ask the assistant to
+list every `${VAR}` it used: a missing one resolves to an empty string and
+fails later, deep in a turn.
 
 ```bash
 # nothing to bring up: the engine embeds its stream and creates its store
@@ -92,12 +86,12 @@ export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 ```
 
 The model's own key is the one variable the config may *not* mention: an entry
-on `auth.mode: api-key` reads its harness's key variable (`ANTHROPIC_API_KEY` for
-Claude Code, `CODEX_API_KEY` for Codex) when it names none. An entry on a plan
-needs no variable at all, but a login on the engine host —
-`crewlet llm login <key> -from-host` adopts the one your own harness already has.
-Then check the model end to end before the first turn; unlike `validate`, this
-reads the environment and makes real calls:
+on `auth.mode: api-key` reads its harness's key variable (`ANTHROPIC_API_KEY`
+for Claude Code, `CODEX_API_KEY` for Codex) when it names none. An entry on a
+plan needs no variable, but a login on the engine host:
+`crewlet llm login <key> -from-host` adopts the one your own harness already
+has. Then check the model end to end before the first turn; unlike `validate`,
+this reads the environment and makes real calls:
 
 ```bash
 crewlet llm doctor
@@ -111,13 +105,12 @@ crewlet run crewlet.yaml -company company.yaml
 
 ### 7. Watch the first turn
 
-Open <http://localhost:8000/> and sign in with the API token your
-`crewlet.yaml` declares; then put yourself on your human seat: open it from
-**Company › Structure** and press **Invite**, exactly as the
-[quickstart's step 4](quickstart.md#4-sign-in-and-invite-yourself)
-describes. A company with no integrations has no inbound work, which is why
-the first pass puts a five-minute schedule on the top seat purely to prove
-the loop:
+Open <http://localhost:8000/>, sign in with the API token your `crewlet.yaml`
+declares, then put yourself on your human seat: open it from
+**Company › Structure** and press **Invite**, as in the
+[quickstart's step 4](quickstart.md#4-sign-in-and-invite-yourself). A company
+with no integrations has no inbound work, so the first pass puts a five-minute
+schedule on the top seat to prove the loop:
 
 ```yaml
 schedules:
@@ -127,50 +120,43 @@ schedules:
 ```
 
 Within five minutes the CEO goes `Working`, steps through **Execute →
-Review** (with **Onboarding** before them on its very first turn), and
-returns to `Idle` — every prompt and tool call
-inspectable. That's the engine, your model, and your config all
-confirmed working, with no external account involved. Delete the
-schedule once real work arrives: every fire continues, and pays for, the
-session the last one left
-([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
+Review** (with **Onboarding** before them on its first turn), and returns to
+`Idle`, every prompt and tool call inspectable. That confirms the engine, your
+model and your config, with no external account. Delete the schedule once real
+work arrives: every fire continues, and pays for, the session the last one
+left ([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
 so each fire costs more as that session grows, up to the harness's window.
 
 ### 8. Add one integration at a time
 
-Now go back to the assistant:
-
 > Add Mattermost so the team can talk in channels and DM me.
 
-Pick your stack in [Choosing your stack](choosing-your-stack.md), create
-the accounts it names (the assistant writes config, it can't stand up a
-Mattermost server or create a Slack app for you), then let it wire the
-config and re-validate. One integration per pass — a failure is then
-unambiguous.
+Pick your stack in [Choosing your stack](choosing-your-stack.md), create the
+accounts it names (the assistant writes config; it can't stand up a Mattermost
+server or create a Slack app), then let it wire the config and re-validate. One
+integration per pass, so a failure is unambiguous, and each lands working
+before the next.
 
-Tier B is live-editable, so applying a change is
-`crewlet config import company.yaml`, no restart. A full worked
-seven-seat company, with every setting's reasoning in a comment:
-[`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) — the
-full stack, on a tracker, a wiki, chat and a code host. A pass should land
-one of those integrations, working, before it adds the next.
+Tier B is live-editable: apply a change with
+`crewlet config import company.yaml`, no restart. A worked seven-seat company
+with every setting's reasoning in a comment, the full stack on a tracker, a
+wiki, chat and a code host:
+[`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml).
 
 ---
 
 ## Why not just point an assistant at the docs
 
-Two reasons the raw docs aren't enough on their own.
+**The surface is large and strict.** Tier B validates against typed config
+models that forbid unknown keys, so an invented field name (`responsibilites`,
+`leed`, `commnad`) is a hard error, not a silent no-op. An assistant working
+from prose will occasionally invent one.
 
-**The surface is large and strict.** Tier B validates against the typed config models
-models that forbid unknown keys, so a plausible-but-invented field name
-(`responsibilites`, `leed`, `commnad`) is a hard error, not a silent
-no-op. An assistant working from prose will occasionally invent one.
-
-**The expensive mistakes aren't type errors.** Choosing a handle you
-later rename, putting a secret in the config file, or confusing a unit's
-`space` (routing identity) with `knowledge.scope` (read scope) all
-produce a *valid* config that behaves wrong. Those are judgement calls, and they're what the
-skill front-loads.
+**The expensive mistakes aren't type errors.** Choosing a handle you later
+rename, putting a secret in the config file, or confusing a unit's `space`
+(routing identity) with `knowledge.scope` (read scope) all give a *valid*
+config that behaves wrong. Those judgement calls are what the skill
+front-loads.
 
 The schema fixes the first problem. The skill fixes the second.
 
@@ -178,67 +164,54 @@ The schema fixes the first problem. The skill fixes the second.
 
 ## Without Crewlet installed
 
-Config authoring naturally happens *before* installation — you design
-the company, then set up the infrastructure to run it. So the schema is
-deliberately a **static file with no dependency on the `crewlet`
-binary**: an assistant fetches it from a URL and validates against it
-with any standards-compliant JSON Schema validator (`jsonschema`,
+Authoring happens *before* installation, so the schema is a **static file with
+no dependency on the `crewlet` binary**: an assistant fetches it from a URL and
+validates with any standards-compliant JSON Schema validator (`jsonschema`,
 `ajv`), or by reading it.
 
-It carries more than field names. Because it is generated from the same
-Go types the engine parses with, and those forbid unknown keys, a
-schema-only check catches:
+It is generated from the Go types the engine parses with, which forbid unknown
+keys, so a schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
-- wrong shapes — a list where a map belongs, text where a number belongs —
-  and bad enums (`kind: robot`, `harness: claud-code`)
+- wrong shapes (a list where a map belongs, text where a number belongs) and
+  bad enums (`kind: robot`, `harness: claud-code`)
 - malformed handles and unit ids, and numbers out of range
 
-It also says where a credential goes: every field, list member or map
-value that holds one carries `"x-crewlet-secret": true`. That is an
-annotation rather than a check — a literal there still validates — so it
-is the assistant that reads it and writes a `${VAR}` reference instead of
-a value, without guessing from a field's name. See
+Every field, list member or map value that holds a credential carries
+`"x-crewlet-secret": true`. It is an annotation, not a check (a literal there
+still validates), so the assistant reads it and writes a `${VAR}` reference
+without guessing from a field's name. See
 [Credential positions](../reference/cli.md#credential-positions-x-crewlet-secret).
 
-It does **not** flag a number or a boolean written into a text field:
-YAML reads `name: 2024` as a number and `org_webhook: false` as a
-boolean, the engine takes each as the text it was written as, and the
-schema does too — an editor that underlined a config the engine runs
-would teach its author to ignore it. An empty value (`~` or `""`) is
-accepted wherever the engine reads it as unset.
+It does **not** flag a number or boolean written into a text field: YAML reads
+`name: 2024` as a number and `org_webhook: false` as a boolean, the engine
+takes each as the text written, and the schema does too (an editor underlining
+a config the engine runs would teach its author to ignore it). An empty value
+(`~` or `""`) is accepted wherever the engine reads it as unset.
 
-A human seat with no `contact` identity passes both checks, because it is a
-legitimate seat: a person who works only through the dashboard has no chat
-account to name. `crewlet validate` warns about it at the seat's `contact`,
-so nobody is surprised that it cannot be @-mentioned. A company with no
-`kind: human` seat at all passes too — its agents may run it alone through
-the deployment's API tokens — and `crewlet validate` warns at `roles` that
-nobody can be invited into it or created in it, since every person holds a
-human seat.
+A human seat with no `contact` identity passes both checks: a person who works
+only through the dashboard has no chat account. `crewlet validate` warns at the
+seat's `contact` that it cannot be @-mentioned. A company with no `kind: human`
+seat passes too (its agents may run it alone through the deployment's API
+tokens), and `crewlet validate` warns at `roles` that nobody can be invited
+into it or created in it, since every person holds a human seat.
 
-Everything that turns on more than one field, or on what a value
-*means*, still needs the binary, and the skill tells the assistant to
-check it by reading:
+Anything turning on more than one field, or on what a value *means*, needs the
+binary; the skill tells the assistant to check it by reading:
 
 | Gap | Why the schema can't |
 |---|---|
-| `lead` / `manages` naming a seat handle or unit id that exists | Reference integrity across the document — not expressible in JSON Schema |
-| A `knowledge.*` scope naming a backend the config configures | A rule that turns on whether a block is present at all, which JSON Schema can state only by enumerating every shape the block can take — and one stated subtly wrong would flag configs the engine runs |
+| `lead` / `manages` naming a seat handle or unit id that exists | Reference integrity across the document: not expressible in JSON Schema |
+| A `knowledge.*` scope naming a backend the config configures | The rule turns on whether a block is present, which JSON Schema can state only by enumerating every shape the block can take, and a subtly wrong one would flag configs the engine runs |
 | Real IANA timezone | Needs the timezone database |
-| A cron expression — its field count as well as its values (`99 * * * *`) | The schema takes a cron as text; checking one needs a cron parser, which `crewlet validate` runs |
+| A cron expression — its field count as well as its values (`99 * * * *`) | The schema takes a cron as text; `crewlet validate` runs a cron parser |
 
-The two encodings are held in sync by
-`internal/config/schema_test.go`, which runs every rule through
-both paths and fails if they disagree — a schema that quietly diverges
-from the loader would be worse than no schema, because an assistant
-would trust it.
+`internal/config/schema_test.go` runs every rule through both encodings and
+fails if they disagree.
 
 ---
 
 ## The validation loop
-
-The property that makes automated authoring safe:
 
 ```bash
 crewlet validate company.yaml -json
@@ -269,14 +242,14 @@ crewlet validate company.yaml -json
 }
 ```
 
-Every offending field, with its exact path, all at once, so an assistant
-fixes them in one pass instead of re-guessing. A rule broken inside a seat or
-a unit names that seat's handle or that unit as well, and a seat is located
-where it was written even when its `unit:` reference moves it into a unit.
+Every offending field comes with its exact path, all at once, so an assistant
+fixes them in one pass. A rule broken inside a seat or a unit names that
+seat's handle or that unit too, and a seat is located where it was written even
+when its `unit:` reference moves it into a unit.
 
 A document the parser refuses (an unknown key, a value of the wrong shape)
-reports every such key at once, at the key as it sits in the file and with the
-line it is on. The rules above run once it parses:
+reports every such key at once, at the key as it sits in the file, with its
+line. The rules above run once it parses:
 
 ```json
 { "path": "roles[0].backstroy", "segments": ["roles", 0, "backstroy"],
@@ -295,71 +268,62 @@ Each problem carries:
 | `seat`, `unit` | The handle of the seat, or the name of the unit, the problem is about. Omitted when it is about neither. |
 | `line` | The line in the file, for a problem the parser found. Omitted otherwise. |
 
-`kind` is a closed set with a fallback deliberately: a loop branching on it
-must never receive an empty string and read it as a field somebody forgot to
-populate. Two seats sharing a handle are one message and **one problem per
-seat**, each at the field that seat wrote — its `handle`, or its `name` where
-the handle is derived from it — so `problems` can hold more entries than the
+`kind` is a closed set with a fallback so a loop branching on it never gets an
+empty string. Two seats sharing a handle are one message and **one problem per
+seat**, each at the field that seat wrote (its `handle`, or its `name` where
+the handle is derived from it), so `problems` can hold more entries than the
 prose output has lines (which leads such a message with every path it applies
-to). Two seats merely sharing a *name* are fine: a name is prose, and the
-example above is refused only because neither seat declares a `handle`, so
-both derive the same one.
+to). Two seats sharing only a *name* are fine: the example above is refused
+because neither seat declares a `handle`, so both derive the same one.
 
 `warnings` are references that resolve to nothing: a unit `lead` (a seat
 handle), a root seat's `unit` (a unit key), a `manages` entry (either), or a
-GitLab access level naming no seat.
-The engine runs a company with one (live configuration assembles an
-organization in pieces), so a warning never fails validation, but one that
-survives a finished document is a misspelling nothing else will report.
-`kind` is `dangling_reference`, `ref` says which kind of reference, `from`
-and `to` are what holds it and what it names, and `path`, `segments`,
-`seat` and `unit` locate it as they do a problem. Both lists are always
-arrays, empty rather than absent.
+GitLab access level naming no seat. The engine runs a company with one (live
+configuration assembles an organization in pieces), so a warning never fails
+validation, but one surviving in a finished document is a misspelling nothing
+else will report. `kind` is `dangling_reference`, `ref` says which kind of
+reference, `from` and `to` are what holds it and what it names, and `path`,
+`segments`, `seat` and `unit` locate it as they do a problem. Both lists are
+always arrays, empty rather than absent.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**, so
-`crewlet validate company.yaml -json || exit 1` actually gates. Nothing is
-echoed on stderr in `-json` mode: the payload already carries every problem,
-and a second copy is what makes the loop's log unreadable.
+`crewlet validate company.yaml -json || exit 1` gates. Nothing is echoed on
+stderr in `-json` mode: the payload already carries every problem.
 
 **It needs no credentials, no database, and no network.** Tier B stores
 `${VAR}` references verbatim and resolves them at engine start (see
 [Configuration § Environment variables](configuration.md#environment-variable-references)),
-so a complete config validates *before any secret exists*. You can draft
-and check an entire company offline.
+so a complete config validates *before any secret exists*.
 
 Validation is deep: it builds the `Organization`, so duplicate handles,
-duplicate unit keys, bad cron expressions, invalid timezones and a
-knowledge scope with no backend behind it all fail here rather than at run
-time, and a unit lead that is no seat's handle is reported as a warning.
+duplicate unit keys, bad cron expressions, invalid timezones and a knowledge
+scope with no backend all fail here rather than at run time, and a unit lead
+that is no seat's handle is a warning.
 
-`-tier auto` (the default) picks the tier from the document's **keys**, not
-its filename: the one thing this has to get right is the case where the file
-was named something else. The two tiers share no top-level key:
-`name` / `roles` / `units` / `providers` / `integrations` mean Tier B,
-`node` / `stream` / `store` / `coordination` / `api` mean Tier A.
+`-tier auto` (the default) picks the tier from the document's **keys**, not its
+filename. The tiers share no top-level key: `name` / `roles` / `units` /
+`providers` / `integrations` mean Tier B, `node` / `stream` / `store` /
+`coordination` / `api` mean Tier A. A document carrying neither, or an equal
+count of both, is **refused naming the flag** rather than guessed at (a wrong
+guess reports every field as invalid, which a fix loop can't tell from a
+genuinely broken document). Force it with `-tier company` / `-tier bootstrap`.
 
-A document carrying neither, or an equal count of both, is **refused naming
-the flag** rather than guessed at: guessing wrong reports every field of the
-file as invalid, and a fix loop reading that has no way to tell it from a
-genuinely broken document. Force it with `-tier company` / `-tier bootstrap`.
-
-The same loop checks a repository's `.crewlet/checks.yaml` — told apart by a
-`checks:` beside no key of either tier, whatever else it carries, or forced
-with `-tier checks` — with every problem located at its field and line in the
-same payload (the first 128, and one more counting the rest), a typo'd key
-beside `checks:` among them, refused at its own line rather than reported as an
-undecidable document ([The checks
+The same loop checks a repository's `.crewlet/checks.yaml`, told apart by a
+`checks:` beside no key of either tier, whatever else it carries, or forced with
+`-tier checks`. Every problem is located at its field and line in the same
+payload (the first 128, and one more counting the rest); a typo'd key beside
+`checks:` is refused at its own line rather than reported as an undecidable
+document ([The checks
 file](../concepts/gitlet.md#the-checks-file)).
 
 ---
 
 ## Editor autocomplete
 
-The same schema drives your editor. Add a modeline to the top of the
-file — with the [YAML Language Server](https://github.com/redhat-developer/yaml-language-server)
-(built into VS Code's YAML extension, and available in Neovim, JetBrains,
-and Helix) you get completion, inline docs from the field docstrings, and
-typo squiggles as you type:
+The same schema drives your editor. Add a modeline at the top of the file; with
+the [YAML Language Server](https://github.com/redhat-developer/yaml-language-server)
+(in VS Code's YAML extension, Neovim, JetBrains, Helix) you get completion,
+inline docs from the field docstrings, and typo squiggles:
 
 ```yaml
 # yaml-language-server: $schema=https://docs.crewlet.ai/engine/latest/schema/company.schema.json
@@ -373,11 +337,10 @@ crewlet schema company -o schema/company.schema.json
 crewlet schema bootstrap -o schema/bootstrap.schema.json
 ```
 
-Both are also checked into [`schema/`](../../schema/) in the repo. They
-are generated artifacts — a test regenerates and compares them, so they
-cannot drift from what the loader accepts.
+Both are also checked into [`schema/`](../../schema/). A test regenerates and
+compares them, so they cannot drift from what the loader accepts.
 
-Wire it into CI to catch a bad config before it reaches the engine:
+To catch a bad config in CI:
 
 ```bash
 crewlet validate company.yaml -json || exit 1
@@ -388,15 +351,12 @@ crewlet validate company.yaml -json || exit 1
 ## The `company-architect` skill
 
 [`skills/company-architect/SKILL.md`](../../skills/company-architect/SKILL.md)
-is a prompt for an AI assistant. It carries the interview script, the
-invariants that the schema can't express, and the validation loop above.
+is a provider-neutral prompt (a markdown file, not a vendor format) carrying
+the interview script, the invariants the schema can't express, and the
+validation loop above.
 
-It is written provider-neutral (it's a markdown file, not a
-vendor format), so it works anywhere you can give an assistant
-instructions.
-
-**Claude Code** discovers skills automatically. Install it for one
-project or for every project:
+**Claude Code** discovers skills automatically. Install for one project or for
+every project:
 
 ```bash
 # this project only
@@ -406,53 +366,51 @@ mkdir -p .claude/skills && cp -r skills/company-architect .claude/skills/
 mkdir -p ~/.claude/skills && cp -r skills/company-architect ~/.claude/skills/
 ```
 
-Then just say what you want:
+Then say what you want:
 
 > Set up a Crewlet company for a 5-person dev-tools startup.
 
-**Any other assistant** — Cursor, Copilot, Codex, the ChatGPT/Claude web
-apps: paste the file, attach it, or add it to your rules/context
-directory. If you installed a released binary and don't have a repo
-checkout, fetch it from
+**Any other assistant** (Cursor, Copilot, Codex, the ChatGPT/Claude web apps):
+paste or attach the file, or add it to your rules/context directory. Without a
+repo checkout, fetch it from
 [GitHub](https://github.com/crewlet/crewlet/blob/main/skills/company-architect/SKILL.md).
 
 ### What it will do
 
 - Interview you about the company before writing anything.
-- Start you **integration-free** with one scheduled task, so you see a
-  real agent turn within minutes — then layer integrations one at a
-  time.
+- Start you **integration-free** with one scheduled task, so you see a real
+  agent turn within minutes, then layer integrations one at a time.
 - Keep every secret as a `${VAR}` reference, never a literal.
 - Put you in the org chart as a
-  [human seat](../concepts/humans-in-the-org.md#the-founder-seat) — the
-  seat you are invited onto once the company runs.
+  [human seat](../concepts/humans-in-the-org.md#the-founder-seat), the seat you
+  are invited onto once the company runs.
 - Warn you that handles are effectively permanent (see below).
 - Validate after every edit, and not claim success until it passes.
 
 ### What it can't do
 
-It writes config; it doesn't provision. Standing up the Mattermost server
-(or the Slack workspace), the Atlassian site, the GitLab group, the
-API keys, and the harness your model runs through
-([installed on the engine host](installation.md#a-harness)) is still your job — [Choosing your stack](choosing-your-stack.md)
-lists what you must create by hand for each. Once those exist, each
-integration's Agents tab turns each agent on there, and the engine creates
-the per-seat accounts and seals their tokens itself; Atlassian and GitHub issue no credential on a
-provisioner's behalf, so their commands report which account each
-hand-created credential turned out to be.
+It writes config; it doesn't provision. Standing up the Mattermost server (or
+Slack workspace), the Atlassian site, the GitLab group, the API keys, and the
+harness your model runs through
+([installed on the engine host](installation.md#a-harness)) is your job;
+[Choosing your stack](choosing-your-stack.md) lists what to create by hand for
+each. Once those exist, each integration's Agents tab turns each agent on
+there, and the engine creates the per-seat accounts and seals their tokens
+itself. Atlassian and GitHub issue no credential on a provisioner's behalf, so
+their commands report which account each hand-created credential turned out to
+be.
 
 ---
 
 ## The one thing to get right before you run
 
-**Handles are effectively permanent.** An agent's durable id is a UUIDv5
-over `"<company name>:<handle>"` (`org.DeriveAgentID`), so renaming a
-seat's `handle`, *or the company `name`*, mints a new id and orphans what
-the agent keeps under it: its diary and onboarding markers. A `handle`
-rename also orphans what is kept under the handle itself — its episodes,
-skills, counterparty profiles and conversations' sessions — so the renamed
-seat starts with no memory at all. Either way the seat keeps working,
-without what was orphaned.
+**Handles are effectively permanent.** An agent's durable id is a UUIDv5 over
+`"<company name>:<handle>"` (`org.DeriveAgentID`), so renaming a seat's
+`handle`, *or the company `name`*, mints a new id and orphans what the agent
+keeps under it: its diary and onboarding markers. A `handle` rename also
+orphans what is kept under the handle itself (episodes, skills, counterparty
+profiles, conversations' sessions), so the seat starts with no memory at all.
+Either way the seat keeps working, without what was orphaned.
 
 Settle the company name and each handle before the company runs. See
 [Agent Runtime § Seat Definition and the Runner](../concepts/agent-runtime.md#seat-definition-and-the-runner).
