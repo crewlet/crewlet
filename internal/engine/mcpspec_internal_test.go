@@ -244,6 +244,8 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		integration.KindAWS: "no pass mints a seat's AWS credential",
 		// Signed at use.
 		integration.KindSSH: "no pass mints a seat's SSH credential",
+		// The team's keys stay in the engine, which makes every call (ADR-0170).
+		integration.KindAppStoreConnect: "no seat holds an App Store Connect key",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

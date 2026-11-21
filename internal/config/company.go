@@ -1237,6 +1237,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.GoogleCloud != nil
 	case "ssh":
 		return in.SSH != nil
+	case "app_store_connect":
+		return in.AppStoreConnect != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:

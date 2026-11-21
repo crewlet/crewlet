@@ -1377,7 +1377,7 @@ export interface McpHeldWhole {
   arguments: Record<string, unknown>;
   /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it. */
   arguments_sha256: string;
-  /** A held growth act's card, read live from its product; null for any other call. */
+  /** A held growth act's decision card (`growth.Card`), read live from its product; null for any other call. */
   card: GrowthCard | null;
 }
 

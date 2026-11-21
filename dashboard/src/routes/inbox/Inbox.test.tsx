@@ -2616,6 +2616,7 @@ describe("the pane", () => {
       question: "May cto run a command on api-1 as crewlet-ops?",
       arguments: { host: "api-1", command: "sudo systemctl restart api", reason: "stuck" },
       arguments_sha256: "ab".repeat(32),
+      card: null,
     };
     function heldRun(held: Record<string, unknown>) {
       return {

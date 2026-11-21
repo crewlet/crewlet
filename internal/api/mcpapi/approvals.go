@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -343,6 +344,14 @@ type HeldAnswer struct {
 	Context         string         `json:"context"`
 	Arguments       map[string]any `json:"arguments"`
 	ArgumentsSHA256 string         `json:"arguments_sha256"`
+	// Card is a growth act's decision card as its target reads now, null for
+	// every other call or one whose target could not be read (ADR-0171).
+	Card *growth.Card `json:"card"`
+}
+
+// GrowthCards reads a held growth act's decision card from its product.
+type GrowthCards interface {
+	Card(ctx context.Context, run sandbox.PendingRun, args map[string]any) (*growth.Card, error)
 }
 
 // serveHeld answers the held call its path names, whole, to whoever may answer
@@ -375,7 +384,17 @@ func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	held := *run.HeldCall
-	httpjson.Write(w, http.StatusOK, HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
+	answer := HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
 		Seat: run.AgentHandle, TurnID: run.TurnID, LaunchID: run.LaunchID, Question: run.Question,
-		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest})
+		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest}
+	if held.Approvers == sandbox.HeldApproversAdmin && s.cards != nil {
+		// A CARD THAT CANNOT BE READ leaves the question, its context and
+		// the whole arguments, which are what the answer is given on.
+		card, err := s.cards.Card(r.Context(), run, args)
+		if err != nil {
+			log.WarnContext(r.Context(), "growth_card_unread", "approval", id, "error", err.Error())
+		}
+		answer.Card = card
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }

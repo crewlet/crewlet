@@ -478,7 +478,10 @@ type Engine struct {
 	// sshRunner runs the SSH tools' commands, holding each turn's read
 	// certificate in memory until it ends ([Engine.sshRun]).
 	sshRunnerOnce sync.Once
-	sshRunner     *sshint.Runner
+	// growthOnce makes the growth products once ([Engine.growthProducts]).
+	growthOnce sync.Once
+	growth     []builtin.GrowthProduct
+	sshRunner  *sshint.Runner
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment here. ONE VALUE on the engine, mutated in place:

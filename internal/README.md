@@ -103,6 +103,8 @@
 | `delegated` | Delegated decisions (ADR-0125): the typed act of a request that waits on a person, how a panel's verdicts combine, and the engine's limits, escalating paths and required checks that bound a delegate; values only. |
 | `growth` | The marketing and growth integrations' vocabulary: the six classes, seat levels, each product's catalog of every vendor operation, money in micros, account-local days, report answers and the metrics (ADR-0170, ADR-0171). |
 | `spendguard` | Holds an ad product's spend to the company's per-account caps at the ask and again at the apply, under one lease per account; micros only, and `spendguardtest` is the one contract every capacity runs. |
+| `appstoreconnect` | App Store Connect as a growth product: every operation of Apple's API classed in its catalog, each call signed for itself with the least-privileged team key, scoped to the seat's apps, public and admin acts held (ADR-0170, ADR-0171). |
+| `es256` | Signs a JWT with ES256 (ECDSA P-256 over SHA-256) on the standard library alone, as Apple's APIs take it. |
 | `worklet` | Worklet, the engine's own work tracker and `statelog`'s first domain: its records, subjects, writer, applier, reads and the routing of who hears about a change. |
 | `changefeed` | Durable, fleet-wide pull consumer over a state log that derives a wake from each committed record, with replay and dead-lettering of records a node cannot read |
 | `routing` | Who a committed record concerns and which of them it wakes: the one rule every native domain routes by (one reason per handle, ordered fallback chain, roster-filtered wake, delivery states). |

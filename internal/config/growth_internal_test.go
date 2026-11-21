@@ -181,14 +181,14 @@ func TestGrowthCapsAreAmountsInTheAccountsCurrency(t *testing.T) {
 func TestGrowthConnectionIDsAndLevels(t *testing.T) {
 	t.Parallel()
 	var p problems
-	checkGrowthConnections(&p, field("integrations.ads.connections"), []string{"eu", "eu", "Team A", ""})
+	checkGrowthConnections(&p, field("integrations.ads.connections"), []string{"eu", "Team A", "9x"})
 	got := strings.Join(problemPaths(p.err()), " ")
-	for _, want := range []string{"connections[1].id", "connections[2].id", "connections[3].id"} {
+	for _, want := range []string{"connections.Team A", "connections.9x"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%s was not refused: %s", want, got)
 		}
 	}
-	if strings.Contains(got, "connections[0]") {
+	if strings.Contains(got, "connections.eu") {
 		t.Errorf("a good id was refused: %s", got)
 	}
 	if growthLevelProblem("") != "" || growthLevelProblem("administer") != "" || growthLevelProblem("admin") == "" {

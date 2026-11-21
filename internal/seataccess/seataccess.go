@@ -100,6 +100,9 @@ const (
 	LaneAWS          Lane = "aws"
 	LaneGoogleCloud  Lane = "google_cloud"
 	LaneSSH          Lane = "ssh"
+	// LaneAppStoreConnect is a seat's level and apps at App Store Connect,
+	// which the engine reaches for it with the company's keys.
+	LaneAppStoreConnect Lane = "app_store_connect"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -109,7 +112,7 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH,
+		LaneSSH, LaneAppStoreConnect,
 	}
 }
 
