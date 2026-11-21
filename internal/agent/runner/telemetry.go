@@ -977,8 +977,9 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
 		// A child's failure text, sized by nothing the parent controls:
-		// redacted, and clipped so the event stays publishable, since one over the queue's
-		// ceiling is refused and the whole record lost (events.MaxDiagnosticBytes).
+		// redacted, and clipped so the event stays publishable, since one
+		// over the queue's ceiling is refused and the whole record lost
+		// (events.MaxDiagnosticBytes).
 		Error:     events.Diagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
@@ -1070,10 +1071,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
-		// Redacted, and clipped as a DELIVERY GUARANTEE, not a content budget: an event over
-		// the queue's ceiling is refused and the error ABSENT; a tighter cut
-		// would cost the errors worth reading (a wrapped chain's cause is at
-		// its end). See events.MaxDiagnosticBytes.
+		// Redacted, and clipped as a DELIVERY GUARANTEE, not a content
+		// budget: an event over the queue's ceiling is refused and the error
+		// ABSENT; a tighter cut would cost the errors worth reading (a
+		// wrapped chain's cause is at its end). See events.MaxDiagnosticBytes.
 		ev.Error = events.Diagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
