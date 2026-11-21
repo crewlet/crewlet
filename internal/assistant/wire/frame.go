@@ -239,6 +239,11 @@ type SnapshotEvent struct {
 	Messages []Message   `json:"messages"`
 	Steps    []StepEvent `json:"steps"`
 	Cards    []CardEvent `json:"cards"`
+	// Cut says the turn's records pass [FrameMaxBytes] and some are left
+	// out: its oldest steps first, then its oldest cards that propose no
+	// change, then its oldest answers, then its proposals, never the
+	// question. The conversation's transcript holds them all.
+	Cut bool `json:"cut,omitempty"`
 }
 
 // payloads names each kind's payload as set or not, in [EventKinds] order.

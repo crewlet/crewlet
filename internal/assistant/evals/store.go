@@ -194,6 +194,34 @@ func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdom
 	return t, nil
 }
 
+// TurnTranscript implements [assistant.Transcripts].
+func (s *Store) TurnTranscript(_ context.Context, owner, turn uuid.UUID) (assistantdomain.TurnTranscript, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, _, err := s.child(owner, turn)
+	if err != nil {
+		return assistantdomain.TurnTranscript{}, err
+	}
+	out := assistantdomain.TurnTranscript{Messages: []assistantdomain.Message{},
+		Steps: []wire.StepEvent{}, Cards: []assistantdomain.Card{}}
+	for _, m := range c.messages {
+		if m.Turn == turn {
+			out.Messages = append(out.Messages, m)
+		}
+	}
+	for _, st := range c.steps {
+		if assistantdomain.StepID(turn, st.Index) == st.StepID {
+			out.Steps = append(out.Steps, st)
+		}
+	}
+	for _, card := range c.cards {
+		if card.Turn == turn {
+			out.Cards = append(out.Cards, card)
+		}
+	}
+	return out, nil
+}
+
 // Turn implements [assistant.Transcripts].
 func (s *Store) Turn(_ context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error) {
 	s.mu.Lock()
