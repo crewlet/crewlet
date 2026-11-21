@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -99,7 +100,12 @@ func (f *fakeAds) Prepare(_ context.Context, call builtin.GrowthCall) (builtin.G
 	}
 	return builtin.GrowthHold{Binding: f.binding(), Subject: delegated.Subject(delegated.KindAdSpend, "c1", "60"),
 		Question: "May sre raise Summer sale's daily budget from 50.00 to 60.00 EUR?",
-		Context:  "sre asks to raise the daily budget of campaign c1."}, nil
+		Context:  "sre asks to raise the daily budget of campaign c1.",
+		Ask: growth.Record{Connection: "eu", Account: "act_1", Target: "c1", Operation: f.binding(),
+			Changes: []growth.RecordChange{{Field: "daily_budget", Label: "Daily budget", Before: "50000000",
+				After: "60000000", Money: true}},
+			// What a product cannot set: the engine writes the seat, the act and the class.
+			Handle: "someone-else", Call: "c-1", Class: growth.ClassRead}}, nil
 }
 
 func (f *fakeAds) Card(context.Context, builtin.GrowthCall, string) (growth.Card, error) {
@@ -123,14 +129,47 @@ func (f *fakeAds) Denied(_ context.Context, call builtin.GrowthCall) error {
 	return nil
 }
 
+// growthAudit is the access log as the held call records an ask on it.
+type growthAudit struct {
+	mu    sync.Mutex
+	asked []growth.Record
+	err   error
+}
+
+func (a *growthAudit) Asked(_ context.Context, r growth.Record) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		return false, a.err
+	}
+	a.asked = append(a.asked, r)
+	return true, nil
+}
+
+func (a *growthAudit) records() []growth.Record {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]growth.Record(nil), a.asked...)
+}
+
 // growthTools registers product's tools and answers them by name, with the
 // registry's entries.
 func growthTools(t *testing.T, product builtin.GrowthProduct) (map[string]tools.SeatCallable, *tools.Registry) {
 	t.Helper()
+	byName, reg, _ := growthToolsAudited(t, product)
+	return byName, reg
+}
+
+// growthToolsAudited is [growthTools] and the access log they record on.
+func growthToolsAudited(t *testing.T, product builtin.GrowthProduct) (map[string]tools.SeatCallable,
+	*tools.Registry, *growthAudit) {
+	t.Helper()
 	_, _, chart := sshFixture(t)
 	reg := tools.NewRegistry()
+	audit := &growthAudit{}
 	if _, err := builtin.Register(reg, builtin.Deps{Growth: builtin.GrowthDeps{
-		Products: []builtin.GrowthProduct{product}, Requesters: healthRequesters(), Chart: chart}}); err != nil {
+		Products: []builtin.GrowthProduct{product}, Requesters: healthRequesters(), Chart: chart,
+		Audit: audit}}); err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]tools.SeatCallable{}
@@ -141,7 +180,80 @@ func growthTools(t *testing.T, product builtin.GrowthProduct) (map[string]tools.
 		}
 		out[name] = asSeatCallable(t, tools.Innermost(entry.Tool))
 	}
-	return out, reg
+	return out, reg, audit
+}
+
+// NO GROWTH TOOL IS REGISTERED WITHOUT AN ACCESS LOG: a held call whose ask
+// could not be recorded would leave the act off the audit.
+//
+// Mutation: drop Audit from GrowthDeps.serves and the tools register with
+// nothing to record their asks on.
+func TestAGrowthToolNeedsTheAccessLog(t *testing.T) {
+	t.Parallel()
+	_, _, chart := sshFixture(t)
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{Growth: builtin.GrowthDeps{
+		Products: []builtin.GrowthProduct{&fakeAds{}}, Requesters: healthRequesters(), Chart: chart}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Lookup(growthSpendTool); ok {
+		t.Error("a growth tool registered with no access log to record its asks on")
+	}
+}
+
+// A HELD GROWTH CALL'S ASK IS RECORDED ONCE IT IS HELD, under its held call's
+// id, as its tool, class, seat and turn are, never as its product says them;
+// a call refused before it is held, or that a run already waiting could not
+// hold, records nothing; and an ask whose record fails is still held.
+//
+// Mutation: record the ask before the desk records the hold and a call the
+// desk turns away is on the access log as asked; take the record's seat or
+// class from the product and its ask names another seat.
+func TestAHeldGrowthCallsAskIsRecordedOnceItIsHeld(t *testing.T) {
+	t.Parallel()
+	ads := &fakeAds{levels: map[string]growth.Level{"sre": growth.LevelOperate}, budget: "50"}
+	_, reg, audit := growthToolsAudited(t, ads)
+	entry, _ := reg.Lookup(growthSpendTool)
+	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
+	turn := growthTurn(t, "sre")
+	ask := func(desk *askDesk) (tools.Result, bool) {
+		return builtin.NewCallHold(desk, callSeal(t), nil, nil).Hold(ctx, turn, tools.HeldCall{
+			Name: growthSpendTool, Entry: entry, Args: map[string]any{"campaign": "c1", "daily_budget": "60.00"}})
+	}
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	if _, held := ask(desk); !held || len(desk.recorded) != 1 {
+		t.Fatalf("the spend call was not held: %+v", desk.recorded)
+	}
+	got := audit.records()
+	if len(got) != 1 {
+		t.Fatalf("the access log holds %d asks, want 1", len(got))
+	}
+	r := got[0]
+	if r.HeldCall != desk.recorded[0].Held.ID || r.Call != "" || r.Handle != "sre" || r.Turn != turn.RunID ||
+		r.Tool != growthSpendTool || r.Class != growth.ClassSpend || r.Product != "fakeads" ||
+		r.Account != "act_1" || r.Target != "c1" || r.Operation != ads.binding() || len(r.Changes) != 1 {
+		t.Errorf("the ask is recorded as %+v", r)
+	}
+	for name, desk := range map[string]*askDesk{
+		"a run already waiting":   {outcome: sandbox.AskAlreadyAsked},
+		"a run no longer running": {outcome: sandbox.AskNotRunning},
+	} {
+		if _, held := ask(desk); held {
+			t.Errorf("%s held the call", name)
+		}
+	}
+	ads.refuse = &builtin.GrowthRefusal{Class: tools.RefusalForbidden, Said: "over the daily cap"}
+	if _, held := ask(&askDesk{outcome: sandbox.AskRecorded}); held {
+		t.Error("a call its product refused was held")
+	}
+	ads.refuse = nil
+	if n := len(audit.records()); n != 1 {
+		t.Errorf("calls that were never held recorded %d more asks", n-1)
+	}
+	audit.err = errors.New("the access log is unreachable")
+	if _, held := ask(&askDesk{outcome: sandbox.AskRecorded}); !held {
+		t.Error("an ask whose record failed was not held")
+	}
 }
 
 func growthTurn(t *testing.T, handle string) *turnctx.Turn {

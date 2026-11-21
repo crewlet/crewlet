@@ -250,12 +250,22 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	if res, joined := h.joined(ctx, turn.Handle(), runID, held); joined {
 		return res, false
 	}
-	return h.record(ctx, runID, launch, call.Name, sandbox.Ask{
+	res, recorded := h.record(ctx, runID, launch, call.Name, sandbox.Ask{
 		Question: prep.Question, Context: prep.Context + actingWords(held.Acting),
 		Decision: sandbox.HeldFixedDecision(prep.Question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,
 	})
+	// RECORDED ONCE IT IS HELD, never before: a call refused or joined above
+	// asked nobody. The ask stands if its record fails; the answer and the
+	// outcome are recorded before they act.
+	if recorded && prep.Held != nil {
+		if err := prep.Held(ctx, held.ID); err != nil {
+			log.ErrorContext(ctx, "held_call_ask_unrecorded", "tool", call.Name, "held_call", held.ID,
+				"error", err.Error())
+		}
+	}
+	return res, recorded
 }
 
 // joined answers a call whose seat already holds a request of the same act and
@@ -396,8 +406,11 @@ type preparedTool interface {
 
 // HeldPrep is what a held call is recorded with: its binding and subject
 // ([fixedTool.Binding], [fixedTool.Subject]) and the words a person reads.
+// Held, where set, is told the call's id once it is held, and records what the
+// access log keeps of the ask (a growth act's, ADR-0171).
 type HeldPrep struct {
 	Binding, Subject, Question, Context string
+	Held                                func(ctx context.Context, heldID string) error
 }
 
 // prepared is tool's prepared hold: read live by a [preparedTool], or from
