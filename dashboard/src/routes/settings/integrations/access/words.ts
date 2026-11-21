@@ -402,7 +402,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Turning it on lets the agent use the chosen apps at the chosen level through Crewlet's own tools. Nothing is created at Apple, and the agent holds no key.",
     off: "The agent's next App Store Connect call is refused.",
     remove: "There is nothing to remove: the agent never held a key.",
-    rotate: "The agent holds no key, so there is nothing to rotate. Replace a team key on the integration's page.",
+    rotate:
+      "The agent holds no key, so there is nothing to rotate. Replace a team key on the integration's page.",
     scope: {
       noun: "Apps",
       singular: "app",

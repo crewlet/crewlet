@@ -46,6 +46,8 @@ import {
 import { useAccess, useOperatorManaged } from "./access/api.ts";
 import { AgentsAccess } from "./access/AgentsAccess.tsx";
 import { SshServers } from "./SshServers.tsx";
+import { AppStoreAnalytics, AppStoreKeys } from "./AppStoreAnalytics.tsx";
+import { analyticsConnections, connectedKeys } from "./appStoreAnalytics.ts";
 import { accessHold, lanesOf, needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
@@ -384,6 +386,15 @@ export function AppPane({
             <SettingsSummary tool={tool} />
             {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
             {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
+            {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
+            {tool.entry.key === "app_store_connect" && (
+              <>
+                <AppStoreKeys keys={connectedKeys(tool.sections.map((s) => s.tool))} />
+                <AppStoreAnalytics
+                  connections={analyticsConnections(tool.sections.map((s) => s.tool))}
+                />
+              </>
+            )}
             <Button
               size="small"
               variant="secondary"
