@@ -111,9 +111,8 @@ type turnTelemetry struct {
 	// cut under two tokens. Empty on a resume, which carries the parked task.
 	task string
 
-	// title is what a person reads the turn's work by ([turnctx.Turn.Title]):
-	// the ask, else the trigger's feed line; on a resume, the line its run is
-	// already listed under.
+	// title is what a person reads the turn's work by ([turnTitle]); on a
+	// resume, the line its run is already listed under.
 	title string
 
 	// senders is who spoke to this seat ([sendersSpoken] over the
@@ -308,12 +307,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
-	// The ask, or where the trigger stated none (an attachment-only message)
-	// its feed line, so a run the turn launches is never listed as nothing.
-	t.title = t.ask
-	if t.title == "" {
-		t.title = t.trigger.Summary
-	}
+	t.title = turnTitle(t.ask, t.trigger)
 	// THE ITEM, from the same first event the trigger is described from,
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
@@ -584,7 +578,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		EndedAt:       ended,
 		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
 		TaskSummary:   t.trigger.Summary,
-		Ask:           t.unspokenAsk(),
+		// REDACTED, on the record alone: the turn-start judgements read the
+		// ask part by part (askParts) and the park keeps it as it came.
+		Ask:           redact.Secrets(t.unspokenAsk()),
 		AskProvenance: t.unspokenAskLabel(),
 		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
@@ -603,7 +599,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Acted:           actedOutside(calls, deliverySurface(e.ToolsFor(t.handle))),
 		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
-		Interactions:    t.interactions,
+		Interactions:    recordedInteractions(t.interactions),
 		ConversationKey: t.convKey,
 	}
 	if !res.Suspended && t.measuredWhole() {
@@ -809,6 +805,31 @@ func (t turnTelemetry) unspokenAskLabel() *provenance.Label {
 		return nil
 	}
 	return t.askLabel
+}
+
+// turnTitle is what a person reads a turn's work by ([turnctx.Turn.Title]):
+// its ask REDACTED, or where the trigger stated none (an attachment-only
+// message) its feed line, which the descriptor redacted
+// ([types.DescribeTrigger]), so a run the turn launches is never listed as
+// nothing. Every copy is a person's (the run's row and label, its
+// announcement, its session's ask), and the model reads its brief instead.
+func turnTitle(ask string, trigger types.Trigger) string {
+	if ask != "" {
+		return redact.Secrets(ask)
+	}
+	return trigger.Summary
+}
+
+// recordedInteractions is the turn's interactions as its record keeps them,
+// each body REDACTED, in a copy: the park keeps the turn's own as they came,
+// and the model read the bodies through the trigger, never through these.
+// Whole, as the record carries them uncut.
+func recordedInteractions(in []types.InboundInteraction) []types.InboundInteraction {
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].Body = redact.Secrets(out[i].Body)
+	}
+	return out
 }
 
 // planSummary is the reviewer's account of the turn, or the artifact,

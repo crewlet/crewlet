@@ -703,6 +703,10 @@ type Role struct {
 	// The decision is cheap and the prompt is bounded, so a small fast
 	// model is the right default.
 	LLMJudge ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero"`
+	// LLMTriage runs the triage of a wake that reaches this seat while one of
+	// its runs works, from somebody other than the run's requester
+	// (ADR-0168): one bounded call that names a label, so a fast model too.
+	LLMTriage ProviderKeys `yaml:"llm_triage,omitempty" json:"llm_triage,omitzero"`
 
 	// Workers narrows which of the company's delegate templates this seat
 	// may hand work to. Empty means every one — see config.Role.Workers,
@@ -911,6 +915,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_subagent", len(r.LLMSubagent) > 0},
 		{"llm_auxiliary", len(r.LLMAuxiliary) > 0},
 		{"llm_judge", len(r.LLMJudge) > 0},
+		{"llm_triage", len(r.LLMTriage) > 0},
 		{"sandbox", r.Sandbox != nil},
 		{"token_budget", len(r.TokenBudget) > 0},
 		{"workers", len(r.Workers) > 0},

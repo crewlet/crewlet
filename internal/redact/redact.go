@@ -27,14 +27,15 @@
 //
 // # Text that is still being written
 //
-// A live view shows what a running process has written so far, and every
-// rule here was written for text that is whole. [Settled] is the other half:
-// how much of a growing text has a redaction that nothing written after it
-// can change, so a reader is never shown a key's body that its END line,
-// arriving a moment later, would have redacted. It lives beside the rules
-// because it is a property OF them — a rule added here that can reach across a
-// line break is a rule [Settled] has to learn about, and its test feeds every
-// shape here through text that arrives a line at a time.
+// Every rule here reads whole text; a live view shows a growing one. [Settled]
+// is how much of it has a redaction nothing written after it can change, so a
+// reader never sees a key's body that its END line, arriving later, redacts. A
+// rule that can reach across a line break is one Settled has to learn; its test
+// feeds it every shape here a line at a time. A stream from [NewLiveStream]
+// hands its stages only what Settled settles, and [Stream.Flush] decides each
+// stage there as at the text's end. Unflushed, it answers as a [NewStream]
+// does; flushed, it writes Secrets where Close answers nil, and refuses only
+// in a layout named below.
 //
 // # How far a rule reads
 //
@@ -85,7 +86,7 @@
 //
 // [Stream] redacts a text written to it in pieces and writes, put together,
 // exactly what [Secrets] returns for the whole, without holding it, or
-// refuses the text (below): a whole PDF's base64 on one line of a transcript
+// refuses it (below): a whole PDF's base64 on one line of a transcript
 // is redacted in what a few hundred KiB a pass hold. It runs the passes
 // Secrets makes, the keys' blocks and then each rule in order, as STAGES, each
 // reading what the one before it wrote, and each deciding with the code
@@ -95,9 +96,8 @@
 // of that at the last marker it holds (below), and by exactly that window
 // however much more it holds. The stages are handed the text a piece at a
 // time at its own offsets, so what each holds when it steps is the text's
-// alone, and how the text is cut into writes changes nothing. Secrets itself
-// reads its text whole at any length: its caller holds the text already, and
-// read by the stages, a text that needs none of their windows paid for them.
+// alone, and how it is cut into writes changes nothing. Secrets reads its
+// text whole at any length: its caller holds it.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
 // [keyReading]) and trusts a decision only where the window holds all it read.
@@ -137,7 +137,8 @@
 // and claims the stages keep beside it, where a text is markers end to end (a
 // JSON Web Token every fifteen bytes). So a stream allocates its buffers, about
 // 16 MiB, and past them under a quarter of a byte a byte of a session or a PDF,
-// a few where passwords are dense. Tests hold each.
+// a few where passwords are dense. Tests hold each. A live stream also holds
+// its text past the settled point, any length ([settling]).
 //
 // A WINDOW DECIDED EARLY IS CHECKED, AND A STREAM THAT FINDS IT READ A CLAIM
 // OTHERWISE REFUSES ([ErrDecidedEarly]). Every token's and AWS secret's claim
@@ -156,16 +157,15 @@
 // the claims, and a claim that then comes, or ends, otherwise over it stops
 // the stream: what it wrote is not Secrets of the text and may hold what
 // Secrets redacts, so its caller neither keeps nor shows it. A text gets that
-// only where a key's block is read beside such a claim: a password's key on a
-// line that ends in a key's END, with a run longer than the lag straight after
-// its value's line, which one such key is enough for; many password's keys
-// between an armour and a run longer than the lag; or armours among long
-// tokens each with a password's key after it. None is a credential's format.
-// Held below its own hold, a stream refuses more: a step that writes a key's
-// block waits on the claims too, so at a hold of 256 KiB it refuses some
-// texts that hold a value a few hundred KiB long beside a block; at its own
-// hold it refuses none of them. A window decided early that read no claim
-// otherwise decided what the whole text does.
+// only where a key's block is read beside such a claim, with a run of about the
+// lag after it: a password's key on a line that ends in a key's END, the run
+// straight after its value's line; a password's key on a key's BEGIN line or
+// the line after it, the run as its value's line or a few lines below; a
+// password's key, its value's line and a key's END on three lines under a
+// gutter; a password's key or more between an armour and the run; or armours
+// among long tokens each with a password's key after it. None is a credential's
+// format; below its own hold a stream refuses more. A window decided early
+// that read no claim otherwise decided what the whole text does.
 //
 // # A key's block beside a password
 //
@@ -345,6 +345,7 @@
 package redact
 
 import (
+	"bytes"
 	"cmp"
 	"io"
 	"iter"
@@ -6030,16 +6031,14 @@ func inBase64(c byte) bool {
 	return c == '+' || c == '/' || c == '='
 }
 
-// Settled is how much of text — a text still being written, one complete line
-// at a time — can be redacted and shown now: the length of its longest prefix,
-// ending on a line break, whose redaction nothing written after text can
-// change.
+// Settled is how much of text, a text still being written a complete line at
+// a time, can be redacted and shown now: the length of its longest prefix
+// ending on a line break whose redaction nothing written after it can change.
 //
 // THE PROMISE IS EXACT: for every boundary it returns, redacting the text in
 // pieces cut there is the same as redacting it whole, however the rest of it
-// arrives. So a reader shown each settled piece as it lands sees, in the end,
-// exactly what the whole text redacts to — and never a credential in clear
-// that a later line would have redacted. Five things hold a line back, and
+// arrives, so a reader shown each settled piece as it lands sees in the end
+// exactly what the whole text redacts to. Five things hold a line back, and
 // each is a match that can cross a line break:
 //
 //   - a private key's block still OPEN — its BEGIN line, and every line
@@ -6082,15 +6081,74 @@ func inBase64(c byte) bool {
 //     marker, which can join the value's line to the END's or take the
 //     gutter the END's line opened with, so the claim keeps out of the block
 //     a value the rule does not take, and holds the block until it decides
-//     whether to cut it. Held for the rule's reading alone, a live view
-//     redacted a piece of a key's line that the whole text publishes.
+//     whether to cut it.
 //
-// Whatever is after the last line break is not a line yet, and is never
-// settled: a credential is matched by its whole shape, and half a token on
-// screen is a line that changes when its other half lands.
+// Nothing past the last line break settles: a credential's shape is whole.
+//
+// READ IN ANY PIECES, IT ANSWERS WHAT IT ANSWERS WHOLE ([settling]): nothing
+// written after a settled point reads back across it, so no reader holds
+// anything pending there and the text past it reads as one that starts
+// there: Settled is that point and Settled of the rest, and never falls.
 func Settled(text string) int {
-	settled, _ := settle(text)
-	return settled
+	s := settling[string]{text: text}
+	return s.next()
+}
+
+// settling is [Settled] of a text as it arrives: the text past the point
+// settled so far, how much of it was looked at for a line break, and how
+// many times it asked Settled's readers ([settle]). It asks only once a line
+// break has arrived since it last asked, since Settled reads nothing past
+// the last one, and only of the text from its point to there, which Settled
+// chains at. It holds the line being written and the lines Settled holds
+// back, which a run of key lines can make any length. Over a string, as
+// Settled reads one, an ask copies nothing.
+type settling[T textual] struct {
+	text          T
+	scanned, asks int
+}
+
+// next is how much more of the text is settled, the text left as it is.
+func (s *settling[T]) next() int {
+	from := s.scanned
+	s.scanned = len(s.text)
+	i := tLastIndexByte(s.text[from:], '\n')
+	if i < 0 {
+		return 0
+	}
+	s.asks++
+	n, _ := settle(string(s.text[:from+i+1]))
+	return n
+}
+
+// growing is a settling over bytes a stream holds: it takes the text as it
+// is written, and hands on what settles.
+type growing struct{ settling[[]byte] }
+
+// write takes p as the next of the text.
+func (s *growing) write(p []byte) { s.text = append(s.text, p...) }
+
+// settlingKeeps is the most buffer a settling keeps once what it holds fits
+// in it again: a line being written and the lines Settled holds back in an
+// ordinary text, for a block's and a value's reach ([MaxKeyBlockBytes],
+// [MaxReach]), with room for append to double. A buffer grown past it held a
+// long line, or a longer stretch Settled held back, which a stream would
+// otherwise keep the size of until it closed.
+const settlingKeeps = 4 * MaxReach
+
+// settle hands hand the text settled since it last answered, if any, and
+// keeps the rest.
+func (s *growing) settle(hand func([]byte)) {
+	n := s.next()
+	if n == 0 {
+		return
+	}
+	hand(s.text[:n])
+	if rest := s.text[n:]; cap(s.text) > settlingKeeps && len(rest) <= settlingKeeps {
+		s.text = bytes.Clone(rest)
+	} else {
+		s.text = s.text[:copy(s.text, rest)]
+	}
+	s.scanned -= n
 }
 
 // settle is [Settled], and the bytes it handed its readers to read: the keys'

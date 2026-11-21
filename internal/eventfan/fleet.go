@@ -610,7 +610,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.Phases(ctx, agentID, limit, before, at)
+			rows, more, err := f.Local.Phases(ctx, agentID, limit, AnswerBytes, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -639,7 +639,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 	p := phasesParams{AgentID: agentID, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.AgentPhases(ctx, agentID, before, at)
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, AnswerBytes, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {

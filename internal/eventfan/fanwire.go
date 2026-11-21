@@ -516,7 +516,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, p.Before.cursor(), p.At)
+		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, AnswerBytes, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}
@@ -526,7 +526,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Before.cursor(), p.At)
+		rows, more, err := log.AgentPhases(ctx, p.AgentID, AnswerBytes, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}
@@ -600,6 +600,18 @@ func phaseLimit(limit int) int {
 }
 
 // ---- fitting a reply into the transport --------------------------------- //
+
+// AnswerBytes bounds the rows one node's turn or phases answer reads, by their
+// text ([store.RecordBytes]): the turn's opening and ending together, and a
+// page of phase records, each stopped before the row that would pass it, the
+// first always kept.
+//
+// HALF OF [queue.MaxPayloadBytes], as a chat page is (internal/chatlet's
+// pageBytes): the answer is one reply, and the other half is for what rides
+// with the rows and their encoding. The count alone never bounded it: a phase
+// record carries its prompts and response verbatim, so a page of
+// [store.MaxPhasePage] could read hundreds of MiB for one 8 MiB reply.
+const AnswerBytes = queue.MaxPayloadBytes / 2
 
 // cuttable is a part that can give up rows to fit the transport, keeping the
 // ones that matter most and saying that it did.

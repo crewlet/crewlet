@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -589,7 +590,7 @@ var liveList = listRule{share: liveListBytes, rows: sandbox.MaxBridgeCalls, row:
 // liveRow is a live row's identity ([keptIdentity]) and arguments held to the
 // bridged call's shares (internal/kept's Args drops the largest values first),
 // a submission's to sandbox.MaxSubmissionArgsBytes; its answer is already held
-// to its tail ([liveExecutions]).
+// to its tail ([liveWords.executions]).
 func liveRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	out := keptIdentity(row)
 	argsShare := sandbox.MaxBridgeArgsBytes
@@ -626,25 +627,38 @@ func keptRunning(calls []types.RunningCall) ([]types.RunningCall, int) {
 	return calls, 0
 }
 
-// liveTail is s's END within budget bytes, cut on a character and marked at
-// its start as internal/textcut's Tail marks it.
+// liveTail is the END of s, an attempt abandoned where it was cut, within
+// budget bytes as the event encodes it: its settled lines redacted
+// ([shownEnd]), cut on a character and never inside a marker the redaction
+// wrote, and marked at its start as internal/textcut's Tail marks it, and at
+// its end where words after its last settled line are held back: an attempt
+// is final, and one that said only words held back reads as nothing said.
 func liveTail(s string, budget int) string {
-	if kept.Quoted(s) <= budget {
-		return s
+	end, elided, held := shownEnd(s, budget, true)
+	trail := ""
+	if held {
+		trail = tailMarker
 	}
-	room := budget - 2 - kept.Len(tailMarker)
-	used, cut := 0, len(s)
+	if !elided && kept.Quoted(end+trail) <= budget {
+		return end + trail
+	}
+	room := budget - 2 - kept.Len(tailMarker) - kept.Len(trail)
+	used, cut := 0, len(end)
 	for cut > 0 {
-		_, size := utf8.DecodeLastRuneInString(s[:cut])
-		cost := kept.Len(s[cut-size : cut])
+		_, size := utf8.DecodeLastRuneInString(end[:cut])
+		cost := kept.Len(end[cut-size : cut])
 		if used+cost > room {
 			break
 		}
 		used += cost
 		cut -= size
 	}
-	return tailMarker + s[cut:]
+	if _, after, inside := redact.MarkersAround(end, cut); inside {
+		cut = after
+	}
+	return tailMarker + end[cut:] + trail
 }
 
-// tailMarker is what starts a tail [liveTail] cut.
+// tailMarker is what starts a tail [liveTail] cut, and ends one that holds
+// words back.
 const tailMarker = "…"

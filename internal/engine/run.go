@@ -531,6 +531,9 @@ type Engine struct {
 	// read the node's own memory ([Engine.buildGitletHost]).
 	gitMemory int64
 
+	// setMemoryLimit is Options.setMemoryLimit, kept likewise ([Engine.limitMemory]).
+	setMemoryLimit func(int64) int64
+
 	// compactorEstate is Options.compactorEstate, kept likewise: nil hands the
 	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
 	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
@@ -1308,6 +1311,11 @@ type Options struct {
 	// own ([gitproc.Options.Memory]), zero for the node's own.
 	gitMemory int64
 
+	// setMemoryLimit is what sets the runtime's memory limit in place of
+	// debug.SetMemoryLimit, so a case reads the limit its node would set; nil
+	// sets it, but in a test binary, which no case's figure may limit.
+	setMemoryLimit func(int64) int64
+
 	// compactorEstate stands between the Gitlet compactor and the router's
 	// code seam it lists and proposes through ([gitletcompact.Options.Estate]),
 	// nil for none, so a case about the compaction-behind alarm can show a
@@ -1606,6 +1614,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		cacheDisk:           opts.cacheDisk,
 		sizedByTheMachine:   sizedByTheMachine(ctx),
 		gitMemory:           opts.gitMemory,
+		setMemoryLimit:      opts.setMemoryLimit,
 		compactorEstate:     opts.compactorEstate,
 		homeSeams:           opts.homeSeams,
 		committerPublisher:  opts.committerPublisher,

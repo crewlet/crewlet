@@ -465,9 +465,10 @@ describe("a seat's model setting, as rows a person reads", () => {
   });
 
   test("a mapping is one row per phase, in the engine's own order", () => {
-    expect(formatPhaseLLM({ judge: "tiny", default: ["big", "fast"] })).toEqual([
+    expect(formatPhaseLLM({ triage: "tiny", judge: "tiny", default: ["big", "fast"] })).toEqual([
       { phase: "default", chain: "big, then fast" },
       { phase: "judge", chain: "tiny" },
+      { phase: "triage", chain: "tiny" },
     ]);
   });
 

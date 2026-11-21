@@ -651,7 +651,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 	WriteEvents(t, log, recs)
 
 	// The head read keeps the OPENING, as its own doc says.
-	head, err := log.Turn(t.Context(), "tn-long", time.Now())
+	head, _, err := log.Turn(t.Context(), "tn-long", 0, time.Now())
 	if err != nil {
 		t.Fatalf("turn: %v", err)
 	}
@@ -663,7 +663,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"not exercising a cut at all")
 	}
 
-	got, err := log.TurnClosing(t.Context(), "tn-long", 5, time.Now())
+	got, err := log.TurnClosing(t.Context(), "tn-long", 5, 0, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing: %v", err)
 	}
@@ -688,7 +688,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"came for are empty")
 	}
 	// A limit of zero asks for nothing rather than for everything.
-	none, err := log.TurnClosing(t.Context(), "tn-long", 0, time.Now())
+	none, err := log.TurnClosing(t.Context(), "tn-long", 0, 0, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing, no limit: %v", err)
 	}
@@ -720,7 +720,7 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 	} else if got == nil {
 		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
 	}
-	if got, err := log.Turn(ctx, "tn-nothing-wrote-this", time.Now()); err != nil {
+	if got, _, err := log.Turn(ctx, "tn-nothing-wrote-this", 0, time.Now()); err != nil {
 		t.Fatalf("turn: %v", err)
 	} else if got == nil {
 		t.Error("Turn answered nil for a turn with no rows, which serializes as null")
@@ -730,7 +730,7 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 	} else if got == nil {
 		t.Error("Trace answered nil for a trace with no rows, which serializes as null")
 	}
-	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5, time.Now()); err != nil {
+	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5, 0, time.Now()); err != nil {
 		t.Fatalf("turn closing: %v", err)
 	} else if got == nil {
 		t.Error("TurnClosing answered nil for a turn with no rows, which serializes as null")

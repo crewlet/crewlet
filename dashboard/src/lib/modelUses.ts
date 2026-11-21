@@ -3,15 +3,16 @@
  * three categories of seat work and the Assistant, mapped onto the engine's
  * fields, and the next company document a change of uses becomes.
  *
- * THREE CATEGORIES, FIVE FIELDS. The engine resolves a seat's five jobs from
- * five fields (`SEAT_JOB_FIELDS`, held to the engine by a Go gate). A person
+ * THREE CATEGORIES, SIX FIELDS. The engine resolves a seat's six jobs from
+ * six fields (`SEAT_JOB_FIELDS`, held to the engine by a Go gate). A person
  * tells three kinds of work apart, so the page offers those, and a category
  * writes every field it holds in the same revision: Coding is `llm`;
  * Reviewing and delegations is `llm_review` and `llm_subagent`; Routines and
- * evaluations is `llm_auxiliary` and `llm_judge`. The pairs are paired by the
- * model each wants: the review and the delegated work take a strong model, and
- * the routines and the onboarding judge, each under a fixed deadline, a fast
- * one, so one choice of model serves both jobs it writes. Ask Crewlet and
+ * evaluations is `llm_auxiliary`, `llm_judge` and `llm_triage`. The groups are
+ * grouped by the model each wants: the review and the delegated work take a
+ * strong model, and the routines, the onboarding judge and a busy seat's wake
+ * triage, each a bounded call under a fixed deadline, a fast one, so one
+ * choice of model serves every job it writes. Ask Crewlet and
  * the Advisor are the company's, not a seat's: `assistant.model` and
  * `advisor.model`, with no seats.
  *
@@ -56,7 +57,7 @@ export const CATEGORY_ORDER: readonly JobCategory[] = ["coding", "reviews", "rou
 export const CATEGORY_JOBS: Readonly<Record<JobCategory, readonly SeatJob[]>> = {
   coding: ["executor"],
   reviews: ["review", "subagent"],
-  routines: ["auxiliary", "judge"],
+  routines: ["auxiliary", "judge", "triage"],
 };
 
 /** The category each seat job belongs to. */
@@ -66,6 +67,7 @@ export const CATEGORY_OF: Readonly<Record<SeatJob, JobCategory>> = {
   subagent: "reviews",
   auxiliary: "routines",
   judge: "routines",
+  triage: "routines",
 };
 
 /** The fields a category writes, as its tooltip names them: "llm_review and llm_subagent". */

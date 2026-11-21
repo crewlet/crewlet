@@ -146,7 +146,7 @@ const WORDS = {
   routines: {
     label: "Routines and evaluations",
     short: "Routines",
-    hint: "Background memory and summaries, and the checks that decide when onboarding is done.",
+    hint: "Background memory and summaries, the checks that decide when onboarding is done, and sorting messages to a busy seat.",
     verb: "run routines and evaluations",
   },
 } as const satisfies Record<JobCategory, CategoryWords>;
@@ -181,7 +181,7 @@ export const ADVISOR_USE = {
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet and the Advisor are separate: choose each on its own.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary, llm_judge and llm_triage, so every seat job resolves to it. Ask Crewlet and the Advisor are separate: choose each on its own.",
 } as const;
 
 /**
