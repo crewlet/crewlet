@@ -1112,7 +1112,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Agent:    agentID,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
-		Detail:   events.ClipDiagnostic(panicked.Error()),
+		Detail:   events.Diagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
 	}, trace)
@@ -1144,7 +1144,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 		// it was cut at 200 bytes, which a wrapped error spends on
 		// its outer operations before it reaches what failed.
 		rec := d.skippedRecord(handle, ev, disposition,
-			events.ClipDiagnostic(reason+", so it was not redelivered: "+cause.Error()))
+			events.Diagnostic(reason+", so it was not redelivered: "+cause.Error()))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}

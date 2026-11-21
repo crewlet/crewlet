@@ -260,7 +260,7 @@ func TextKeyOf(output string, outputBytes int) (TextKey, bool) {
 	case outputBytes == 0:
 		return TextKey{Bytes: len(output), Whole: true, Sum: sha256.Sum256([]byte(output))}, true
 	}
-	opening, ok := rowRecord.Opening(output, outputBytes)
+	opening, ok := OutputOpening(output, outputBytes)
 	if !ok {
 		return TextKey{}, false
 	}

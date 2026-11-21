@@ -395,19 +395,11 @@ export function AtlasMap({
       })),
     [plan, narrowed, held],
   );
-  // The open groups are the map's, kept across a new arrangement's new canvas.
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
-
   // THE MAP OPENS ON THE SELECTION THE ADDRESS ARRIVED WITH, in the middle at
   // a size its card reads, where it otherwise opens fitted: a link to an entry
-  // (its sheet, or "Show it on the map") lands on it. Read once, for the first
-  // canvas, so neither a later selection nor a new arrangement moves the view to it.
-  const [arrival, setArrival] = useState<{ id: string | null; plan: string | null }>({
-    id: selectedId,
-    plan: null,
-  });
-  if (plan && arrival.plan === null) setArrival({ id: arrival.id, plan: plan.key });
-  const arrived = plan && plan.key === arrival.plan ? arrival.id : null;
+  // (its sheet, or "Show it on the map") lands on it. Read once, when the map
+  // is first placed, so a later selection never moves the reader's view.
+  const [arrived] = useState(selectedId);
 
   const selected = selectedId === null ? undefined : byId.get(selectedId);
   // THE PATH THE MAP LIGHTS, COUNTED OVER EVERY HOP and said so, in the verb
@@ -437,16 +429,13 @@ export function AtlasMap({
       >
         {plan && (
           <GraphCanvas
-            // A NEW ARRANGEMENT IS A NEW CANVAS, measured and fitted afresh.
-            key={plan.key}
             className="atlas-map__graph"
             label="Atlas map: everything the company runs on and how it relates"
             bands={bands}
             nodes={nodes}
             edges={edges}
             groups={groups}
-            openGroups={open}
-            onOpenGroupsChange={setOpen}
+            collapseAbove={grouped ? ATLAS_OPEN_MAX : undefined}
             labels={MAP_LABELS}
             tones={work ? MAP_TONES : HEALTH_TONES}
             selectedId={selectedId}
@@ -498,7 +487,10 @@ export function AtlasMap({
                 </div>
               ) : undefined
             }
-            fitKey={fitKey}
+            // A NEW ARRANGEMENT IS FITTED ON THE SAME CANVAS, never a new one, which
+            // would drop the screen a fullscreen map holds; the kit fits it again
+            // once its cards are measured at the new width.
+            fitKey={`${fitKey}|${plan.key}`}
             initialNode={arrived}
           />
         )}
