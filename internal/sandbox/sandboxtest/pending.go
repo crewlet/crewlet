@@ -54,6 +54,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -4724,11 +4726,18 @@ func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.Pendi
 	// by the frame that ends the turn — a resume, or a stop's close — so
 	// every write between the two hands it on, a relaunch's reset included:
 	// a reviewer's send-back is the same turn answering the same ask, and
-	// the relaunch's own row states none.
-	want := sandbox.ColleagueAsk{
-		ChannelID: "a2a-1", Question: "which branch?", Chain: []string{"ceo"},
-		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	// the relaunch's own row states none. The question holds a credential,
+	// and every write hands it on AS ASKED, since the answer echoes it to the
+	// asking seat's model: only the reads that serve it redact it.
+	sample := map[string]string{}
+	for _, shape := range redacttest.Shapes() {
+		sample[shape.Name] = shape.Sample
 	}
+	key := sample["anthropic-key"]
+	want := sandbox.ColleagueAsk{
+		ChannelID: "a2a-1", Chain: []string{"ceo"},
+		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	}.WithQuestion("which branch, and may it use " + key + "?")
 	r := run("t1")
 	asked := want
 	r.ColleagueAsk = &asked
@@ -4736,10 +4745,13 @@ func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.Pendi
 	check := func(step string, got sandbox.PendingRun) {
 		t.Helper()
 		if got.ColleagueAsk == nil || got.ColleagueAsk.ChannelID != want.ChannelID ||
-			got.ColleagueAsk.Question != want.Question || len(got.ColleagueAsk.Chain) != 1 ||
+			got.ColleagueAsk.RawQuestion() != want.RawQuestion() || len(got.ColleagueAsk.Chain) != 1 ||
 			got.ColleagueAsk.Chain[0] != "ceo" || got.ColleagueAsk.TraceID != want.TraceID ||
 			got.ColleagueAsk.SpanID != want.SpanID || got.ColleagueAsk.ParentSpanID != want.ParentSpanID {
 			t.Fatalf("%s left ask %+v, want %+v", step, got.ColleagueAsk, want)
+		}
+		if shown := got.ColleagueAsk.Question(); strings.Contains(shown, key) || !strings.Contains(shown, redact.Marker) {
+			t.Fatalf("%s left an ask whose question reads %q, want the key as a marker", step, shown)
 		}
 	}
 	check("the launch", mustGet(t, s, "t1"))

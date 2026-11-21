@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -50,6 +52,7 @@ var delegatedCases = []struct {
 }{
 	{"APanelVerdictIsRecordedOncePerDelegate", testAPanelVerdictIsRecordedOncePerDelegate},
 	{"AnEscalationEndsTheWaitOnTheDelegatesOnce", testAnEscalationEndsTheWaitOnTheDelegatesOnce},
+	{"ADelegatesWordsReachTheRowWithNoSecretTheyCarried", testADelegatesWordsReachTheRowWithNoSecretTheyCarried},
 }
 
 // verdictBy is a high-confidence answer by.
@@ -114,5 +117,72 @@ func testAnEscalationEndsTheWaitOnTheDelegatesOnce(t *testing.T, s sandbox.Pendi
 	}
 	if ok, err := s.EscalateHeld(ctx, "t-esc", "another-launch", held.ID, e); err != nil || ok {
 		t.Fatalf("an escalation naming another question = %v, %v", ok, err)
+	}
+}
+
+// A DELEGATE'S WORDS REACH THE ROW WITH NO SECRET THEY CARRIED: its reason
+// and findings, which people read before the call itself, hold a provider's
+// key, a password's value and a bearer token, and the answer the write gives
+// back, the row and the list of active runs all hold markers in their place,
+// the words around them as written.
+func testADelegatesWordsReachTheRowWithNoSecretTheyCarried(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	sample := map[string]string{}
+	for _, shape := range redacttest.Shapes() {
+		sample[shape.Name] = shape.Sample
+	}
+	planted := []struct{ text, value string }{
+		{sample["anthropic-key"], sample["anthropic-key"]},
+		{sample["password"], strings.TrimPrefix(sample["password"], "password: ")},
+		{"Authorization: Bearer " + sample["jwt"], sample["jwt"]},
+	}
+	held := DelegatedParked(t, s, "t-words", []string{"security-a"}, base)
+	v := verdictBy("security-a", "deny")
+	v.Reason = "it echoes " + planted[0].text + " to the log"
+	v.Findings = []string{"the script sets " + planted[1].text, "it sends " + planted[2].text, "nothing else"}
+	written, ok, err := s.GiveDelegateVerdict(ctx, "t-words", held.LaunchID, held.ID, v)
+	if err != nil || !ok {
+		t.Fatalf("the delegate's answer = %v, %v; want it recorded", ok, err)
+	}
+	r, found, err := s.Get(ctx, "t-words")
+	if err != nil || !found || r.HeldCall == nil || r.HeldCall.Delegation == nil {
+		t.Fatalf("the row reads %+v, %v, %v", r.HeldCall, found, err)
+	}
+	active, err := s.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("ListActive: %v", err)
+	}
+	reads := map[string]*sandbox.HeldDelegation{"the answer written": written.Delegation,
+		"the row": r.HeldCall.Delegation}
+	for _, a := range active {
+		if a.TurnID == "t-words" && a.HeldCall != nil {
+			reads["the active list"] = a.HeldCall.Delegation
+		}
+	}
+	if len(reads) != 3 {
+		t.Fatalf("the active list holds no held call of t-words")
+	}
+	for where, d := range reads {
+		if d == nil || len(d.Given) != 1 || len(d.Given[0].Findings) != 3 {
+			t.Fatalf("%s holds %+v; want the one answer with its three findings", where, d)
+		}
+		g := d.Given[0]
+		words := append([]string{g.Reason}, g.Findings...)
+		for i, p := range planted {
+			text := words[i]
+			if strings.Contains(text, p.value) || !strings.Contains(text, redact.Marker) {
+				t.Errorf("%s holds %q; want a marker in place of the secret", where, text)
+			}
+		}
+		if !strings.HasPrefix(g.Reason, "it echoes ") || !strings.HasSuffix(g.Reason, " to the log") ||
+			g.Findings[2] != "nothing else" {
+			t.Errorf("%s changed the delegate's other words: %q, %q", where, g.Reason, g.Findings)
+		}
+		if g.By != "security-a" || g.Verdict != "deny" || g.Confidence != string(delegated.High) {
+			t.Errorf("%s changed who answered or what: %+v", where, g)
+		}
+	}
+	if !strings.Contains(v.Reason, planted[0].value) || !strings.Contains(v.Findings[1], planted[2].value) {
+		t.Errorf("recording the answer changed the caller's copy: %+v", v)
 	}
 }
