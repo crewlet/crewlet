@@ -45,6 +45,7 @@ roles:
   - name: SWE
     handle: swe
     llm: zulu
+    sandbox: {max_concurrent_runs: 1}
 `
 
 // pauseHolds is what a queue reports holding a seat's inbox under.
@@ -162,6 +163,10 @@ func (h *refusedOnce) Hold(ctx context.Context, handle string, at queue.Attachme
 
 func (h *refusedOnce) Release(ctx context.Context, handle string, at queue.Attachment) error {
 	return h.inner.Release(ctx, handle, at)
+}
+
+func (h *refusedOnce) Readmit(ctx context.Context, handle, key, turn string) (int, error) {
+	return h.inner.Readmit(ctx, handle, key, turn)
 }
 
 // EACH REFUSAL NAMES WHAT IT WAITS ON, which is what lets a retried resume wait

@@ -594,9 +594,12 @@ type RoleSandbox struct {
 }
 
 // DefaultMaxConcurrentRuns is the runs a seat that names no
-// sandbox.max_concurrent_runs holds at once: one, the seat taking no other
-// conversation while its run works (ADR-0169).
-const DefaultMaxConcurrentRuns = 1
+// sandbox.max_concurrent_runs holds at once (ADR-0169). TWO: a second run keeps
+// a busy seat answering an unrelated request without a second seat, while a
+// seat at rest holds no box, so a run that never starts spends nothing; a third
+// would charge a third launch floor against the seat's budget for a gain only a
+// seat's own owner can judge.
+const DefaultMaxConcurrentRuns = 2
 
 // ConcurrentRuns is how many of the seat's executor runs may hold it at once:
 // its max_concurrent_runs, or [DefaultMaxConcurrentRuns] where it names none.

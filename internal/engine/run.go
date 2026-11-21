@@ -2363,11 +2363,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// Live, as Answer below: the coordinator may arrive by apply.
 		d.HoldSandbox = e.holdSandboxSeat
 	}
-	if d.ConversationBusy == nil {
-		d.ConversationBusy = e.sandboxConversationBusy
+	if d.Beside == nil {
+		d.Beside = e.beside
 	}
-	if d.HoldConversation == nil {
-		d.HoldConversation = e.holdSandboxConversation
+	if d.SetAside == nil {
+		d.SetAside = e.setAside
+	}
+	if d.HoldAside == nil {
+		d.HoldAside = e.holdAside
 	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
