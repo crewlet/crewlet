@@ -1033,6 +1033,9 @@ type Engine struct {
 	// wakeRouters is this node's routers of its busy seats' held inboxes
 	// (wakerouter.go, ADR-0167).
 	wakeRouters seatRouters
+	// runWaits is this node's watches over its seats' runs parked by
+	// `wait_for_run` (runwaits.go, ADR-0176).
+	runWaits runWaits
 
 	// waitsTold is what each wake waiting behind a busy seat was told of why
 	// it waits, so a person is told each reason once (foldin.go).
@@ -2085,11 +2088,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			// window: its previous holder may not have lived to ask.
 			e.kickAccessReviews(s.Handle)
 		},
-		// A seat whose turn has ended re-checks what was refused for the turn
-		// running ([node.ErrSeatBusy]): an answer by turn that arrived mid-turn is
-		// the seat's next turn ([Engine.admitResume]).
+		// A SEAT RUNS UP TO ITS CAP OF TURNS, one per conversation, read
+		// fresh so an apply that changes the cap moves the next admission.
+		SeatTurns: e.seatRunCap,
+		// A seat whose turn has ended re-checks what was refused for the turns
+		// running ([node.ErrSeatFull], [node.ErrConversationBusy]): an answer by
+		// turn that arrived mid-turn is the seat's next turn ([Engine.admitResume]).
 		SeatTurnEnded: func(handle string) {
-			e.readmitResumes(waitSeatBusy, handle)
+			e.readmitResumes(waitSeatTurns, handle)
 		},
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
@@ -2359,6 +2365,15 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.HoldSandbox == nil {
 		// Live, as Answer below: the coordinator may arrive by apply.
 		d.HoldSandbox = e.holdSandboxSeat
+	}
+	if d.Beside == nil {
+		d.Beside = e.beside
+	}
+	if d.SetAside == nil {
+		d.SetAside = e.setAside
+	}
+	if d.HoldAside == nil {
+		d.HoldAside = e.holdAside
 	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
@@ -2803,6 +2818,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// The routers of busy seats' held inboxes, once the coordinator that starts
 	// them has stopped.
 	e.stopRouters()
+	// And the watches over its seats' waits, which answer through the same
+	// coordinator.
+	e.stopRunWaits()
 	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()

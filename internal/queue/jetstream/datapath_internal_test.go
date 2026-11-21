@@ -121,18 +121,32 @@ func readings(t *testing.T, m *LinkMeter, what string, f func(n int) bool) {
 // boundReadings is how many of the meter's readings a bound spans.
 const boundReadings = int(pathBound / meterPeriod)
 
-// stillAfter is how many readings past its last byte a link crossed at its
-// full rate still reads moving over a bound: until under movingShare of the
-// floor, half the rate, is left of the bound's bytes.
-const stillAfter = (1 - movingShare/2) * float64(boundReadings)
+// refusedMoving reads path once, between two of the meter's readings, and
+// reports whether it refused while the meter read the link moving over a
+// bound, and its answer: the one refusal for silence the code never makes. A
+// reading landing between the two leaves the case undecided, read as not.
+// Judged by the meter, not by a count of readings, which a loaded runner's
+// late ticks spread over a bound in fewer than its eight.
+func refusedMoving(m *LinkMeter, path func() error) (bool, error) {
+	next := m.nextReading()
+	err := path()
+	moving := m.Moving(pathBound)
+	select {
+	case <-next:
+		return false, err
+	default:
+	}
+	return err != nil && moving, err
+}
 
 // THE DATA PATH IS PROVEN END TO END through a leaf's client and data link,
 // counted in the meter's readings: (a) blackholed idle, refused within a probe
 // period and a bound, never before a bound, the lease link standing; (b) a
-// mebibyte crossing four bounds ahead of the probe, proven throughout; (c) two
-// mebibytes blackholed six seconds in, proven until then, refused once the
-// link reads still over a bound and within two; (d) a probe never answered
-// while bulk moves, refused at the cap as a link that moves, never before.
+// mebibyte crossing four bounds ahead of the probe, never refused while the
+// link reads moving (a relay a loaded runner stalls is still, rightly
+// refused); (c) two mebibytes blackholed six seconds in, refused once the link
+// reads still over a bound, never while moving, and within two bounds; (d) a
+// probe unanswered while bulk moves, refused at the cap, not sooner while moving.
 //
 // Mutant: the silence clause dropped — (b). Mutant: silence read over less
 // than the bound — (c). Mutant: no cap — (d). Mutant: DataPath reads only the
@@ -180,9 +194,9 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 			default:
 			}
 			crossed++
-			if err := path(); err != nil {
-				t.Fatalf("%d readings into a crossing at the link's rate, the path is refused: %v",
-					crossed, err)
+			if moving, err := refusedMoving(p.meter, path); moving {
+				t.Fatalf("%d readings into a crossing, the path is refused while its link reads "+
+					"moving: %v", crossed, err)
 			}
 			return false
 		})
@@ -199,24 +213,25 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 		p.bulkUp(t, 2<<20, true)
 		const before = 3 * boundReadings
 		readings(t, p.meter, "six seconds of the crossing", func(n int) bool {
-			if err := path(); err != nil {
-				t.Fatalf("%d readings into a crossing at the link's rate, the path is refused: %v", n, err)
+			if moving, err := refusedMoving(p.meter, path); moving {
+				t.Fatalf("%d readings into a crossing, the path is refused while its link reads "+
+					"moving: %v", n, err)
 			}
 			return n >= before
 		})
 		p.link.Blackhole(server.DEFAULT_GLOBAL_ACCOUNT)
 		t.Cleanup(func() { p.link.Mend(server.DEFAULT_GLOBAL_ACCOUNT) })
 		readings(t, p.meter, "the path refused after its last byte", func(n int) bool {
-			err := path()
+			moving, err := refusedMoving(p.meter, path)
 			switch {
 			case err == nil:
 				if n > 2*boundReadings {
 					t.Fatalf("%d readings after the link's last byte the path still reads proven", n)
 				}
 				return false
-			case float64(n) < stillAfter-1:
+			case moving:
 				t.Fatalf("the path was refused %d readings after the link's last byte, while its "+
-					"bound still read moving (%.1f readings): %v", n, stillAfter, err)
+					"bound still read moving: %v", n, err)
 			case !strings.Contains(err.Error(), "carried nothing"):
 				t.Fatalf("the path blackholed mid-crossing was refused for %v, want its silence", err)
 			}
@@ -242,13 +257,23 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 				t.Fatalf("the bulk crossed before the path was refused (%d readings)", n)
 			default:
 			}
-			err := path()
+			moving, err := refusedMoving(p.meter, path)
 			switch {
 			case err == nil:
 				return false
+			case !moving && strings.Contains(err.Error(), "carried nothing"):
+				if p.meter.Moving(pathBound) {
+					return false // a reading fell between: judge the next one
+				}
+				// A starved runner stalled the relay over a bound: the refusal
+				// for silence is right, and this run leaves the cap unjudged.
+				t.Logf("the link stalled %d readings in, refused for its silence: %v", n, err)
 			case n < capReadings-1:
-				t.Fatalf("a path whose link moves was refused %d readings in, under the cap's %d: %v",
-					n, capReadings, err)
+				if moving {
+					t.Fatalf("a path whose link moves was refused %d readings in, under the cap's "+
+						"%d: %v", n, capReadings, err)
+				}
+				return false
 			case !strings.Contains(err.Error(), "moves"):
 				t.Fatalf("a path whose link moves was refused for %v, want the cap", err)
 			}

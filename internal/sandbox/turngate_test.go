@@ -36,7 +36,7 @@ type turnGate struct {
 
 type gateKey struct{}
 
-func (g *turnGate) admit(ctx context.Context, _ string, route ResumeRoute) (context.Context, func(), error) {
+func (g *turnGate) admit(ctx context.Context, _, _ string, route ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.asked++
@@ -470,7 +470,7 @@ func TestASignalWhileTheGateRefusesIsNotLost(t *testing.T) {
 	rig := newCoordRig(t)
 	var mu sync.Mutex
 	refused := false
-	rig.coordinator.gate = func(ctx context.Context, handle string, _ ResumeRoute) (context.Context, func(), error) {
+	rig.coordinator.gate = func(ctx context.Context, handle, _ string, _ ResumeRoute) (context.Context, func(), error) {
 		mu.Lock()
 		first := !refused
 		refused = true

@@ -43,9 +43,10 @@ name: dependabot-dashboard
 # the moment it holds a commit it did not write.
 #
 # `main`'s ruleset keeps approvals across pushes today, so a bump with a bundle
-# commit merges itself once CI is green, and so does anything else pushed onto an
-# open Dependabot branch. Turning on "Require approval of the most recent
-# reviewable push" puts a person in front of that. See CONTRIBUTING.md.
+# commit merges itself once CI is green, and so does anything else pushed onto
+# the open branch of a bump dependabot-merge.yml queued. Turning on "Require
+# approval of the most recent reviewable push" puts a person in front of that.
+# See CONTRIBUTING.md.
 
 on:
   pull_request:

@@ -86,9 +86,10 @@ const (
 	// when they resume it.
 	HoldSeatPaused Hold = "seat_paused"
 
-	// HoldSandbox is taken while one of the seat's detached executors
-	// holds it, or a reply recorded as a parked run's answer is still owed
-	// the resume it drives — and lifted when neither is true. The sandbox
+	// HoldSandbox is taken while the seat's detached executors hold every
+	// slot of its cap, its inbox holds as many deliveries aside as it keeps,
+	// or a reply recorded as a parked run's answer is still owed the resume
+	// it drives — and lifted when none is true. The sandbox
 	// coordinator takes and lifts it, at its own transitions (see
 	// sandbox.SeatHold); the screening asks for it only for a delivery that
 	// raced it ([ActionHoldAndDefer]).
@@ -128,9 +129,11 @@ type Conditions struct {
 	// turn can run until a revision adds one.
 	TurnEngineReady bool
 
-	// SeatHeldBySandbox is whether a detached executor HOLDS the seat, so
-	// it starts no new turn. An executor can work for hours, far past any
-	// ack window.
+	// SeatHeldBySandbox is whether detached executors hold EVERY SLOT of the
+	// seat's cap (sandbox.max_concurrent_runs, two by default), so it starts
+	// no new turn. An executor can work for hours, far past any ack window.
+	// Below the cap a delivery waiting on one of them waits aside, which the
+	// dispatcher decides past the screening (internal/engine, ADR-0169).
 	SeatHeldBySandbox bool
 
 	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped

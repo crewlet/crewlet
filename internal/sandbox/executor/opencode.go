@@ -1389,7 +1389,7 @@ func (OpenCode) Events() Decoder { return &openCodeEvents{} }
 // The run's tokens and price come from the session's usage report the script
 // appends ([openCodeUsageEvent]), and stay ZERO where there is none, never
 // estimated: a reader cannot tell an invented number in the spend rollup.
-func (OpenCode) Parse(stdout string) sandbox.Result {
+func (OpenCode) Parse(stdout []byte) sandbox.Result {
 	return decodeAll(&openCodeEvents{}, stdout)
 }
 

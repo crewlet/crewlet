@@ -511,6 +511,12 @@ type CoordinatorOptions struct {
 	// seal. Nil names none.
 	Served func(ctx context.Context, run PendingRun) []string
 
+	// SeatCap is the most runs a seat holds at once, at most one per
+	// conversation (seatcap.go): the engine's, from the seat's
+	// sandbox.max_concurrent_runs, read at every check so an apply moves the
+	// next one. Nil, or an answer below one, is one.
+	SeatCap func(handle string) int
+
 	// Busy is told a seat's runs holding it went from none to some on this
 	// node or back, or that this node let the seat go: the engine's router of
 	// the seat's held inbox follows it, reading [Coordinator.SeatRuns]. Not an
@@ -748,6 +754,8 @@ type Coordinator struct {
 	wakesEnded      func(ctx context.Context, run PendingRun, wakes []RunNote)
 	// served is [CoordinatorOptions.Served].
 	served func(ctx context.Context, run PendingRun) []string
+	// seatCap is [CoordinatorOptions.SeatCap].
+	seatCap func(handle string) int
 	// busy is [CoordinatorOptions.Busy].
 	busy func(handle string)
 	// foldInAnswered is [CoordinatorOptions.FoldInAnswered].
@@ -833,6 +841,22 @@ type Coordinator struct {
 	// and RecoverSeat seeds it on takeover.
 	mu   sync.Mutex
 	runs map[string]seatRuns
+	// reserved counts each seat's slots taken by a write out that moves a run
+	// into [Holding], and heldRuns is each run counted there, by turn, with
+	// the conversations it works: together the seat's cap and its busy
+	// conversations (seatcap.go). Under mu.
+	reserved map[string]int
+	heldRuns map[string]heldRun
+	// waitingRuns is each run parked by `wait_for_run` this node counts, by
+	// turn: out of [Holding], its keys stay held while it waits, so its mail
+	// waits aside behind it (ADR-0176's amendment). Under mu.
+	waitingRuns map[string]heldRun
+	// freed is each seat's keys its runs leaving [Holding] freed, readmitted
+	// on its inbox where no run still holds them ([Coordinator.readmitFreed]),
+	// and asideFull each seat whose inbox holds as many deliveries aside as it
+	// keeps ([Coordinator.HoldForAside]). Under mu.
+	freed     map[string][]freedKey
+	asideFull map[string]bool
 
 	// moves counts what this node has done to each seat's runs that a recount
 	// from the store must not be read across (every [Coordinator.adjustLocked]
@@ -1046,6 +1070,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		steersConfirmed:    opts.SteersConfirmed,
 		wakesEnded:         opts.WakesEnded,
 		served:             opts.Served,
+		seatCap:            opts.SeatCap,
 		busy:               opts.Busy,
 		foldInAnswered:     opts.FoldInAnswered,
 		node:               opts.Node,
@@ -1076,6 +1101,11 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		captureTick:  captureWaitTick,
 		now:          opts.Now,
 		runs:         map[string]seatRuns{},
+		reserved:     map[string]int{},
+		heldRuns:     map[string]heldRun{},
+		waitingRuns:  map[string]heldRun{},
+		freed:        map[string][]freedKey{},
+		asideFull:    map[string]bool{},
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
@@ -1294,7 +1324,8 @@ func (c *Coordinator) collectionSlot(ctx context.Context, turnID string) (func()
 var errReadUnstarted = errors.New("sandbox: the read of the run's box did not start")
 
 // SeatRuns is what this node knows about one seat's detached runs: whether one
-// HOLDS the seat, and whether one is waiting for a person's answer.
+// HOLDS the seat, and whether one is waiting for a person's answer. How many,
+// against the seat's cap, is [Coordinator.SeatCount].
 //
 // The inbox screening reads BOTH values together because they change together:
 // a run parking stops holding and starts awaiting in one moment, so two calls
@@ -1363,13 +1394,20 @@ func (c *Coordinator) moved(handle string) {
 	c.moves[handle]++
 }
 
-// seatFreed signals [SeatCoding] for a seat whose last holding run has just
-// left [Holding], so an answer owed on it is resumed now rather than at its
-// backstop, and tells [CoordinatorOptions.Busy] of a seat that became busy or
-// free. Called outside c.mu, which [Coordinator.Readmit] takes.
-func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
-	if was.holding > 0 && now.holding == 0 {
-		c.Readmit(SeatCoding, handle)
+// seatFreed readmits on the seat's inbox what its runs leaving [Holding] freed
+// ([Coordinator.readmitFreed]), signals [ConversationBusy] for a seat one of
+// whose runs has just left, and [SeatFull] where that freed a slot below its
+// cap, so an answer owed on it is resumed now rather than at its backstop, and
+// tells [CoordinatorOptions.Busy] of a seat that became busy or free. Called
+// outside c.mu, which [Coordinator.Readmit] takes.
+func (c *Coordinator) seatFreed(ctx context.Context, handle string, was, now seatRuns) {
+	c.readmitFreed(ctx, handle)
+	// A RUN PARKED ON A WAIT ENDING frees the conversations it kept busy too.
+	if now.holding < was.holding || now.awaiting < was.awaiting {
+		c.Readmit(ConversationBusy, handle)
+	}
+	if now.holding < was.holding && now.holding < c.capOf(handle) {
+		c.Readmit(SeatFull, handle)
 	}
 	if (was.holding > 0) != (now.holding > 0) && c.busy != nil {
 		c.busy(handle)
@@ -1399,7 +1437,10 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorAnswerGiven:
 		if payload.FoldIn != "" {
 			// A FOLD-IN'S ANSWER IS RECORDED ALREADY (AnswerDesk.AnswerFoldIn):
-			// this delivery only tells the seat's router to read it.
+			// this delivery only hands back the wake it decides, should it wait
+			// aside ([Coordinator.readmitFoldIn]), and tells the seat's router
+			// to read it.
+			c.readmitFoldIn(ctx, *payload)
 			if c.foldInAnswered != nil {
 				c.foldInAnswered(payload.AgentHandle)
 			}
@@ -1459,6 +1500,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
 			return
 		}
+		served := c.servedOf(ctx, runs)
 		c.mu.Lock()
 		if c.moves[handle] != moved {
 			c.mu.Unlock()
@@ -1468,6 +1510,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 		// their answers are taken, so such a run is counted where the moves so
 		// far leave it, row listed or not.
 		counts := c.countedLocked(handle, runs)
+		c.heldFromListingLocked(handle, runs, served)
 		// THIS RECOUNT MOVES THE SEAT TOO, for an older recount still on its way.
 		c.moves[handle]++
 		was := c.runs[handle]
@@ -1477,7 +1520,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.runs[handle] = counts
 		}
 		c.mu.Unlock()
-		c.seatFreed(handle, was, counts)
+		c.seatFreed(ctx, handle, was, counts)
 		// The hold follows the recount, as it follows every transition.
 		c.reconcileHold(ctx, handle)
 		return
@@ -1556,7 +1599,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 			"until", refusal.Until.UTC().Format(time.RFC3339))
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, &TurnRefused{Refusal: refusal})
 	}
-	adm, err := c.admitTurn(ctx, ev.AgentHandle, ResumeCompletion)
+	// NO CONVERSATION FOR A COMPLETION: its run holds the conversation's one
+	// turn, which this resume continues (ADR-0169).
+	adm, err := c.admitTurn(ctx, ev.AgentHandle, "", ResumeCompletion)
 	if err != nil {
 		if c.pastDeadline(ctx, ev) {
 			// PAST ITS TURN'S DEADLINE A REFUSED RESUME IS NOT WAITED FOR
@@ -3167,12 +3212,17 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
 		return AnswerWords{}, RecordedAnswer{}, err
 	}
+	waited, err := waitedOf(run, given.Waited)
+	if err != nil {
+		return AnswerWords{}, RecordedAnswer{}, err
+	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed on the row and handed
 		// as is to the harness, whose box and session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
 		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
+		Waited: waited,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -5705,6 +5755,12 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// AND THE WRITES OUT ON THE SEAT'S RUNS, same step: a later answer moves
 	// nothing and a recovery here counts each run afresh (countwrite.go).
 	maps.DeleteFunc(c.writing, func(_ string, w *runWrites) bool { return w.handle == handle })
+	// AND ITS SLOTS AND HELD RUNS with them: a recovery here counts afresh.
+	delete(c.reserved, handle)
+	delete(c.freed, handle)
+	delete(c.asideFull, handle)
+	maps.DeleteFunc(c.heldRuns, func(_ string, r heldRun) bool { return r.handle == handle })
+	maps.DeleteFunc(c.waitingRuns, func(_ string, r heldRun) bool { return r.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: its turns run on the next
 	// holder.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
@@ -5841,6 +5897,10 @@ type AskedRun struct {
 	// from who answered, never set beside Refused: a refused reply is no answer.
 	Withdrawn bool
 
+	// Waited is how the run a wait was for left its seat's slots, where the
+	// engine answered a run parked by `wait_for_run` (ADR-0176); nil otherwise.
+	Waited *types.RunWaited
+
 	// Refused is set where the question's outcome is no answer but the REFUSAL of a
 	// reply too large to be one ([PendingRun.AnswerRefusal]): what the run is told
 	// (how many messages, the figures) in place of an answer, Answer and By empty.
@@ -5881,5 +5941,6 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 		BoxKept:   run.SandboxID != "",
 		Label:     answer.Label,
 		Withdrawn: WithdrawnBy(run, answer.By, answer.ByKind),
+		Waited:    answer.Waited,
 	}
 }

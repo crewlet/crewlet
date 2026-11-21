@@ -654,7 +654,7 @@ func worstRow(t *testing.T) PendingRun {
 		wakes := make([]SealedWake, MaxItemWakes)
 		for i := range wakes {
 			wakes[i] = SealedWake{ID: plain(MaxWakeIDBytes), Sealed: []byte(plain(MaxWakeItemBytes / MaxItemWakes)),
-				At: worstAt}
+				At: worstAt, From: plain(MaxWakeIDBytes)}
 		}
 		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
@@ -973,6 +973,8 @@ func worstRow(t *testing.T) PendingRun {
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
+		// THE MESSAGES ITS JOB SENT OTHER RUNS, at their bound, for a job id.
+		RunSendsFor: uuid.NewString(), RunSends: MaxJobRunSends,
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
@@ -1008,9 +1010,9 @@ func worstRow(t *testing.T) PendingRun {
 		Answered:        handles(100),
 		AudienceHandles: handles(MaxAudienceHandles), AudienceFallback: true, Requester: plain(64),
 		RequesterLogin: plain(iam.MaxLogin), RequesterApps: slices.Clone(iam.Apps), WorkingFor: workingFor(),
-		ColleagueAsk: &ColleagueAsk{ChannelID: plain(64), Question: keptTitle(markup(1 << 20)),
-			Chain: handles(32), TraceID: plain(32), SpanID: plain(16), ParentSpanID: plain(16),
-			WorkingFor: workingFor()},
+		ColleagueAsk: new(ColleagueAsk{ChannelID: plain(64), Chain: handles(32), TraceID: plain(32),
+			SpanID: plain(16), ParentSpanID: plain(16),
+			WorkingFor: workingFor()}.WithQuestion(keptQuestion(markup(1 << 20)))),
 		TraceID: plain(32), SpanID: plain(16), DelegationDepth: math.MaxInt, DelegationChain: handles(32),
 		ExecuteState: json.RawMessage(state), Charged: true, CompanyCharged: true,
 		CodeHolds: holds, Repos: repos, CodeFloor: floor, CodeLaunch: floor, CodeCeiling: plain(64),
@@ -1065,6 +1067,12 @@ func worstLog(t *testing.T) BridgeLog {
 	}
 	for i := range MaxCallsInFlight {
 		bridged.InFlight = append(bridged.InFlight, worstEntry(t, i))
+	}
+	// THE WRITTEN SET AT ITS BOUND, each id at its own in the bytes that escape
+	// the most, and one record more, refused, which marks it ([BridgeLog.wrote]).
+	for i := range types.MaxWrittenRecords + 1 {
+		bridged.wrote([]types.WrittenRecord{{Kind: types.WrittenConversation,
+			ID: fmt.Sprintf("%04d", i) + strings.Repeat("<", types.MaxWrittenIDBytes-4)}})
 	}
 	return bridged
 }
@@ -1176,6 +1184,8 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
 			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
 			"at their bound",
+		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
+			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at
@@ -1353,6 +1363,10 @@ func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	if bridged.LateElided != elidedWorst {
 		t.Errorf("the log counts %d of its %d dropped calls late, want every one: the count is measured at "+
 			"the most it can be", bridged.LateElided, elidedWorst)
+	}
+	if len(bridged.Wrote) != types.MaxWrittenRecords || !bridged.WroteMore {
+		t.Errorf("the log's written set holds %d records (full %v), want its bound and the mark: the set is "+
+			"measured at its most", len(bridged.Wrote), bridged.WroteMore)
 	}
 	if !slices.Equal(bridged.Committed, everyKind()) {
 		t.Errorf("the log's union of what its calls committed holds %d kinds, want every one of the %d: the "+

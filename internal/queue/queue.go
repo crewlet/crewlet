@@ -20,13 +20,22 @@
 //     consumer, retains what is published while nothing is attached, and
 //     replays in order when someone attaches. Publishing to a topic with no
 //     subscription drops the event silently — hence EnsureSubscription.
-//   - Handlers have four outcomes, not two. Ack, Nak (a failure), Defer
-//     (hand it back and stop consuming: a condition of the node) and Pass
+//   - Handlers have five outcomes, not two. Ack, Nak (a failure), Defer
+//     (hand it back and stop consuming: a condition of the node), Pass
 //     (hand it back for a peer and go on consuming: this node will not
-//     handle this message, another may) — see Result. The returns keep
-//     different places, on every backend: a Nak and a Pass come back BEHIND
-//     the mail that was waiting, a Defer at the HEAD. A handler whose
-//     message must keep its place in its conversation does not Nak.
+//     handle this message, another may) and Aside (keep it unacknowledged
+//     under a key until Readmit, and go on consuming) — see Result. The
+//     returns keep different places, on every backend: a Nak and a Pass come
+//     back BEHIND the mail that was waiting, a Defer and a readmitted Aside at
+//     the HEAD. A handler whose message must keep its place does not Nak.
+//   - AN ASIDE IS SET ASIDE IN FLIGHT, never copied or republished: the
+//     delivery stays the backend's, kept from timing out, its count honest,
+//     until Readmit hands every delivery of its key back at the head of the
+//     next drain (a busy seat's mail waiting on one of its runs, ADR-0169). A
+//     Readmit landing while the handler runs readmits what it then sets aside,
+//     so none is lost to that race; a release or a stop hands aside mail back
+//     as fetched-and-undispatched mail is, one delivery spent; a crash
+//     redelivers it once its ack window lapses. At most [MaxAside] at once.
 //   - A handler is told how many deliveries are LEFT before the backend
 //     dead-letters a message, because every outcome that puts one back spends
 //     one and the count rides on the message rather than on the process
@@ -153,8 +162,9 @@
 // over about 2 MiB at the floor, and the connection with it. A caller's own
 // deadline is never extended, but on an external broker it is not checked
 // while its request waits for the connection's lock, so it can be held behind
-// every large write ahead of it (crewlet/crewlet#1035). Not covered: a link
-// slower than the floor or busy with other traffic (ADR-0161).
+// every large write ahead of it; a node's holds ride a connection of their own
+// (ADR-0174). Not covered: a link slower than the floor or busy with other
+// traffic (ADR-0161).
 //
 // # Broker connections and authentication
 //
@@ -344,6 +354,17 @@ const (
 	// slot throughout; the server's default 1000 stays on purpose (the group
 	// then waits on new mail, losing none).
 	OutcomePass
+
+	// OutcomeAside keeps the delivery unacknowledged under a key ([Result.Key],
+	// [Aside]) and goes on consuming past it: for mail that must wait on work
+	// already running (a busy seat's conversation, ADR-0169) without holding
+	// the mail behind it. IT SPENDS NOTHING: the backend keeps it from timing
+	// out while it waits. [EventQueue.Readmit] of its key hands it back at the
+	// head of the next drain, partitioned there as any drain's mail; a release
+	// or a stop hands it back at one delivery, a crash after the ack window.
+	// One past [MaxAside], or naming no key, is handed back at the head as a
+	// deferral is, one delivery spent, the attachment not quiesced.
+	OutcomeAside
 )
 
 // String renders an outcome for logs.
@@ -355,6 +376,8 @@ func (o Outcome) String() string {
 		return "defer"
 	case OutcomePass:
 		return "pass"
+	case OutcomeAside:
+		return "aside"
 	default:
 		return "ack"
 	}
@@ -376,6 +399,9 @@ type Result struct {
 	// message ([NakNode]): returned as any failure is, and never counted
 	// as the message's own ([Result.FailsMessage]).
 	NodeFault bool
+	// Key is what an aside waits under ([OutcomeAside]), the name
+	// [EventQueue.Readmit] hands it back by.
+	Key string
 }
 
 // FailsMessage reports whether r is a failure of the MESSAGE: a Nak that is
@@ -499,8 +525,8 @@ var ErrNotLive = errors.New("queue: not live")
 //
 // NOT ErrNotLive: a silent broker proves no teardown (consumers resume), so
 // reading it so would hand a seat to a peer while this node may still consume
-// it. Quiesce, Unquiesce, Detach, Attachment, PauseTopic and ResumeTopic NEVER
-// ANSWER IT: they touch no broker, and a node that lost a seat's proof quiesces
+// it. Quiesce, Unquiesce, Detach, Attachment, PauseTopic, ResumeTopic and
+// Readmit NEVER ANSWER IT: they touch no broker, and a node that lost a seat's proof quiesces
 // on the very outage that cost it. NOT "NOTHING HAPPENED": an unacknowledged
 // publish may be stored, so retries tolerate a second copy. A caller's own
 // deadline on a connected broker stays the context's error; one ending while
@@ -906,8 +932,8 @@ type EventQueue interface {
 	// Waiting reports the mail a subscription holds that no handler of THIS
 	// client is running on, per mailbox of a laned topic ([Waiting]): what
 	// is waiting for the subscription's consumer, whether it was never
-	// delivered, was fetched in a drain and not yet dispatched, or was
-	// handed back. The mail a handler of this client is running on is not
+	// delivered, fetched and not yet dispatched, handed back or set aside
+	// ([OutcomeAside]). The mail a handler of this client is running on is not
 	// waiting and is not counted, which is why the count is asked of the
 	// client that holds the subscription's attachment: any other client
 	// counts that mail too.
@@ -923,8 +949,9 @@ type EventQueue interface {
 	// the topic's own, each in the order its subscription holds it, at most
 	// limit events (below one is refused). It MAY INCLUDE MAIL ALREADY ACKED
 	// or under a running handler (a backend reads from its group's ack
-	// floor), so a caller acting on it checks what it acts on was not worked.
-	// READ-YOUR-OWN-WRITE: a publish that has returned is in it.
+	// floor), so a caller acting on it checks what it acts on was not worked;
+	// mail THIS client holds aside ([OutcomeAside]) is never in it, decided
+	// already. READ-YOUR-OWN-WRITE: a publish that has returned is in it.
 	// What a seat's router reads a held inbox by (internal/engine); a
 	// subscription that does not exist holds nothing.
 	Backlog(ctx context.Context, topic, group string, limit int) ([]*events.Event, error)
@@ -1066,9 +1093,9 @@ type EventQueue interface {
 	// Start connects the backend and begins consuming. WHETHER A BACKEND
 	// REQUIRES IT IS ITS OWN ANSWER (JetStream's Open connects, so Start is a
 	// no-op; the twin's Start makes it live), but it may NOT answer DIFFERENTLY
-	// PER VERB: before Start, all twenty-two publish, subscription, attachment,
+	// PER VERB: before Start, all twenty-three publish, subscription, attachment,
 	// ephemeral and dead-letter verbs either all refuse or none require it
-	// (Capabilities.RequiresStart; queuetest sends all twenty-two). A twin that
+	// (Capabilities.RequiresStart; queuetest sends all twenty-three). A twin that
 	// refused Publish but let PauseTopic take a hold left it to survive into
 	// the next life, silently deaf. AFTER Stop it is no capability (see Stop).
 	// The DRAIN protocol (PauseDelivery, WaitForHandlers, InFlightCount) is
@@ -1120,6 +1147,16 @@ type EventQueue interface {
 	// next attachment took under the same reason is not this caller's.
 	ResumeTopic(ctx context.Context, topic, group string, at Attachment, reason string) error
 
+	// Readmit hands back every delivery this client's attachments of the pair
+	// hold aside under key ([OutcomeAside]), at the head of each one's next
+	// drain, in the order the subscription holds them, and answers how many.
+	// None aside is no error: a caller readmits whatever its transition freed.
+	// A Readmit landing while a handler runs readmits the delivery that handler
+	// then sets aside under key. It touches no broker, so it never answers
+	// ErrUnavailable; the delivery is still unacknowledged and its count
+	// unspent, so what it hands back is the delivery the backend made.
+	Readmit(ctx context.Context, topic, group, key string) (int, error)
+
 	// WaitForHandlers waits for in-flight handlers, returning how many
 	// were still running when the wait ended. Zero means a clean drain;
 	// non-zero means the timeout expired, which is not an error — the
@@ -1132,7 +1169,7 @@ type EventQueue interface {
 	// detach or stop met between fetch and handler), though no handler runs.
 	WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error)
 
-	// Stop closes the connection. AFTERWARDS EVERY ONE OF THE TWENTY-TWO VERBS
+	// Stop closes the connection. AFTERWARDS EVERY ONE OF THE TWENTY-THREE VERBS
 	// REFUSES: a requirement, not a capability, unlike the pre-Start rule
 	// ("not connected yet" is a state JetStream's Open never has; "closed" is
 	// one every backend reaches). A verb mutating through a closed client is
@@ -1384,6 +1421,9 @@ func LogResult(ctx context.Context, l *slog.Logger, topic, group string, ev *eve
 	case OutcomePass:
 		l.InfoContext(ctx, "delivery_passed", "topic", topic, "group", group,
 			"event_type", eventType(ev), "reason", r.Reason, "error", errText(r.Err))
+	case OutcomeAside:
+		l.InfoContext(ctx, "delivery_set_aside", "topic", topic, "group", group,
+			"event_type", eventType(ev), "key", r.Key, "reason", r.Reason)
 	}
 }
 
@@ -1414,6 +1454,10 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 		l.InfoContext(ctx, "batch_delivery_passed", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
 			"event_type", eventType(head), "reason", r.Reason, "error", errText(r.Err))
+	case OutcomeAside:
+		l.InfoContext(ctx, "batch_delivery_set_aside", "topic", topic, "group", group,
+			"batch_key", batchKey, "event_count", len(evs),
+			"event_type", eventType(head), "key", r.Key, "reason", r.Reason)
 	}
 }
 

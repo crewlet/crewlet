@@ -138,7 +138,7 @@ func outlined(said string) prompts.Prompt {
 // them kept; and a prompt's outline still tiles its redacted text.
 //
 // Mutation: drop the redaction at any one path (recordedText for the answer,
-// recordedPrompt, recordedNarration, recordedOutput, tools.RedactedArgs,
+// recordedPrompt, recordedNarration, recordedOutput, redact.Args,
 // events.Diagnostic), and its case holds the plant; misstate a part's size
 // in redactedPrompt, and the outline is lost.
 func TestAPhasesRecordHoldsNoSecretItsWordsCarried(t *testing.T) {

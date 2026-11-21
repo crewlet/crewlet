@@ -4172,7 +4172,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
-          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."
+          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs. Absent = the engine-wide settings only."
         },
         "schedules": {
           "description": "Recurring work fired into this seat's inbox.",
@@ -5002,6 +5002,14 @@
           "description": "Env for this seat's executor run; declare external tokens here.",
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "max_concurrent_runs": {
+          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2.",
+          "minimum": 1,
+          "type": [
+            "integer",
             "null"
           ]
         },

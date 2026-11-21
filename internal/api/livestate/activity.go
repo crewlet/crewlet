@@ -136,16 +136,29 @@ func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
 	return seatState{activity: ActivityIdle}
 }
 
-// turnWorks reports a turn the seat is working on now: one not parked on its
-// run, whose work is the run's.
+// turnWorks reports a turn the seat is working on now: any of its turns not
+// parked on its run, whose work is the run's.
 //
 // A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the probe the
 // engine runs when the park's alarm lifts it: until a call answers, the seat is
 // waiting, and drawing each probe as work is the blink this state exists to
 // stop. A person's pause still outranks it, as every stop's reason is ranked.
 func turnWorks(agent *agentLive) bool {
-	return agent != nil && agent.turn != nil && agent.turn.Stage != StageParked &&
-		!limitParked(agent)
+	return len(workingTurns(agent)) > 0 && !limitParked(agent)
+}
+
+// workingTurns is the seat's turns not parked on a run.
+func workingTurns(agent *agentLive) []*LiveTurn {
+	if agent == nil {
+		return nil
+	}
+	var out []*LiveTurn
+	for _, held := range agent.turns {
+		if held.turn.Stage != StageParked {
+			out = append(out, held.turn)
+		}
+	}
+	return out
 }
 
 func limitParked(agent *agentLive) bool {

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -148,7 +149,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			return fmt.Errorf("read the activation pointer: %w", err)
 		}
 		if pointed {
-			fleetOutranks(ctx, plane, plan.file, target, cipher, log)
+			fleetOutranks(ctx, plane, configs, plan.file, target, cipher, log)
 			return nil
 		}
 		return importSeed(ctx, configs, plane, pub, plan.file, store.Revision{}, cipher,
@@ -198,7 +199,7 @@ func importOverride(ctx context.Context, configs *store.Configs, plane coord.Pla
 		base = known
 	}
 	if pointed {
-		same, fleets, uncompared := seed.isFleets(ctx, plane, target, cipher)
+		same, fleets, uncompared := seed.isFleets(ctx, plane, configs, target, cipher)
 		if uncompared != nil {
 			// NOT SHOWN TO BE THE FILE, so it is replaced, as the
 			// override asks — and said, because a fleet revision this
@@ -288,10 +289,10 @@ func publishOverride(ctx context.Context, plane coord.Plane, pub queue.Publisher
 // fleetOutranks says that a -company file is not imported because the fleet
 // already runs a company — unless the fleet runs this very file, which is no
 // news: every node of a fleet started from one company.yaml carries it.
-func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
+func fleetOutranks(ctx context.Context, plane coord.Plane, configs *store.Configs, seed tierBSeed,
 	target coord.Activation, cipher secrets.Cipher, log *slog.Logger) {
 
-	same, _, err := seed.isFleets(ctx, plane, target, cipher)
+	same, _, err := seed.isFleets(ctx, plane, configs, target, cipher)
 	if same {
 		return
 	}
@@ -310,6 +311,17 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 // revisionBuild builds a company as this node's apply would build it before
 // changing anything, and discards it ([engine.Engine.Buildable]).
 type revisionBuild func(*config.Company) error
+
+// seedSummary is the summary of a boot's import of the seed's file, the path
+// cut to [summaryPartBytes] as an offline import's is: the path is the
+// operator's flag, of any length, and the pointer carries the summary.
+func seedSummary(seed tierBSeed) string {
+	path := textcut.Within(seed.Path, summaryPartBytes)
+	if seed.Override {
+		return "imported from " + path + " at boot"
+	}
+	return "seeded from " + path
+}
 
 // importSeed writes the seed's file as a new revision built on base, and points
 // the fleet at it. A zero base is a company built on nothing: a bootstrap, or
@@ -355,10 +367,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	if err != nil {
 		return err
 	}
-	summary := "seeded from " + seed.Path
-	if seed.Override {
-		summary = "imported from " + seed.Path + " at boot"
-	}
+	summary := seedSummary(seed)
 	at := time.Now().UTC()
 	// THE NODE IS THE AUTHOR: a boot imported this file, and no credential
 	// made the write. Named by the node's own id, because which node read
@@ -404,7 +413,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 			return fmt.Errorf("activate the seeded company config: %w; "+
 				"and the pointer that won could not be read: %w", err, terr)
 		}
-		fleetOutranks(ctx, plane, seed, current, cipher, log)
+		fleetOutranks(ctx, plane, configs, seed, current, cipher, log)
 		return nil
 	}
 	if err != nil {

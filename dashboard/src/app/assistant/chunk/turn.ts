@@ -168,6 +168,11 @@ export interface TurnView {
   /** The assistant's messages in this turn, in order. */
   replies: { id: string; text: string }[];
   cards: AssistantCardEvent[];
+  /**
+   * The last snapshot left part of the turn out to fit one frame; reopening
+   * the conversation reads all of it. Absent for a turn drawn whole.
+   */
+  cut?: true;
   /** What the person's own gestures added to each proposal, by its id. */
   proposals: Record<string, ProposalLocal>;
   /** The page actions the engine sent, for the page to claim and apply. */
@@ -395,16 +400,20 @@ function applyFrame(turn: TurnView, frame: AssistantNarrowFrame): TurnView {
         answeredAt: open ? frame.at : next.answeredAt,
       };
     case "snapshot": {
-      const { messages, steps, cards } = frame.snapshot;
+      const { messages, steps, cards, cut } = frame.snapshot;
       const asked = messages.find((m) => m.role === "user");
+      // A SNAPSHOT REPLACES THE TURN WHOLE, the mark of an earlier cut one
+      // included: a later snapshot that fits clears it.
+      const { cut: _earlier, ...whole } = next;
       return {
-        ...next,
+        ...whole,
         attachments: asked?.attachments ?? next.attachments,
         steps: [...steps].sort((a, b) => a.index - b.index),
         cards: [...cards],
         replies: messages
           .filter((m) => m.role === "assistant")
           .map((m) => ({ id: m.id, text: m.text })),
+        ...(cut ? { cut: true as const } : {}),
       };
     }
   }

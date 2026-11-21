@@ -79,9 +79,12 @@ func channelOpen(t *testing.T, e *Engine, channelID string) bool {
 // run's record, and the resume that collects the run and ends the turn replies
 // on the ask's channel — the turn's account, the question echoed, the ask's
 // trace continued and the answering RUN as the reply's parent — and closes it.
+// The question holds a token, and the record keeps it and the reply echoes it
+// as asked, to the model that wrote it; the record serves it redacted.
 //
 // Mutation: drop the resume's answer, and the asker is never woken; drop the
-// ask from the launch's record, and the resume has nothing to answer.
+// ask from the launch's record, and the resume has nothing to answer; record
+// or echo the redacted question, and the token is gone.
 func TestAParkedTurnAnswersItsAskerFromTheSegmentThatEndsIt(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
@@ -89,7 +92,8 @@ func TestAParkedTurnAnswersItsAskerFromTheSegmentThatEndsIt(t *testing.T) {
 	askingCompany(t, e)
 	rig := rigRuns(t, e, modelPlayer(t, billingRun))
 	trace := events.TraceContext{TraceID: "0af7651916cd43dd8448eb211c80319c", SpanID: "b7ad6b7169203331"}
-	channelID, ask := askSwe(t, e, q, "Which branch carries the fix?", trace)
+	question := "Which branch carries the fix? Push it as " + leakedToken
+	channelID, ask := askSwe(t, e, q, question, trace)
 
 	res, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-ask", RunID: "run-ask", WorkSince: time.Now().UTC(),
@@ -104,9 +108,12 @@ func TestAParkedTurnAnswersItsAskerFromTheSegmentThatEndsIt(t *testing.T) {
 		t.Fatalf("the parked turn answered %d time(s) or closed the channel: it has not finished", len(got))
 	}
 	carried := rig.row(t, "run-ask").ColleagueAsk
-	if carried == nil || carried.ChannelID != channelID || carried.Question != "Which branch carries the fix?" ||
+	if carried == nil || carried.ChannelID != channelID || carried.RawQuestion() != question ||
 		carried.TraceID != trace.TraceID || len(carried.Chain) != 1 || carried.Chain[0] != "ceo" {
 		t.Fatalf("the run's record carries ask %+v, want the channel, question, chain and trace of the ask", carried)
+	}
+	if shown := carried.Question(); strings.Contains(shown, leakedToken) {
+		t.Fatalf("the run's record serves the question as %q, want the token as a marker", shown)
 	}
 
 	if err := rig.collect(t, "run-ask"); err != nil {
@@ -128,8 +135,7 @@ func TestAParkedTurnAnswersItsAskerFromTheSegmentThatEndsIt(t *testing.T) {
 	}
 	reply := got[0]
 	msg, _ := events.DataAs[*types.A2AMessage](reply)
-	if msg.Sender != "swe" || msg.Content != ended.Response ||
-		msg.Question != "Which branch carries the fix?" {
+	if msg.Sender != "swe" || msg.Content != ended.Response || msg.Question != question {
 		t.Fatalf("the reply is %+v, want swe's answer %q, echoing the question", msg, ended.Response)
 	}
 	if reply.TraceID != trace.TraceID || reply.SpanID != trace.SpanID {

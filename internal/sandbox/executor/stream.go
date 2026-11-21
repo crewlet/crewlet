@@ -174,17 +174,21 @@ func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, 
 
 // decodeAll runs a whole text through a decoder: a harness's Parse for a
 // stream already in hand.
-func decodeAll(dec Decoder, text string) sandbox.Result {
-	// A strings.Reader cannot fail, so neither can this.
-	_ = eachLine(strings.NewReader(text), dec, maxLineBytes)
+func decodeAll(dec Decoder, text []byte) sandbox.Result {
+	// A bytes.Reader cannot fail, so neither can this.
+	_ = eachLine(bytes.NewReader(text), dec, maxLineBytes)
 	return dec.Result()
 }
 
 // transcriptHoldBytes is how much of a run's transcript a whole reading holds
-// raw: the most the engine reads any one text whole, so below it a transcript
-// costs what it always has. Past it the transcript is redacted as it arrives
-// and only what the run's record keeps is held ([sandbox.TranscriptHalves]).
-const transcriptHoldBytes = sandbox.MaxFileBytes
+// raw: what the run's record keeps of one ([sandbox.MaxRunTextBytes]). Past it
+// the transcript is redacted as it arrives and only what the record keeps is
+// held ([sandbox.TranscriptHalves]), the same text and counts as its whole
+// redaction cut where the box is read, or a note withholding one the stream
+// cannot redact in one pass ([transcriptLines.result]): held raw any further,
+// it is held only to be redacted whole, another copy, and cut
+// ([sandbox.BoxReadHeldBytes]).
+const transcriptHoldBytes = sandbox.MaxRunTextBytes
 
 // transcriptLines builds a run's activity transcript one entry at a time, and
 // is where a skipped line becomes a note. Each entry is trimmed and a blank one
@@ -209,6 +213,8 @@ type transcriptLines struct {
 	stream              transcriptStream
 	halves              sandbox.TranscriptHalves
 	fedBytes, fedBreaks int
+	// chunk is the buffer each piece is written to the stream through ([transcriptLines.write]).
+	chunk []byte
 
 	// skipped, skippedBytes and skippedBound are a run of consecutive lines
 	// past the bound, said in ONE note where they were, not one per line.
@@ -263,15 +269,25 @@ func (t *transcriptLines) push(entry string) {
 // feed writes entry to the stream, after the line break joining it to the
 // entry before.
 func (t *transcriptLines) feed(entry string) {
-	piece := make([]byte, 0, len(entry)+1)
 	if t.fedBytes > 0 {
-		piece = append(piece, '\n')
+		t.write("\n")
 	}
-	piece = append(piece, entry...)
-	t.fedBytes += len(piece)
-	t.fedBreaks += bytes.Count(piece, []byte("\n"))
-	// A refusal is answered again by Close, which result reads.
-	_, _ = t.stream.Write(piece)
+	t.write(entry)
+}
+
+// write writes s to the stream through one buffer of [lineChunkBytes] it
+// reuses: the stream writes what Secrets does however its text is cut, and a
+// copy of a long entry whole would hold the entry twice.
+func (t *transcriptLines) write(s string) {
+	t.fedBytes += len(s)
+	t.fedBreaks += strings.Count(s, "\n")
+	for len(s) > 0 {
+		n := min(len(s), lineChunkBytes)
+		t.chunk = append(t.chunk[:0], s[:n]...)
+		// A refusal is answered again by Close, which result reads.
+		_, _ = t.stream.Write(t.chunk)
+		s = s[n:]
+	}
 }
 
 func (t *transcriptLines) skip(n int64, bound int) {

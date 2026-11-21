@@ -1145,6 +1145,8 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 	var managed *ManagedError
 	var raise *RaiseError
 	var tooLarge *DocumentTooLargeError
+	var tooLong *SummaryTooLongError
+	var pointer *PointerTooLargeError
 	switch {
 	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
 	// managed document refuses whoever is asking before anything they sent
@@ -1158,11 +1160,26 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 	case errors.As(err, &tooLarge):
 		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
 			httpjson.Detail{
-				"hint": "the document, sealed into the activation pointer that carries it " +
-					"to every node, is past what one key of the coordination store holds; " +
-					"nothing was stored. Make the document or its summary smaller",
-				"document_bytes": tooLarge.DocumentBytes, "pointer_bytes": tooLarge.PointerBytes,
-				"max_pointer_bytes": coord.MaxValueBytes,
+				"hint": "the company document, sealed, is past what one key of the " +
+					"coordination store holds; nothing was stored. Make the document smaller",
+				"document_bytes": tooLarge.DocumentBytes, "body_bytes": tooLarge.BodyBytes,
+				"max_body_bytes": coord.MaxValueBytes,
+			})
+	case errors.As(err, &tooLong):
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeSummaryTooLong,
+			httpjson.Detail{
+				"hint": "the summary in the X-Summary header or the body's _summary key is " +
+					"past what the activation pointer carries to every node; nothing was " +
+					"stored. Say what the write changed more briefly",
+				"summary_bytes": tooLong.SummaryBytes, "max_summary_bytes": coord.MaxSummaryBytes,
+			})
+	case errors.As(err, &pointer):
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOriginTooLong,
+			httpjson.Detail{
+				"hint": "the name this write was made under, beside its summary, is past " +
+					"what the activation pointer carries to every node; nothing was stored. " +
+					"Make the write through a credential with a shorter name",
+				"pointer_bytes": pointer.PointerBytes, "max_pointer_bytes": coord.MaxPointerBytes,
 			})
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,

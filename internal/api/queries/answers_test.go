@@ -247,13 +247,17 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
 
 	got := ask(t, r, "live_call", map[string]any{"agent_id": ids["ada"]})
-	call, _ := got["live_call"].(*livestate.LiveCall)
+	calls, _ := got["live_calls"].([]any)
+	var call *livestate.LiveCall
+	if len(calls) == 1 {
+		call, _ = calls[0].(*livestate.LiveCall)
+	}
 	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || call == nil ||
 		call.Prompt != "fix the build" || len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
 		t.Fatalf("answer = %+v; want ada's call whole, its prompt at version 1", got)
 	}
 	namesake := ask(t, r, "live_call", map[string]any{"agent_id": ids["bob"]})
-	if namesake["live_call"] != nil || namesake["handle"] != "bob" {
+	if calls, _ := namesake["live_calls"].([]any); calls == nil || len(calls) != 0 || namesake["handle"] != "bob" {
 		t.Errorf("bob's answer = %+v; want his own seat, with nothing in flight", namesake)
 	}
 	if _, err := r.Answer(everyGrant(t), "live_call", map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
@@ -261,7 +265,7 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	}
 }
 
-// THE ANSWER CARRIES THE SEAT'S CALL SEQUENCE, a null call included: it is what
+// THE ANSWER CARRIES THE SEAT'S CALL SEQUENCE, an empty list included: it is what
 // the tab orders the answer by against the `agents` pushes for the same seat,
 // since the answer is computed on its own goroutine and can reach the tab after
 // a push generated later ([livestate.Overlay.LiveCallSeq]). An answer for a
@@ -281,7 +285,7 @@ func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 
 	running := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
 	seq := state.AgentOverlay("a-lead").LiveCallSeq
-	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
+	if calls, _ := running["live_calls"].([]any); len(calls) != 1 || seq == 0 || running["live_call_seq"] != seq {
 		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
 	}
 
@@ -290,8 +294,8 @@ func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 	})
 	cleared := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
 	after := state.AgentOverlay("a-lead").LiveCallSeq
-	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
-		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
+	if calls, _ := cleared["live_calls"].([]any); len(calls) != 0 || after <= seq || cleared["live_call_seq"] != after {
+		t.Errorf("answer = %+v; want no call at the clear's sequence %d, past %d", cleared, after, seq)
 	}
 }
 
@@ -1352,7 +1356,10 @@ func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
 				t.Errorf("body_withheld = %v, want %v", wire["body_withheld"], !c.body)
 			}
 			live, _ := wire["live"].(map[string]any)
-			call, _ := live["live_call"].(map[string]any)
+			var call map[string]any
+			if calls, _ := live["live_calls"].([]any); len(calls) == 1 {
+				call, _ = calls[0].(map[string]any)
+			}
 			if call == nil || call["phase"] != "execute" {
 				t.Fatalf("the live call's status was not answered: %v", wire["live"])
 			}
@@ -1382,7 +1389,10 @@ func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
 			if err != nil {
 				t.Fatalf("live_call: %v", err)
 			}
-			repaired, _ := asMap(t, got)["live_call"].(map[string]any)
+			var repaired map[string]any
+			if calls, _ := asMap(t, got)["live_calls"].([]any); len(calls) == 1 {
+				repaired, _ = calls[0].(map[string]any)
+			}
 			if repaired == nil {
 				t.Fatal("live_call answered no call")
 			}

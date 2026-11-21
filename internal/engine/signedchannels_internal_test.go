@@ -30,16 +30,16 @@ import (
 // log's: the instruction channels (the estate service, broker membership, a
 // note to a running turn, a box read, the tool bridge's relay, the Dashboard
 // Assistant's replays and stops, a code search, an MCP server's test, a parked
-// run's answer, a run's kept leads, a note on a run record, its seat anchor and
-// a wake on it) and the sealed ones that are no instruction (presence, the
-// live relay, the assistant's frames). The domain is in the derived key and
-// the MAC, so two channels sharing one verify each other's frames: an estate
-// reply sent as a broker request, a state-log record replayed as a note.
-// Nothing else compares the names; TestEverySignedChannelTheTreeBuildsIsClaimed
-// holds the tree to this list.
+// run's answer, a run's kept leads, a note on a run record, its seat anchor, a
+// wake on it and another run's message) and the sealed ones that are no
+// instruction (presence, the live relay, the assistant's frames). The domain
+// is in the derived key and the MAC, so two channels sharing one verify each
+// other's frames: an estate reply sent as a broker request, a state-log record
+// replayed as a note. Nothing else compares the names;
+// TestEverySignedChannelTheTreeBuildsIsClaimed holds the tree to this list.
 func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	t.Parallel()
-	if owner := claimedDomains(t); len(owner) != len(registeredDomains())+29 {
+	if owner := claimedDomains(t); len(owner) != len(registeredDomains())+30 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }
@@ -137,10 +137,11 @@ func claimedDomains(t *testing.T) map[string]string {
 	claim(presenceWire.Domain(), "a presence frame")
 	claim(answers.Domain(), "an answer to a parked run")
 	claim(leads.Domain(), "a lead a run keeps")
-	note, seat, wake := notes.Domains()
+	note, seat, wake, run := notes.Domains()
 	claim(note, "a note on a run record")
 	claim(seat, "a run record's seat anchor")
 	claim(wake, "a wake on a run record")
+	claim(run, "a run's message on a run record")
 	return owner
 }
 

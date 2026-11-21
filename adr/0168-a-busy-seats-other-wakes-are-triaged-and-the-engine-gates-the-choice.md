@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`, `internal/engine.TestTheEngineGatesTheTriagesChoice`, `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`, `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`, `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`, `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`, `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`, `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`, `internal/engine.TestAWaitingPersonIsToldWhyOncePerWake`, `internal/notify.TestAWaitingMessageIsToldWhyItWaits`, `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`, `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`
+- **Enforced-by:** `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`, `internal/engine.TestTheEngineGatesTheTriagesChoice`, `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`, `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`, `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`, `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`, `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`, `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`, `internal/engine.TestAWaitingPersonIsToldWhyOncePerWake`, `internal/notify.TestAWaitingMessageIsToldWhyItWaits`, `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`, `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`, `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`, `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`
 - **Cost-when-tried:** under ADR-0167 alone a colleague's fact about a running run's work ("the customer is on the EU region"), a lead's "stop, roll back" in chat and a "thanks!" in the run's room all waited for the run to end: the run worked on without the fact or the correction, and each message then started a turn of its own over a finished result, the thanks included.
 - **Tag-status:** unreleased
 
@@ -35,3 +35,7 @@ amendment "another writer's request joins only on approval", which states the ru
 left undecided, followed from the run's record at each read with no second triage; refused, unanswered when
 the job ends, past a job's four fold-ins, or with nobody to put it to, it waits for a turn of its own. A
 person whose wake waits is told why, once per wake and reason, on the conversation's queued line.
+
+## Amendment: a wake about a record the run wrote is a candidate
+
+A wake about a record the run created or wrote (ADR-0167's amendment, the same exact identity) is a candidate whoever wrote it, beside one in the run's conversation, about its item or a lead's, and the triage's message says so in the engine's line before the wake's fence. The gate is unchanged: such a wake's input joins as information, another writer's request is put as a fold-in (the amendment above), and noise is absorbed only owing nothing.

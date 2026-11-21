@@ -92,7 +92,7 @@ func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
 		{name: "relative", env: newestEnv, require: "1", value: "chrome-linux64/chrome", find: Newest,
 			fatal: "not an absolute path"},
 		{name: "missing", env: floorEnv, require: "1", value: filepath.Join(t.TempDir(), "chrome"), find: Floor,
-			fatal: "names nothing this case can run"},
+			fatal: "names nothing this case can reach"},
 		{name: "no Chrome for Testing version", env: newestEnv, require: "1", value: notChromium, find: Newest,
 			fatal: "names no Chrome for Testing version"},
 		{name: "a newest below the floor", env: newestEnv, require: "1", value: belowTheFloor, find: Newest,

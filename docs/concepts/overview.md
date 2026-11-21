@@ -104,7 +104,7 @@ flowchart TB
 | Store | Turso | Two local files this process owns exclusively (this node's own estate and the replicated one); pure Go, SQLite file format, and the vector functions recall is written against |
 | Vector search | The store's vector distance functions | The per-agent diary and episodic store, in the same file. The arithmetic is the database's; the Go driver reaches no ANN index yet, so recall is a scan behind the per-agent index |
 | Event store | A table in that file | LLM-invocation observability and event dashboards, written inline by a publish listener |
-| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV on the stream's own NATS broker, never the store file. External broker: the queue's connection. Embedded: a second connection to the same server. Both are watched; either closing for good stops the node |
+| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV on the stream's own NATS broker, never the store file. External broker: the queue's connection. Embedded: a second connection to the same server. Holds ride a lease connection of their own on both. Each is watched; any closing for good stops the node |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the editors' schema and the docs |
 | Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
 | LLM backends | Harnesses — Claude Code, Codex, OpenCode and the rest | Each vendor's own harness, driven as a process: request shape, thinking, caching and sign-in stay the vendor's to keep current, so the engine calls no model vendor's HTTP API |

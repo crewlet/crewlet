@@ -3,7 +3,9 @@ name: dependabot-merge
 # Dependabot's own pull requests, approved and queued to merge with nobody in
 # the loop. Nothing else about them changes: ci.yml runs on a bump exactly as
 # it runs on anything else, and `--auto` holds the merge until every check
-# `main` requires has gone green. This shortens the WAIT, not the gate.
+# `main` requires has gone green. This shortens the WAIT, not the gate. All but
+# a bump of the Playwright tree a seat's box installs, which a person lands
+# (`paths-ignore`, below).
 #
 # Two repository settings are load-bearing and neither of them is in this
 # file:
@@ -32,6 +34,13 @@ on:
     # approved by nobody, forever, and the auto-merge it is queued for never
     # fires.
     types: [opened, reopened, synchronize]
+    # A pull request that changes only the Playwright tree starts no run, so
+    # nothing approves or queues it, whatever is pushed onto its branch: each
+    # release is read and landed from a person's own branch (boxhelper's
+    # package doc; CONTRIBUTING.md, "A Playwright MCP bump is read before it
+    # lands").
+    paths-ignore:
+      - "internal/browser/boxhelper/tree/**"
 
 # A run triggered by Dependabot gets a READ-ONLY `GITHUB_TOKEN` whatever the
 # repository default is, and no access to the repository's Actions secrets

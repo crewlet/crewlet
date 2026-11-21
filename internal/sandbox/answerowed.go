@@ -70,17 +70,8 @@ const maxDeclinedAnswers = 16
 // [Coordinator.Readmit]).
 type Condition string
 
-// SeatCoding is what an owed answer's resume waits on while another of its
-// seat's runs HOLDS the seat ([Holding]): a seat busy coding takes no other
-// work, a person's answer to another of its runs included (seathold.go), and
-// resuming the answered run beside the job would put two of the seat's turns
-// in flight at once.
-//
-// THIS PACKAGE'S OWN CONDITION, unlike the engine's, because the count it
-// waits on is this coordinator's ([Coordinator.SeatRuns]): the coordinator
-// signals it itself ([Coordinator.Readmit]) the moment the seat's last holding
-// run leaves [Holding], parked, settled or resumed and done.
-const SeatCoding Condition = "seat_coding"
+// [SeatFull] and [ConversationBusy] (seatcap.go) are what an owed answer's
+// resume waits on while its seat cannot take another run.
 
 // SeatLost is a control-topic delivery refused because this node no longer
 // holds the seat it is for: [ErrSeatNotHeld], with the node's own lease agreeing
@@ -103,16 +94,6 @@ const SeatLost Condition = "seat_lost"
 // because that decision is its own. An answer waiting on it waits for the
 // release.
 const Draining Condition = "drain"
-
-// seatCoding refuses an owed resume on a seat its executor holds for
-// another turn.
-func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {
-	if held, _ := c.SeatRuns(handle); held {
-		return Refusal{Condition: SeatCoding,
-			Reason: "the seat's executor holds it for another turn"}, true
-	}
-	return Refusal{}, false
-}
 
 // Refusal is why a seat may not run a retried resume now, and what would
 // change that.
@@ -311,10 +292,12 @@ func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 // admits nobody from the conversation; the dashboard's route still answers it.
 // Whether the holder may act NOW is asked once a run would take the reply
 // ([AudienceResolver.MayAnswer]). AND ONE TURN WORKS FOR ONE WHOM: the reply
-// must be written for whom the run works for ([Reply.writtenForTheRun]).
+// must be written for whom the run works for ([Reply.writtenForTheRun]). A run
+// waiting on another run ([PendingRun.WaitsFor]) is put to nobody: the engine
+// answers it, and mail in its conversation waits aside behind it (ADR-0176).
 func (r Reply) putTo(run PendingRun) bool {
-	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) &&
-		r.writtenForTheRun(run)
+	return r.Writer != "" && run.WaitsFor == nil &&
+		(run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) && r.writtenForTheRun(run)
 }
 
 // writtenForTheRun reports whether the reply was written for whom run works
@@ -999,7 +982,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (kept boo
 	// resumed, so it takes no slot and does not wait out a drain to be told
 	// so.
 	seen := c.signalsSeen()
-	adm, err := c.admitTurn(ctx, run.AgentHandle, ResumeAnswer)
+	adm, err := c.admitTurn(ctx, run.AgentHandle, run.ConversationKey, ResumeAnswer)
 	if err != nil {
 		c.owedRefused(ctx, run, refusalOf(err), seen)
 		return false
@@ -1045,8 +1028,14 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	defer done()
 	// INTO THE HOLDING SET, once, as the claim's answer is taken; recorded
 	// before the write, so a recount meanwhile counts the run as the answer it
-	// is still counted as (countwrite.go).
-	write := c.writingCount(run, StatusAnswered, StatusResumed)
+	// is still counted as (countwrite.go). THE SEAT'S SLOT IS RESERVED IN THE
+	// SAME STEP, or the resume waits for one (seatcap.go): the check before
+	// the admission ran outside the lock, beside a launch that may take it.
+	write, err := c.reservingCount(run, StatusAnswered, StatusResumed)
+	if err != nil {
+		c.waitOwed(ctx, run.TurnID, refusalOf(err), seen)
+		return false
+	}
 	defer c.settleWrite(write)
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	c.mu.Lock()
@@ -1489,7 +1478,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 	// lands while they are deciding is one the wait below must not sleep
 	// through. See [Coordinator.waitOwed].
 	seen := c.signalsSeen()
-	if refusal, refused := c.seatCoding(handle); refused {
+	if refusal, refused := c.seatRefusal(run.TurnID, handle, run.ConversationKey); refused {
 		c.waitOwed(ctx, turnID, refusal, seen)
 		return
 	}
@@ -1862,10 +1851,11 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 // ([Coordinator.refireLifted]). The rows are the record, so a new holder lifts
 // its predecessor's holds; only seats this node holds, as a lift is a write
 // under the lease; in the background, as Readmit must stay cheap. Not for
-// [SeatCoding], which no hold names and whose signal comes at every freed seat.
+// [SeatFull] or [ConversationBusy], which no hold names and whose signals come
+// at every freed slot.
 // The caller holds c.mu. See the package doc, "Kept completions".
 func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
-	if c.closed || cond == SeatCoding {
+	if c.closed || cond == SeatFull || cond == ConversationBusy {
 		return
 	}
 	c.inflight.Add(1)

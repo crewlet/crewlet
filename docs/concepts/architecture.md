@@ -163,8 +163,12 @@ two estates and [section 5](#5-where-state-lives) for which fact lives where. On
 an external broker it rides the queue's own connection; on the embedded one it
 holds a second connection to the same in-process server, shared with the
 seat-memory replay and the backup's stream copies so none sits on the read loop
-every mailbox consumes through. The two connections can fail independently, so
-both are watched: the NATS client closing either for good stops the node, since one holding leases while its inbox connection is gone lasts no longer than a reconnect. Only
+every mailbox consumes through. A node's holds ride a lease connection of their
+own on every topology, so no bulk the node sends queues a renewal where the path
+shares fairly between connections. The
+connections can fail independently, so each is watched: the NATS client closing
+one for good stops the node, and a node holds leases only while its data path
+answers. Only
 the *lease* half follows `coordination.type`: on a single node it falls back to
 an in-process store, while the shared buckets (activation pointer, ledgers,
 counters, the company's secrets) are opened on every topology, because a lone
@@ -672,7 +676,7 @@ days keep none.
 | **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership, and every other lease, Worklet's `move:` · `merge:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter, which a single node's in-process leases mint from too, since their tokens are written into records that outlive the process. No age at all (see below) |
-| **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
+| **`crewlet_config`** | The activation pointer — its own revision **is** the epoch — and the sealed company document it names, `body.<sha256>` |
 | **`crewlet_status`** | One key per node: the epoch and revision it last attempted, how that went (`error` or `degraded` is a refusal), and the revision it serves. A refused re-activation of the revision a node already runs names one revision in both, so a refusal is read from the status, never from the two differing |
 | `crewlet_node_status` | One key per node: its [status record](coordination.md#its-status-record), what it says of its MCP servers, its models, its runners, what it runs on and the runs of its seats waiting for an operator, beside its presence rather than on it and counted only at its presence's epoch. The bucket's age, the same minute as `crewlet_status`, removes a dead node's |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |

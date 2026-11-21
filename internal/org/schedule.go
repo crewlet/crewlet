@@ -39,9 +39,10 @@ const (
 // A ritual that is not stuck spends about a quarter of an hour: prefetch, box
 // launch and setup ([DefaultSetupTimeoutSeconds] per command), five to ten
 // harness rounds, and the reviewer. Half an hour is twice that, so a
-// send-back still fits. Not more: a seat takes no other work while its run
-// works, so a schedule firing more often than the cap sits it out with fires
-// queued, unless it sets a timeout_seconds below its period.
+// send-back still fits. Not more: a seat at its run cap (one by default)
+// takes no other work, and a schedule's fires share one conversation, which
+// runs one turn at a time, so a schedule firing more often than the cap sits
+// it out with fires queued, unless it sets a timeout_seconds below its period.
 // TestADefaultScheduleCapOutlastsTheTurnBeforeItsRun (internal/engine) holds
 // the order. A judgment without production data.
 const DefaultScheduleTimeout = 30 * time.Minute

@@ -178,9 +178,9 @@ func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
 // link whole; every call waits the same whole bound ([jsapi.Sends.Whole]), the
 // request term plus a crossing per send, so a resend after an in-flight answer
 // gets nothing more. On an external broker the client checks no caller's
-// deadline behind the connection's lock or in the socket, so a write (a lease
-// renewal too) waits behind each large one ahead, up to
-// internal/queue/jetstream's externalWriteDeadline each (crewlet/crewlet#1035).
+// deadline behind the connection's lock or in the socket, so a write waits
+// behind each large one ahead on its connection (internal/queue/jetstream's
+// externalWriteDeadline each); a hold rides its own (ADR-0174).
 // No create is budgeted: [createKey], via the settled Update, is the one create;
 // the client's Create conditions on a marker the sweep may remove and asks a
 // replica (TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient).

@@ -39,9 +39,9 @@ const (
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
 	// value — the turn's earlier rounds' tool names, the log's own fields (its
-	// identifiers, the kinds of change its calls committed and its count of
-	// the dropped calls no save point holds) and the room for a later build's
-	// keys — is what [RowBytes] leaves.
+	// identifiers, the kinds of change its calls committed, the records they
+	// wrote and its count of the dropped calls no save point holds) and the
+	// room for a later build's keys — is what [RowBytes] leaves.
 	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share of the row: the
@@ -69,7 +69,7 @@ const (
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
-	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// KiB, which the 102,064 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
 
@@ -259,8 +259,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_335_469
-	measuredSpare       = 379_223
+	measuredOtherFields = 2_337_906
+	measuredSpare       = 376_786
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -392,7 +392,9 @@ const (
 
 	// LogRestBytes is the rest of the log's value beside its calls and its
 	// calls in flight: the turn's earlier rounds' tool names, the log's own
-	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// fields (the records the turn's calls wrote among them, [BridgeLog.Wrote]:
+	// at most 128 ids of at most 256 bytes, about 200 KiB at their most
+	// escaped), and the room a later build adds keys to the log in. STATED, NOT
 	// DERIVED, as the table above states it, so the log's split closes only
 	// while every line of it is the table's: a change of [BridgeLogBytes] or of
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
@@ -975,6 +977,30 @@ func keptTitle(s string) string {
 		}
 	}
 	return title
+}
+
+// keptQuestion is a colleague's question as the row keeps it, raw: within
+// [keptTitle]'s bound, and CUT WHERE ITS REDACTION ([ColleagueAsk.Question]) IS
+// AN OPENING OF THE WHOLE QUESTION'S. A cut inside a credential leaves a part
+// the redaction no longer knows as one, so such a cut moves back to where the
+// redaction settles ([redact.Settled]): the last line break before it. That
+// gives up as much as a line of the opening (all of it, for a question on one
+// line), which a question past 16 KiB can spare: the turn's own record keeps
+// the whole, and no shorter cut is known to settle. The second check holds what
+// is served, the redaction of the opening WITH the cut's note, to the opening's
+// own, so the guarantee never rests on how a rule reads the note's words.
+func keptQuestion(q string) string {
+	held := keptTitle(q)
+	opening, cut := rowRecord.Opening(held, len(q))
+	if !cut || held == q {
+		return held
+	}
+	shown := redact.Secrets(opening)
+	if strings.HasPrefix(redact.Secrets(q), shown) && strings.HasPrefix(redact.Secrets(held), shown) {
+		return held
+	}
+	held, _ = rowRecord.TextOf(opening[:redact.Settled(opening)], len(q), MaxRunTitleBytes)
+	return held
 }
 
 // answerFits reports why answer is past its share of the row

@@ -34,7 +34,7 @@ func TestATurnIsWorkingFromItsStartEvent(t *testing.T) {
 	if o.Activity != livestate.ActivityWorking {
 		t.Errorf("activity = %q, want working from the start event", o.Activity)
 	}
-	turn := o.Turn
+	turn := soleTurn(t, o.Turns)
 	if turn == nil {
 		t.Fatal("no turn on the seat after its start")
 	}
@@ -49,7 +49,7 @@ func TestATurnIsWorkingFromItsStartEvent(t *testing.T) {
 	s.Apply(env("agent_phase_started", turnPayload("tn-1", map[string]any{
 		"phase": "execute", "iteration": 0,
 	}), at("2026-06-14T12:00:01Z")))
-	if got := overlayOf(t, s, "Lead").Turn; got == nil || got.Stage != livestate.StagePhase {
+	if got := soleTurn(t, overlayOf(t, s, "Lead").Turns); got == nil || got.Stage != livestate.StagePhase {
 		t.Errorf("turn = %+v, want it in a phase once one started", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestAStartThatLandsAfterItsPhaseDoesNotMoveTheStageBack(t *testing.T) {
 		"work_item":  map[string]any{"backend": "native", "id": "t-1", "key": "ENG-1"},
 	}), at("2026-06-14T12:00:00Z")))
 
-	turn := overlayOf(t, s, "Lead").Turn
+	turn := soleTurn(t, overlayOf(t, s, "Lead").Turns)
 	if turn == nil || turn.Stage != livestate.StagePhase {
 		t.Fatalf("turn = %+v, want the phase stage kept", turn)
 	}
@@ -90,14 +90,14 @@ func TestAParkedTurnSaysParkedNotIdle(t *testing.T) {
 		at("2026-06-14T12:00:05Z")))
 
 	o := overlayOf(t, s, "Lead")
-	if o.Turn == nil || o.Turn.Stage != livestate.StageParked {
-		t.Fatalf("turn = %+v, want tn-1 parked", o.Turn)
+	if soleTurn(t, o.Turns) == nil || soleTurn(t, o.Turns).Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 parked", soleTurn(t, o.Turns))
 	}
 	if o.LastTurn != nil {
 		t.Errorf("last turn = %+v, want none: a suspension is not an end", o.LastTurn)
 	}
-	if o.LiveCall != nil {
-		t.Errorf("live call = %+v, want none while nothing is being called", o.LiveCall)
+	if soleCall(t, o.LiveCalls) != nil {
+		t.Errorf("live call = %+v, want none while nothing is being called", soleCall(t, o.LiveCalls))
 	}
 
 	// The run is collected and the SAME turn resumes, possibly elsewhere.
@@ -105,18 +105,18 @@ func TestAParkedTurnSaysParkedNotIdle(t *testing.T) {
 		"resumed": true, "node": "core-2", "started_at": "2026-06-14T13:00:00Z",
 	}), at("2026-06-14T13:00:00Z")))
 	o = overlayOf(t, s, "Lead")
-	if o.Turn == nil || o.Turn.Stage != livestate.StageContext || o.Turn.Node != "core-2" {
-		t.Fatalf("turn = %+v, want the resumed segment on core-2", o.Turn)
+	if soleTurn(t, o.Turns) == nil || soleTurn(t, o.Turns).Stage != livestate.StageContext || soleTurn(t, o.Turns).Node != "core-2" {
+		t.Fatalf("turn = %+v, want the resumed segment on core-2", soleTurn(t, o.Turns))
 	}
-	if o.Turn.StartedAt != "2026-06-14T12:00:00Z" {
+	if soleTurn(t, o.Turns).StartedAt != "2026-06-14T12:00:00Z" {
 		t.Errorf("started at %q, want the turn's first start rather than the segment's",
-			o.Turn.StartedAt)
+			soleTurn(t, o.Turns).StartedAt)
 	}
 
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T13:00:09Z")))
 	o = overlayOf(t, s, "Lead")
-	if o.Turn != nil {
-		t.Errorf("turn = %+v, want none once it ended", o.Turn)
+	if soleTurn(t, o.Turns) != nil {
+		t.Errorf("turn = %+v, want none once it ended", soleTurn(t, o.Turns))
 	}
 	want := livestate.LastTurn{TurnID: "tn-1", EndedAt: "2026-06-14T13:00:09Z",
 		Outcome: livestate.OutcomeCompleted}
@@ -134,7 +134,7 @@ func parked(t *testing.T) *livestate.LiveState {
 		at("2026-06-14T12:00:01Z")))
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{"suspended": true}),
 		at("2026-06-14T12:00:05Z")))
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 parked before the case begins", turn)
 	}
 	return s
@@ -159,11 +159,11 @@ func TestAWorkerItsRunDelegatedToLeavesItsTurnParked(t *testing.T) {
 	}), at("2026-06-14T12:03:00Z")))
 
 	o := overlayOf(t, s, "Lead")
-	if o.Turn == nil || o.Turn.Stage != livestate.StageParked {
-		t.Fatalf("turn = %+v, want tn-1 still parked on its run", o.Turn)
+	if soleTurn(t, o.Turns) == nil || soleTurn(t, o.Turns).Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 still parked on its run", soleTurn(t, o.Turns))
 	}
-	if o.Turn.Node != "core-2" {
-		t.Errorf("node = %q, want core-2, the node that published the turn's newest event", o.Turn.Node)
+	if soleTurn(t, o.Turns).Node != "core-2" {
+		t.Errorf("node = %q, want core-2, the node that published the turn's newest event", soleTurn(t, o.Turns).Node)
 	}
 	// NOT WORK OF ITS OWN: a parked turn is working only through its run's
 	// record, and this case holds none. Un-parked by its worker's report, the
@@ -175,7 +175,7 @@ func TestAWorkerItsRunDelegatedToLeavesItsTurnParked(t *testing.T) {
 
 	// The seat's next instance finds the turn still parked on its run.
 	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"}, at("2026-06-14T12:04:00Z")))
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 to outlive the spawn, parked", turn)
 	}
 
@@ -205,7 +205,7 @@ func TestACollectedLaunchLeavesItsTurnParked(t *testing.T) {
 	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
 		"iteration": 1, "launch_id": "job-1", "total_tokens": 900,
 	}), at("2026-06-14T12:30:00Z")))
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 parked on its collected run", turn)
 	}
 
@@ -214,7 +214,7 @@ func TestACollectedLaunchLeavesItsTurnParked(t *testing.T) {
 	s.Apply(env("agent_phase_completed", turnPayload("tn-1", map[string]any{
 		"phase": "execute", "iteration": 1,
 	}), at("2026-06-14T12:30:02Z")))
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StagePhase {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.Stage != livestate.StagePhase {
 		t.Fatalf("turn = %+v, want tn-1 in a phase once its own segment ran one", turn)
 	}
 }
@@ -232,7 +232,7 @@ func TestACollectedLaunchOpensItsTurnParked(t *testing.T) {
 	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
 		"iteration": 1, "launch_id": "job-1",
 	}), at("2026-06-14T12:30:00Z")))
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.TurnID != "tn-1" ||
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.TurnID != "tn-1" ||
 		turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 opened parked on its collected run", turn)
 	}
@@ -264,7 +264,7 @@ func TestAFailedLaunchIsTheSeatsLastError(t *testing.T) {
 		got.TurnID != "tn-1" || got.EventID != "broke" {
 		t.Fatalf("last error = %+v, want the failed launch's kind, in execute, on its turn", got)
 	}
-	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 still parked: a failed launch's round is resumed", turn)
 	}
 	s.Apply(env("agent_turn_started", turnPayload("tn-1", map[string]any{"resumed": true}),
@@ -303,7 +303,7 @@ func TestANestedRecordOpensItsTurnAtTheStageItsHostImplies(t *testing.T) {
 			t.Parallel()
 			s := livestate.New()
 			s.Apply(env("agent_phase_completed", turnPayload("tn-1", tc.payload), at("2026-06-14T12:03:00Z")))
-			if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.TurnID != "tn-1" || turn.Stage != tc.want {
+			if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn == nil || turn.TurnID != "tn-1" || turn.Stage != tc.want {
 				t.Errorf("turn = %+v, want tn-1 at %s", turn, tc.want)
 			}
 		})
@@ -335,7 +335,7 @@ func TestAStragglerDoesNotPutAnEndedTurnBack(t *testing.T) {
 	s.Apply(env("agent_phase_started", turnPayload("tn-1", map[string]any{"phase": "execute"}),
 		at("2026-06-14T12:00:01Z")))
 
-	if turn := overlayOf(t, s, "Lead").Turn; turn != nil {
+	if turn := soleTurn(t, overlayOf(t, s, "Lead").Turns); turn != nil {
 		t.Errorf("turn = %+v, want the ended turn kept off the seat", turn)
 	}
 }
@@ -351,8 +351,8 @@ func TestACompletionThatLostARaceToTheNextTurnStillEndsIt(t *testing.T) {
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T12:00:09Z")))
 
 	o := overlayOf(t, s, "Lead")
-	if o.Turn == nil || o.Turn.TurnID != "tn-2" {
-		t.Errorf("turn = %+v, want tn-2", o.Turn)
+	if soleTurn(t, o.Turns) == nil || soleTurn(t, o.Turns).TurnID != "tn-2" {
+		t.Errorf("turn = %+v, want tn-2", soleTurn(t, o.Turns))
 	}
 	if o.LastTurn == nil || o.LastTurn.TurnID != "tn-1" {
 		t.Errorf("last turn = %+v, want tn-1", o.LastTurn)
@@ -375,8 +375,8 @@ func TestALostRunEndsItsParkedTurn(t *testing.T) {
 		t.Error("ending the parked turn did not move its seat")
 	}
 	o := overlayOf(t, s, "Lead")
-	if o.Turn != nil {
-		t.Errorf("turn = %+v, want the lost run's turn ended", o.Turn)
+	if soleTurn(t, o.Turns) != nil {
+		t.Errorf("turn = %+v, want the lost run's turn ended", soleTurn(t, o.Turns))
 	}
 	if o.LastTurn == nil || o.LastTurn.TurnID != "tn-1" || o.LastTurn.Outcome != livestate.OutcomeFailed {
 		t.Errorf("last turn = %+v, want tn-1 failed", o.LastTurn)
@@ -407,7 +407,7 @@ func TestTheOverlayAlwaysCarriesTheTurnKeys(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	for _, key := range []string{"turn", "last_turn"} {
+	for _, key := range []string{"turns", "last_turn"} {
 		if _, ok := rows[0][key]; !ok {
 			t.Errorf("the pushed row has no %q key", key)
 		}
@@ -451,8 +451,8 @@ func TestAStoppedTurnEndsAsStoppedAndNotFailed(t *testing.T) {
 		t.Error("ending the parked turn did not move its seat")
 	}
 	o := overlayOf(t, s, "Lead")
-	if o.Turn != nil {
-		t.Errorf("turn = %+v, want the stopped turn off the seat", o.Turn)
+	if soleTurn(t, o.Turns) != nil {
+		t.Errorf("turn = %+v, want the stopped turn off the seat", soleTurn(t, o.Turns))
 	}
 	if o.LastTurn == nil || o.LastTurn.TurnID != "tn-1" || o.LastTurn.Outcome != livestate.OutcomeStopped {
 		t.Errorf("last turn = %+v, want tn-1 stopped", o.LastTurn)

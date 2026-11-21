@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Three states, and a plain number has two. A seat that says nothing about the
@@ -228,6 +229,43 @@ providers:
 			if got := c.Providers.Sandbox.AttributesCommits(); got != want {
 				t.Errorf("%s with commit_attribution: %s credits commits: %v, want %v", name, value, got, want)
 			}
+		}
+	}
+}
+
+// A SEAT THAT NAMES NO RUN CAP HOLDS TWO RUNS AT ONCE, and one that names a cap
+// below one is refused naming the field: a seat that could hold no run could
+// take no turn, and reading 0 as "the default" would hide the mistake.
+func TestASeatsRunCapDefaultsToTwoAndRefusesLessThanOne(t *testing.T) {
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: SWE
+    sandbox:
+      max_turns: 4
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := cfg.Roles[0].Seat().Sandbox.ConcurrentRuns(); got != 2 {
+		t.Fatalf("an unset cap reads %d runs at once, want 2", got)
+	}
+	if got := (*org.RoleSandbox)(nil).ConcurrentRuns(); got != 2 {
+		t.Fatalf("a seat with no sandbox block reads %d runs at once, want 2", got)
+	}
+	for _, bad := range []string{"0", "-1"} {
+		_, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: SWE
+    sandbox:
+      max_concurrent_runs: ` + bad + `
+`))
+		if err == nil {
+			t.Fatalf("max_concurrent_runs: %s was accepted", bad)
+		}
+		if !strings.Contains(err.Error(), "max_concurrent_runs") {
+			t.Fatalf("the refusal of %s does not name the field: %v", bad, err)
 		}
 	}
 }

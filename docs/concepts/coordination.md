@@ -426,10 +426,14 @@ refuses exactly the same values, so a test passing on it passes on the store.
 Two kinds of value come near it, and both are held to it where they are made:
 a sandbox run's record and its tool log, budgeted field by field
 ([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)),
-and the activation pointer, which carries the company document sealed: a
-config write whose document would make a pointer past it is refused `413`
-before the revision is stored
+and the activation's body, the company document sealed: a config write whose
+sealed document is past it is refused `413` before the revision is stored
 ([PATCH /config](../reference/api-endpoints.md#patch-config--the-narrower-write)).
+The activation pointer that names the body is held to 8 KiB
+(`coord.MaxPointerBytes`), its summary to 4 KiB as the pointer encodes it,
+because every probe on every node reads it: at its bound its read crosses the
+slowest link allowed in a third of a second. The body is read only by a node
+that lacks the revision, given the time its recorded size takes to cross.
 Every other record is bounded by its own fields far below it.
 
 ### A compare-and-set waits for the leader to decide
@@ -475,9 +479,10 @@ failed the same way under the beat's fifteen seconds, on any link below about
 - **A caller's own deadline** is kept, but on an external broker the client
   does not check it while a write waits for the connection (which a large
   write holds for its whole length) or while the write is in the socket. A
-  write, a lease renewal among them, is held behind every large write ahead of
-  it, each for up to the client's write deadline of about eight minutes, and
-  then for its own ([Delivery Semantics](event-system.md#delivery-semantics)).
+  write is held behind every large write ahead of it on its connection, each
+  for up to the client's write deadline of about eight minutes, and then for
+  its own ([Delivery Semantics](event-system.md#delivery-semantics)). A node's
+  holds ride a connection of their own ([below](#backends)).
 - Each node states how its connection reaches the store when it opens it, from
   its broker's kind, since the store cannot see how the connection was made.
 - A node's MCP listings are written on a pass of their own beside its
@@ -490,9 +495,8 @@ failed the same way under the beat's fifteen seconds, on any link below about
   `coord.MaxValueCrossing`, thirteen minutes across a link at the floor, none
   in the store's own process), and the caller's bound is its reason plus that
   ([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)).
-- Not covered, and the event system's to say: a link slower than the floor, a
-  link busy with traffic ahead of the write, and the lease renewals a large
-  write holds behind it
+- Not covered, and the event system's to say: a link slower than the floor,
+  and a link busy with traffic ahead of the write
   ([Delivery Semantics](event-system.md#delivery-semantics)).
 
 A read of a **large value waits as long as its reply takes to cross.** The
@@ -657,7 +661,13 @@ Three hours is not what keeps an answer right. Nothing in the engine takes a mar
 The sweep removes only what it saw. It purges each key **through the marker's own revision**, and the broker applies that bound, so a record created again after the sweep's pass saw the marker has a later revision and is untouched. The client library's own sweep (`PurgeDeletes`) purges a key outright, and would take that new record with the marker.
 
 
-The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already carries every record and every part, so a sweep walks the logs once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
+The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already names every record and every part, so a sweep walks the bucket once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
+
+The pass carries each key's metadata, never its value, so a sweep moves no run log.
+
+### Superseded bodies are swept
+
+The job `activation_bodies`, on the same duty and tick, removes from `config` an activation's body (`body.<sha256>`) that the pointer no longer names and that was written more than **an hour** (`coord.BodyRetention`) before the tick. It walks `config` itself, each key's metadata and never its value, so it moves no body. The pointer is read after the walk, and a flip lands within half an hour of its body's write beginning or not at all: twice the longest a body at its bound takes to write across a link at the slowest pace, the other half left for clock skew. So a body a flip in flight will name is either younger than the cutoff or written again after the walk, and the purge through the revision the walk saw leaves it. Each activation leaves its predecessor's body for up to an hour and a quarter, so a company at its bound activating N times an hour keeps up to about 1.25 × N × 6.29 MB more in `config`, on each replica.
 
 ## The lease TTL bounds seats and presence only
 
@@ -765,7 +775,11 @@ Two things stay **per-process**:
 | External NATS | The same KV, on a cluster this node dials | A fleet whose stream and everything on it should outlive any engine |
 | Memory | An in-process twin | Tests |
 
-**The coordination store lives on the stream's own broker.** The engine starts or dials exactly one broker and opens the leases and shared records on it: over the queue's own connection on an external broker, and over a second connection to the same in-process server on the embedded one (shared by the seat-memory replay and the backup's stream copies, so neither sits on the read loop every mailbox consumes through). Two connections can fail independently, leaving a node renewing leases on one while the one carrying its inbox is gone: alive to peers, deaf to its work, holding every seat. So **both are watched**: the NATS client closing either for good stops the node, which exits for its supervisor to restart ([Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)). A split lasts no longer than a reconnect. ([ADR-0001](https://github.com/crewlet/crewlet/blob/main/adr/0001-one-broker-carries-the-stream-and-the-coordination-store.md) records the decision.)
+**The coordination store lives on the stream's own broker.** The engine starts or dials exactly one broker and opens the leases and shared records on it: over the queue's own connection on an external broker, and over a second connection to the same in-process server on the embedded one (shared by the seat-memory replay and the backup's stream copies, so neither sits on the read loop every mailbox consumes through).
+
+**A node's holds ride a connection of their own.** Its claims, renewals, releases, presence and fencing epochs go over a **lease connection** nothing else rides: on a leaf a second leaf link to the members' one leaf port, isolated from other leaves' interest; on an external broker a second dial, named `crewlet-leases`, that gives a dead socket up within a heartbeat of the shortest lease; on a member a third in-process connection. Every read of the fleet's leases (a lease's lookup, the listings, the watches, the placement hints and the protocol gate's view) stays on the coordination connection, so the lease link carries what this node holds and nothing that grows with the fleet, and no write the node sends, however large, queues a renewal where the path to the fleet shares fairly between connections ([ADR-0174](https://github.com/crewlet/crewlet/blob/main/adr/0174-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+
+Connections can fail independently, leaving a node renewing leases on one while the one carrying its inbox is gone: alive to peers, deaf to its work, holding every seat. So **every connection the node cannot run without is watched**: the NATS client closing one for good stops the node, which exits for its supervisor to restart ([Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)). A split lasts no longer than a reconnect. ([ADR-0001](https://github.com/crewlet/crewlet/blob/main/adr/0001-one-broker-carries-the-stream-and-the-coordination-store.md) records the decision.) And two links can reach the broker apart, so **a node takes or keeps a hold only while its data path answers**: the queue probes the fleet's JetStream over its own connection every five seconds, and a claim or renewal is refused as unknown, before anything is sent, while that probe is unproven (a release never is). The lease link is probed the same way and moved off a member that stops answering ([ADR-0173](https://github.com/crewlet/crewlet/blob/main/adr/0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md); the numbers are in [Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)).
 
 The twin is held to the **same certified suite** as the real backends (`internal/coord/coordtest`), because a twin that agrees only with itself proves nothing.
 

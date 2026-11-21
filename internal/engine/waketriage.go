@@ -253,7 +253,8 @@ func (e *Engine) triage(ctx context.Context, handle string, run sandbox.PendingR
 	}
 	requester := cmp.Or(run.Requester, run.RequesterLogin)
 	v, err := runTriage(ctx, deps, prompts.WakeTriage{Seat: handle, Task: run.TaskDescription,
-		Requester: requester, Wake: w, InConversation: rel.conversation, AboutItem: rel.item, ByLead: rel.lead})
+		Requester: requester, Wake: w, InConversation: rel.conversation, AboutItem: rel.item,
+		AboutWritten: rel.wrote, ByLead: rel.lead})
 	if err != nil {
 		return triageVerdict{failure: err.Error()}
 	}
@@ -261,16 +262,21 @@ func (e *Engine) triage(ctx context.Context, handle string, run sandbox.PendingR
 }
 
 // wakeRelations is why a wake is weighed for a run at all: written in its
-// conversation, about its work item, or by somebody who leads the seat.
-type wakeRelations struct{ conversation, item, lead bool }
+// conversation, about its work item, about a record it created or wrote, or by
+// somebody who leads the seat.
+type wakeRelations struct{ conversation, item, wrote, lead bool }
 
-// relationsOf is o's relations to run on seat handle. The lead is the chart's
-// answer ([ChartAuthority.Leads]), as `steer_turn` decides it, for a writer
-// writing as a seat; a chart that cannot tell is no.
-func (e *Engine) relationsOf(ctx context.Context, handle string, run sandbox.PendingRun, o wakeOrigin) wakeRelations {
+// relationsOf is o's relations to run on seat handle, wrote whether it is about
+// a record the run wrote ([wroteAbout]). The lead is the chart's answer
+// ([ChartAuthority.Leads]), as `steer_turn` decides it, for a writer writing as
+// a seat; a chart that cannot tell is no.
+func (e *Engine) relationsOf(ctx context.Context, handle string, run sandbox.PendingRun, o wakeOrigin,
+	wrote bool) wakeRelations {
+
 	rel := wakeRelations{
 		conversation: run.ConversationKey != "" && o.conversation == run.ConversationKey,
 		item:         sameItem(run.WorkItem, o.item),
+		wrote:        wrote,
 	}
 	if o.login == "" && o.requester != "" && o.requester != handle {
 		leads, err := ChartAuthorityOf(e).Leads(ctx, o.requester, handle)
@@ -291,7 +297,7 @@ func sameItem(a, b *types.WorkItem) bool {
 func candidate(why string, rel wakeRelations) bool {
 	switch why {
 	case stayNoRequester, stayWriter, stayOtherWork:
-		return rel.conversation || rel.item || rel.lead
+		return rel.conversation || rel.item || rel.wrote || rel.lead
 	}
 	return false
 }
@@ -423,10 +429,12 @@ func (m *routeMemo) prune(runs []sandbox.PendingRun) {
 }
 
 // routeRead is one read's own state: the triages it made and the steers it
-// gathered, each run's lead's filed as one note once every wake is weighed.
+// gathered, each run's lead's filed as one note once every wake is weighed,
+// and what each run created or wrote, by turn ([Engine.writtenOf]).
 type routeRead struct {
 	triages int
 	steers  []*steerBurst
+	wrote   map[string][]types.WrittenRecord
 }
 
 // steerBurst is one lead's steer wakes for one run in one read.

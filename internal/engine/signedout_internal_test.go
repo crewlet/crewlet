@@ -54,8 +54,8 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 	// the seat's pause, the witness that the waiter announced the job again.
 	var admitted, refusedOnPause atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
-			ctx, release, err := next(ctx, handle, route)
+		return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+			ctx, release, err := next(ctx, handle, conversation, route)
 			var refused *sandbox.TurnRefused
 			switch {
 			case err == nil:

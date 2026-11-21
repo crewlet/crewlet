@@ -756,8 +756,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if c.framing(req.Turn.TurnID) {
 		from = StatusResumed
 	}
-	write := c.writingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle},
-		from, StatusLaunching)
+	// AND THE SEAT'S SLOT RESERVED IN THE SAME STEP, or nothing is written: a
+	// seat at its cap, or with the conversation worked by another of its runs,
+	// starts no run (seatcap.go). A relaunch of a run still held takes none.
+	write, err := c.reservingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
+		ConversationKey: req.Turn.ConversationKey}, from, StatusLaunching)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("sandbox: launching %s on %s: %w", req.Turn.TurnID, req.Turn.AgentHandle, err)
+	}
 	defer c.settleWrite(write)
 	opened, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,

@@ -120,13 +120,13 @@ func TestAReadOfNoCompanySaysHowToStartOne(t *testing.T) {
 
 // movingPlane answers its first read of the pointer with a revision whose body
 // is gone by the time it is asked for: another activation landed between the
-// two reads.
+// two reads, and the sweep took the body.
 type movingPlane struct {
 	coord.Plane
 	mu    sync.Mutex
 	stale *coord.Activation
 	// stuck keeps answering the stale revision, as a store whose pointer
-	// names a body it does not carry would.
+	// names a body it does not hold would.
 	stuck bool
 }
 
@@ -144,12 +144,12 @@ func (p *movingPlane) Target(ctx context.Context) (coord.Activation, bool, error
 }
 
 // A POINTER THAT MOVES BETWEEN ITS TWO READS IS READ AGAIN, AND ONE THAT NAMES A
-// BODY IT DOES NOT CARRY IS REPORTED.
+// BODY THE STORE DOES NOT HOLD IS REPORTED.
 //
 // The fleet's revision is read in two steps on a node that has not kept it yet:
-// the pointer, then the body it carries; and the pointer moves on between them
+// the pointer, then the body it names; and the pointer moves on between them
 // whenever an activation lands there, which is a later revision to answer. A
-// pointer that keeps naming a body it does not carry is not moving, and asking
+// pointer that keeps naming a body the store lacks is not moving, and asking
 // it again for ever would hang the request. Mutation: drop the bound, and the
 // stuck row never answers; treat the first moved read as the fault, and the
 // moving row answers 500.
@@ -170,6 +170,7 @@ func TestAPointerThatMovesBetweenItsTwoReadsIsReadAgain(t *testing.T) {
 			return &coord.Activation{
 				Epoch: target.Epoch - 1, RevisionID: "replaced-before-this-node-met-it",
 				At: target.At.Add(-time.Minute), Origin: target.Origin,
+				Body: coord.BodyOf([]byte(`{"swept":true}`)),
 			}
 		}
 		moving.mu.Lock()
@@ -189,14 +190,14 @@ func TestAPointerThatMovesBetweenItsTwoReadsIsReadAgain(t *testing.T) {
 			t.Errorf("GET /config across a moved pointer = %d naming %s, want 200 naming %s: %s",
 				res.Code, res.Header().Get("ETag"), current, res.Body)
 		case stuck && res.Code != http.StatusInternalServerError:
-			t.Errorf("GET /config on a pointer naming no body = %d, want 500: %s", res.Code, res.Body)
+			t.Errorf("GET /config on a pointer naming a body the store lacks = %d, want 500: %s", res.Code, res.Body)
 		}
 		// A DIFF AGAINST IT IS THE SAME FAULT, never a revision the caller
 		// asked about that is not there.
 		if stuck {
 			diff := s.do(t, http.MethodGet, "/config/revisions/"+current+"/diff", "", nil)
 			if diff.Code != http.StatusInternalServerError {
-				t.Errorf("a diff against a pointer naming no body = %d, want 500: %s",
+				t.Errorf("a diff against a pointer naming a body the store lacks = %d, want 500: %s",
 					diff.Code, diff.Body)
 			}
 		}

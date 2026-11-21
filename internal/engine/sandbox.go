@@ -1857,7 +1857,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label, Withdrawn: asked.Withdrawn,
+		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited,
 	}
 	if refused := asked.Refused; refused != nil {
 		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
@@ -1878,7 +1878,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
 		// arguments, so they are opened for a deny as well.
 		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
-			args, err := seal.OpenArguments(held.TurnID, call)
+			args, err := seal.OpenRawArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
 				// node cannot open leaves the call unmade, and the run is
@@ -2814,7 +2814,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunUnresumable,
+		Unresumable: e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed
@@ -2832,6 +2832,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// turn's end, so its next turn continues the session the turn kept.
 		// See wakeitem.go.
 		Served: e.runSteers.served,
+		// AND A SEAT HOLDS UP TO ITS CAP OF RUNS, one per conversation
+		// (ADR-0169).
+		SeatCap: e.seatRunCap,
 		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
 		// wake from the run's requester about its work handed to it. See
 		// wakerouter.go.
@@ -2846,10 +2849,12 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// FUNCTION FOR EVERY REASON, because to the indicator they are
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
-		Stopped: e.releaseWorkingStatus,
+		Stopped: e.runStopped,
 		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
-		// each finds it waiting (ADR-0125). See delegated.go.
-		Parked: e.wakeDelegates,
+		// each finds it waiting (ADR-0125), and a run parked by
+		// `wait_for_run` is watched until its run leaves (ADR-0176). See
+		// delegated.go and runwaits.go.
+		Parked: e.runParked,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.
@@ -3131,14 +3136,24 @@ func (e *Engine) stopSandbox() {
 }
 
 // sandboxSeatRuns is the inbox screening's two sandbox answers for a seat, read
-// off the runtime live: no to both where there is none, which is right for a
-// node that has never run code — a seat on it cannot be in either state.
-func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
+// off the runtime live: whether its runs hold every slot of its cap, and
+// whether one waits for an answer, in one read; no to both where there is no
+// runtime, which is right for a node that has never run code.
+func (e *Engine) sandboxSeatRuns(handle string) (atCap, awaitsAnswer bool) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return false, false
 	}
-	return rt.coordinator.SeatRuns(handle)
+	count := rt.coordinator.SeatCount(handle)
+	return count.AtCap(), count.Awaiting > 0
+}
+
+// holdAside is the dispatcher's [Dispatcher.HoldAside], through the
+// coordinator current when the delivery arrives.
+func (e *Engine) holdAside(ctx context.Context, handle string) {
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.HoldForAside(ctx, handle)
+	}
 }
 
 // answerParkedRun offers a delivery to a parked executor, through the
@@ -3179,6 +3194,21 @@ func (h seatHold) Release(ctx context.Context, handle string, at queue.Attachmen
 		return err
 	}
 	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
+}
+
+// Readmit hands back the seat's mail set aside under key, freed by turn's run
+// leaving it ([queue.EventQueue.Readmit]): seat_wake_readmitted names both.
+func (h seatHold) Readmit(ctx context.Context, handle, key, turn string) (int, error) {
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return 0, err
+	}
+	n, err := h.engine.backends.Queue.Readmit(ctx, subject, group, key)
+	if n > 0 {
+		log.InfoContext(ctx, "seat_wake_readmitted", "seat", handle, "key", key, "turn_id", turn,
+			"deliveries", n, "detail", "the run they waited on left the seat; they run at the head of its inbox")
+	}
+	return n, err
 }
 
 // inboxOf is the inbox a hold on handle sits on, named by the seat's id — the
@@ -3244,12 +3274,12 @@ const (
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
 
-	// waitSeatBusy: another of the seat's turns is running on this node, and
-	// a seat runs one at a time ([node.ErrSeatBusy]). Signalled the moment
-	// that turn is released ([node.Config.SeatTurnEnded]), so the answer is
-	// resumed as the seat's next turn, ahead of its mail, which its owed hold
-	// keeps waiting.
-	waitSeatBusy sandbox.Condition = "seat_busy"
+	// waitSeatTurns: the seat runs as many turns on this node as its cap, or
+	// one of the answer's conversation ([node.ErrSeatFull],
+	// [node.ErrConversationBusy]). Signalled the moment one of them is
+	// released ([node.Config.SeatTurnEnded]), so the answer is resumed as the
+	// seat's next turn, ahead of its mail, which its owed hold keeps waiting.
+	waitSeatTurns sandbox.Condition = "seat_turns"
 
 	// waitProvider: every model of the seat's chain is at a usage limit it
 	// already reported, or this node holds the seat parked on one. Signalled
@@ -3285,11 +3315,11 @@ func (e *Engine) turnGate() sandbox.TurnGate {
 // (only a hand-built one lacks it). The node is asked HERE, not where the gate
 // is built ([Engine.turnGate]): boot builds the coordinator before assigning
 // the node, so choosing then would leave every node ungated.
-func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+func (e *Engine) admitResume(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 	if e.node == nil {
 		return ctx, func() {}, nil
 	}
-	ctx, release, err := e.node.AdmitTurn(ctx, handle)
+	ctx, release, err := e.node.AdmitTurn(ctx, handle, conversation)
 	switch {
 	case err == nil:
 		if refusal, refused := e.seatCannotRun(ctx, handle, route); refused {
@@ -3300,9 +3330,9 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: sandbox.Draining, Reason: err.Error()}}
-	case errors.Is(err, node.ErrSeatBusy):
+	case errors.Is(err, node.ErrSeatFull), errors.Is(err, node.ErrConversationBusy):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
-			Condition: waitSeatBusy, Reason: err.Error()}}
+			Condition: waitSeatTurns, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatNotOwned):
 		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
 		// does not find owned, for the same edges.
@@ -3312,6 +3342,31 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 	default:
 		return nil, nil, err
 	}
+}
+
+// seatRunCap is how many of handle's runs hold its seat at once, and how many
+// of its turns a node admits ([node.Config.SeatTurns], [sandbox.CoordinatorOptions.SeatCap]):
+// the seat's sandbox.max_concurrent_runs in the current epoch, the default for
+// a seat the epoch does not resolve (ADR-0169).
+func (e *Engine) seatRunCap(handle string) int {
+	var box *org.RoleSandbox
+	if role := e.seatRole(handle); role != nil {
+		box = role.Sandbox
+	}
+	return box.ConcurrentRuns()
+}
+
+// besideFloor is what handle's other runs holding its seat are counted to
+// spend before their collections charge it ([launchFloor.beside]): the static
+// floor for each run held besides turn's own, which a relaunch of it already
+// holds. The static floor, because a running run's spend so far is nowhere
+// until its collection, and its first request is at least that.
+func (e *Engine) besideFloor(c *Company, handle, turn string) int {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return 0
+	}
+	return rt.coordinator.HeldBeside(handle, turn) * staticFloor(c).static
 }
 
 // seatCannotRun reports whether the turn route resumes on handle's seat would
@@ -3525,8 +3580,8 @@ func resumeRefusal(err error) (sandbox.Refusal, bool) {
 // THE SCREENING'S OWN CONDITIONS, as a delivery reads them: a retry runs outside
 // any delivery and must not start a turn on a seat whose lease is stale, that a
 // person paused, that has no model, or whose node refuses new work. Budget and
-// model limit are the turn gate's ([Engine.seatCannotRun]); another executor
-// holding the seat is the coordinator's count ([sandbox.SeatCoding]).
+// model limit are the turn gate's ([Engine.seatCannotRun]); the seat's cap is
+// the coordinator's count ([sandbox.SeatFull], [sandbox.ConversationBusy]).
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
 // polling ([sandbox.Coordinator.Readmit]). Ownership is an event
@@ -4049,8 +4104,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	}
 }
 
-// SeatHeldBySandbox reports whether a detached executor HOLDS a seat, so it
-// starts no new turn until the run settles.
+// SeatHeldBySandbox reports whether detached executors hold every slot of a
+// seat's cap, so it starts no new turn until one settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
 // it internally through the dispatcher's conditions, but "is this seat busy on
