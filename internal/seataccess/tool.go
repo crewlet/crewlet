@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -55,8 +56,9 @@ func ToolServerOf(c *config.Company, lane Lane) string {
 // waiting where a per-seat server reads the lane's credential, or the lane's
 // tool is a CLI in the seat's box with engine-set credentials ([LaneSpec.BoxEnv],
 // [BoxDefaults]), waiting until sealed; server_off where every such server is
-// off; else builtin for Jira and Confluence and no_server for the rest. SSH is
-// builtin whatever the servers (`ssh_read`, `ssh_operate`).
+// off; else builtin for Jira and Confluence and no_server for the rest. SSH and
+// every growth lane are builtin whatever the servers: their tools are the
+// engine's (`ssh_read`, a growth product's catalog).
 //
 // A SERVER TURNED OFF READS NO CREDENTIAL ([config.MCPServer.IsEnabled]): a lane
 // whose only server is off is not live however well sealed; Jira and Confluence
@@ -65,7 +67,7 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff
 	}
-	if lane == LaneSSH {
+	if _, growthLane := growth.CatalogOf(string(lane)); lane == LaneSSH || growthLane {
 		return ToolBuiltin
 	}
 	var servers []*config.MCPServer

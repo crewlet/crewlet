@@ -131,6 +131,11 @@ const (
 	// company's servers with and ingests nothing.
 	KindSSH Kind = "ssh"
 
+	// KindGoogleAnalytics is Google Analytics 4: agents read and manage
+	// properties as their Google growth identity, through engine tools. It
+	// ingests nothing.
+	KindGoogleAnalytics Kind = "google_analytics"
+
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
 	// is where the account itself is created, which no site API can do. It
@@ -146,7 +151,7 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian, KindGoogleAnalytics,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -167,6 +172,9 @@ var ConvergeOrder = []Kind{
 	KindSlack, KindMattermost,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
 	KindScaleway, KindAWS, KindGoogleCloud, KindSSH,
+	// THE GOOGLE GROWTH PRODUCTS AFTER GOOGLE CLOUD, whose company pass makes
+	// the growth identities they sign in as (internal/googleauth).
+	KindGoogleAnalytics,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -244,10 +252,10 @@ func (k Kind) Ingress() Ingress {
 // then receives everything said in its team; Atlassian only CREATES accounts
 // (Jira and Confluence have their own webhook and parser). So "no parser turns
 // deliveries into work" warns about Mattermost and means nothing for Atlassian.
-// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud and SSH are
-// likewise: credentials there are minted, pasted or issued, and nothing they
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH and the
+// growth products are likewise: credentials there are minted, pasted or issued, and nothing they
 // send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindGoogleAnalytics
 }

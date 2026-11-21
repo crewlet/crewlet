@@ -1212,6 +1212,9 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return vendor.declaredAt(c) != ""
 	}
 	in := c.Integrations
+	if slices.Contains(growthBlockKeys(), surface) {
+		return in.growthBlock(surface) != nil
+	}
 	switch surface {
 	case "jira":
 		return in.Jira != nil

@@ -24,21 +24,22 @@ import (
 // Every block is a POINTER, and nil turns the integration off. An empty block
 // is not the same: `slack: {}` enables Slack with nothing overridden.
 type Integrations struct {
-	Jira         *Jira         `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
-	Confluence   *Confluence   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
-	Slack        *Slack        `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
-	Mattermost   *Mattermost   `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
-	GitHub       *GitHub       `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
-	GitLab       *GitLab       `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
-	Datadog      *Datadog      `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
-	Cloudflare   *Cloudflare   `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
-	Expo         *Expo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."`
-	DigitalOcean *DigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"DigitalOcean team the agents' tokens act in: a person creates each agent's personal access token and pastes it. Absent = disabled."`
-	Scaleway     *Scaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"Scaleway Organization and provisioner key, used to make one IAM application, policy and API key per agent. Absent = disabled."`
-	GoogleCloud  *GoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
-	Atlassian    *Atlassian    `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
-	AWS          *AWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
-	SSH          *SSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
+	Jira            *Jira            `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
+	Confluence      *Confluence      `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
+	Slack           *Slack           `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
+	Mattermost      *Mattermost      `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
+	GitHub          *GitHub          `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
+	GitLab          *GitLab          `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
+	Datadog         *Datadog         `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
+	Cloudflare      *Cloudflare      `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
+	Expo            *Expo            `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."`
+	DigitalOcean    *DigitalOcean    `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"DigitalOcean team the agents' tokens act in: a person creates each agent's personal access token and pastes it. Absent = disabled."`
+	Scaleway        *Scaleway        `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"Scaleway Organization and provisioner key, used to make one IAM application, policy and API key per agent. Absent = disabled."`
+	GoogleCloud     *GoogleCloud     `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"Google Cloud provisioner service account and federation key, used to create one service account per agent and grant it on the projects prepared for Crewlet. Absent = disabled."`
+	Atlassian       *Atlassian       `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
+	AWS             *AWS             `yaml:"aws,omitempty" json:"aws,omitempty" desc:"The Crewlet stack in an AWS account and the engine's certificate authority, used to create one IAM role per agent through IAM Roles Anywhere. Absent = disabled."`
+	GoogleAnalytics *GoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"Google Analytics 4: agents read and manage properties as their own Google growth identity, through the Google Cloud connection's identity. Absent = disabled."`
+	SSH             *SSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"The engine's SSH certificate authority and the servers agents may reach with short-lived certificates it signs. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -148,6 +149,9 @@ func (i *Integrations) validate(path Path) error {
 	}
 	if i.GoogleCloud != nil {
 		p.wrap(i.GoogleCloud.validate(at(path, "google_cloud")))
+	}
+	if i.GoogleAnalytics != nil {
+		p.wrap(i.GoogleAnalytics.validate(i, at(path, "google_analytics")))
 	}
 	if i.SSH != nil {
 		p.wrap(i.SSH.validate(at(path, "ssh")))

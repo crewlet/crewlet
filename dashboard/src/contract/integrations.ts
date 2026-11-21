@@ -214,6 +214,7 @@ export const INTEGRATION_TOOLS = {
   aws: ["aws"],
   google_cloud: ["google_cloud"],
   ssh: ["ssh"],
+  google_analytics: ["google_analytics"],
 } as const;
 
 /**

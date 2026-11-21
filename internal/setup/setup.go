@@ -121,11 +121,45 @@ const (
 	// so a toggle rendered as a choice would produce a patch the config
 	// surface rejects on every submission.
 	KindToggle Kind = "toggle"
+
+	// KindAddIdentity is a step a person takes at the vendor, never a value
+	// the document holds: adding an identity Crewlet made, by its email, at a
+	// role ([Requirement.Identity]). Nothing is submitted for it.
+	KindAddIdentity Kind = "add_identity"
 )
 
 // Kinds is every kind, in no significant order.
 var Kinds = []Kind{
-	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle,
+	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle, KindAddIdentity,
+}
+
+// IdentityStep is a [KindAddIdentity] requirement's step: the email a person
+// adds at the vendor, the role it needs, and where.
+type IdentityStep struct {
+	Email string `json:"email"`
+	// Role is the vendor's own role ID and its name.
+	Role IdentityRole `json:"role"`
+	// Where is the vendor's page for it, and the words of how to reach it.
+	Where IdentityWhere `json:"where"`
+	// Level is "company" for the company's own identity, "seat" for one
+	// seat's, which Seat then names.
+	Level string `json:"level"`
+	Seat  string `json:"seat,omitempty"`
+	// State is "present" where the engine saw the identity hold the role,
+	// "missing" where it saw it not, and "unknown" before it has looked.
+	State string `json:"state"`
+}
+
+// IdentityRole is a vendor role an identity is added at.
+type IdentityRole struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// IdentityWhere is where at the vendor a person adds an identity.
+type IdentityWhere struct {
+	URL   string `json:"url"`
+	Words string `json:"words"`
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -252,6 +286,10 @@ type Requirement struct {
 	// itself or a private key, which [Requirement.MarshalJSON] refuses to
 	// send. Nil where there is nothing to show.
 	Public *PublicView `json:"public,omitempty"`
+
+	// Identity is a [KindAddIdentity] requirement's step, nil for any other
+	// kind.
+	Identity *IdentityStep `json:"identity,omitempty"`
 
 	// Checkable reports that this credential can be checked at the vendor
 	// before it is stored, with a read-only call, so a form offers a Test

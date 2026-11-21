@@ -91,3 +91,34 @@ func (e *Engine) GoogleReaderToken(ctx context.Context, scopes []string, hc *htt
 	reader := googleauth.AccountEmail(googleauth.ReaderAccountID(company.Config.Name), conn.IdentityProject())
 	return conn.FederatedToken(ctx, reader, scopes...)
 }
+
+// missingAPIs is the finding a Google growth product reports for its APIs not
+// on in the identity project: a person runs the Cloud Shell block again,
+// which turns them on; the pass enables nothing itself.
+func missingAPIs(ctx context.Context, client *googlecloud.Client, kind integration.Kind) ([]integration.Finding, error) {
+	product, ok := googleauth.ProductOf(kind)
+	if !ok {
+		return nil, fmt.Errorf("engine: %s registers no Google product", kind)
+	}
+	enabled, err := client.EnabledServices(ctx, client.IdentityProject())
+	if err != nil {
+		return nil, fmt.Errorf("engine: read the APIs on %s: %w", client.IdentityProject(), googleauth.Reject(err))
+	}
+	var off []string
+	for _, api := range product.APIs {
+		if !enabled[api] {
+			off = append(off, api)
+		}
+	}
+	if len(off) == 0 {
+		return nil, nil
+	}
+	slices.Sort(off)
+	return []integration.Finding{{
+		Kind: integration.FindingApprovalRequired, Subject: "apis",
+		Title:     "Turn on " + product.Name + "'s APIs",
+		Detail:    "The identity project " + client.IdentityProject() + " does not have these on: " + fmt.Sprint(off),
+		Remedy:    "Run the Google Cloud connection's Cloud Shell block again; it turns them on",
+		ActionURL: googlecloud.CloudShellURL, Subjects: off,
+	}}, nil
+}

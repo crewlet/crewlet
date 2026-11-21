@@ -113,6 +113,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// AND THE SSH TOOLS, the same way: registered for every seat, offered
 	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
 	deps.SSH = SSHToolDeps(e)
+	// AND EVERY GROWTH PRODUCT'S TOOLS, built from its catalog, offered only
+	// to a seat whose lane level grants them (internal/growth).
+	deps.Growth = GrowthToolDeps(e)
 	// AND THE ATLAS TOOLS, on the same deps the operator catalogue builds
 	// per call: a seat reads the atlas within whoever woke its turn.
 	deps.Atlas = AtlasToolDeps(e)
