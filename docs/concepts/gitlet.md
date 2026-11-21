@@ -2167,10 +2167,11 @@ and on a node running seats too 1 980 MiB at the default `node.max_concurrent`
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
 ingress node mounts), so every Gitlet node keeps the transcript reads' pool,
-with seats or without: at 2 GiB a core that costs it one transfer. Every figure in
-this section but the table below is of the memory those pools leave. They are the executor's
-in-process pools alone: a node running seats also holds its harness calls and
-boxes ([Replica count](../guides/deployment.md#replica-count)).
+with seats or without; on a node without seats of 2 GiB of memory a core in
+all, that costs it one transfer. The lanes' and the budget's figures in this
+section, but the table below, are of the memory those pools leave. They are
+the executor's in-process pools alone: a node running seats also holds its
+harness calls and boxes ([Replica count](../guides/deployment.md#replica-count)).
 The rest is the budget of its background work. Every step (the bitmap, the
 index without one, a cold cache's included, the commit-graph, the tip, a
 connectivity check, a compaction's build, a publication's) is held to the budget
@@ -2236,9 +2237,10 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | 16 GiB, eight cores | yes | 1 980 | 28 | 6 302 | 1 830 |
 
 A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
-186 MiB more than its memory. It still boots and serves, as small and
-development installs run there, and logs `code_cache_memory_short` once at
-boot with the figures; give a node running seats beside Gitlet 4 GiB or more.
+186 MiB more than its memory. Small and development installs run there, so it
+still boots and serves, and logs `code_cache_memory_short` once at boot with the
+figures; at the default `node.max_concurrent`, give a node running seats beside
+Gitlet 4 GiB of memory or more in all.
 
 The budget does not bound the clones themselves, which take the node's git
 transfer slots, four a core and no more than one for each 512 MiB of the memory the
