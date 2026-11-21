@@ -66,8 +66,8 @@ type liveText struct {
 // among them, all shorter than the hold they are read at. Then texts a stream
 // decides early: a shape of each hold at 256 KiB, an armour beside a run, an
 // AWS secret's blanks or a Google token's dots in no layout that refuses there;
-// and at the stream's own hold, after 600 KiB of lines, every second layout the
-// package doc names, and of its neighbours, beside a run past the lag.
+// and at the stream's own hold, after 600 KiB of lines, each layout the package
+// doc names, and its neighbours, beside a run past the lag.
 func liveTexts(r *rand.Rand) (texts []liveText) {
 	add := func(name, text string, h int, canRefuse bool) {
 		texts = append(texts, liveText{name, text, h, canRefuse, false})
@@ -106,9 +106,6 @@ func liveTexts(r *rand.Rand) (texts []liveText) {
 	layouts, named := redact.RefusingLayouts(r)
 	lines := strings.Repeat("ok\n", 200<<10)
 	for i, l := range layouts {
-		if i%2 == 1 {
-			continue
-		}
 		texts = append(texts, liveText{l[0] + ", after 600 KiB of lines", lines + l[1], redact.HoldBytes(), named[i], true})
 	}
 	return texts
