@@ -261,11 +261,13 @@ func (c Catalog) Validate() error {
 	tools := map[string]bool{}
 	for _, t := range c.Tools {
 		// A READ TOOL MAY NAME NO OPERATION: it answers from the catalog alone.
-		if t.Name == "" || tools[t.Name] || !t.Class.Callable() ||
+		// Its name starts with its kind's, so each product keeps to its own
+		// names; Register and the authority refuse any that still collide.
+		if !strings.HasPrefix(t.Name, c.Kind+"_") || tools[t.Name] || !t.Class.Callable() ||
 			(len(t.Operations) == 0 && t.Class != ClassRead) ||
 			strings.TrimSpace(t.Description) == "" || t.Parameters == nil {
-			bad("growth: %s tool %q needs a unique name, a callable class, its operations, a description "+
-				"and its parameters", c.Kind, t.Name)
+			bad("growth: %s tool %q needs a unique name starting %s_, a callable class, its operations, a "+
+				"description and its parameters", c.Kind, t.Name, c.Kind)
 		}
 		tools[t.Name] = true
 		for _, id := range t.Operations {
@@ -319,8 +321,9 @@ var (
 	catalogs   = map[string]Catalog{}
 )
 
-// Register adds a product's catalog, from its package's init: an invalid or
-// second catalog for a kind is a build fault, and panics.
+// Register adds a product's catalog, from its package's init: an invalid
+// catalog, a second one for a kind, or a tool another catalog lists is a
+// build fault, and panics.
 func Register(c Catalog) {
 	if err := c.Validate(); err != nil {
 		panic(err)
@@ -329,6 +332,13 @@ func Register(c Catalog) {
 	defer catalogsMu.Unlock()
 	if _, dup := catalogs[c.Kind]; dup {
 		panic("growth: a second catalog for " + c.Kind)
+	}
+	for _, other := range catalogs {
+		for _, t := range c.Tools {
+			if _, listed := other.Tool(t.Name); listed {
+				panic("growth: " + c.Kind + " lists tool " + t.Name + ", which " + other.Kind + " lists")
+			}
+		}
 	}
 	catalogs[c.Kind] = c
 }

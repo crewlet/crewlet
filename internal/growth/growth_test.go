@@ -173,6 +173,8 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		"a tool off its op":    func(c *growth.Catalog) { c.Tools[3].Class = growth.ClassSpend },
 		"a never tool":         func(c *growth.Catalog) { c.Tools[0].Class = growth.ClassNever },
 		"a tool not described": func(c *growth.Catalog) { c.Tools[1].Description = "" },
+		"a tool off its kind":  func(c *growth.Catalog) { c.Tools[1].Name = "other_ads_pause" },
+		"a tool of no name":    func(c *growth.Catalog) { c.Tools[1].Name = "test_ads" },
 		"a role without note":  func(c *growth.Catalog) { c.Roles[0].Note = "" },
 		"a rule lowering up":   func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = growth.ClassAdmin },
 		"a state with no name": func(c *growth.Catalog) {
@@ -189,6 +191,33 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 			t.Errorf("%s: the catalog validated", name)
 		}
 	}
+}
+
+// A TOOL NAME IS ONE PRODUCT'S: a catalog listing a tool another already
+// lists is refused at registration, though each name starts with its own
+// kind's, since one kind may begin another's.
+//
+// Mutation: drop Register's walk over the other catalogs, and the second
+// registers.
+func TestACatalogListingAnothersToolIsRefused(t *testing.T) {
+	t.Parallel()
+	object := map[string]any{"type": "object"}
+	catalog := func(kind string) growth.Catalog {
+		return growth.Catalog{Kind: kind, API: "Shared API", Version: "v1",
+			Operations: []growth.Operation{{ID: "list", Method: "GET", Path: "/list", Class: growth.ClassRead}},
+			Tools: []growth.Tool{{Name: "shared_ads_list", Class: growth.ClassRead, Operations: []string{"list"},
+				Description: "List.", Parameters: object}}}
+	}
+	growth.Register(catalog("shared"))
+	defer func() {
+		if recover() == nil {
+			t.Error("a second catalog listing shared_ads_list registered")
+		}
+		if _, ok := growth.CatalogOf("shared_ads"); ok {
+			t.Error("the refused catalog is registered")
+		}
+	}()
+	growth.Register(catalog("shared_ads"))
 }
 
 // An operation naming roles is permitted to an identity holding one of them,
