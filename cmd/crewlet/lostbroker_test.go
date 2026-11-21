@@ -23,14 +23,13 @@ import (
 //
 // `crewlet run` as a supervisor sees it: a real process pointed at an operator's
 // NATS server that then refuses it (credentials rotated), so the client closes
-// the connection for good, and the lease connection with it. On an external
-// broker the coordination store reads over the queue's own. The process used
+// the connection for good, and the lease connection with it. The process used
 // to stay up with nothing to do. It must stop by a signal's shutdown (drain,
 // then teardown) and EXIT NON-ZERO through main, naming the cause and the
 // setting to change. In a CHILD, as the drain probe: main exits the process.
 // Mutation: wait on the signal context alone in runEngine and it never exits;
 // return nil after the shutdown and the status is the probe's own; skip the
-// shutdown, the order row is red. Which drain line is said is
+// shutdown, the order row is red. The drain line's choice is
 // TestTheDrainLineSaysWhatTheLostConnectionDecides's.
 func TestANodeWhoseBrokerConnectionIsClosedForGoodExitsNamingIt(t *testing.T) {
 	// Not parallel, for the drain probe's reason: a whole node in a second
