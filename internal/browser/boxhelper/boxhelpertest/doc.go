@@ -1,11 +1,19 @@
-// Package boxhelpertest hands a case of the box helper the Nodes it runs
-// under, each with its own npm: the machine's node and npm ([Node], [NPM]), at
-// or above boxhelper.MinNodeMajor and MinNPMMajor, and the floor's pinned
-// build with the npm it bundles ([Floor], [FloorNPM]), of those majors
-// exactly, so what a case asserts holds on the oldest Node and npm a box may
-// carry as well as on current ones (boxhelper's package doc says why the floor
-// is pinned). And the Playwright tree the suite installs from the committed
-// lock ([Tree]).
+// Package boxhelpertest stands a seat's box up on disk for a case of the box
+// helper: the helper written into it as the engine writes it, beside the bin
+// directory, npm cache and npm settings of the box's own ([Start]); the
+// helper's modules driven under the box's Node through the probe beside
+// boxhelper's tests ([Box.Probe]); a stand-in registry ([Registry]) and a
+// stand-in npm ([Box.StandInNPM]) for what a box's npm meets; and the
+// Playwright tree the suite installs from the committed lock ([Tree]). A case
+// runs on each Node a box may bring, each with its own npm ([EachNode]): the
+// machine's node and npm ([Node], [NPM]), at or above boxhelper.MinNodeMajor
+// and MinNPMMajor, and the floor's pinned build with the npm it bundles
+// ([Floor], [FloorNPM]), of those majors exactly, so what a case asserts
+// holds on the oldest Node and npm a box may carry as well as on current
+// ones (boxhelper's package doc says why the floor is pinned).
+//
+// Test support (the name ends in `test`), so internal/fixedwait reads it as
+// test code: it holds no fixed wait, and every bound in it is a context's.
 //
 // # Where each comes from
 //
@@ -16,8 +24,9 @@
 // fetches the floor's build (`make node`, the one recipe scripts/node.sh),
 // which keeps the npm its release bundles beside its node, and names it in
 // CREWLET_TEST_NODE_FLOOR, under the same rule. The floor's npm is its
-// npm-cli.js, run with the floor's node, never through a bin/npm, whose `env
-// node` would run whichever node is on PATH.
+// npm-cli.js, which a case runs with the floor's node, or links as a box's
+// bin/npm, whose `env node` then runs the box's own node, since the box's
+// PATH is its bin alone.
 //
 // Each is held by what it answers to --version: the machine's at or above the
 // floor, the floor's of its major exactly, since a newer one in the floor's
@@ -40,6 +49,45 @@
 // another lock's, a variable left from before a bump, and fails naming the
 // recipe.
 //
-// Test support (the name ends in `test`), so internal/fixedwait reads it as
-// test code: it holds no fixed wait, and every bound in it is a context's.
+// # A box on disk
+//
+// A box's home is a short directory of its own in the temporary directory
+// (os.MkdirTemp, named cb and digits), never a t.TempDir: one named after a
+// long test would put a socket in the box past the 104 bytes macOS bounds a
+// socket's path at. Its helper is written by boxhelper.Write, so the suite
+// writes exactly what the engine writes, through a writer that replaces each
+// file whole by a rename, as a box's own upload service does, and leaves the
+// loose modes such a service may (0644 files, 0755 directories), so a case
+// sees the helper hold them to its own. config.json is then the engine's with
+// the case's keys merged over it ([Options]): a bound shortened where a case's
+// subject is that bound. A case's end removes the home.
+//
+// Its bin directory holds links to the case's node and npm, and its PATH is
+// that directory alone, so the box's npm runs under the box's node and no case
+// finds the machine's own programs however the machine's PATH reads. Its
+// ~/.npm is a copy of the suite tree's npm cache, unless the case wants it
+// empty, and its environment ([Box.Environ]) points npm at a registry on a
+// port nothing listens on, so every box installs for real and offline, a miss
+// failing in about 2.4 s, and names an empty global npmrc of the box's own, so
+// the machine's never reaches it; a case's variables come after and win. A
+// case that wants a registry starts a stand-in on 127.0.0.1, which serves the
+// lock's tarballs from the suite tree's cache by integrity, or answers 404 or
+// 500, a corrupt tarball, nothing at all, or half a tarball, waiting on the
+// request's end and never on the time, and records every request. A stand-in
+// npm is an sh script that records each command line it is run with,
+// answers --version as the case says, and otherwise runs what the case gives
+// it, with the box's own npm at hand.
+//
+// # What a dead test binary leaves
+//
+// A home outlives a test binary that dies before its cases' cleanup runs,
+// killed at go test's -timeout or for memory, so each binary's first box
+// sweeps the homes of every binary that is gone. A home names the binary that
+// made it in a file of its own, owner: the binary's pid and start time
+// (procgroup.Identify). A home is removed once the kernel no longer reports
+// that pid, reports it with another start time (the pid handed out again), or
+// reports it exited; one it cannot judge (no owner file, one it cannot read)
+// is left alone. The pid is never judged as a process group's leader, as
+// procgroup.Leader.Current would: a test binary leads no group, so a live one
+// would read as gone.
 package boxhelpertest

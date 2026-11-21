@@ -828,8 +828,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # embeds — the notes plugin (opencode_steer_test.go), run under node against a
 # stand-in of the bridge's notes route and a real bridge's, and the skill-load
 # plugin (opencode_skills_test.go), against a stand-in of its skill route — and
-# internal/browser/boxhelper, which installs the Playwright tree with the
-# machine's npm under its node. Without node those cases fail under REQUIRED
+# internal/browser/boxhelper, which runs the box helper under this node and the
+# floor's, each box installing the Playwright tree with that Node's own npm,
+# offline. Without node those cases fail under REQUIRED
 # (internal/prereqtest's one rule), once the whole half has run; the
 # prerequisite says it before anything runs. ci.yml's `test (race)` installs
 # node for the same reason. (internal/e2e's dashboard replay is node's other
@@ -979,8 +980,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
 	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds, and internal/browser/boxhelper installs a box's"; \
-	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
+	  echo "  engine embeds, and internal/browser/boxhelper runs the box"; \
+	  echo "  helper's modules under node, each box installing its Playwright"; \
+	  echo "  tree with that node's npm. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
 	  echo "  suite has run, so this says so first."; \

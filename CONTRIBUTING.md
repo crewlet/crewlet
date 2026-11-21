@@ -514,9 +514,14 @@ The prerequisites that legitimately vary by machine:
   requires node and CI's race shards install it; the probes find node by the
   same rule as the replay. The plugins import nothing, so no npm.
 
-  `node` also runs the npm with which `internal/browser/boxhelper`'s
-  `TestTheLockInstallsWithEachNodesOwnNpm` installs the Playwright tree from
-  the suite's npm cache: the machine's npm, and the floor Node's own under it.
+  `node` also runs the **box helper** the engine writes into a seat's box
+  (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
+  on disk as the engine writes one and drives the helper's modules from it,
+  through `boxhelper_probe.mjs` beside its tests, under your node and the
+  floor's (*The floor Node*, above), and each box installs the Playwright tree
+  with that Node's own npm, offline, from the suite tree's npm cache or a
+  stand-in registry on 127.0.0.1, as `TestTheLockInstallsWithEachNodesOwnNpm`
+  installs it with each.
 
 - **`npm`** builds and tests the dashboard. Vitest runs its assertions (the
   wire protocol, the router's history rules, the ordering comparators, the
@@ -669,7 +674,7 @@ The prerequisites that legitimately vary by machine:
   `build` job. The last must always answer this the same way as `dashboard
   gates`, because it rebuilds the bundle that job diffs. The two sets of Go
   shards need not match: what they run under plain node is a committed file
-  (the plugin, the built bundle), not a fresh build.
+  (a plugin, the box helper's modules, the built bundle), not a fresh build.
 
   **Nothing in this repository names the node you install**, by decision:
   nothing would maintain a pin. Dependabot moves the versions in
@@ -768,7 +773,9 @@ modules in `dashboard/src`, `internal/e2e`'s client replay is
 OpenCode plugins' probes are
 `internal/sandbox/executor/opencode_steer_probe.mjs` and
 `opencode_skills_probe.mjs` beside the `opencode_steer_test.go` and
-`opencode_skills_test.go` that run them. There is no top-level `tests/` tree.
+`opencode_skills_test.go` that run them, and the box helper's probe is
+`internal/browser/boxhelper/boxhelper_probe.mjs`, beside the tests that drive
+it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
@@ -1221,7 +1228,8 @@ request and decides whether it lands. Eleven things to know:
 - **A Playwright MCP bump waits for a person.** The tree a seat's box installs
   (`internal/browser/boxhelper/tree/`) has an npm entry and no group; its pull
   request never merges itself, and stays red until `internal/browser`'s release
-  constants name what it moved: see [A Playwright MCP bump is read before it
+  constants and `tree/installed.sha256` name what it moved: see [A Playwright
+  MCP bump is read before it
   lands](#a-playwright-mcp-bump-is-read-before-it-lands).
 - **A Compose image can be held back on purpose**, with the reason in a comment
   beside the pin: `mattermost-db` holds its Postgres major because an existing
@@ -1450,8 +1458,9 @@ The Playwright MCP a seat's box installs is a manifest and a lock in
 [`internal/browser/boxhelper/tree/`](internal/browser/boxhelper/tree), which npm
 in the box installs with `npm ci`, and Dependabot proposes each release of it.
 Its pull request stays red: `internal/browser`'s release constants name the
-release somebody read, and boxhelper's tests hold the lock to them (boxhelper's
-package doc says why). Nor does it merge itself: `dependabot-merge.yml` neither
+release somebody read, and boxhelper's tests hold the lock to them and the
+files it installs to `tree/installed.sha256` (boxhelper's package doc says
+why). Nor does it merge itself: `dependabot-merge.yml` neither
 approves nor queues a pull request that changes only this directory (see [A
 bump merges itself](#a-bump-merges-itself)). Land the bump from a branch of
 your own, not Dependabot's, which stops rebasing once it holds a commit of
@@ -1473,6 +1482,11 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    `$tree/node_modules/playwright-core/browsers.json`;
    `TestTheLockIsTheReleaseSomebodyRead` and
    `TestTheLockedCoreExpectsTheChromiumSomebodyRead` name what they found.
+   Write the digest of the files the new lock installs, which every box holds
+   its install to, into `internal/browser/boxhelper/tree/installed.sha256`:
+   `CREWLET_TEST_PLAYWRIGHT_TREE="$tree" go test -run
+   TestTheInstalledDigestNamesTheFilesTheLockInstalls
+   ./internal/browser/boxhelper/` names it.
 4. `make check`, and title the pull request `build(deps): bump playwright mcp
    from <a> to <b>`. Dependabot closes its own once `main` carries the release.
 
