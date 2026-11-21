@@ -2116,7 +2116,7 @@ The company's sign-in policy is the **company's**, the same on every node and ch
 delegated_decisions:
   enabled: true                          # off (the default) puts every request to people
   rules:
-    - kinds: [ssh_operate]               # what the rule delegates; other is never delegated
+    - kinds: [ssh_operate]               # what the rule delegates; growth acts and other are never delegated
       delegates: [security-engineer]     # one agent seat, or two on different first llm entries
       escalate_to: [ops-lead]            # at least one person, beside administrators
       sample_one_in: 10                  # optional: one decision in N is spot-checked (1..1000)
