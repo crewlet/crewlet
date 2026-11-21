@@ -16,7 +16,7 @@ import type {
   GrowthRoleOffer,
 } from "~/contract/growth.ts";
 import type { IntegrationRow } from "~/contract/integrations.ts";
-import { SPEND_PRODUCTS } from "~/routes/growth/words.ts";
+import { SPEND_PRODUCTS } from "./words.ts";
 import { GrowthConnections } from "./GrowthConnections.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { GrowthRoles } from "./GrowthRoles.tsx";

@@ -1,13 +1,18 @@
 /**
- * The growth screens' shared words: a product's name, and what its vendor
- * does with a daily budget that the spending caps cannot promise.
+ * The growth products' shared words: a product's name, and what its vendor
+ * does with a daily budget that the spending caps cannot promise. They live
+ * outside `routes/` so the decision card and the caps reach them without a
+ * screen's module, and the integrations catalogue names each product here.
  */
 
-import { CATALOG } from "~/routes/settings/integrations/catalogue.tsx";
+/** Each growth product's name, which its catalogue tile shows too. */
+const NAMES: Readonly<Record<string, string>> = {
+  app_store_connect: "App Store Connect",
+};
 
-/** A growth product's name as its catalogue tile says it, or its kind as written for one the catalogue does not list. */
+/** A growth product's name, or its kind as written for one not named here. */
 export function growthProductName(kind: string): string {
-  return CATALOG.find((entry) => entry.key === kind)?.name ?? kind;
+  return NAMES[kind] ?? kind;
 }
 
 /**

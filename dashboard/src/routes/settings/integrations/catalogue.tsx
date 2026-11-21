@@ -83,6 +83,7 @@ import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/ty
 import { integrationDocHref } from "./docs.ts";
 import { Clocked } from "./Clocked.tsx";
 import { useStableValue } from "~/lib/useStableValue.ts";
+import { growthProductName } from "~/components/growth/words.ts";
 import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -266,7 +267,7 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "app_store_connect",
-    name: "App Store Connect",
+    name: growthProductName("app_store_connect"),
     description: "Apps, listings, reviews and replies, TestFlight, prices, sales and analytics.",
     vendor: "app-store-connect",
     surfaces: surfacesOf("app_store_connect"),

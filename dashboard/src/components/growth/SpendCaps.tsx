@@ -49,7 +49,7 @@ function nameOf(account: CapAccount, among: readonly CapAccount[]): string {
 }
 import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { growthProductName, spendCapsNote } from "~/routes/growth/words.ts";
+import { growthProductName, spendCapsNote } from "./words.ts";
 
 const REREAD = "Reload to see the caps as they are now.";
 

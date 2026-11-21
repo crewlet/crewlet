@@ -27,7 +27,7 @@ import type {
   GrowthCardChange,
   GrowthCardMoney,
 } from "~/contract/growth.ts";
-import { growthProductName, spendCapsNote } from "~/routes/growth/words.ts";
+import { growthProductName, spendCapsNote } from "./words.ts";
 import "~/styles/growth.css";
 
 export interface GrowthDecisionCardProps {

@@ -18,7 +18,7 @@
  */
 
 import { GrowthProductSection } from "~/components/growth/GrowthProduct.tsx";
-import { GROWTH_PRODUCTS } from "~/routes/growth/words.ts";
+import { GROWTH_PRODUCTS } from "~/components/growth/words.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
