@@ -210,6 +210,12 @@ type Config struct {
 	// refuses every such call, as every other phase's does.
 	Hold tools.Holder
 
+	// Runs is what the executor's run sees the runs in flight around it with
+	// (ADR-0176): the read its launch's brief lists, and the tools on its
+	// surface (`list_runs`, `message_run`, `wait_for_run`), offered to the run
+	// where that read found any. Nil reads and offers none.
+	Runs RunsAround
+
 	// Steer is where the turn's notes from a person wait (internal/agent/steer):
 	// taken at the opening of every run of the REVIEWER and by the brief of every
 	// launch of the executor. Never a worker's (a leaf its parent directs), the
@@ -262,6 +268,16 @@ type SteerSource interface {
 type RunAsk interface {
 	tools.Callable
 	Gate(submit tools.Callable) tools.Callable
+}
+
+// RunsAround is the runs in flight around an executor's run and the tools it
+// sees them with ([Config.Runs]). Declared here, by the consumer.
+type RunsAround interface {
+	// Around is every other run in flight around turnID's run.
+	Around(ctx context.Context, turnID string) ([]prompts.RunAround, error)
+
+	// Tools is the tools the run is offered while Around finds any.
+	Tools() []tools.Callable
 }
 
 // Telling is one late call of the round a job's session is known to hold
@@ -1697,6 +1713,22 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 			return nil, fmt.Errorf("runner: %s: %w", ph, err)
 		}
 		active = append(active, r.cfg.Ask.Name())
+	}
+	// AND THE TOOLS FOR THE RUNS AROUND IT, on every executor surface's
+	// snapshot so a rebuilt one holds what its run called; ACTIVE only where the
+	// launch found runs around it ([Runner.runsAround]), which the run's state
+	// keeps for every rebuild.
+	if ph == phase.Execute && r.cfg.Runs != nil {
+		for _, tool := range r.cfg.Runs.Tools() {
+			if _, held := snapshot.Lookup(tool.Name()); held {
+				continue
+			}
+			var err error
+			snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+			if err != nil {
+				return nil, fmt.Errorf("runner: %s: %w", ph, err)
+			}
+		}
 	}
 	// AND ITS CHECKOUT, in the same funnel: a collection's rebuilt surface holds
 	// the tool its run called.

@@ -36,3 +36,6 @@ This amends ADR-0065's statement, carried in `.claude/rules/architecture.md`, th
 
 **Why not the obvious ways to keep the mail.** A deferral costs a delivery and returns at the head, so the busy message is the head again on the next fetch: the whole inbox blocked and the budget spent in minutes. A Nak or a pass returns it behind waiting mail spaced up to thirty seconds, about ten minutes to a dead letter, against a run of hours. A republish lands at the tail, resets the count and loops while the inbox flows. A side store (the coordination store, a list on the run's row) needs a second road into a turn with no delivery behind it, and a hand-back racing the run's leaving. The broker already keeps an unacknowledged message durably; setting it aside in flight keeps it there.
 
+## Amendment: a seat's runs see and message each other
+
+A run launched beside the seat's other runs is told of them and may message one of the same requester or wait for one to leave its slot ([ADR-0176](0176-a-seats-runs-see-and-message-each-other.md)). A run parked so keeps its keys and no slot: its mail waits aside behind it until it resumes or ends.

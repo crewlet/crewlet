@@ -52,6 +52,13 @@ type SealedWake struct {
 	// At is when the store filed it, on the clock of the node that did.
 	At time.Time `json:"at"`
 
+	// From is the turn id of the run that sent it with `message_run`, "" for a
+	// wake from the seat's inbox: IN THE CLEAR, so the store holds the job to
+	// [MaxJobRunMessages] and a reader opens it in the run messages' own seal
+	// domain, whose body names the same run, so no writer of the store can
+	// say a wake is a run's message nor a run's message a wake (ADR-0176).
+	From string `json:"from,omitempty"`
+
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -134,19 +141,27 @@ func (s *CoordStore) FileWake(ctx context.Context, turnID string, filing WakeFil
 	case filing.Launch == "" || !validWakeID(wake.ID) || len(wake.Sealed) == 0:
 		return RunNote{}, fmt.Errorf("sandbox: a wake for run %s names its job, its seal, and an id of 1 to %d "+
 			"bytes of the id charset", turnID, MaxWakeIDBytes)
+	case wake.From != "" && !validWakeID(wake.From):
+		return RunNote{}, fmt.Errorf("sandbox: wake %s for run %s names a sending run outside the id charset",
+			wake.ID, turnID)
 	case len(wake.Sealed) > MaxWakeItemBytes:
 		return RunNote{}, fmt.Errorf("sandbox: wake %s for run %s is sealed in %d bytes, past the %d a wake item "+
 			"holds: %w", wake.ID, turnID, len(wake.Sealed), MaxWakeItemBytes, ErrWakeTooLarge)
 	}
 	wake.At = s.clock()
 	var (
-		item          RunNote
-		closed, spent bool
+		item                  RunNote
+		closed, spent, others bool
 	)
 	_, won, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
-		item, closed, spent = RunNote{}, false, false
+		item, closed, spent, others = RunNote{}, false, false, false
 		if run.LaunchID != filing.Launch || !slices.Contains(ItemStatuses, run.Status) {
 			closed = true
+			return false
+		}
+		if wake.From != "" && runMessagesIn(run.Steer.Notes, filing.Launch) >= MaxJobRunMessages &&
+			!slices.ContainsFunc(run.Steer.Notes, func(n RunNote) bool { return n.holdsWake(wake.ID) }) {
+			others = true
 			return false
 		}
 		notes := slices.Clone(run.Steer.Notes)
@@ -199,17 +214,30 @@ func (s *CoordStore) FileWake(ctx context.Context, turnID string, filing WakeFil
 	case spent:
 		return RunNote{}, fmt.Errorf("sandbox: wake %s for run %s's job %s: %w", wake.ID, turnID,
 			filing.Launch, ErrWakesSpent)
+	case others:
+		return RunNote{}, fmt.Errorf("sandbox: message %s for run %s's job %s, which holds %d from other runs: %w",
+			wake.ID, turnID, filing.Launch, MaxJobRunMessages, ErrRunMessagesSpent)
 	}
 	return item, nil
 }
 
+// holdsWake reports whether n is a wake item holding the wake named id.
+func (n RunNote) holdsWake(id string) bool {
+	return n.IsWake() && slices.ContainsFunc(n.Wake.Wakes, func(w SealedWake) bool { return w.ID == id })
+}
+
 // joinable reports whether wake may join item, its job's newest wake item: one
 // waiting that nothing served, no hook and no poll, with room under
-// [MaxItemWakes] and [MaxWakeItemBytes]. A wake joining an item once served
+// [MaxItemWakes] and [MaxWakeItemBytes], neither of them another run's message. A wake joining an item once served
 // would reach no harness: a hook serves an item once, and a poll's harness has
 // admitted it as it was.
 func joinable(item RunNote, wake SealedWake) bool {
 	if !item.Waiting() || item.Served != "" || len(item.Serves) > 0 || len(item.Wake.Wakes) >= MaxItemWakes {
+		return false
+	}
+	// ANOTHER RUN'S MESSAGE IS AN ITEM OF ITS OWN, so it is handed over whole,
+	// never left out of an item's answer for length (ADR-0176).
+	if wake.From != "" || slices.ContainsFunc(item.Wake.Wakes, func(w SealedWake) bool { return w.From != "" }) {
 		return false
 	}
 	size := len(wake.Sealed)
