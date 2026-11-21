@@ -1,8 +1,6 @@
 package engine_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -11,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // pointerLinkRate is the pace the cases hold a leaf's link to, each way: 160
@@ -20,32 +17,9 @@ import (
 // a read's flat 5 s, far inside what it is given at the slowest pace.
 const pointerLinkRate = 160 << 10
 
-// bodyRoom is how far short of what one key holds a case's sealed body is: a
+// bodyRoom is how far short of what one key holds a case's body is: a
 // kibibyte, so the body is at its bound and never past it.
 const bodyRoom = 1 << 10
-
-// sealedAtTheBound is document sealed under cipher, padded with trailing
-// whitespace inside the seal so that the sealed body is within [bodyRoom] of
-// what one key of the coordination store holds. The padding is sealed, so the
-// bytes on the link are ciphertext no link compresses.
-func sealedAtTheBound(t *testing.T, cipher secrets.Cipher, document json.RawMessage) json.RawMessage {
-	t.Helper()
-	pad := 0
-	for range 8 {
-		padded := append(bytes.Clone(document), bytes.Repeat([]byte(" "), pad)...)
-		sealed, err := secrets.Seal(cipher, padded)
-		if err != nil {
-			t.Fatalf("seal: %v", err)
-		}
-		short := coord.MaxValueBytes - bodyRoom - len(sealed)
-		if short >= 0 && short < bodyRoom {
-			return sealed
-		}
-		pad = max(pad+short*3/4, 0)
-	}
-	t.Fatalf("no padding of the document seals within %d bytes of %d", bodyRoom, coord.MaxValueBytes)
-	return nil
-}
 
 // A RECONCILER ACROSS A SLOW LINK APPLIES A REVISION AT ITS BOUND. A node
 // without `data` reads the pointer and the body across its leaf link: the
@@ -60,7 +34,7 @@ func TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound(t *testing.T) {
 	across := kvtest.SlowLeaf(t, pointerLinkRate)
 	e := newEngine(t, engine.Options{})
 	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Fleet = across.Leaf })
-	body := sealedAtTheBound(t, e.Cipher(), yamlToJSON(t, grownCompanyDoc))
+	body := kvtest.SealedAtTheBound(t, e.Cipher(), yamlToJSON(t, grownCompanyDoc), bodyRoom)
 	published, err := across.Member.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: uuid.NewString(), Summary: "a company at its bound", Payload: body,
 		At: pinnedNow, Origin: anOrigin})

@@ -108,10 +108,12 @@ func TestAPointerReadAcrossALeafsLinkCarriesNoBody(t *testing.T) {
 	}
 }
 
-// A BODY AT ITS BOUND IS READ ACROSS A LEAF'S LINK, WITH NO DEADLINE OF ITS
-// CALLER'S: its read is given the arrival of the size the pointer records, so
-// its reply of eight mebibytes, fifty-one seconds here, is waited for whole.
-// Read at the flat read term, it was cut at five seconds every time.
+// A BODY AT ITS BOUND IS READ ACROSS A LEAF'S LINK AT ITS FIRST ASK: its read
+// is given the arrival of the size the pointer records, so its reply of eight
+// mebibytes, fifty-one seconds here, is waited for whole. The caller allows
+// that one ask's term and no more, so a read that had to ask again fails
+// rather than hangs. Read at the flat read term, it was cut at five seconds
+// every time.
 //
 // Mutation: read the body at the read term, or at the pointer's size, and it
 // is cut before its reply arrives.
@@ -123,7 +125,10 @@ func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the pointer read across the leaf's link: found=%v err=%v", found, err)
 	}
-	body, found, err := leaf.Body(context.Background(), target)
+	firstAsk := jsprovision.ReadTerm + jsapi.Arrival(target.Body.Bytes+kvHeaderBytes, AcrossLink.pace())
+	ctx, cancel := context.WithTimeout(t.Context(), firstAsk)
+	defer cancel()
+	body, found, err := leaf.Body(ctx, target)
 	if err != nil || !found {
 		t.Fatalf("the body of %d bytes read across the leaf's link: found=%v err=%v",
 			target.Body.Bytes, found, err)

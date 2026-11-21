@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // bootLinkRate is the pace the case holds a leaf's link to, each way: 160 KiB
@@ -30,7 +28,7 @@ func TestABootAcrossASlowLinkReadsTheActivationPointer(t *testing.T) {
 	across := kvtest.SlowLeaf(t, bootLinkRate)
 	peer, err := across.Member.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "peer-revision", Summary: "from a peer", At: time.Now(),
-		Payload: sealedAtTheBound(t, []byte(`{"name":"Peer"}`)),
+		Payload: kvtest.SealedAtTheBound(t, fixtureCipher, []byte(`{"name":"Peer"}`), 1<<10),
 		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorOperator,
 			Source: "api", CreatedAt: time.Now()},
 	})
@@ -42,27 +40,4 @@ func TestABootAcrossASlowLinkReadsTheActivationPointer(t *testing.T) {
 		t.Fatalf("a boot across the leaf's link: %v", err)
 	}
 	assertFleetOn(t, across.Leaf, peer)
-}
-
-// sealedAtTheBound is document sealed under the fixture keyring, padded with
-// trailing whitespace inside the seal so that the sealed body is within a
-// kibibyte of what one key of the coordination store holds: ciphertext, which
-// no link compresses.
-func sealedAtTheBound(t *testing.T, document []byte) []byte {
-	t.Helper()
-	const room = 1 << 10
-	pad := 0
-	for range 8 {
-		sealed, err := secrets.Seal(fixtureCipher, append(bytes.Clone(document), bytes.Repeat([]byte(" "), pad)...))
-		if err != nil {
-			t.Fatalf("seal: %v", err)
-		}
-		short := coord.MaxValueBytes - room - len(sealed)
-		if short >= 0 && short < room {
-			return sealed
-		}
-		pad = max(pad+short*3/4, 0)
-	}
-	t.Fatalf("no padding of the document seals within %d bytes of %d", room, coord.MaxValueBytes)
-	return nil
 }
