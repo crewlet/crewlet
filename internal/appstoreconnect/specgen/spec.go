@@ -230,11 +230,9 @@ func (s *spec) listable(t string) bool {
 	return false
 }
 
-// owned is every resource type that belongs to exactly one app: one with a
-// to-one relationship to an app or to an owned container, or one an owned
-// parent reads below it that the team cannot list and that names no list of
-// such parents back. A type reached only many-to-many, or listed team-wide
-// (Apple's reference data, the team's own resources), is not.
+// owned is every resource type that belongs to exactly one app
+// (appstoreconnect's package doc, "Scope"): never one reached many-to-many or
+// listed team-wide.
 func (s *spec) owned() map[string]bool {
 	rels, lists := s.relations(), s.lists()
 	owned := map[string]bool{}

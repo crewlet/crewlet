@@ -64,10 +64,8 @@ func (p *Product) generic(ctx context.Context, call growth.Call) (any, error) {
 		Document: string(body), NextCursor: nextOf(body)}, nil
 }
 
-// cut is an answer as the seat may read it (package doc, "Scope"): apps
-// outside its apps removed, and, for a seat whose apps do not cover the team,
-// a read not rooted at its app that holds an owned resource refused. Only an
-// answer rooted at the seat's app through owned hops fills the cache.
+// cut is an answer as the seat may read it, and fills the cache only from an
+// answer rooted at the seat's app (package doc, "Scope").
 func (p *Product) cut(ctx context.Context, handle string, m made, body []byte) ([]byte, error) {
 	seat, err := p.seat(handle)
 	if err != nil {

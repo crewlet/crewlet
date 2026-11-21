@@ -157,9 +157,8 @@ type placer struct {
 }
 
 // appOf is the app owned resource typ/id is in, [teamOwned] for one in no
-// app, or an error: [errElsewhere] where the team does not hold it. It reads
-// up the resource's to-one links where Apple's document gives one, and else
-// searches down from each of apps through owned types alone.
+// app, or [errElsewhere]: read up its to-one links where Apple's document has
+// one, else searched down from apps through owned types alone.
 func (pl placer) appOf(ctx context.Context, typ, id string, apps []string) (string, error) {
 	var walked []resourceRef
 	found := func(app string) (string, error) {
@@ -341,12 +340,6 @@ func (p *Product) placeOwned(ctx context.Context, seat *config.RoleAppStoreConne
 		"as far as the engine can find: read it through its app's list first. No call was made.", typ, id,
 		words.And(seat.Apps)))
 }
-
-// The answer's cut: an apps resource outside the seat's apps is removed from
-// every answer, and a seat whose apps do not cover its team never reads an
-// owned resource through a request not rooted at its own app: such a read is
-// refused whole, since placing each resource it holds would read Apple once
-// per resource (package doc, "Scope").
 
 // cutApps removes from an answer every apps resource, and every link to one,
 // outside allowed.

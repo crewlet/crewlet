@@ -35,10 +35,9 @@ func recordOf(call growth.Call, m made) growth.Record {
 	return r
 }
 
-// recordChanges are card changes as the access log keeps them, so the log
-// accepts every record: a published word, free text and any value the log
-// refuses in the clear go as their digest and length; a field the log may not
-// name, or one past its bound, is left out and counted in a change of its own.
+// recordChanges are card changes as the access log accepts them: published
+// words, free text and values it refuses in the clear go as digests; a field
+// it may not name, or one past its bound, is left out and counted.
 func recordChanges(ch []growth.CardChange, public bool) []growth.RecordChange {
 	out := make([]growth.RecordChange, 0, len(ch))
 	left := 0
