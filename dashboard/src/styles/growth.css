@@ -227,3 +227,63 @@
 .growth-account__fact {
   white-space: nowrap;
 }
+
+/* Recent agent changes: one entry a step, the target first and when it happened at the end of its line. */
+.growth-changes {
+  display: grid;
+  gap: var(--spacing-3);
+  justify-items: start;
+}
+
+.growth-changes__list {
+  display: grid;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One column that may shrink below its content: a vendor ID has no space to wrap at. */
+.growth-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) 0;
+  min-width: 0;
+}
+
+.growth-change + .growth-change {
+  border-top: 1px solid var(--color-border-default);
+}
+
+.growth-change__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 var(--spacing-3);
+}
+
+.growth-change__what {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.growth-change__step {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.growth-change__when,
+.growth-change__where {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.growth-change__fields {
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}

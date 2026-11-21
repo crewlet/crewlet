@@ -195,3 +195,87 @@ export interface GrowthSpendAccount {
   per_change?: string;
   daily?: string;
 }
+
+/** A step of a growth act in the access log (`growth.Step`). */
+export type GrowthStep =
+  "made" | "asked" | "allowed" | "denied" | "lapsed" | "applied" | "void" | "failed";
+
+/** Why a growth act did not run (`growth.Failure`); empty for one that did. */
+export type GrowthFailure =
+  | ""
+  | "vendor_refused"
+  | "unauthorized"
+  | "rate_limited"
+  | "vendor_unavailable"
+  | "timed_out"
+  | "unknown_outcome"
+  | "cap_exceeded"
+  | "access_lowered"
+  | "engine_error";
+
+/**
+ * One field a recorded act changed. A value is sent as written, a money
+ * value as decimal-integer micros; published text is never sent, only its
+ * digest and length.
+ */
+export interface GrowthChangeField {
+  field: string;
+  label: string;
+  money: boolean;
+  /** Whether the field is published text, sent as its digest and length alone. */
+  text: boolean;
+  before?: string;
+  after?: string;
+  before_sha256?: string;
+  before_bytes?: number;
+  after_sha256?: string;
+  after_bytes?: number;
+}
+
+/** A recorded spend act's figures in micros of `currency`, as decimal-integer strings. */
+interface GrowthChangeMoney {
+  currency: string;
+  delta_micros: string;
+  daily_micros: string;
+  daily_after_micros: string;
+  per_change_cap_micros: string;
+  daily_cap_micros: string;
+}
+
+/** One step of an agent's growth act, as the access log keeps it (`growth_changes`). */
+export interface GrowthChangeRow {
+  /** The seat that acted, by handle. */
+  seat: string;
+  turn: string;
+  /** The held call or the call the step belongs to. */
+  act: string;
+  /** Whether the act was held for a person's decision. */
+  held: boolean;
+  product: string;
+  connection: string;
+  account: string;
+  /** The vendor's ID of what the act targeted (a campaign, a review), up to 128 characters with no space. */
+  target: string;
+  tool: string;
+  class: GrowthClass;
+  step: GrowthStep;
+  /** Who answered a held act: a person, or the engine's lapse. */
+  answered_by: string;
+  /** The human seat that allowed or denied a held act, by handle; empty for any other step. */
+  answerer: string;
+  operation: string;
+  before: string;
+  changes: GrowthChangeField[];
+  money: GrowthChangeMoney | null;
+  failure: GrowthFailure;
+  at: string;
+}
+
+/** `growth_changes`: the agents' growth acts, newest first, an administrator's read, paged by `next`. */
+export interface GrowthChangesAnswer {
+  rows: GrowthChangeRow[];
+  /** The cursor of the next older page; empty at the end of the list. */
+  next: string;
+  /** Whether this node could read every record the page covers: false where some may be missing, never the list's end. */
+  complete: boolean;
+}

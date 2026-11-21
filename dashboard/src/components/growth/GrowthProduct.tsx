@@ -18,7 +18,9 @@ import type {
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { SPEND_PRODUCTS } from "~/routes/growth/words.ts";
 import { GrowthConnections } from "./GrowthConnections.tsx";
+import { useViewer } from "~/lib/viewer.ts";
 import { GrowthRoles } from "./GrowthRoles.tsx";
+import { RecentChanges } from "./RecentChanges.tsx";
 import { SpendCapsSection } from "./SpendCaps.tsx";
 import type { CapAccount } from "./caps.ts";
 import "~/styles/growth.css";
@@ -100,6 +102,7 @@ export function GrowthProductSection({
   row: IntegrationRow | undefined;
 }) {
   const { connections, roles } = growthDetailsOf(row);
+  const viewer = useViewer();
   const held = [...new Set(connections.flatMap((c) => c.roles_held))];
   return (
     <div className="growth-product">
@@ -123,6 +126,20 @@ export function GrowthProductSection({
       )}
       {SPEND_PRODUCTS.has(kind) ? (
         <SpendCapsSection kind={kind} accounts={capAccountsOf(connections)} />
+      ) : null}
+      {/* THE ACCESS LOG IS AN ADMINISTRATOR'S, so only one is shown what agents did here. */}
+      {viewer.admin ? (
+        <section aria-labelledby={`${kind}-changes`}>
+          <Text as="h3" variant="label" id={`${kind}-changes`}>
+            Recent agent changes
+          </Text>
+          <RecentChanges
+            product={kind}
+            accounts={
+              new Map(capAccountsOf(connections).map((account) => [account.id, account.currency]))
+            }
+          />
+        </section>
       ) : null}
     </div>
   );

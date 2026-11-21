@@ -5,9 +5,22 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { GrowthProductSection, capAccountsOf, growthDetailsOf } from "./GrowthProduct.tsx";
+
+const viewer = vi.hoisted(() => ({ admin: false }));
+vi.mock("~/lib/viewer.ts", async (original) => ({
+  ...(await original<typeof import("~/lib/viewer.ts")>()),
+  useViewer: () => viewer,
+}));
+vi.mock("./RecentChanges.tsx", () => ({
+  RecentChanges: ({ product, accounts }: { product: string; accounts: Map<string, string> }) => (
+    <p>
+      changes of {product} in {[...accounts.values()].join(",")}
+    </p>
+  ),
+}));
 
 afterEach(cleanup);
 
@@ -91,4 +104,18 @@ test("a measuring product shows its connections and roles, the held one marked, 
   // Each connection is labelled by its own heading, whatever its id.
   expect(screen.getAllByRole("heading", { level: 4 }).map((h) => h.id)).toHaveLength(3);
   expect(new Set(screen.getAllByRole("heading", { level: 4 }).map((h) => h.id)).size).toBe(3);
+});
+
+test("an administrator reads the product's recent agent changes there; nobody else is shown them", () => {
+  viewer.admin = false;
+  const { unmount } = render(
+    <GrowthProductSection kind="google_analytics" product="Google Analytics" row={ROW} />,
+  );
+  expect(screen.queryByRole("region", { name: "Recent agent changes" })).toBeNull();
+  unmount();
+  viewer.admin = true;
+  render(<GrowthProductSection kind="google_analytics" product="Google Analytics" row={ROW} />);
+  const changes = screen.getByRole("region", { name: "Recent agent changes" });
+  // For this product, with each reported account's currency.
+  expect(changes.textContent).toContain("changes of google_analytics in EUR,");
 });
