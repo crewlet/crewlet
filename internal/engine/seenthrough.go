@@ -39,6 +39,9 @@ const (
 	// skipTriaged: a running turn's triage found it noise owing nothing
 	// ([absorbedKey], ADR-0168).
 	skipTriaged
+	// skipFolded: another writer's request a person approved joining a
+	// running turn, filed as its steer note there ([foldedKey], ADR-0109).
+	skipFolded
 )
 
 // absorbed reports whether ev is at or below its seat's mark for its
