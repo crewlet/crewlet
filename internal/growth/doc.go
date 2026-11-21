@@ -41,6 +41,23 @@
 // its high-value acts and one generic tool per class over the rest of its
 // catalog, so every method ships without hundreds of tools.
 //
+// # Every step on the access log
+//
+// Each step of a growth act is one record on the access log ([Record], [Step],
+// internal/accessdomain): a read or operate call made at once, made or failed,
+// and a held call's ask, its one answer (allowed, denied or the engine's lapse)
+// and its one outcome (applied, void where the target moved, or failed with a
+// closed [Failure]). A record never holds a token, a credential, a person's data
+// or published text, which travels as its SHA-256 and length.
+//
+// # What a node meets at a vendor
+//
+// [Signals] keeps, in memory and bounded, what one node's products met that an
+// administrator must act on: a vendor refusing a freshly signed token for the
+// node's clock, and a vendor calling a version this build calls deprecated. The
+// node publishes it on its status record, and internal/notice raises its
+// notices, beside a catalog's own Retires date.
+//
 // # Credentials stay in the engine
 //
 // No growth credential reaches an agent's box (ADR-0170): every call passes
