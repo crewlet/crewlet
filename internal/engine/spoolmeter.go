@@ -15,9 +15,9 @@ type spoolMeter struct {
 }
 
 func (m spoolMeter) SpoolWaited(outcome sandbox.SpoolOutcome, waited time.Duration) {
-	m.metrics.Observe(metrics.SandboxSpoolWait, waited, metrics.Attrs{"outcome": string(outcome)})
+	m.metrics.Observe(metrics.ExecutorSpoolWait, waited, metrics.Attrs{"outcome": string(outcome)})
 }
 
 func (m spoolMeter) SpoolHeld(bytes int64) {
-	m.metrics.Set(metrics.SandboxSpoolHeldBytes, float64(bytes), nil)
+	m.metrics.Set(metrics.ExecutorSpoolHeldBytes, float64(bytes), nil)
 }

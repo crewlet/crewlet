@@ -1110,24 +1110,24 @@ func TestTheEnginesCoordinatorRecordsItsSpoolRoom(t *testing.T) {
 	seen := map[string]bool{}
 	for _, s := range rec.Read() {
 		switch {
-		case s.Name == metrics.SandboxSpoolWait:
+		case s.Name == metrics.ExecutorSpoolWait:
 			if s.Count != 1 || s.Sum != 60_000 {
 				t.Errorf("%s%v holds %d waits of %v ms, want one of 60000", s.Name, s.Attrs, s.Count, s.Sum)
 			}
 			seen[s.Attrs["outcome"]] = true
-		case s.Name == metrics.SandboxSpoolHeldBytes && s.Value != 1<<20:
+		case s.Name == metrics.ExecutorSpoolHeldBytes && s.Value != 1<<20:
 			t.Errorf("%s reads %v, want 1 MiB", s.Name, s.Value)
-		case s.Name == metrics.SandboxSpoolHeldBytes:
+		case s.Name == metrics.ExecutorSpoolHeldBytes:
 			seen["held"] = true
 		}
 	}
 	for _, outcome := range sandbox.SpoolOutcomes {
 		if !outcome.Valid() || !seen[string(outcome)] {
-			t.Errorf("no %s series for outcome %q", metrics.SandboxSpoolWait, outcome)
+			t.Errorf("no %s series for outcome %q", metrics.ExecutorSpoolWait, outcome)
 		}
 	}
 	if !seen["held"] {
-		t.Errorf("no %s series", metrics.SandboxSpoolHeldBytes)
+		t.Errorf("no %s series", metrics.ExecutorSpoolHeldBytes)
 	}
 }
 

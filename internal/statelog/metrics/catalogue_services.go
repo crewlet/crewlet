@@ -226,7 +226,7 @@ func serviceInstruments() []Instrument {
 
 		// ---- the code sandbox -----------------------------------------
 		{
-			Name: SandboxSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Name: ExecutorSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome"},
 			Shows: "How long each final take of an executor run's session " +
 				"waited for room to spool it on this engine process, before " +
@@ -248,14 +248,14 @@ func serviceInstruments() []Instrument {
 				"constants, not settings: report it with both readings.",
 		},
 		{
-			Name: SandboxSpoolHeldBytes, Kind: KindGauge, Unit: UnitBytes,
+			Name: ExecutorSpoolHeldBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: nil,
 			Shows: "Bytes this engine process's executor-session spools hold " +
 				"of the room they share (240.06 MiB): each save's and final " +
 				"take's, from before its pack until its upload ends, at the " +
 				"sealed bound while it packs and its archive's counted size " +
 				"after. Near the room for long is a node whose takes outrun " +
-				"its uploads, where `crewlet.sandbox.spool.wait` starts " +
+				"its uploads, where `crewlet.executor.spool.wait` starts " +
 				"counting `refused`; above zero with no run ending or saving " +
 				"on the node is a spool never given back.",
 		},
