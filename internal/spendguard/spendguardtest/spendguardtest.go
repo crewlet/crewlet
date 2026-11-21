@@ -120,21 +120,29 @@ func Run[Op any](t *testing.T, h Harness[Op]) {
 // Locks is an in-process [spendguard.Leaser]: one holder per resource.
 type Locks struct {
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	locks map[string]chan struct{}
 }
 
-// Hold takes resource's lock, waiting while another holds it.
+// Hold takes resource's lock, waiting while another holds it or until ctx
+// ends; an error took nothing, as [spendguard.Leaser] says.
 func (l *Locks) Hold(ctx context.Context, resource string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	l.mu.Lock()
 	if l.locks == nil {
-		l.locks = map[string]*sync.Mutex{}
+		l.locks = map[string]chan struct{}{}
 	}
-	m := l.locks[resource]
-	if m == nil {
-		m = &sync.Mutex{}
-		l.locks[resource] = m
+	slot := l.locks[resource]
+	if slot == nil {
+		slot = make(chan struct{}, 1)
+		l.locks[resource] = slot
 	}
 	l.mu.Unlock()
-	m.Lock()
-	return m.Unlock, ctx.Err()
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

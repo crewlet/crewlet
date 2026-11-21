@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -58,6 +59,18 @@ func walkDeclared(v reflect.Value, path fieldPath, out *[]declaredField, depth i
 	case reflect.Struct:
 		if encodesItself(v.Type()) {
 			return nil
+		}
+		if v.Type() == reflect.TypeFor[growth.Report]() {
+			// A REPORT DECLARES ITS COLUMNS, not its fields: each cell of an
+			// untrusted column is somebody's words at length.
+			if !v.CanInterface() {
+				return fmt.Errorf("builtin: a report at %q is unexported, so its cells cannot be read",
+					readablePath(path.id()))
+			}
+			for _, cell := range v.Interface().(growth.Report).UntrustedCells() {
+				*out = append(*out, declaredField{path: path.key("rows").index(cell.Row).index(cell.Column),
+					kind: provenance.FieldFence, value: reflect.ValueOf(cell.Text)})
+			}
 		}
 		return walkStruct(v, path, out, depth)
 	case reflect.Map:

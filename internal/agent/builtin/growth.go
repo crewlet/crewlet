@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE GROWTH TOOLS (internal/growth; ADR-0170, ADR-0171): every tool a growth
@@ -27,9 +28,11 @@ import (
 // level allows its class. A public, spend or admin call is held as ssh_operate
 // is (a fixed tool, Allow once or Deny), read live once before it is held
 // ([preparedTool]) and answered by an administrator alone at a fresh step-up;
-// it lapses unanswered after a day. No credential reaches a box: the product
-// makes every call in the engine. Every step is on the access log: a held call's
-// ask once it is held ([GrowthAudit]), and what the product makes by the product.
+// it lapses unanswered after a day. Every write is classed by its product
+// against its target first, and refused here where it comes to more than its
+// tool makes. No credential reaches a box: the product makes every call in the
+// engine. Every step is on the access log: a held call's ask once it is held
+// ([GrowthAudit]), and what the product makes by the product.
 
 // GrowthDeps are what the growth tools act through. Requesters and Chart decide
 // whoever a turn acts for ([companyRequester]), and Audit records each held
@@ -60,21 +63,23 @@ type GrowthProduct interface {
 	// Level is the seat's level on the product's lane now, "" for a seat the
 	// lane is off for.
 	Level(handle string) growth.Level
-	// Run makes a read or operate call. Its answer encodes as a JSON object
-	// and declares every field holding somebody's words (ADR-0040). A
+	// Run makes a read tool's call. Its answer encodes as a JSON object and
+	// declares every field holding somebody's words (ADR-0040). A
 	// [*growth.Refusal] reached no vendor and is said to the agent.
 	Run(ctx context.Context, call growth.Call) (any, error)
-	// Prepare reads a held call's target live and builds what a person is
-	// asked: refused (a [*growth.Refusal]: out of scope, the spend guard, the
-	// vendor's own validation), or the hold.
+	// Prepare reads a write's target live and classes it ([growth.Hold.Class]),
+	// and for a held call builds what a person is asked: refused (a
+	// [*growth.Refusal]: out of scope, the spend guard, the vendor's own
+	// validation), or the hold.
 	Prepare(ctx context.Context, call growth.Call) (growth.Hold, error)
 	// Card is a held call's decision card as its target reads now, Moved where
 	// it no longer matches binding.
 	Card(ctx context.Context, call growth.Call, binding string) (growth.Card, error)
-	// Apply makes an approved held call once: under the account's apply lease
-	// it reads the target again and answers [growth.ErrMoved] without calling
-	// the vendor where it no longer matches binding, and re-checks the seat's
-	// level and scope and, for spend, the caps.
+	// Apply makes a prepared write once: an operate call at once, a held call
+	// once approved (call.HeldCall). Under the account's apply lease it reads
+	// the target again and answers [growth.ErrMoved] without calling the vendor
+	// where it no longer matches binding, and re-checks the seat's level and
+	// scope and, for spend, the caps.
 	Apply(ctx context.Context, call growth.Call, binding string) (any, error)
 	// Denied records that a person denied the held call, or that it lapsed
 	// (call.Approver is the engine's actor).
@@ -171,12 +176,63 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if refusal != nil {
 		return *refusal, nil
 	}
-	answer, err := t.product.Run(ctx, growth.Call{ID: uuid.Must(uuid.NewV7()).String(), Handle: handle,
-		Turn: turn.RunID, Tool: t.Name(), Args: args})
+	call := growth.Call{ID: uuid.Must(uuid.NewV7()).String(), Handle: handle, Turn: turn.RunID, Tool: t.Name(),
+		Args: args}
+	if t.def.Class == growth.ClassRead {
+		answer, err := t.product.Run(ctx, call)
+		if err != nil {
+			return growthFailure(ctx, t.Name(), err), nil
+		}
+		return growthAnswer(ctx, turn, handle, t.Name(), answer)
+	}
+	// AN OPERATE CALL IS CLASSED BEFORE IT IS MADE, against its target as read
+	// now, and made only on that reading: a raise sent through a pause tool is
+	// refused here, whatever its product's own checks.
+	hold, err := t.product.Prepare(ctx, call)
 	if err != nil {
 		return growthFailure(ctx, t.Name(), err), nil
 	}
+	if r := t.within(ctx, hold); r != nil {
+		return *r, nil
+	}
+	answer, err := t.product.Apply(ctx, call, hold.Binding)
+	switch {
+	case errors.Is(err, growth.ErrMoved):
+		return refused(tools.RefusalConflict, t.Name()+" didn't run: what it changes moved while the call was "+
+			"made. Nothing was sent. Read it again, and call "+t.Name()+" again."), nil
+	case err != nil:
+		return growthFailure(ctx, t.Name(), err), nil
+	}
 	return growthAnswer(ctx, turn, handle, t.Name(), answer)
+}
+
+// within refuses a prepared write its tool may not make: one that comes to a
+// class above the tool's, which another tool asks for at its own level, or a
+// hold bound to nothing.
+func (t *growthTool) within(ctx context.Context, hold growth.Hold) *tools.Result {
+	if !hold.Class.Valid() || len(hold.Binding) != sha256.Size*2 ||
+		(hold.Subject != "" && len(hold.Subject) != sha256.Size*2) {
+		r := faulted(ctx, t.Name(), fmt.Errorf("builtin: %s prepared a write with class %q and no digest binding it",
+			t.Name(), hold.Class), t.Name()+" was not called, and nothing was asked: the engine could not class "+
+			"the change or bind it to what it would send")
+		return &r
+	}
+	if hold.Class.Rank() <= t.def.Class.Rank() {
+		return nil
+	}
+	ask := "No tool makes it: a person makes it in the vendor's own console."
+	var through []string
+	for _, def := range t.product.Catalog().Tools {
+		if def.Class == hold.Class {
+			through = append(through, def.Name)
+		}
+	}
+	if len(through) > 0 && hold.Class.Callable() {
+		ask = "Ask through " + words.Or(through) + "."
+	}
+	r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: as its target reads now, this change is %s, "+
+		"which %s does not make. %s No vendor was changed.", t.Name(), hold.Class, t.Name(), ask))
+	return &r
 }
 
 // growthFailure is the answer of a call that did not reach its result.
@@ -255,11 +311,8 @@ func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, ar
 		r := growthFailure(ctx, t.Name(), err)
 		return HeldPrep{}, &r
 	}
-	if len(hold.Binding) != sha256.Size*2 || (hold.Subject != "" && len(hold.Subject) != sha256.Size*2) {
-		r := faulted(ctx, t.Name(), fmt.Errorf("builtin: %s prepared a hold with no digest binding it",
-			t.Name()), t.Name()+" was not called, and nothing was asked: the engine could not bind the "+
-			"question to what it would send")
-		return HeldPrep{}, &r
+	if r := t.within(ctx, hold); r != nil {
+		return HeldPrep{}, r
 	}
 	ask := hold.Ask
 	ask.Product, ask.Tool, ask.Class = t.product.Catalog().Kind, t.Name(), t.def.Class

@@ -315,6 +315,10 @@ type HeldCall struct {
 // Calling reports whether a resume has begun making the call.
 func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
 
+// Lapsed reports whether the call lapses and now is past it ([HeldCall.LapsesAt]):
+// it then takes Deny alone, never an answer that makes it.
+func (h HeldCall) Lapsed(now time.Time) bool { return !h.LapsesAt.IsZero() && !now.Before(h.LapsesAt) }
+
 // Delegated reports whether the call waits on its delegates alone: put to
 // agent delegates and not yet escalated to people.
 func (h HeldCall) Delegated() bool { return h.Delegation != nil && h.Delegation.Escalated == nil }

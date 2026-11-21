@@ -89,6 +89,11 @@ func Classify(op Operation, changes []Change) Class {
 		if i := slices.IndexFunc(op.Fields, func(r FieldRule) bool { return r.Field == ch.Field }); i >= 0 {
 			c = op.Fields[i].classOf(ch)
 		}
+		if !c.Valid() {
+			// A CLASS THIS BUILD DOES NOT KNOW IS NEVER: ranked below read, it
+			// would lower a write nobody classed.
+			return ClassNever
+		}
 		if c.Rank() > out.Rank() {
 			out = c
 		}
@@ -252,7 +257,8 @@ func (c Catalog) Validate() error {
 			}
 		}
 		for _, f := range op.Fields {
-			if f.Field == "" || !f.Class.Callable() || (f.Lower != "" && f.Lower.Rank() > f.Class.Rank()) {
+			if f.Field == "" || !f.Class.Callable() ||
+				(f.Lower != "" && (!f.Lower.Callable() || f.Lower.Rank() > f.Class.Rank())) {
 				bad("growth: %s operation %s field rule %q needs a field, a callable class, "+
 					"and a lowering class no higher than it", c.Kind, op.ID, f.Field)
 			}
@@ -276,6 +282,10 @@ func (c Catalog) Validate() error {
 			case !slices.Contains(op.classes(), t.Class):
 				bad("growth: %s tool %s is %s, and its operation %s never comes to that class",
 					c.Kind, t.Name, t.Class, id)
+			case t.Class == ClassRead && slices.ContainsFunc(op.classes(), func(k Class) bool { return k != ClassRead }):
+				// A READ TOOL IS RUN WITHOUT BEING CLASSED ([Hold]), so it names
+				// reads alone.
+				bad("growth: %s tool %s is read, and its operation %s can come to a write", c.Kind, t.Name, id)
 			}
 		}
 	}

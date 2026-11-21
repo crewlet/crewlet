@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -74,9 +75,10 @@ const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<
 // what to ask instead, as a person's steering note is bounded.
 const maxApprovalNoteRunes = steer.MaxNoteRunes
 
-// maxApprovalBody bounds the body: an answer and a revision summary, which
-// configuration writes hold to a line.
-const maxApprovalBody = 8 << 10
+// maxApprovalBody bounds the body: a note at its bound written wholly as
+// escaped surrogate pairs (12 bytes a character, 24,000 bytes), beside an
+// answer, a digest and a revision summary of a line.
+const maxApprovalBody = 32 << 10
 
 // ApprovalAnswer is what the route answers: the call it answered, the answer
 // and what the delivery says of it, and for `always` the configuration's own
@@ -160,6 +162,13 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		return
 	}
 	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+		return
+	}
+	if held.Lapsed(s.now()) && req.Answer != sandbox.HeldDeny {
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeStaleVersion,
+			httpjson.Detail{"detail": "the call to " + held.Tool + " lapsed unanswered at " +
+				held.LapsesAt.UTC().Format(time.RFC3339) + ", so it takes deny alone. Nothing was sent; the " +
+				"agent asks again with figures read now."})
 		return
 	}
 	if req.Answer == sandbox.HeldOnce && readWhole(held) && !s.readAll(w, run, req.ArgumentsSHA256) {

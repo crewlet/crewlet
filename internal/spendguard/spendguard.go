@@ -39,7 +39,6 @@ package spendguard
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	_ "time/tzdata" // an account's zone loads on a minimal host too
 )
@@ -125,9 +124,6 @@ func (r *Refusal) Error() string {
 	}
 	return string(r.Code)
 }
-
-// ErrMoved is an apply whose change read differently than when it was asked.
-var ErrMoved = errors.New("spendguard: the account moved since the change was allowed")
 
 // Guard holds one product's spend to its caps.
 type Guard[Op any] struct {

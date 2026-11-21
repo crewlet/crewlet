@@ -628,7 +628,7 @@ func sweepLapsed(ctx context.Context, store sandbox.PendingStore,
 	}
 	for _, run := range runs {
 		held := run.HeldCall
-		if held == nil || held.LapsesAt.IsZero() || now.Before(held.LapsesAt) || !run.HeldOpen() ||
+		if held == nil || !held.Lapsed(now) || !run.HeldOpen() ||
 			!slices.Contains(sandbox.Awaiting, run.Status) {
 			continue
 		}

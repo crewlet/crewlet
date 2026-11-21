@@ -90,10 +90,12 @@ func budgetOp() growth.Operation {
 }
 
 // A generic update is classed by what it changes: a pause and a lower are
-// operate, an enable and a raise spend, and the highest change wins.
+// operate, an enable and a raise spend, the highest change wins, and a class
+// this build does not know is never.
 //
-// Mutation: class a write by its operation alone, or read a lowered budget
-// as a raise, and either a raise runs undecided or a brake waits on a person.
+// Mutation: class a write by its operation alone, read a lowered budget as a
+// raise, or rank an unknown class, and a raise runs undecided, a brake waits
+// on a person, or a typo lowers a raise to read.
 func TestAnUpdateIsClassedByWhatItChanges(t *testing.T) {
 	t.Parallel()
 	op := budgetOp()
@@ -117,6 +119,11 @@ func TestAnUpdateIsClassedByWhatItChanges(t *testing.T) {
 		if got := growth.Classify(op, c.changes); got != c.want {
 			t.Errorf("%s: %s, want %s", name, got, c.want)
 		}
+	}
+	unknown := budgetOp()
+	unknown.Fields[0].Lower = "operat"
+	if got := growth.Classify(unknown, []growth.Change{{Field: "daily_budget", Before: "2", After: "1"}}); got != growth.ClassNever {
+		t.Errorf("a lower to a class this build does not know is %s, want never", got)
 	}
 }
 
@@ -175,6 +182,11 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		"a tool not described": func(c *growth.Catalog) { c.Tools[1].Description = "" },
 		"a role without note":  func(c *growth.Catalog) { c.Roles[0].Note = "" },
 		"a rule lowering up":   func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = growth.ClassAdmin },
+		"an unknown lower":     func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = "operat" },
+		"a read tool's write": func(c *growth.Catalog) {
+			c.Operations[1].States = []growth.StateRule{{When: "archived", Class: growth.ClassRead}}
+			c.Tools[0].Operations = []string{"campaign.update"}
+		},
 		"a state with no name": func(c *growth.Catalog) {
 			c.Operations[2].States = []growth.StateRule{{Class: growth.ClassPublic}}
 		},
