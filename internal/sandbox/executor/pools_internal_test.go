@@ -2,32 +2,18 @@ package executor
 
 import "testing"
 
-// A NODE KEEPS THE POOLS IT RUNS, EACH AT ITS WORST AND GROWN BY THE HEAP: a
-// node hosting boxes keeps a base read for each of its turns and its peers'
-// reads, the takes at their base and both large slots, and its seats' one
-// transcript read; one answering people keeps every transcript slot; one
-// doing neither keeps nothing. Each pool, grown, holds the peak its benchmark
-// measured at the default GOGC.
+// A NODE KEEPS THE POOLS IT RUNS, EACH AT ITS WORST LIVE AND HALF AGAIN, the
+// heap's room under the engine's memory limit: a node hosting boxes keeps a
+// base read for each of its turns and its peers' reads, the takes at their
+// base and both large slots, and its seats' one transcript read; one
+// answering people keeps every transcript slot; one doing neither keeps
+// nothing.
 //
-// Mutations, each red: count no heap growth; count the turns or the peers'
-// reads off a node hosting boxes, or neither on one; count people's reads
-// where only seats read, or the seats' where people do.
-func TestANodeKeepsThePoolsItRunsGrownByTheHeap(t *testing.T) {
+// Mutations, each red: keep no room, or the default GOGC's twice live; count
+// the turns or the peers' reads off a node hosting boxes, or neither on one;
+// count people's reads where only seats read, or the seats' where people do.
+func TestANodeKeepsThePoolsItRunsWithTheLimitsRoom(t *testing.T) {
 	t.Parallel()
-	const mib = 1 << 20
-	for _, peak := range []struct {
-		pool       string
-		live, peak int64
-	}{
-		{"a transcript read (BenchmarkAPersonsReadAtItsBounds)", TranscriptReadHeldBytes, 58 * mib},
-		{"the chain at both bounds (BenchmarkAReadingAtItsBounds)", threadChainHeldBytes, 70 * mib},
-		{"a base pass (BenchmarkACollectionPassAtItsBase)", baseTierReadBytes, 8 * mib},
-	} {
-		if heapGrowth*peak.live < peak.peak {
-			t.Errorf("%s keeps %d bytes grown, short of its %d-byte peak at the default GOGC", peak.pool,
-				heapGrowth*peak.live, peak.peak)
-		}
-	}
 	boxes := NodeWork{Boxes: true, Turns: 32, PeerReads: 64}
 	seatsLive := int64(96*baseTierReadBytes) + SessionTakesAtOnce*takeBaseHeldBytes +
 		(CollectionLargeReadsAtOnce+HoldingsReadsAtOnce)*threadChainHeldBytes
@@ -45,7 +31,7 @@ func TestANodeKeepsThePoolsItRunsGrownByTheHeap(t *testing.T) {
 		{"boxes, one turn more", NodeWork{Boxes: true, Turns: 33, PeerReads: 64},
 			seatsLive + baseTierReadBytes + SeatTranscriptReadsAtOnce*TranscriptReadHeldBytes},
 	} {
-		if got, want := tc.work.MemoryPools(16<<30), heapGrowth*tc.live; got != want {
+		if got, want := tc.work.MemoryPools(16<<30), tc.live+tc.live/2; got != want {
 			t.Errorf("%s (%+v): the node keeps %d bytes for the executor's pools, want %d", tc.name, tc.work,
 				got, want)
 		}

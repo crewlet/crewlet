@@ -55,8 +55,8 @@ func perBackedCore(cores int, memory, share int64) int64 {
 }
 
 // memoryReserve is what a node of memory bytes keeps from its background work:
-// engine, what the engine keeps beside Gitlet (gitproc.Pool.Reserved: the
-// executor's pools and the store's page cache), first; gitproc.TransferMemory
+// engine, what the engine keeps beside Gitlet (gitproc.Pool.Reserved:
+// internal/nodebudget's lines), first; gitproc.TransferMemory
 // for each of transfers; and ServingMemoryPerCore for each core what engine
 // leaves backs.
 func memoryReserve(transfers, cores int, memory, engine int64) int64 {
@@ -123,8 +123,7 @@ func (c *Cache) initMemory(pool *gitproc.Pool) {
 }
 
 // warnShort is Open's: a node whose memory is short of what it keeps
-// (memoryReserve: the engine's pools and page cache, its transfers and its
-// serving share)
+// (memoryReserve: the engine's lines, its transfers and its serving share)
 // says so once, at boot, with the shortfall and the memory that holds it
 // (memoryNeeded). It is not refused: a small or development node runs seats
 // beside Gitlet on 2 GiB, and serves while it is not at every worst case at
@@ -133,7 +132,7 @@ func (c *Cache) warnShort(pool *gitproc.Pool) {
 	if short := c.memReserve - c.memory.Bytes; short > 0 {
 		transfers := pool.Slots(gitproc.ClassTransfer)
 		c.log.Warn("code_cache_memory_short", "memory", c.memory.Bytes, "memory_from", c.memory.From,
-			"pools", pool.Reserved(), "transfer_slots", transfers, "memory_reserved", c.memReserve,
+			"kept", pool.Reserved(), "transfer_slots", transfers, "memory_reserved", c.memReserve,
 			"shortfall", short,
 			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.ReservedAt))
 	}

@@ -7693,12 +7693,12 @@ not kept — each only of a turn that ended — and an ended turn is never captu
 again.
 
 **Two transcripts at a time on each node.** One read holds at most 29 MiB
-measured (its heap peaking at about 58 MiB at Go's default `GOGC`), and of what
+measured, and of what
 harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
 redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
-most two transcripts at once, 58 MiB live at their worst (about 116 MiB at their
-peak), whichever socket
+most two transcripts at once, 58 MiB live at their worst (87 MiB with the heap's
+room under the engine's memory limit), whichever socket
 question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
 slot frees within one such read, so an answer comes within 110 seconds (that
@@ -9560,7 +9560,7 @@ Notes:
 - `since`/`until` are the window as instants (first instant of its first company day; first instant after its last, `until` exclusive). `from`/`to`/`days` name the same window by days. The live window carries only the instants.
 - `horizon` states how far back a named window reaches: the history in days and `floor`, the oldest company day still answerable. Not `coverage`: nothing was asked of a node; rows are replicated whole and only time bounds them.
 - `by_phase` covers every phase the [Turn Engine](../concepts/turn-engine.md) emits (`onboarding`, `execute`, `review`, `subagent`, `judge`) as recorded (`execute` includes every launch of the executor's run; its `executor_collected` record names no phase and is filed there), plus `auxiliary`: what the seats' auxiliary model spent, from `auxiliary_spend` records (turn-start context, every compaction, reflection workers, background learning passes, a person's answered question). The series folds these into four bands; the rollup does not.
-- `by_worker` breaks `auxiliary` down by purpose: `memory_filter`, `knowledge_query`, `episode_summary`, `persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`, `episode_compaction`, `skill_clustering`, `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of text a compaction rewrites. Rows sum to that phase.
+- `by_worker` breaks `auxiliary` down by purpose: `memory_filter`, `knowledge_query`, `episode_summary`, `persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`, `episode_compaction`, `skill_clustering`, `skill_promotion`, `provider_probe`, `answer_knowledge`, `wake_triage`, and `condense_<kind>` for each kind of text a compaction rewrites. Rows sum to that phase.
 - `calls` is PROVIDER CALLS in every bucket: a phase's model rounds, a launch's harness turns as its harness reported them (`harness_turns`; one for a launch whose harness reports none, as OpenCode), an auxiliary record's coalesced calls. The executor's own record counts none: its run's calls are its launches'.
 - `by_provider` answers "which configured entry (`providers.llm.<key>`) do we pay for", which `by_model` cannot (a fallback chain serves several models under one key). `models` is every model the entry answered with, biggest first; `seats` the three handles that spent most through it, `seats_total` how many spent at all. A call recorded before the key was promoted (node migration 0032) is under `unknown`. **An admin's alone**: every other reader, of this answer and of the socket's `tokens` push, gets `by_provider` empty and `entries_withheld: true`, other figures unchanged. A model a call did not name is `unknown` in `by_model`, never its entry's key.
 - `by_agent[].turns` and `failed` are how many of the seat's turns ENDED in the window and how many failed; a named window only (the live window holds phase records, not endings). A seat that ended a turn without spending is still listed.

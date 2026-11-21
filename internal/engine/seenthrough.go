@@ -33,6 +33,12 @@ const (
 	skipAbsorbed
 	// skipJoined: a running turn's run read it as a wake ([joinedKey]).
 	skipJoined
+	// skipSteered: filed as its lead's steer note on a running turn
+	// ([steeredKey], ADR-0168).
+	skipSteered
+	// skipTriaged: a running turn's triage found it noise owing nothing
+	// ([absorbedKey], ADR-0168).
+	skipTriaged
 )
 
 // absorbed reports whether ev is at or below its seat's mark for its

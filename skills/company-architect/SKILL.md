@@ -200,8 +200,8 @@ live-editable, so the first version does not need to be the last.
      agent seat's executor is its harness's own run, which only
      `claude-code` and `opencode` can be, so a company on Codex alone is
      refused. Codex (and every other harness) serves a seat's reviewer, workers
-     and side passes through `llm_review`, `llm_subagent`, `llm_auxiliary` or
-     `llm_judge`, beside a Claude Code or OpenCode entry the seat's `llm`
+     and side passes through `llm_review`, `llm_subagent`, `llm_auxiliary`,
+     `llm_judge` or `llm_triage`, beside a Claude Code or OpenCode entry the seat's `llm`
      names.
 
    **Write `providers.sandbox` with the model**, because every agent seat's

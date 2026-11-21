@@ -250,7 +250,7 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 	}
 	def := uses("default")
 	for _, want := range []string{"pm/executor@0:default-entry", "pm/review@0:default-entry",
-		"qa/executor@0:seat", "qa/subagent@0:executor"} {
+		"qa/executor@0:seat", "qa/subagent@0:executor", "pm/triage@0:default-entry", "qa/triage@0:executor"} {
 		if !slices.Contains(def, want) {
 			t.Errorf("default's users %v lack %s", def, want)
 		}

@@ -1588,8 +1588,8 @@ func (c *Company) validateExecutors() error {
 					"executor: a seat's executor is its harness's own run, which "+
 					"only %s have. Point `llm` at an entry with harness: claude-code or "+
 					"opencode (and keep these entries for the reviewer, workers and "+
-					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
-					"llm_judge), or move one of them to claude-code or opencode",
+					"side passes with llm_review, llm_subagent, llm_auxiliary, "+
+					"llm_judge or llm_triage), or move one of them to claude-code or opencode",
 				c.describeChain(seat.chain), words.And(ExecutorHarnesses))
 			continue
 		}
