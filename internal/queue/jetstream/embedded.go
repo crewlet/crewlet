@@ -1291,7 +1291,10 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 	}
 	return []*server.RemoteLeafOpts{
 		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm},
-		{URLs: leases, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm,
+		// PAST THE TUNNEL, so it dials for itself: given the tunnel's term
+		// ([tunnelDial]), since nats-server's one second leaves a lease link
+		// that dropped unable to dial again behind a deep queue.
+		{URLs: leases, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, DialTimeout: tunnelDial,
 			LocalAccount: LeaseAccount, RequestIsolation: true},
 	}, nil
 }

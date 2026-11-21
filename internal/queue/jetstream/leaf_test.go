@@ -128,10 +128,18 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 			opts.JetStream, opts.DontListen, scratch, len(opts.LeafNode.Remotes))
 	}
 	// AND EACH LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a credential
-	// in a URL.
+	// in a URL; the lease link, dialling past the tunnel, waits out its dial
+	// for the tunnel's term, not nats-server's one second.
+	leaseLinks := 0
 	for _, link := range opts.LeafNode.Remotes {
 		if link.Nkey != testFleetAuth().leafSeed() {
 			t.Errorf("a leaf's link in %q presents no leaf nkey of its ring", link.LocalAccount)
+		}
+		if link.LocalAccount == LeaseAccount {
+			leaseLinks++
+			if link.DialTimeout != tunnelDial {
+				t.Errorf("a leaf's lease link dials for %v, want the tunnel's %v", link.DialTimeout, tunnelDial)
+			}
 		}
 		for _, u := range link.URLs {
 			if u.User != nil {
@@ -139,6 +147,9 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 					"the nkey in clear", u.Host)
 			}
 		}
+	}
+	if leaseLinks != 1 {
+		t.Errorf("a leaf holds %d links in %s, want one", leaseLinks, LeaseAccount)
 	}
 }
 
