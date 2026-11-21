@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The Google growth products sign in as two identities the core owns
@@ -117,7 +118,7 @@ func missingAPIs(ctx context.Context, client *googlecloud.Client, kind integrati
 	return []integration.Finding{{
 		Kind: integration.FindingApprovalRequired, Subject: "apis",
 		Title:     "Turn on " + product.Name + "'s APIs",
-		Detail:    "The identity project " + client.IdentityProject() + " does not have these on: " + fmt.Sprint(off),
+		Detail:    "The identity project " + client.IdentityProject() + " does not have these on: " + words.And(off),
 		Remedy:    "Run the Google Cloud connection's Cloud Shell block again; it turns them on",
 		ActionURL: googlecloud.CloudShellURL, Subjects: off,
 	}}, nil
