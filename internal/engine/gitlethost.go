@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -245,10 +246,15 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 
 	// 2. GIT, the node's own: the pool resolves its lanes once (code_git_ready),
 	// sized by the node's memory ([Options.gitMemory] in this package's tests)
-	// less what this node keeps beside Gitlet ([gitWork]).
+	// less what this node keeps beside Gitlet: the executor's pools ([gitWork])
+	// and the store's page cache, at that memory as at the store's open.
+	work, conns := gitWork(e.profile, boot), storeOptions(boot, nil, 0).NodeConnections(heldLogs(boot))
 	pool, err := gitproc.New(ctx, gitproc.Options{
-		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers,
-		Memory: e.gitMemory, Reserve: gitWork(e.profile, boot).MemoryPools, Home: layout.Home, Metrics: e.metrics,
+		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers, Memory: e.gitMemory,
+		Reserve: func(memory int64) int64 {
+			return work.MemoryPools(memory) + store.PageCacheShare(storeSizedBy(memory), conns)
+		},
+		Home: layout.Home, Metrics: e.metrics,
 	})
 	if err != nil {
 		return gitletHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+

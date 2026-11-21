@@ -2158,7 +2158,7 @@ which its maintainer must be able to hold.
 
 **The budget.** A Gitlet node reads its memory (the least of the machine's and
 any cgroup limit) and keeps 224 MiB of it for every git transfer it admits at once and 896 MiB for each core its git runs on,
-for the store, the broker, the engine and its reads. Both count only the cores the memory backs at 2 GiB a core: a container limited in memory and not in CPU sees its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers rather than 256, and runs as the eight-core node its memory makes it.
+for the broker, the engine, the rest of the store and its reads. Both count only the cores the memory backs at 2 GiB a core: a container limited in memory and not in CPU sees its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers rather than 256, and runs as the eight-core node its memory makes it.
 Before both it keeps the executor's own pools it runs, each at its worst and
 twice that for the heap's growth at Go's default `GOGC`: 116 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
@@ -2168,10 +2168,14 @@ turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
 ingress node mounts), so every Gitlet node keeps the transcript reads' pool,
 with seats or without; on a node without seats of 2 GiB of memory a core in
-all, that costs it one transfer. The lanes' and the budget's figures in this
-section, but the table below, are of the memory those pools leave. They are
-the executor's in-process pools alone: a node running seats also holds its
-harness calls and boxes ([Replica count](../guides/deployment.md#replica-count)).
+all, that costs it at most one transfer. Beside the pools it keeps its store's
+[page cache](../guides/deployment.md#the-page-cache), a sixteenth of its memory
+shared by the connections of its two files (one pinned writer for each of its
+14 state logs among them). The lanes' and the budget's figures in this
+section, but the table below, are of the memory the pools and the page cache
+leave. The pools are the executor's in-process pools alone: a node running
+seats also holds its harness calls and boxes
+([Replica count](../guides/deployment.md#replica-count)).
 The rest is the budget of its background work. Every step (the bitmap, the
 index without one, a cold cache's included, the commit-graph, the tip, a
 connectivity check, a compaction's build, a publication's) is held to the budget
@@ -2225,19 +2229,19 @@ than guess it.
 
 At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 
-| Node | Seats | Executor's pools | Transfers | Kept for the store, the broker, the engine and its reads | Background budget |
-|---|---|---|---|---|---|
-| 2 GiB, one core | no | 116 | 3 | 845 | 415 |
-| 2 GiB, one core | yes | 1 980 | 1 | 30 | 0 |
-| 4 GiB, two cores | no | 116 | 7 | 1 741 | 671 |
-| 4 GiB, two cores | yes | 1 980 | 4 | 926 | 294 |
-| 8 GiB, four cores | no | 116 | 15 | 3 533 | 1 183 |
-| 8 GiB, four cores | yes | 1 980 | 12 | 2 718 | 806 |
-| 16 GiB, eight cores | no | 116 | 31 | 7 117 | 2 207 |
-| 16 GiB, eight cores | yes | 1 980 | 28 | 6 302 | 1 830 |
+| Node | Seats | Executor's pools | Store's page cache | Transfers | Kept for the broker, the engine, the rest of the store and its reads | Background budget |
+|---|---|---|---|---|---|---|
+| 2 GiB, one core | no | 116 | 128 | 3 | 789 | 343 |
+| 2 GiB, one core | yes | 1 980 | 128 | 1 | 0 | 0 |
+| 4 GiB, two cores | no | 116 | 256 | 7 | 1 629 | 527 |
+| 4 GiB, two cores | yes | 1 980 | 256 | 3 | 814 | 374 |
+| 8 GiB, four cores | no | 116 | 512 | 14 | 3 309 | 1 119 |
+| 8 GiB, four cores | yes | 1 980 | 512 | 11 | 2 494 | 742 |
+| 16 GiB, eight cores | no | 116 | 1 024 | 29 | 6 669 | 2 079 |
+| 16 GiB, eight cores | yes | 1 980 | 1 024 | 26 | 5 854 | 1 702 |
 
 A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
-186 MiB more than its memory. Small and development installs run there, so it
+284 MiB more than its memory. Small and development installs run there, so it
 still boots and serves, and logs `code_cache_memory_short` once at boot with the
 figures; at the default `node.max_concurrent`, give a node running seats beside
 Gitlet 4 GiB of memory or more in all.
