@@ -3,6 +3,8 @@
 #   .github/workflows/*.yml   the actions CI and releases run on
 #   go.mod                    the engine's own Go dependencies
 #   dashboard/package.json    the dashboard's build and runtime dependencies
+#   internal/browser/boxhelper/tree/package.json
+#                             the Playwright MCP a seat's box installs
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
@@ -27,14 +29,14 @@
 # back by this schedule.
 #
 # Beyond the schedule there are two knobs here, and each is written down where
-# it is set. Every entry pins its own `commit-message.prefix`; one entry — npm —
-# also carries three `groups:` rules, because three families there are broken
-# unless their packages move in one pull request. A group raises the members that have
-# an update TOGETHER, in one pull request titled for the group rather than for
-# any package in it — so it costs a less precise subject on every bump, and it
-# puts one member's bad release in front of the rest. Pay that only where the
-# split is genuinely broken; everything matching no group still gets its own
-# pull request, so grouping narrows nothing.
+# it is set. Every entry pins its own `commit-message.prefix`; one entry — the
+# dashboard's npm — also carries three `groups:` rules, because three families
+# there are broken unless their packages move in one pull request. A group
+# raises the members that have an update TOGETHER, in one pull request titled
+# for the group rather than for any package in it — so it costs a less precise
+# subject on every bump, and it puts one member's bad release in front of the
+# rest. Pay that only where the split is genuinely broken; everything matching
+# no group still gets its own pull request, so grouping narrows nothing.
 #
 # The prefix earns its place because these pull requests
 # auto-merge (.github/workflows/dependabot-merge.yml): the title Dependabot
@@ -205,6 +207,21 @@ updates:
       crewlethq:
         patterns:
           - "@crewlethq/*"
+
+  # The Playwright MCP a seat's box installs: npm in the box runs `npm ci` on
+  # this manifest and its lock (internal/browser/boxhelper's package doc). A
+  # bump is code every seat's browser runs, so its pull request stays red, and
+  # dependabot-merge.yml never queues it, until a person has read the release
+  # and lands it from a branch of their own (CONTRIBUTING.md, "A Playwright MCP
+  # bump is read before it lands"). No `engines`, for the dashboard entry's
+  # reason, and no group: the manifest names one package, which pins the other
+  # two exactly.
+  - package-ecosystem: npm
+    directory: "/internal/browser/boxhelper/tree"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither

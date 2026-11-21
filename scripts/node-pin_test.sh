@@ -888,9 +888,10 @@ fi
 
 # THE FLOOR'S END OF LIFE: from 60 days before it, the check fails as for a pin behind, naming the newest release of
 # the oldest major above the floor in long-term support whose own end is more than 60 days away — Node 24, never Node
-# 23, which has no lts — verified and hashed as a patch is, and the MinNodeMajor and MinNPMMajor change it takes; past
-# it, the same. Mutation: compare the end of life with no warning window -> 30 days ahead reads as far (0, red); take
-# the next major, or a major with no lts -> 23, whose release no releaser signed (2, red).
+# 23, which has no lts — verified and hashed as a patch is, and the MinNodeMajor, MinNPMMajor and tree recipe's
+# min_npm change it takes; past it, the same. Mutation: compare the end of life with no warning window -> 30 days
+# ahead reads as far (0, red); take the next major, or a major with no lts -> 23, whose release no releaser signed (2,
+# red); leave min_npm out of the report -> red.
 for ahead in 30 -3; do
 	c="$TMPROOT/eol$ahead"
 	s="$(checkcase "eol$ahead" "$releaser" "$second")"
@@ -903,6 +904,8 @@ for ahead in 30 -3; do
 		"\`build(deps): raise node's floor from 22 to 24\`"
 	expect "Node 22's end of life $ahead days away -> 1 naming boxhelper.MinNodeMajor and MinNPMMajor" 1 \
 		"it changes internal/browser/boxhelper.MinNodeMajor from 22 to 24, the oldest Node a box must carry, and MinNPMMajor"
+	expect "Node 22's end of life $ahead days away -> 1 naming the tree recipe's min_npm, which moves with MinNPMMajor" 1 \
+		"and scripts/playwright-tree.sh's min_npm with MinNPMMajor (TestTheTreeRecipeRefusesTheNPMTheHelperRefuses"
 done
 expect "an end of life already past says so" 1 "Node 22 reached its end of life on $(day -3)"
 c="$TMPROOT/eolfar"

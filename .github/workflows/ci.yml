@@ -92,12 +92,13 @@ concurrency:
 # commit are saved only when that changes: the modules (0.27 GB), the pinned
 # gits (0.06 GB, Linux's and macOS's), the pinned Chromiums (0.36 GB), the
 # floor Node (0.04 GB, its linux-x64 build with its npm as actions/cache packs
-# it, measured on a development machine), npm's cache (0.05 GB) and the sshd
-# test images (0.11 GB). `caches`, at the end of the run, then deletes every
-# entry a newer one of its kind supersedes. So the repository holds one set,
-# 5.78 GB in 21 entries, and a push's saves take it to about 10.7 GB until
-# that job runs, 15.5 GB while two pushes' runs overlap: past the 10 GB, so
-# eviction takes entries again, the newest of a kind among them.
+# it, measured on a development machine), the Playwright tree (0.01 GB, measured
+# the same way), npm's cache (0.05 GB) and the sshd test images (0.11 GB).
+# `caches`, at the end of the run, then deletes every entry a newer one of its
+# kind supersedes. So the repository holds one set, 5.78 GB in 22 entries, and
+# a push's saves take it to about 10.7 GB until that job runs, 15.6 GB while
+# two pushes' runs overlap: past the 10 GB, so eviction takes entries again,
+# the newest of a kind among them.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -257,6 +258,18 @@ jobs:
       # the runner image, and takes about fifty seconds.
       - name: the floor Node's recipe's and the pin check's own suite
         run: scripts/node-pin_test.sh
+      # The own suite of the Playwright tree's recipe (scripts/playwright-tree.sh)
+      # — `make playwright-tree-test` — for the git suite's reasons, against a
+      # stand-in registry on 127.0.0.1 with every other address sent to a
+      # refused proxy, so it reads no network; about a minute. It runs npm,
+      # so node comes first: `latest`, for the reason the `dashboard gates` job
+      # gives at its own setup-node, which this cannot alias, an anchor being
+      # usable only below it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+      - name: the Playwright tree's recipe's own suite
+        run: scripts/playwright-tree_test.sh
       # Only what this job created or used, by the epoch above. Without the
       # prune, every save would carry forward everything the restored cache
       # held, and the go command only trims entries five days unused — so each
@@ -798,16 +811,39 @@ jobs:
         with:
           path: ${{ env.CREWLET_NODE_CACHE }}
           key: node-${{ runner.os }}-${{ runner.arch }}-l${{ steps.node-key.outputs.layout }}.${{ steps.node-key.outputs.pins }}
+      # THE PLAYWRIGHT TREE. Both test targets depend on `make
+      # playwright-tree`, which installs the tree internal/browser/boxhelper/tree
+      # locks with npm into CREWLET_PLAYWRIGHT_TREE_CACHE (the Makefile's `##@
+      # The locked Playwright tree`), and name it (PLAYWRIGHT_TREE_ENV). Cached
+      # as the floor Node is and for its reasons, keyed on the two files and the
+      # recipe's `layout=` line, which are all that names a tree, and on no
+      # arch: the lock holds no package of a platform's own (boxhelper's
+      # TestTheLockIsTheReleaseSomebodyRead), so the tree is the same on every
+      # runner. Without it every shard of every run would ask npm's registry.
+      - &playwright-tree-cache-dir
+        name: name the Playwright tree's cache directory, and read what names it
+        id: playwright-tree-key
+        run: |
+          echo "CREWLET_PLAYWRIGHT_TREE_CACHE=$HOME/.cache/crewlet/playwright-tree" >> "$GITHUB_ENV"
+          echo "layout=$(sed -n 's/^layout=\([0-9][0-9]*\)$/\1/p' scripts/playwright-tree.sh)" >> "$GITHUB_OUTPUT"
+      - &playwright-tree-restore
+        name: restore the Playwright tree main installed
+        id: playwright-tree
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
       # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
-      # under plain `node` against a stand-in of the bridge's notes route — and
-      # `make test` refuses to start without it (require-node). The probe
-      # never skips here: `make test` requires every prerequisite of the suite
-      # (internal/prereqtest's CREWLET_REQUIRE_PREREQUISITES), so a missing
-      # node fails it, and the skip a bare local loop takes is declared nowhere
-      # in internal/skipgate.
-      # `latest`, and no npm or install, for the reasons the `gates` job below
-      # gives.
+      # under plain `node` against a stand-in of the bridge's notes route, and
+      # internal/browser/boxhelper's cases, which install the Playwright tree
+      # with the npm it brings — and `make test` refuses to start without them
+      # (require-node, require-npm). The cases never skip here: `make test`
+      # requires every prerequisite of the suite (internal/prereqtest's
+      # CREWLET_REQUIRE_PREREQUISITES), so a missing node fails them, and the
+      # skip a bare local loop takes is declared nowhere in internal/skipgate.
+      # `latest` for the reasons the `gates` job below gives; its npm installs
+      # the Playwright tree when the restore above brought none.
       - uses: actions/setup-node@v7
         with:
           node-version: latest
@@ -867,6 +903,13 @@ jobs:
         with:
           path: ${{ env.CREWLET_NODE_CACHE }}
           key: node-${{ runner.os }}-${{ runner.arch }}-l${{ steps.node-key.outputs.layout }}.${{ steps.node-key.outputs.pins }}
+      # The Playwright tree, by the same rule.
+      - name: save the Playwright tree
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.playwright-tree.outputs.cache-hit != 'true' && strategy.job-index == 0
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
       # The sshd test images, main only and a miss only, but from the shard that
       # ran internal/ssh rather than the first: sshdtest marks the directory
       # complete once it holds a tar of every image, and only that shard has.
@@ -1032,15 +1075,16 @@ jobs:
       # length: no node version is pinned anywhere in the tree but the suite's
       # floor Node, which a weekly check moves, because Dependabot moves
       # neither a workflow `with:` nor an `engines` field, so a pin would go
-      # quietly out of date rather than stay put. No npm and no install here —
-      # this only needs a node. (It does NOT have to match the dashboard jobs:
-      # what runs here is the COMMITTED bundle, not their fresh output.)
+      # quietly out of date rather than stay put. Its npm installs the
+      # Playwright tree when the restore below brought none, and nothing else
+      # here. (It does NOT have to match the dashboard jobs: what runs here is
+      # the COMMITTED bundle, not their fresh output.)
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      # The pinned gits and Chromiums and the floor Node, as in the race shards
-      # above, whose comments say why. Restored here and never saved: the first
-      # race shard is their one saver.
+      # The pinned gits and Chromiums, the floor Node and the Playwright tree,
+      # as in the race shards above, whose comments say why. Restored here and
+      # never saved: the first race shard is their one saver.
       - *git-cache-dir
       - *git-restore
       - *git-deps
@@ -1048,6 +1092,8 @@ jobs:
       - *chromium-restore
       - *node-cache-dir
       - *node-restore
+      - *playwright-tree-cache-dir
+      - *playwright-tree-restore
       - name: this shard of the packages that run alone
         env:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -1276,10 +1322,10 @@ jobs:
           key: golangci-lint-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             golangci-lint-${{ runner.os }}-
-      # `latest` is deliberate, and it is one of the six floating versions in
-      # this repository: the others are the `node-version: latest` in the
-      # `dashboard gates` (which the dashboard unit shards reuse),
-      # `test (race)` and `end-to-end gates` jobs above and in
+      # `latest` is deliberate, and it is one of the seven floating versions
+      # in this repository: the others are the `node-version: latest` in the
+      # `build + vet`, `dashboard gates` (which the dashboard unit shards
+      # reuse), `test (race)` and `end-to-end gates` jobs above and in
       # dependabot-dashboard.yml's `build` job, and goreleaser's `~> v2` in
       # release.yml, each held that way for its own reason stated at its own
       # line.
@@ -1329,11 +1375,11 @@ jobs:
   # so the repository holds one set rather than whatever eviction leaves. An
   # entry's kind is its key without the last part, which is the commit for an
   # entry saved on every push and the hash of what it holds for the rest (the
-  # modules, the pinned gits, the pinned Chromiums, the floor Node, npm's
-  # cache, the sshd test images). Only main's entries of the kinds this file
-  # saves are listed, newest first, and the first of each kind is kept. So no
-  # kind is ever emptied, and a job that failed, and therefore saved nothing,
-  # keeps the entry it saved last.
+  # modules, the pinned gits, the pinned Chromiums, the floor Node, the
+  # Playwright tree, npm's cache, the sshd test images). Only main's entries of
+  # the kinds this file saves are listed, newest first, and the first of each
+  # kind is kept. So no kind is ever emptied, and a job that failed, and
+  # therefore saved nothing, keeps the entry it saved last.
   #
   # This is the one job here that changes anything outside its own run, so
   # every line of it is security review:
@@ -1368,7 +1414,7 @@ jobs:
           kept=0 count=0
           while IFS=$'\t' read -r id key size; do
             case "$key" in
-              gobuild-*|gomod-*|git-*|chromium-*|node-*|sshdtest-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              gobuild-*|gomod-*|git-*|chromium-*|node-*|playwright-tree-*|sshdtest-*|test-weights-*|golangci-lint-*|npm-*) ;;
               *) continue ;;
             esac
             kind="${key%-*}-"

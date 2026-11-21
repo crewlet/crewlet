@@ -444,7 +444,10 @@ doing the thing, or does more), so read the file when you touch it:
   reported to leave it empty while a ruleset still blocks the merge,
   so skipping would stall every bump with nothing red. Loosening
   the `if:` makes the workflow run *more*; narrowing the approval silently stops
-  it approving.
+  it approving. Its `paths-ignore` keeps it off a bump of the Playwright tree a
+  seat's box installs, which a person lands: drop it and that bump is approved
+  and queued, and merges itself once anything pushed onto its branch turns it
+  green.
 - **`.github/workflows/dependabot-recreate.yml`'s filter, its command and its
   environment.** It comments `@dependabot recreate` on a bump in
   conflict that Dependabot will not rebase itself: one holding a commit that is

@@ -84,10 +84,10 @@ A `v*` tag is the only compatibility boundary; a surface no tag has shipped has 
 - `dashboard/` — the dashboard's SOURCE (React 19, TypeScript, Vite). `make dashboard` builds it into `static/dashboard/`, `static/artifacts/` and `static/protocol/`, which are committed and NEVER hand-edited (`.claude/rules/dashboard.md`).
 - `examples/` — the Nimbus example company, a working two-tier config. `docs/` — product documentation (docs.crewlet.ai). `skills/` — FOUNDER-facing authoring skills for an AI assistant (not `.claude/skills/`).
 - `schema/` — GENERATED JSON Schema for both config tiers (`crewlet schema <tier>`; a test regenerates and compares): change the Go models, never the files.
-- `scripts/` — the two vendor dev-loop bootstraps, the DCO gate, and the git, Chromium and floor Node pins (`.claude/rules/dependencies.md`).
+- `scripts/` — the two vendor dev-loop bootstraps, the DCO gate, the git, Chromium and floor Node pins, and the Playwright tree's install (`.claude/rules/dependencies.md`).
 
 ## Checks and Tests
-- **Before committing, ALWAYS run `make check`**, every gate CI runs on a pull request (`.claude/rules/testing.md` lists them). It needs GnuPG, `xz`, `zip`, `unzip`, `node`, and a prebuilt `golangci-lint` built with a Go whose language version is no older than `go.mod`'s. List unformatted files with `gofmt -l` over `go run ./internal/sourcetree/gofiles`, never `gofmt -l .`, which enters the nested checkouts under `.claude/worktrees/`. Repair with `make fmt` (`gofmt -s -w`) or `golangci-lint fmt` on that list (it also fixes import grouping), never plain `gofmt -w`, which cannot fix what the linter reports.
+- **Before committing, ALWAYS run `make check`**, every gate CI runs on a pull request (`.claude/rules/testing.md` lists them). It needs GnuPG, `xz`, `zip`, `unzip`, `node` (with its npm), and a prebuilt `golangci-lint` built with a Go whose language version is no older than `go.mod`'s. List unformatted files with `gofmt -l` over `go run ./internal/sourcetree/gofiles`, never `gofmt -l .`, which enters the nested checkouts under `.claude/worktrees/`. Repair with `make fmt` (`gofmt -s -w`) or `golangci-lint fmt` on that list (it also fixes import grouping), never plain `gofmt -w`, which cannot fix what the linter reports.
 - **Run `make test` and `make test-solo`**, never a bare `go test ./...`, which runs the cluster-forming packages beside everything else and bypasses `internal/skipgate`; `go test ./internal/foo/` is a fine loop for one package. Every package runs under the race detector with `-count=1`. Packages that stand up a multi-member broker run alone in `make test-solo`, so a run of `make test` by itself has NOT exercised the fleet.
 - **A skip is not a pass**: both test targets fail on a skip not declared in `internal/skipgate/allowed.go`. `internal/store`'s capability cases skip DELIBERATELY, and that is the mechanism rather than a gap: a feature Turso announces but does not reach Go yet turns into a passing test the day it lands.
 - **The Makefile is the command CI runs.** The two test jobs call `make test` and `make test-solo`, so `GOTEST`, `GOTESTBUILD` and `GOTESTRUN` change CI; every other job inlines its own copy of its target, and nothing checks they agree. Change a target and its `ci.yml` step in the same commit, and give a new target its `## ` help line.
@@ -113,7 +113,7 @@ A rule loads when you read or edit a file its `paths:` names; a skill loads when
 | `.claude/rules/compatibility.md` | the forward mechanisms that keep this build a good older peer |
 | `.claude/rules/operator.md` | what `crewlet-operator` follows, and how its companion change is made |
 | `.claude/rules/build-and-release.md` | Turso's linkage and the release matrix, what a tag ships, `main`'s image |
-| `.claude/rules/dependencies.md` | Dependabot, its groups and workflows, the git, Chromium and floor Node pins, the pinned tool servers |
+| `.claude/rules/dependencies.md` | Dependabot, its groups and workflows, the git, Chromium and floor Node pins, the Playwright tree's lock, the pinned tool servers |
 | `.claude/rules/broker.md` | the NATS topologies, keys and the coordination KV |
 | `.claude/rules/harnesses.md` | how a phase's tools reach a harness, and where each phase runs |
 | `.claude/rules/gitlet.md` | the git Gitlet runs and the pin the suite runs |

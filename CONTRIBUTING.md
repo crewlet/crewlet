@@ -126,8 +126,8 @@ floor of that major exactly, since a newer build in the floor's place is a floor
 nobody is testing. Never the machine's own Chrome (no exact version, no floor),
 and never the Chromium Playwright installs for the dashboard's layout suites
 (below): that one is pinned to the Playwright release that drives it,
-checksummed by nothing, and fetched by npm, which the engine's suite does not
-need.
+checksummed by nothing, and fetched by `npx playwright install`, which the
+engine's suite never runs.
 
 **The floor Node.** A box brings its own Node and npm, and the box helper
 supports Node `internal/browser/boxhelper.MinNodeMajor` (22) or newer with the
@@ -151,11 +151,30 @@ floor named there is held to `MinNodeMajor`'s major, and its npm to
 `node-test`, the recipe's and the weekly check's own suite, needs GnuPG beside
 those.
 
-**A current Node** (npm ships with it) for the dashboard. Its build output is
-committed, so building and running the ENGINE needs neither, but changing the
-dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
-plugins does. Nothing in the tree pins the node you install, the suite's floor
-(above) aside; CI installs the latest (see *Which node* under [A skip is not a
+**The Playwright tree.** A seat's box installs Playwright MCP with npm from the
+lock in `internal/browser/boxhelper/tree/`, and the box helper's cases read the
+Chromium build it expects from the tree the suite installs from that lock, and
+install it again from its npm cache with each Node's own npm, offline
+(`internal/browser/boxhelper/boxhelpertest`'s `Tree`). Every make target that
+runs the whole suite depends on `make playwright-tree`, which installs it with
+[`scripts/playwright-tree.sh`](scripts/playwright-tree.sh) (`node`, an npm of
+`MinNPMMajor` or newer and the SHA-256 tool; about 4 MB of download from the
+registry or mirror your npm configuration names, 23 MB kept, in
+`~/.cache/crewlet/playwright-tree`, which `CREWLET_PLAYWRIGHT_TREE_CACHE`
+moves), once per lock, and names it in `CREWLET_TEST_PLAYWRIGHT_TREE` (the
+Makefile's `PLAYWRIGHT_TREE_ENV`). A
+one-package loop names it and the floor Node by hand, as three statements:
+`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" go test ./internal/browser/boxhelper/...`
+A bare `go test` without them skips those cases, saying so, and runs the rest.
+`make check`'s `playwright-tree-test` is the recipe's own suite.
+
+**A current Node** (npm ships with it) for the dashboard and the suite. The
+dashboard's build output is committed, so building and running the ENGINE needs
+neither, but changing the dashboard or running the suite does: `internal/e2e`'s
+client replay, the probes of OpenCode's plugins and the box helper's cases run
+under node, and the suite's Playwright tree is installed with npm (above).
+Nothing in the tree pins the node you install, the suite's floor (above) aside;
+CI installs the latest (see *Which node* under [A skip is not a
 pass](#a-skip-is-not-a-pass)).
 **Docker** only for the vendor loops below; the engine itself needs no services.
 
@@ -213,12 +232,14 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
 scripts/chromium-pin_test.sh   # the Chromium recipe's and the pin check's own suite (chromium-test)
 scripts/node-pin_test.sh       # the floor Node's recipe's and the pin check's own suite (node-test)
+scripts/playwright-tree_test.sh  # the Playwright tree's recipe's own suite (playwright-tree-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 make git         # the pinned gits, built once a machine (both test targets need it)
 make chromium    # the pinned Chromiums, fetched once a machine (both test targets need them)
 make node        # the floor Node with its npm, fetched once a machine (both test targets need it)
+make playwright-tree  # the Playwright tree, installed with npm once per lock (both test targets need it)
 make test        # the suite, minus the packages that run alone, on the node pin, four at a time
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
@@ -493,12 +514,18 @@ The prerequisites that legitimately vary by machine:
   requires node and CI's race shards install it; the probes find node by the
   same rule as the replay. The plugins import nothing, so no npm.
 
+  `node` also runs the npm with which `internal/browser/boxhelper`'s
+  `TestTheLockInstallsWithEachNodesOwnNpm` installs the Playwright tree from
+  the suite's npm cache: the machine's npm, and the floor Node's own under it.
+
 - **`npm`** builds and tests the dashboard. Vitest runs its assertions (the
   wire protocol, the router's history rules, the ordering comparators, the
   purity of `src/contract/`, and the MEASURED contrast of every colour token
   over every surface it can land on, in both themes and for protan and deutan
   vision): `make dashboard-test`. They are computed from the file that ships,
-  since none is checkable by looking at the stylesheet.
+  since none is checkable by looking at the stylesheet. npm also installs the
+  suite's Playwright tree (`make playwright-tree`), which the box helper's
+  cases find by the `internal/prereqtest` rule above (`boxhelpertest.Tree`).
 
   **A set the engine owns is declared in `dashboard/src/contract/`**, one
   module per concern, and held against the engine by one Go test that reads it
@@ -633,9 +660,10 @@ The prerequisites that legitimately vary by machine:
   dashboard bump brings its own bundle](#a-dashboard-bump-brings-its-own-bundle).
 
   **Which node.** CI installs `latest` (the newest Node release, resolved by
-  setup-node when the job runs) in the `dashboard gates` job and the
-  `dashboard unit` shards (one step, which the shards reuse), the race shards,
-  the `end-to-end gates` shards and
+  setup-node when the job runs) in the `build + vet` job, for the Playwright
+  tree recipe's suite, the `dashboard gates` job and the `dashboard unit`
+  shards (one step, which the shards reuse), the race shards, the `end-to-end
+  gates` shards and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard
   gates`, because it rebuilds the bundle that job diffs. The two sets of Go
@@ -1119,6 +1147,7 @@ examples launch are held by a test (see below).
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
+| `internal/browser/boxhelper/tree/package.json` | `npm` | the Playwright MCP a seat's box installs |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 | `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
@@ -1137,8 +1166,8 @@ names in `with:`, which Dependabot never bumps, each for the reason at its line
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, with the commit prefix its bumps carry,
-plus three grouping rules on the npm entry. CI runs on each pull request and
-decides whether it lands. Ten things to know:
+plus three grouping rules on the dashboard's npm entry. CI runs on each pull
+request and decides whether it lands. Eleven things to know:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
   `@types/react-dom` arrive in one pull request, because **react-dom checks at
@@ -1188,6 +1217,11 @@ decides whether it lands. Ten things to know:
   rebuilds and pushes it: see [A dashboard bump brings its own
   bundle](#a-dashboard-bump-brings-its-own-bundle). Bumps that leave the output
   unchanged (`@types/*`, `prettier`, a byte-identical build tool) get no commit.
+- **A Playwright MCP bump waits for a person.** The tree a seat's box installs
+  (`internal/browser/boxhelper/tree/`) has an npm entry and no group; its pull
+  request never merges itself, and stays red until `internal/browser`'s release
+  constants name what it moved: see [A Playwright MCP bump is read before it
+  lands](#a-playwright-mcp-bump-is-read-before-it-lands).
 - **A Compose image can be held back on purpose**, with the reason in a comment
   beside the pin: `mattermost-db` holds its Postgres major because an existing
   `mattermost-pgdata` volume will not open under a newer one without a
@@ -1223,7 +1257,8 @@ A new dependency surface (a second `package.json`, a second module) needs its
 `updates:` entry in the same change; nothing reports the omission.
 
 The tool servers the docs, examples and skills launch sit in a page's YAML or a
-setup step's command line, out of Dependabot's sight.
+setup step's command line, out of Dependabot's sight. (The Playwright MCP a
+seat's box installs is not one of them: it is a lock Dependabot watches.)
 [`internal/config/toolservers_test.go`](internal/config/toolservers_test.go)
 holds them:
 
@@ -1275,7 +1310,10 @@ arithmetic `std` does all of it.
 approves a pull request Dependabot opened and queues it with `gh pr merge
 --auto --squash`. CI *is* the review a dependency change gets: `--auto` holds the
 merge until every check `main`'s protection rule requires has passed, and a bump
-CI rejects sits red until a person looks.
+CI rejects sits red until a person looks. All but one kind: a pull request that
+changes only `internal/browser/boxhelper/tree/` starts no run (the workflow's
+`paths-ignore`), because a person reads and lands that bump (see [A Playwright
+MCP bump is read before it lands](#a-playwright-mcp-bump-is-read-before-it-lands)).
 
 Two settings outside this repository's files hold that up. `main`'s protection
 rule must **require** the `ci` checks: `--auto` waits only for the checks a rule
@@ -1325,8 +1363,9 @@ and the `--auto --squash` flags were dropped, and no linter reads a workflow
 file. Every failure is silent (drop `--auto` and, while `main` requires the
 checks, the merge step goes red; with no such rule it merges before a check
 reports), and the job holds `contents: write` and `pull-requests: write`. Read
-the `if:`, the approval's condition and the merge command on any diff that
-touches [`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
+the `paths-ignore`, the `if:`, the approval's condition and the merge command on
+any diff that touches
+[`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
 
 ### A dashboard bump brings its own bundle
 
@@ -1382,10 +1421,10 @@ outside this repository's files must exist:
 The workflow decides nothing. [`dependabot-merge.yml`](.github/workflows/dependabot-merge.yml)
 approved Dependabot's commit, and `main`'s ruleset decides whether the bundle
 commit on top lands. With *dismiss stale approvals* and *require approval of the
-most recent push* both off, **as they are today**, a bump merges itself once CI
-is green, and so does *anything* pushed onto an open Dependabot branch: a
-bundle, a commit from a person with write access, or from whoever holds this
-token. Turning on **Require approval of the most recent reviewable push** puts a
+most recent push* both off, **as they are today**, a bump `dependabot-merge.yml`
+queued merges itself once CI is green, and so does *anything* pushed onto its
+open branch: a bundle, a commit from a person with write access, or from
+whoever holds this token. Turning on **Require approval of the most recent reviewable push** puts a
 person in front of that, at the price that a bump whose bundle was rebuilt then
 waits for one.
 
@@ -1403,6 +1442,38 @@ Nothing checks any of this, and the workflow holds a credential that can write
 to a branch. Read the `if:` on both jobs, each job's `permissions:` and the
 token's scope on any diff that touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
+
+### A Playwright MCP bump is read before it lands
+
+The Playwright MCP a seat's box installs is a manifest and a lock in
+[`internal/browser/boxhelper/tree/`](internal/browser/boxhelper/tree), which npm
+in the box installs with `npm ci`, and Dependabot proposes each release of it.
+Its pull request stays red: `internal/browser`'s release constants name the
+release somebody read, and boxhelper's tests hold the lock to them (boxhelper's
+package doc says why). Nor does it merge itself: `dependabot-merge.yml` neither
+approves nor queues a pull request that changes only this directory (see [A
+bump merges itself](#a-bump-merges-itself)). Land the bump from a branch of
+your own, not Dependabot's, which stops rebasing once it holds a commit of
+yours and carries a title of about 90 characters, where a subject takes 72:
+
+1. In `internal/browser/boxhelper/tree/`, run `npm install --package-lock-only
+   --ignore-scripts --save-exact --registry=https://registry.npmjs.org/
+   @playwright/mcp@<b>`. Never behind a mirror, whose host the lock would then
+   name.
+2. `tree=$(scripts/playwright-tree.sh) && (cd "$tree" && npm audit signatures
+   --registry=https://registry.npmjs.org/)`: the recipe installs the new lock's
+   tree and prints its path, and every package in it must show a verified
+   registry signature and a verified attestation, read from npm's registry
+   itself, as step 1's lock is, since a mirror need not serve either.
+3. Read the release. Then move `PlaywrightMCPRelease` and
+   `PlaywrightCoreRelease` in
+   [`internal/browser/playwright.go`](internal/browser/playwright.go) to the
+   lock's versions, and the expected build to the chromium entry of
+   `$tree/node_modules/playwright-core/browsers.json`;
+   `TestTheLockIsTheReleaseSomebodyRead` and
+   `TestTheLockedCoreExpectsTheChromiumSomebodyRead` name what they found.
+4. `make check`, and title the pull request `build(deps): bump playwright mcp
+   from <a> to <b>`. Dependabot closes its own once `main` carries the release.
 
 ### A conflicted bump is asked to recreate
 
@@ -1687,10 +1758,13 @@ fetches the new build and refuses a tarball that is not the digest), then
 `build(deps): bump node's floor from <a> to <b>`.
 
 **Raising the floor** is never a bump: it changes `MinNodeMajor`, the oldest
-Node a box must carry, and `MinNPMMajor`, to the npm the new floor bundles, and
+Node a box must carry, and `MinNPMMajor`, to the npm the new floor bundles, with
+[`scripts/playwright-tree.sh`](scripts/playwright-tree.sh)'s `min_npm`, and
 moves the pin to the new major's newest release in the same pull request,
 titled `build(deps): raise node's floor from <a> to <b>`, each a major;
-`TestTheFloorNodeIsTheMajorItStandsFor` fails while the three disagree.
+`TestTheFloorNodeIsTheMajorItStandsFor` fails while the pin and the two
+constants disagree, and `TestTheTreeRecipeRefusesTheNPMTheHelperRefuses` while
+`min_npm` and `MinNPMMajor` do.
 
 **The keys are checked in the same run.** Some releasers' keys or their signing
 subkeys expire, and a release signed after that with the key extended cannot

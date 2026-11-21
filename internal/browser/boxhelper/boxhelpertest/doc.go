@@ -4,7 +4,8 @@
 // build with the npm it bundles ([Floor], [FloorNPM]), of those majors
 // exactly, so what a case asserts holds on the oldest Node and npm a box may
 // carry as well as on current ones (boxhelper's package doc says why the floor
-// is pinned).
+// is pinned). And the Playwright tree the suite installs from the committed
+// lock ([Tree]).
 //
 // # Where each comes from
 //
@@ -25,6 +26,19 @@
 // and without npm's own settings from the environment, every variable whose
 // name begins npm_config_ in any case, as npm reads them: npm 10 and 11 end,
 // printing nothing, under a loglevel they do not know.
+//
+// # The tree the suite installs
+//
+// The same targets install the tree internal/browser/boxhelper/tree locks
+// (`make playwright-tree`, the one recipe scripts/playwright-tree.sh), once per
+// lock, and name it in CREWLET_TEST_PLAYWRIGHT_TREE, under the same rule. It
+// holds npm's install of the lock in node_modules, where the expected
+// Chromium's build is written (playwright-core's browsers.json), and the npm
+// cache that install filled in npm-cache, from which a case installs the tree
+// again with each Node's own npm, offline: a box's install without a registry.
+// A tree whose package-lock.json is not the committed one byte for byte is
+// another lock's, a variable left from before a bump, and fails naming the
+// recipe.
 //
 // Test support (the name ends in `test`), so internal/fixedwait reads it as
 // test code: it holds no fixed wait, and every bound in it is a context's.

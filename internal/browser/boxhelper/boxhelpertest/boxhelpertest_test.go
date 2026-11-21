@@ -244,3 +244,91 @@ func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 		})
 	}
 }
+
+// THE TREE IS FOUND, REQUIRED OR SKIPPED, and held to the lock. Unset, it is a
+// missing prerequisite (internal/prereqtest): it fails under the requirement
+// the make targets set, naming `make playwright-tree`, and skips otherwise.
+// Named, it must be a whole tree of the committed lock: .complete, its npm
+// cache, and that lock byte for byte. Not parallel: it sets the variables Tree
+// reads.
+//
+// Mutations, each red: drop the .complete, npm cache or lock check (that row's
+// tree is handed back); look for npm-cache alone (an empty one is handed
+// back); a tree's lock compared with nothing.
+func TestTheTreeIsFoundRequiredOrSkippedAndHeldToTheLock(t *testing.T) {
+	lock, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "browser", "boxhelper", "tree",
+		"package-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// tree is a stand-in tree, laid out as scripts/playwright-tree.sh lays one
+	// out, with each of its parts but the one drop names and what lies under
+	// it, and lock as its lock.
+	tree := func(drop string, lock []byte) string {
+		dir := t.TempDir()
+		for _, part := range []struct {
+			name  string
+			write func(string) error
+		}{
+			{".complete", func(p string) error { return os.WriteFile(p, nil, 0o644) }},
+			{"npm-cache", func(p string) error { return os.Mkdir(p, 0o755) }},
+			{"npm-cache/_cacache", func(p string) error { return os.Mkdir(p, 0o755) }},
+			{"package-lock.json", func(p string) error { return os.WriteFile(p, lock, 0o644) }},
+		} {
+			if drop == "" || !strings.HasPrefix(part.name, drop) {
+				if err := part.write(filepath.Join(dir, part.name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		return dir
+	}
+	whole := tree("", lock)
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		name, require, tree string
+		fatal, skip         string // a fragment of each; neither: the tree back
+	}{
+		{name: "unset and required", require: "1", fatal: treeEnv + " is unset"},
+		{name: "unset", skip: "`make playwright-tree` installs it"},
+		{name: "relative", require: "1", tree: "playwright-tree", fatal: "not an absolute path"},
+		{name: "missing", require: "1", tree: filepath.Join(t.TempDir(), "gone"), fatal: "names nothing"},
+		{name: "a file", require: "1", tree: file, fatal: "is not a directory"},
+		{name: "a tree without .complete", require: "1", tree: tree(".complete", lock), fatal: "holding no .complete"},
+		{name: "a tree without its npm cache", require: "1", tree: tree("npm-cache", lock), fatal: "holds no npm cache"},
+		{name: "a tree whose npm-cache holds no cache", require: "1", tree: tree("npm-cache/_cacache", lock),
+			fatal: "holds no npm cache"},
+		{name: "a tree without its lock", require: "1", tree: tree("package-lock.json", lock),
+			fatal: "installed from another lock"},
+		{name: "a tree of another lock", require: "1", tree: tree("", append(slices.Clone(lock), ' ')),
+			fatal: "installed from another lock"},
+		{name: "a whole tree of the lock", require: "1", tree: whole},
+		{name: "a whole tree of the lock, unrequired", tree: whole},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(prereqtest.RequireEnv, tc.require)
+			t.Setenv(treeEnv, tc.tree)
+			var got string
+			ended := prereqtest.Run(t, func(tb testing.TB) { got = Tree(tb) })
+			switch {
+			case tc.fatal != "":
+				if !strings.Contains(ended.Fatal, tc.fatal) || !strings.Contains(ended.Fatal, treeRemedy) {
+					t.Errorf("failed %q, skipped %q; want a failure saying %q and %q", ended.Fatal, ended.Skip,
+						tc.fatal, treeRemedy)
+				}
+			case tc.skip != "":
+				if !strings.Contains(ended.Skip, tc.skip) || ended.Fatal != "" {
+					t.Errorf("failed %q, skipped %q; want a skip saying %q", ended.Fatal, ended.Skip, tc.skip)
+				}
+			default:
+				if ended != (prereqtest.Ended{}) || got != tc.tree {
+					t.Errorf("found %q (ended %+v), want %s", got, ended, tc.tree)
+				}
+			}
+		})
+	}
+}

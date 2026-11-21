@@ -217,9 +217,9 @@
 | `toolname` | Declares once the engine's own tool names that a package must spell but cannot import from the tool's owner; a leaf, with a suite walking the module's string literals for copies. |
 | `toolname/toolnametest` | TEST-ONLY: the set of tool names `toolname`'s walk holds every string literal to, shared with the suites that hold a tool surface to it. |
 | `httpx` | The one outbound HTTP transport every client shares, the public-address guard for a URL a remote party named (ADR-0072), and the rate-limit rule a vendor client waits out a 429 by. |
-| `browser` | The oldest Chromium major the engine accepts and the suite certifies (`MinChromiumMajor`), and the gate that no Go but the artifact render's client names a DevTools method. |
-| `browser/boxhelper` | The oldest Node major, with the npm it bundles, the box helper supports (`MinNodeMajor`, `MinNPMMajor`). |
-| `browser/boxhelper/boxhelpertest` | Test support: the Nodes a box helper case runs under, each with its own npm: the machine's (`Node`, `NPM`) and the pinned floor's (`Floor`, `FloorNPM`). |
+| `browser` | The oldest Chromium major the engine accepts and the suite certifies (`MinChromiumMajor`), the Playwright release a box installs (`PlaywrightMCPRelease`, `ExpectedChromiumVersion`), and the gate that no Go but the artifact render's client names a DevTools method. |
+| `browser/boxhelper` | The Playwright tree a seat's box installs with npm, locked in `tree/` and held to `browser`'s release constants, and the oldest Node, with its npm, the box helper supports (`MinNodeMajor`, `MinNPMMajor`). |
+| `browser/boxhelper/boxhelpertest` | Test support: the Nodes a box helper case runs under, each with its own npm (`Node`, `NPM`, `Floor`, `FloorNPM`), and the Playwright tree the suite installs from the lock (`Tree`). |
 | `browser/chromiumtest` | Test support: the two pinned Chromiums a case drives (`Newest`, `Floor`, `Each`), how one is launched, and what its protocol describes (`Methods`), never the machine's own Chrome. |
 | `sigv4` | AWS request signing on the standard library alone: Signature Version 4 with an access key, and the IAM Roles Anywhere form that signs the same canonical request with an X.509 key. |
 | `modelcatalog` | What a model step suggests: each coding harness vendor's models, read from models.dev's public keyless catalogue and cached in memory on this node, never through a model vendor's API. |

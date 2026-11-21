@@ -290,8 +290,9 @@ Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers 
 make build    # go build ./...
 make check    # every gate CI runs on a pull request, which CONTRIBUTING.md
               #   lists under "Running tests and lint"; its first run on a
-              #   machine builds the pinned gits from source and fetches the
-              #   two pinned Chromiums and the floor Node (about 1 GB on disk)
+              #   machine builds the pinned gits from source, fetches the two
+              #   pinned Chromiums and the floor Node, and installs the
+              #   Playwright tree (about 1 GB on disk)
 make help     # everything else
 ```
 

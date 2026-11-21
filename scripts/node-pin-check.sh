@@ -16,11 +16,11 @@
 # whose long-term support has begun (its `lts` date passed) and whose end of life is more than 60 days away. A major
 # with no `lts` is one Node never supports for long, so never a floor; and the schedule gives odd Node 27 an `lts`,
 # so "the next even major" would skip a line Node supports. Raising the floor is a change to boxhelper.MinNodeMajor
-# (and MinNPMMajor, to the npm the new floor bundles), so the report names it. For every release it proposes, the
-# check downloads that release's SHASUMS256.txt and its signature (SHASUMS256.txt.sig), verifies the signature with
-# the releasers' keys beside this script, then downloads each platform's tarball and requires its SHA-256 to be the
-# one the signed list names — so every SHA-256 in the report is that of a tarball downloaded here AND signed for by a
-# releaser.
+# (and MinNPMMajor, to the npm the new floor bundles, with scripts/playwright-tree.sh's min_npm), so the report names
+# it. For every release it proposes, the check downloads that release's SHASUMS256.txt and its signature
+# (SHASUMS256.txt.sig), verifies the signature with the releasers' keys beside this script, then downloads each
+# platform's tarball and requires its SHA-256 to be the one the signed list names — so every SHA-256 in the report is
+# that of a tarball downloaded here AND signed for by a releaser.
 #
 # THE KEYS ARE THE PINNED ONES AND NOTHING ELSE, as scripts/git-pin-check.sh holds the git maintainer's: any of Node's
 # releasers signs a release, so the pin is their set. scripts/node-release-keys.asc is imported into a GnuPG home made
@@ -408,7 +408,7 @@ if [ "$ended" -le "$limit" ]; then
 	fi
 	propose "$successor" "floor: Node $major $when: move it to Node $next, the oldest major in long-term support whose end of life is more than $warn_days days away, whose newest release is $successor" \
 		"build(deps): raise node's floor from $major to $next"
-	echo "Raising the floor is not a bump: it changes internal/browser/boxhelper.MinNodeMajor from $major to $next, the oldest Node a box must carry, and MinNPMMajor to the major of the npm Node $next bundles, in the same pull request (TestTheFloorNodeIsTheMajorItStandsFor fails while they disagree)." >>"$work/report"
+	echo "Raising the floor is not a bump: it changes internal/browser/boxhelper.MinNodeMajor from $major to $next, the oldest Node a box must carry, and MinNPMMajor to the major of the npm Node $next bundles, in the same pull request (TestTheFloorNodeIsTheMajorItStandsFor fails while they disagree), and scripts/playwright-tree.sh's min_npm with MinNPMMajor (TestTheTreeRecipeRefusesTheNPMTheHelperRefuses fails while those two do)." >>"$work/report"
 	echo >>"$work/report"
 fi
 
