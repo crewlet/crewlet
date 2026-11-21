@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,10 +130,19 @@ func p8(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// leases is an in-process lease per resource.
-type leases struct{ mu sync.Mutex }
+// leases is an in-process lease per resource; refused fails every take.
+type leases struct {
+	mu      sync.Mutex
+	refused atomic.Bool
+}
 
-func (l *leases) Hold(context.Context, string) (func(), error) { l.mu.Lock(); return l.mu.Unlock, nil }
+func (l *leases) Hold(context.Context, string) (func(), error) {
+	if l.refused.Load() {
+		return nil, errors.New("the lease is held elsewhere")
+	}
+	l.mu.Lock()
+	return l.mu.Unlock, nil
+}
 
 // step is one recorded step.
 type step struct {
@@ -195,7 +205,8 @@ func (a *audit) Failed(_ context.Context, r growth.Record) (bool, error) {
 
 func product(t *testing.T, s *store, level string, team bool) (*appstoreconnect.Product, *audit) {
 	t.Helper()
-	return productKeys(t, s, level, team, nil)
+	p, a, _ := productLeases(t, s, level, team, nil)
+	return p, a
 }
 
 // adminKeyID is the Admin slot's key ID in productKeys.
@@ -204,6 +215,14 @@ const adminKeyID = "A1B2C3D4E5"
 // productKeys is product with admin's key in the Admin slot too, where set.
 func productKeys(t *testing.T, s *store, level string, team bool, admin *config.AppStoreConnectKey) (
 	*appstoreconnect.Product, *audit) {
+	t.Helper()
+	p, a, _ := productLeases(t, s, level, team, admin)
+	return p, a
+}
+
+// productLeases is productKeys and the leases its acts take.
+func productLeases(t *testing.T, s *store, level string, team bool, admin *config.AppStoreConnectKey) (
+	*appstoreconnect.Product, *audit, *leases) {
 	t.Helper()
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
@@ -221,7 +240,7 @@ func productKeys(t *testing.T, s *store, level string, team bool, admin *config.
 			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"},
 				TeamResources: team}}}},
 	}
-	a := &audit{t: t}
+	a, l := &audit{t: t}, &leases{}
 	p := appstoreconnect.New(appstoreconnect.Deps{
 		Company: func() *config.Company { return company },
 		Resolve: func(v string) string {
@@ -230,10 +249,10 @@ func productKeys(t *testing.T, s *store, level string, team bool, admin *config.
 			}
 			return v
 		},
-		HTTP: srv.Client(), Base: srv.URL, Audit: a, Leases: &leases{},
+		HTTP: srv.Client(), Base: srv.URL, Audit: a, Leases: l,
 		Now: func() time.Time { return time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC) },
 	})
-	return p, a
+	return p, a, l
 }
 
 func refusal(err error) growth.RefusalKind {
@@ -596,5 +615,79 @@ func TestEveryActIsRecordedAsTheLogAcceptsIt(t *testing.T) {
 	a.refuse = growth.StepAllowed
 	if _, err := p.Apply(ctx, approved, held.Binding); refusal(err) != growth.RefusedUnavailable || len(s.writes) != 1 {
 		t.Errorf("an act whose allow did not land answered %v and wrote %v", err, s.writes)
+	}
+}
+
+// A HELD CALL HOLDS ONE ANSWER AND ONE OUTCOME: an allow that comes after the
+// engine's lapse sends nothing and records nothing more, and an allowed call
+// that ends before its request (its target out of the seat's apps now, the
+// lease taken, a reply's review elsewhere) records its allow and a failure.
+//
+// Mutation: act when the allow was not the first answer, or return an early
+// error before recording, and a lapsed call is made or an allowed one has no
+// outcome.
+func TestAHeldCallHoldsOneAnswerAndOneOutcome(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "READY_FOR_SALE", reviewed: "It crashes on launch."}
+	p, a, l := productLeases(t, s, "operate", false, nil)
+	ctx := context.Background()
+	publish := growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: map[string]any{
+		"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
+		"body": map[string]any{"data": map[string]any{"type": "appStoreVersionLocalizations", "id": "L1",
+			"attributes": map[string]any{"description": "New"}}}, "reason": "fix the description"}}
+	hold, err := p.Prepare(ctx, publish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lapsed := publish
+	lapsed.HeldCall = "h1"
+	if err := p.Denied(ctx, lapsed); err != nil {
+		t.Fatal(err)
+	}
+	late := lapsed
+	late.Approver = "founder"
+	if _, err := p.Apply(ctx, late, hold.Binding); refusal(err) != growth.RefusedForbidden || len(s.writes) != 0 ||
+		len(a.steps) != 1 || a.steps[0].step != growth.StepLapsed {
+		t.Fatalf("an allow after a lapse answered %v, wrote %v and recorded %+v", err, s.writes, a.steps)
+	}
+	outcome := func(held string) growth.Step {
+		var steps []growth.Step
+		for _, st := range a.steps {
+			if st.rec.HeldCall == held {
+				steps = append(steps, st.step)
+			}
+		}
+		if len(steps) != 2 || steps[0] != growth.StepAllowed {
+			t.Errorf("held call %s recorded %v", held, steps)
+			return ""
+		}
+		return steps[1]
+	}
+	gone := late
+	gone.HeldCall, gone.Args = "h2", map[string]any{"operation": "appStoreVersionLocalizations_updateInstance",
+		"path": map[string]any{"id": "L9"}, "body": publish.Args["body"], "reason": "fix the description"}
+	if _, err := p.Apply(ctx, gone, hold.Binding); err == nil || outcome("h2") != growth.StepFailed {
+		t.Errorf("an approved call on a target out of the seat's apps answered %v", err)
+	}
+	l.refused.Store(true)
+	busy := late
+	busy.HeldCall = "h3"
+	if _, err := p.Apply(ctx, busy, hold.Binding); err == nil || outcome("h3") != growth.StepFailed {
+		t.Errorf("an approved call that could not take its lease answered %v", err)
+	}
+	l.refused.Store(false)
+	reply := growth.Call{Handle: "growth", Tool: appstoreconnect.ToolReply, HeldCall: "h4", Approver: "founder",
+		Args: map[string]any{"app": "111", "replies": []any{map[string]any{"review": "R9", "text": "Thanks."}},
+			"reason": "answer"}}
+	if _, err := p.Apply(ctx, reply, hold.Binding); err == nil || outcome("h4") != growth.StepFailed {
+		t.Errorf("an approved reply to a review elsewhere answered %v", err)
+	}
+	if len(s.writes) != 0 {
+		t.Errorf("wrote %v", s.writes)
+	}
+	for _, st := range a.steps {
+		if st.step == growth.StepFailed && st.rec.Failure == "" {
+			t.Errorf("a failure names no reason: %+v", st.rec)
+		}
 	}
 }

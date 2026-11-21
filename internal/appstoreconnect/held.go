@@ -236,26 +236,27 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		}
 		return p.applyReplies(ctx, call, approved)
 	}
-	m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
-	if err != nil {
-		return nil, err
-	}
 	held := call.HeldCall != ""
-	if m.class.Held() != held {
-		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s is %s, which is made only once an "+
-			"administrator allows it. No call was made.", m.op.ID, m.class))
+	if class := classOfTool(call.Tool); class.Held() != held {
+		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s calls are %s, which is made only "+
+			"once an administrator allows it. No call was made.", call.Tool, class))
+	}
+	m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
+	rec := p.heldRecord(call, m, err == nil)
+	if held {
+		// THE ANSWER FIRST, then one outcome for every way the act ends.
+		if aerr := p.allow(ctx, rec, call.Approver); aerr != nil {
+			return nil, aerr
+		}
+	}
+	if err != nil {
+		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	release, err := p.hold(ctx, leaseOf(m))
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	defer release()
-	rec := recordOf(call, m)
-	if held {
-		if err := p.allow(ctx, rec, call.Approver); err != nil {
-			return nil, err
-		}
-	}
 	b, err := p.beforeOf(ctx, m)
 	if err != nil {
 		rec.Failure = failureOf(err)
@@ -307,20 +308,68 @@ func (p *Product) Denied(ctx context.Context, call growth.Call) error {
 	if call.Approver == "" || call.Approver == engineActor {
 		step, answerer = growth.StepLapsed, ""
 	}
-	rec := growth.Record{Product: Kind, Tool: call.Tool, Class: classOfTool(call.Tool), Handle: call.Handle,
-		Turn: call.Turn, HeldCall: call.HeldCall, Answerer: answerer, Operation: argsDigest(call),
-		Account: accountOf(call.Args)}
+	var rec growth.Record
 	if call.Tool == ToolReply {
-		if m, rs, err := p.replies(ctx, call); err == nil {
-			rec.Connection, rec.Operation = m.team.id, replyBinding(m.app, rs)
+		m, rs, err := p.replies(ctx, call)
+		rec = p.heldRecord(call, m, err == nil)
+		if err == nil {
+			rec.Operation = replyBinding(m.app, rs)
 		}
-	} else if m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args); err == nil {
-		rec = growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn,
-			HeldCall: call.HeldCall, Answerer: answerer, Operation: operationDigest(m), Account: recordOf(call, m).Account,
-			Connection: m.team.id, Target: recordOf(call, m).Target}
+	} else {
+		m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
+		rec = p.heldRecord(call, m, err == nil)
 	}
+	rec.Answerer = answerer
 	p.note(ctx, step, rec)
 	return nil
+}
+
+// heldRecord is a held call's record: from m where the call was made concrete,
+// else from its arguments (the seat's access or the target changed since).
+func (p *Product) heldRecord(call growth.Call, m made, concrete bool) growth.Record {
+	if concrete {
+		return recordOf(call, m)
+	}
+	return growth.Record{Product: Kind, Tool: call.Tool, Class: classOfTool(call.Tool), Handle: call.Handle,
+		Turn: call.Turn, HeldCall: call.HeldCall, Operation: argsDigest(call), Account: accountOf(call.Args),
+		Connection: p.connectionOf(call.Args)}
+}
+
+// connectionOf is the connection a call names for the log, the only one where
+// it names none, else "unknown".
+func (p *Product) connectionOf(args map[string]any) string {
+	name, _ := args["connection"].(string)
+	teams, err := p.teamsNow()
+	for _, t := range teams {
+		if err == nil && (t.id == name || (name == "" && len(teams) == 1)) {
+			return t.id
+		}
+	}
+	return "unknown"
+}
+
+// failEarly records the failed outcome of an allowed held call that ended
+// before its request was sent, and answers err as the agent is told it.
+func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
+	if held {
+		rec.Failure = earlyFailure(err)
+		p.note(ctx, growth.StepFailed, rec)
+	}
+	return said(err)
+}
+
+// earlyFailure is why an allowed call ended before its request was sent: the
+// seat's access lowered, Apple's refusal of a read, or the engine's own.
+func earlyFailure(err error) growth.Failure {
+	var refused *growth.Refusal
+	var apiErr *APIError
+	switch {
+	case errors.As(err, &refused) && refused.Kind == growth.RefusedForbidden:
+		return growth.FailureAccessLowered
+	case errors.As(err, &apiErr), errors.Is(err, context.DeadlineExceeded):
+		return failureOf(err)
+	}
+	return growth.FailureEngineError
 }
 
 // engineActor is who the engine's own answer names, as its lapse sweep

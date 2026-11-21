@@ -308,19 +308,21 @@ type PostedReply struct {
 
 func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved string) (any, error) {
 	m, rs, err := p.replies(ctx, call)
+	rec := p.heldRecord(call, m, err == nil)
+	if err == nil {
+		rec.Operation = replyBinding(m.app, rs)
+	}
+	if aerr := p.allow(ctx, rec, call.Approver); aerr != nil {
+		return nil, aerr
+	}
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, true, rec, err)
 	}
 	release, err := p.hold(ctx, leaseOf(m))
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, true, rec, err)
 	}
 	defer release()
-	rec := recordOf(call, m)
-	rec.Operation = replyBinding(m.app, rs)
-	if err := p.allow(ctx, rec, call.Approver); err != nil {
-		return nil, err
-	}
 	if !growth.BindingHolds(approved, replyBinding(m.app, rs)) {
 		p.note(ctx, growth.StepVoid, rec)
 		return nil, growth.ErrMoved
