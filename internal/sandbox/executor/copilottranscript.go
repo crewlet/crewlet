@@ -16,8 +16,8 @@ import (
 )
 
 // transcript reads a Copilot archive ([copilotArchiveFormat]): its
-// events.jsonl, a line at a time, as the session's entries. Every other member
-// (session.db and its journal) is passed unread.
+// events.jsonl, a line at a time, as the session's entries. Any other member
+// is passed unread.
 func (Copilot) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr

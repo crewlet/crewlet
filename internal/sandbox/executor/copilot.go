@@ -232,7 +232,8 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 		// THE BOX'S OWN COPY GOES only now, once the archive is known to hold
 		// a conversation.
 		"rm -rf " + q(held),
-		"mv " + q(from) + " " + q(held),
+		"mkdir -p " + q(held),
+		"mv " + q(from+"/events.jsonl") + " " + q(held+"/events.jsonl"),
 	}, " && ")
 	line(`s=%s k=yes w= h= d=`, q(session.ID))
 	line(`[ -s %s ] && h=1`, q(held+"/events.jsonl"))
@@ -308,10 +309,9 @@ fi
 
 // copilotArchiveFormat is the layout a Copilot run packs its session in
 // ([copilotPack]) and the one it restores ([copilotSessionGate]): one gzipped
-// tar whose members are named relative to the run's home,
-// `session-state/<session>/events.jsonl` (the conversation),
-// `session-state/<session>/session.db` (the sql tool's tables) and, where one
-// is open, its `session.db-journal`. A change is a new format.
+// tar of one member named relative to the run's home,
+// `session-state/<session>/events.jsonl`, the conversation, which a resume
+// takes up whole on its own (measured on 1.0.114). A change is a new format.
 const copilotArchiveFormat = 1
 
 // ArchiveFormat is the layout a Copilot run packs its session in ([carrier]).
@@ -347,16 +347,12 @@ func copilotCapture(paths Paths) string {
 }
 
 // copilotPack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): events.jsonl, session.db and its
-// -journal where each is a plain file. NEVER ANYTHING ELSE: not `config.json`
-// (the login), `mcp-oauth-config/`, nor `files/` and `rewind-file-snapshots/`,
-// which carry the checkout rather than the conversation; workspace.yaml and
-// checkpoints/ Copilot writes again on a resume (measured on 1.0.114).
-//
-// session.db's journal is `delete` (measured): a pack made once the harness is
-// gone takes the file and any hot journal together, which SQLite rolls back on
-// open. A pack beside a working harness is held to [claudeHeldTar]'s rule,
-// which refuses a file other than a transcript written while it read.
+// at.dest, its digest kept ([packDigest]): its events.jsonl alone. Copilot
+// writes workspace.yaml and checkpoints/ again on a resume (measured on 1.0.114).
+// NEVER session.db or its -journal, the sql tool's tables, so that tool's data
+// does not carry to a continued session: a binary SQLite file cannot pass the
+// archive's text scrub without being corrupted. A pack beside a working harness
+// is held to [claudeHeldTar]'s rule.
 func copilotPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -365,10 +361,7 @@ func copilotPack(paths Paths, at packAt) string {
 	dir := copilotSessionState + `/"$s"`
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	// THE CONVERSATION FIRST: [claudeHeldTar] reads back its first operand.
 	line(`    set -- %s/events.jsonl`, dir)
-	line(`    for f in session.db session.db-journal; do if [ -f %s/%s/"$f" ] && [ ! -L %s/%s/"$f" ]; then set -- "$@" %s/"$f"; fi; done`,
-		q(home), dir, q(home), dir, dir)
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(home), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {

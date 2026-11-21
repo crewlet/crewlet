@@ -25,7 +25,8 @@ func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
 
 // CopilotSessionDir is session's directory under the run's home: its
-// `events.jsonl`, the conversation, and `session.db`, the sql tool's tables.
+// `events.jsonl`, the conversation, and `session.db`, the sql tool's tables,
+// which a pack never takes ([copilotPack]).
 func (p Paths) CopilotSessionDir(session string) string {
 	return p.CopilotHome() + "/" + copilotSessionState + "/" + session
 }

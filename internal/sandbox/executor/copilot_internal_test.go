@@ -560,10 +560,11 @@ func TestACopilotSessionContinuesOnlyOnItsFloor(t *testing.T) {
 	}
 }
 
-// A pack carries the conversation and the sql tool's database, never the login
-// or the checkout's snapshots, and a restore in another home continues it.
+// A pack carries the conversation alone: never session.db or its journal, a
+// binary file the archive's text scrub would corrupt, nor the login or the
+// checkout's snapshots. A restore in another home continues it.
 //
-// Mutation: pack the whole session directory, or config.json — the members
+// Mutation: pack session.db, or the whole session directory — the members
 // differ; drop the restore's move — the second home holds nothing.
 func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	for _, tool := range []string{"tar", "gzip", "cksum"} {
@@ -576,6 +577,7 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	for name, body := range map[string]string{
 		dir + "/events.jsonl":               string(copilotFixture(t, "steered.events.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
+		dir + "/session.db-journal":         "journal",
 		dir + "/workspace.yaml":             "cwd: /box/repo\n",
 		dir + "/rewind-file-snapshots/a":    "checkout bytes",
 		from.CopilotHome() + "/config.json": `{"copilotTokens":{}}`,
@@ -613,7 +615,7 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 		}
 		members = append(members, h.Name)
 	}
-	want := []string{"session-state/" + id + "/events.jsonl", "session-state/" + id + "/session.db"}
+	want := []string{"session-state/" + id + "/events.jsonl"}
 	if !slices.Equal(members, want) {
 		t.Fatalf("members = %v, want %v", members, want)
 	}
