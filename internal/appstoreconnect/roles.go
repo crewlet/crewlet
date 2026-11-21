@@ -1,10 +1,6 @@
 package appstoreconnect
 
-import (
-	"slices"
-
-	"github.com/crewlet/crewlet/internal/growth"
-)
+import "github.com/crewlet/crewlet/internal/growth"
 
 // Apple's roles a team key may hold, by Apple's own names, each a key slot of
 // the company document (config.AppStoreConnectKeys) and a catalog role.
@@ -47,8 +43,9 @@ func roles() []growth.Role {
 }
 
 // adminSlot is the Admin role's slot. Its key manages the team's users and
-// keys, so it is used for an admin-class act alone, or a write no other role
-// may make, and never for a read or an operate act ([adminMay]).
+// keys, so it makes an admin-class act alone, which an administrator allowed:
+// never a read, a placement search, a pass or an operate act. An operation
+// only Admin may make is classed admin (operations.go).
 const adminSlot = "admin"
 
 // keyFor is the slot of the least-privileged connected key op allows, false
@@ -65,16 +62,4 @@ func keyFor(op growth.Operation, connected []string, admin bool) (string, bool) 
 		}
 	}
 	return "", false
-}
-
-// adminMay reports whether a call of op in class may go through the Admin
-// key: an admin-class act, or a write Apple lets no role but Admin make.
-func adminMay(op growth.Operation, class growth.Class) bool {
-	if class == growth.ClassAdmin {
-		return true
-	}
-	if class == growth.ClassRead || !slices.Contains(op.Roles, RoleAdmin) {
-		return false
-	}
-	return !slices.ContainsFunc(op.Roles, func(r string) bool { return r != RoleAdmin && r != RoleAccountHolder })
 }

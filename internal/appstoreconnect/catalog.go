@@ -42,14 +42,14 @@ const (
 	opSales   = "salesReports_getCollection"
 )
 
-func init() { growth.Register(Catalog()) }
+func init() { growth.RegisterFunc(Kind, Catalog) }
 
 // Catalog is App Store Connect's whole API as the engine offers it.
 var Catalog = sync.OnceValue(func() growth.Catalog {
 	return growth.Catalog{
 		Kind: Kind, API: "App Store Connect API", Version: "4.6.1",
 		Roles:      append(roles(), growth.Role{ID: RoleAccountHolder, Name: "Account Holder", Note: "The team's legal owner; no API key carries it, so an act only it may take is done in App Store Connect by that person."}),
-		Operations: operations,
+		Operations: operations(),
 		Tools:      tools(),
 	}
 })
@@ -58,7 +58,7 @@ var Catalog = sync.OnceValue(func() growth.Catalog {
 // state that lowers it to c.
 func ofClass(c growth.Class) []string {
 	var out []string
-	for _, op := range operations {
+	for _, op := range operations() {
 		if op.Class == c || slices.ContainsFunc(op.States, func(s growth.StateRule) bool { return s.Class == c }) {
 			out = append(out, op.ID)
 		}

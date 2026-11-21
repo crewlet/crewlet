@@ -80,7 +80,11 @@ func (p *Product) stateOf(ctx context.Context, m *made) (string, bool, error) {
 	for reads := 0; len(queue) > 0 && reads < maxStateReads; reads++ {
 		path := queue[0]
 		queue = queue[1:]
-		resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: path, Read: true, Reserved: true})
+		slot, err := m.reader(path)
+		if err != nil {
+			return "", false, err
+		}
+		resp, err := m.team.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true})
 		if err != nil {
 			return "", false, err
 		}
@@ -139,7 +143,12 @@ func (p *Product) internalOnly(ctx context.Context, m *made) (bool, error) {
 		return false, nil
 	}
 	for _, g := range groups {
-		resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: "/v1/betaGroups/" + url.PathEscape(g),
+		path := "/v1/betaGroups/" + url.PathEscape(g)
+		slot, err := m.reader(path)
+		if err != nil {
+			return false, err
+		}
+		resp, err := m.team.client.Do(ctx, slot, Request{Method: "GET", Path: path,
 			Query: url.Values{"fields[betaGroups]": {"isInternalGroup"}}, Read: true, Reserved: true})
 		if err != nil {
 			return false, err
@@ -159,4 +168,16 @@ func (p *Product) internalOnly(ctx context.Context, m *made) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// reader is the key m's engine reads of path go through: the least-privileged
+// one that may, else m's own, and never the Admin key ([adminSlot]).
+func (m made) reader(path string) (string, error) {
+	if slot, ok := readerOf(m.team, path); ok {
+		return slot, nil
+	}
+	if m.slot != adminSlot {
+		return m.slot, nil
+	}
+	return "", fmt.Errorf("%w: only the Admin key may read %s", ErrNoKey, path)
 }

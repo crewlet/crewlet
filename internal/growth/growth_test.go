@@ -375,3 +375,30 @@ func TestARoleOffersTheClassesOfWhatItMayCall(t *testing.T) {
 		t.Errorf("Read offers %v", read.Classes)
 	}
 }
+
+// A CATALOG REGISTERED AS A FUNCTION IS BUILT AT FIRST USE, once: a large
+// catalog costs nothing at init.
+//
+// Mutation: build at registration, or rebuild on each read, and the counter
+// reads one before any read, or two after the second.
+func TestALazyCatalogIsBuiltOnceAtFirstUseAndValidated(t *testing.T) {
+	builds := 0
+	growth.RegisterFunc("lazy_ads", func() growth.Catalog {
+		builds++
+		c := validCatalog()
+		c.Kind = "lazy_ads"
+		for i := range c.Tools {
+			c.Tools[i].Name = "lazy_" + c.Tools[i].Name
+		}
+		return c
+	})
+	if builds != 0 {
+		t.Fatalf("the catalog was built %d times at registration", builds)
+	}
+	if _, ok := growth.CatalogOf("lazy_ads"); !ok || builds != 1 {
+		t.Fatalf("the first read built it %d times (found %v)", builds, ok)
+	}
+	if growth.CatalogOf("lazy_ads"); builds != 1 {
+		t.Errorf("a second read built it again: %d", builds)
+	}
+}

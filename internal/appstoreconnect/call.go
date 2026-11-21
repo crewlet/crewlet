@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -96,7 +97,7 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	if err := p.place(ctx, seat, &m, args); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, adminMay(op, class))
+	slot, ok := keyFor(op, m.team.slots, class == growth.ClassAdmin)
 	if !ok {
 		return made{}, noKey(op, m.team.slots)
 	}
@@ -197,29 +198,129 @@ func typeAndID(path string) (typ, id string) {
 	return typ, id
 }
 
-// place decides the app m acts on, or that it is a team call, and its team.
+// place decides the app m acts on, or that it is a team call, and its team:
+// every owned resource the call names is placed in one of the seat's apps, in
+// one team, and any other resource it names needs team_resources.
 func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, args map[string]any) error {
+	named, err := namedBy(m)
+	if err != nil {
+		return err
+	}
+	teamWide := false
+	for _, r := range named {
+		app := r.ID
+		var t *team
+		switch {
+		case r.Type == "apps":
+		case topology().owned[r.Type]:
+			if app, t, err = p.placeOwned(ctx, seat, r.Type, r.ID); err != nil {
+				return err
+			}
+		default:
+			teamWide = true
+			continue
+		}
+		if app == teamOwned {
+			teamWide = true
+			if m.team != nil && m.team != t {
+				return invalid("the call names resources of two teams.")
+			}
+			m.team = t
+			continue
+		}
+		if m.app == "" {
+			if err := p.placeApp(ctx, seat, m, app); err != nil {
+				return err
+			}
+			continue
+		}
+		if !slices.Contains(seat.Apps, app) {
+			return p.placeApp(ctx, seat, &made{}, app)
+		}
+		if other, err := p.teamOf(ctx, app); err != nil || other != m.team {
+			return invalid("the call names resources of two teams.")
+		}
+	}
 	typ, id := typeAndID(m.path)
 	switch {
-	case id != "":
-		return p.placeResource(ctx, seat, m, typ, id, args)
-	case m.op.Method == "POST":
-		ref, ok := bodyTarget(m.body)
-		if !ok {
-			return p.placeTeam(seat, m, args)
-		}
-		return p.placeResource(ctx, seat, m, ref.Type, ref.ID, args)
-	case typ == "apps":
-		// THE TEAM'S APP LIST, filtered to the seat's apps when answered.
+	case teamWide && !seat.TeamResources:
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s names the team's resources no app owns, "+
+			"and this agent's access does not include them (team_resources). No call was made.", m.op.ID))
+	case m.team != nil:
+		return nil
+	case typ == "apps" && id == "":
+		// THE TEAM'S APP LIST, cut to the seat's apps when answered.
 		return p.placeAnyApp(ctx, seat, m)
-	case m.query.Get("filter[app]") != "":
-		return p.placeApp(ctx, seat, m, m.query.Get("filter[app]"))
-	}
-	if _, owned := downward[typ]; owned {
+	case topology().owned[typ] && id == "":
 		return invalid("a list of %s names its app: add query filter[app] with one of this agent's apps, or read it "+
 			"through the app (operation apps_..._getToManyRelated).", typ)
 	}
 	return p.placeTeam(seat, m, args)
+}
+
+// namedBy is every resource m names: its path's, its query's ID filters' and
+// its body's data and relationships', to-one and to-many alike.
+func namedBy(m *made) ([]resourceRef, error) {
+	var out []resourceRef
+	add := func(typ, id string) error {
+		// A LOCAL ID names a resource the body itself creates (`${...}`).
+		if typ == "" || id == "" || strings.HasPrefix(id, "${") {
+			return nil
+		}
+		if !pathValue().MatchString(id) {
+			return invalid("%s ID %q is not an App Store Connect ID.", typ, id)
+		}
+		if !slices.Contains(out, resourceRef{Type: typ, ID: id}) {
+			out = append(out, resourceRef{Type: typ, ID: id})
+		}
+		return nil
+	}
+	if err := add(typeAndID(m.path)); err != nil {
+		return nil, err
+	}
+	filters := topology().idFilters[m.op.Path]
+	names := slices.Sorted(maps.Keys(m.query))
+	for _, k := range names {
+		f, ok := strings.CutPrefix(k, "filter[")
+		if typ := filters[strings.TrimSuffix(f, "]")]; ok && typ != "" {
+			for _, id := range strings.Split(m.query.Get(k), ",") {
+				if err := add(typ, strings.TrimSpace(id)); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	for _, r := range bodyRefs(m.body) {
+		if err := add(r.Type, r.ID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// bodyRefs are the resources a write body's data and its relationships name.
+func bodyRefs(body map[string]any) []resourceRef {
+	var out []resourceRef
+	refs := func(v any) {
+		items, ok := v.([]any)
+		if !ok {
+			items = []any{v}
+		}
+		for _, it := range items {
+			r, _ := it.(map[string]any)
+			t, _ := r["type"].(string)
+			id, _ := r["id"].(string)
+			out = append(out, resourceRef{Type: t, ID: id})
+		}
+	}
+	refs(body["data"])
+	data, _ := body["data"].(map[string]any)
+	rels, _ := data["relationships"].(map[string]any)
+	for _, n := range slices.Sorted(maps.Keys(rels)) {
+		r, _ := rels[n].(map[string]any)
+		refs(r["data"])
+	}
+	return out
 }
 
 // bodyTarget is the first resource a POST body's relationships name.
@@ -241,32 +342,6 @@ func bodyTarget(body map[string]any) (resourceRef, bool) {
 		}
 	}
 	return resourceRef{}, false
-}
-
-func (p *Product) placeResource(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, typ, id string,
-	args map[string]any) error {
-	if typ == "apps" {
-		return p.placeApp(ctx, seat, m, id)
-	}
-	if _, owned := downward[typ]; !owned {
-		return p.placeTeam(seat, m, args)
-	}
-	if app, ok := p.owners.get(typ, id); ok {
-		return p.placeApp(ctx, seat, m, app)
-	}
-	for _, app := range seat.Apps {
-		t, err := p.teamOf(ctx, app)
-		if err != nil {
-			continue
-		}
-		pl := &placer{owners: p.owners, list: teamLister{t: t}, down: downward}
-		found, err := pl.appOf(ctx, typ, id, []string{app})
-		if err == nil && found == app {
-			return p.placeApp(ctx, seat, m, app)
-		}
-	}
-	return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s %s is in none of this agent's apps (%s), as far as the "+
-		"engine can find: read it through its app's list first. No call was made.", typ, id, words.And(seat.Apps)))
 }
 
 func (p *Product) placeApp(ctx context.Context, seat *config.RoleAppStoreConnect, m *made, app string) error {
@@ -307,37 +382,27 @@ func (p *Product) placeTeam(seat *config.RoleAppStoreConnect, m *made, args map[
 	return nil
 }
 
-// teamLister lists related resources through a team's least-privileged reader.
-type teamLister struct{ t *team }
-
-func (l teamLister) listPage(ctx context.Context, path, cursor string) ([]resourceRef, string, error) {
-	slot := ""
-	for _, role := range leastFirst {
-		for _, s := range l.t.slots {
-			if slotRole[s] == role && slot == "" && role != RoleFinance && role != RoleSales && role != RoleAccessToReports {
-				slot = s
-			}
+// readByTemplate is every read operation by its path template.
+var readByTemplate = sync.OnceValue(func() map[string]growth.Operation {
+	out := map[string]growth.Operation{}
+	for _, op := range operations() {
+		if op.Method == "GET" {
+			out[op.Path] = op
 		}
 	}
-	if slot == "" {
-		return nil, "", fmt.Errorf("%w: reading %s", ErrNoKey, path)
+	return out
+})
+
+// readerOf is the least-privileged connected key, never the Admin key, whose
+// role may read path: a read, a placement search or a target's state.
+func readerOf(t *team, path string) (string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) >= 4 {
+		parts[3] = "{id}"
 	}
-	q := url.Values{"limit": {"200"}}
-	if cursor != "" {
-		q.Set("cursor", cursor)
+	op, ok := readByTemplate()[strings.Join(parts, "/")]
+	if !ok {
+		return "", false
 	}
-	resp, err := l.t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Query: q, Read: true, Reserved: true})
-	if err != nil {
-		return nil, "", err
-	}
-	var doc struct {
-		Data  []resourceRef `json:"data"`
-		Links struct {
-			Next string `json:"next"`
-		} `json:"links"`
-	}
-	if err := json.Unmarshal(resp.Body, &doc); err != nil {
-		return nil, "", fmt.Errorf("appstoreconnect: read %s: %w", path, err)
-	}
-	return doc.Data, cursorOf(doc.Links.Next), nil
+	return keyFor(op, t.slots, false)
 }

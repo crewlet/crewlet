@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -46,10 +47,12 @@ func hexSum(data []byte) string {
 }
 
 // before is a held act's target as it reads now: its attributes, and their
-// digest, which the approval binds.
+// digest, which the approval binds. unread is a target only the Admin key may
+// read, which reads nothing: the approval binds the request alone.
 type before struct {
 	attrs  map[string]any
 	digest string
+	unread bool
 }
 
 // beforeOf reads m's target: the resource a PATCH or DELETE names; a POST's
@@ -61,8 +64,12 @@ func (p *Product) beforeOf(ctx context.Context, m made) (before, error) {
 		data, _ := json.Marshal(ref)
 		return before{attrs: map[string]any{}, digest: hexSum(data)}, nil
 	}
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: "/v1/" + typ + "/" + url.PathEscape(id),
-		Read: true, Reserved: true})
+	path := "/v1/" + typ + "/" + url.PathEscape(id)
+	slot, err := m.reader(path)
+	if errors.Is(err, ErrNoKey) {
+		return before{attrs: map[string]any{}, digest: hexSum([]byte("unread")), unread: true}, nil
+	}
+	resp, err := m.team.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true})
 	if err != nil {
 		return before{}, err
 	}
@@ -186,17 +193,16 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 	if err != nil {
 		return growth.Card{}, err
 	}
-	if m.slot == adminSlot {
-		// NOT READ AGAIN WITH THE ADMIN KEY, whose every call is on the access
-		// log: the card shows the request as asked, and Apply reads the target.
-		return cardOf(call, m, before{attrs: map[string]any{}}, false, []string{"The target is read again with " +
-			"the Admin key only when the change is applied; Allow once sends nothing if it moved since the ask."}), nil
-	}
 	b, err := p.beforeOf(ctx, m)
 	if err != nil {
 		return growth.Card{}, said(err)
 	}
-	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), nil), nil
+	var findings []string
+	if b.unread {
+		findings = append(findings, "Only the Admin key may read the target, and it makes the allowed change "+
+			"alone: Allow once sends exactly this request without reading the target first.")
+	}
+	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), findings), nil
 }
 
 // cardOf is m's card over its target's state b.
@@ -230,27 +236,32 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		}
 		return p.applyReplies(ctx, call, approved)
 	}
-	m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
-	if err != nil {
-		return nil, err
-	}
 	held := call.HeldCall != ""
-	if m.class.Held() != held {
-		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s is %s, which is made only once an "+
-			"administrator allows it. No call was made.", m.op.ID, m.class))
+	if class := classOfTool(call.Tool); class.Held() != held {
+		return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s calls are %s, which is made only "+
+			"once an administrator allows it. No call was made.", call.Tool, class))
+	}
+	m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
+	rec := p.heldRecord(call, m, err == nil)
+	if held {
+		// THE ANSWER FIRST, then one outcome for every way the act ends.
+		if aerr := p.allow(ctx, rec, call.Approver); aerr != nil {
+			return nil, aerr
+		}
+	}
+	if err != nil {
+		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	release, err := p.hold(ctx, leaseOf(m))
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	defer release()
-	rec := recordOf(call, m)
-	if held {
-		rec.Answerer = call.Approver
-		p.note(ctx, growth.StepAllowed, rec)
-		rec.Answerer = ""
-	}
-	b, err := p.beforeOf(ctx, m)
+	// EVERYTHING UNDER THE LEASE IS CUT AT ITS BOUND, so nothing acts once the
+	// lease could lapse; the records take the caller's context.
+	act, cancel := context.WithTimeout(ctx, p.applyBound)
+	defer cancel()
+	b, err := p.beforeOf(act, m)
 	if err != nil {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
@@ -263,10 +274,10 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		}
 		return nil, growth.ErrMoved
 	}
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: m.op.Method, Path: m.path, Query: m.query,
+	resp, err := m.team.client.Do(act, m.slot, Request{Method: m.op.Method, Path: m.path, Query: m.query,
 		Body: m.body, Reserved: held})
 	if err != nil {
-		rec.Failure = failureOf(err)
+		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
 		return nil, said(err)
 	}
@@ -276,7 +287,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		step = growth.StepApplied
 	}
 	p.note(ctx, step, rec)
-	if m.app != "" {
+	if rootedAt(m, resp.Body) {
 		p.owners.remember(m.app, resp.Body)
 	}
 	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: slotRole[m.slot],
@@ -301,20 +312,68 @@ func (p *Product) Denied(ctx context.Context, call growth.Call) error {
 	if call.Approver == "" || call.Approver == engineActor {
 		step, answerer = growth.StepLapsed, ""
 	}
-	rec := growth.Record{Product: Kind, Tool: call.Tool, Class: classOfTool(call.Tool), Handle: call.Handle,
-		Turn: call.Turn, HeldCall: call.HeldCall, Answerer: answerer, Operation: argsDigest(call),
-		Account: accountOf(call.Args)}
+	var rec growth.Record
 	if call.Tool == ToolReply {
-		if m, rs, err := p.replies(ctx, call); err == nil {
-			rec.Connection, rec.Operation = m.team.id, replyBinding(m.app, rs)
+		m, rs, err := p.replies(ctx, call)
+		rec = p.heldRecord(call, m, err == nil)
+		if err == nil {
+			rec.Operation = replyBinding(m.app, rs)
 		}
-	} else if m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args); err == nil {
-		rec = growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn,
-			HeldCall: call.HeldCall, Answerer: answerer, Operation: operationDigest(m), Account: recordOf(call, m).Account,
-			Connection: m.team.id, Target: recordOf(call, m).Target}
+	} else {
+		m, err := p.concrete(ctx, call.Handle, call.Tool, call.Args)
+		rec = p.heldRecord(call, m, err == nil)
 	}
+	rec.Answerer = answerer
 	p.note(ctx, step, rec)
 	return nil
+}
+
+// heldRecord is a held call's record: from m where the call was made concrete,
+// else from its arguments (the seat's access or the target changed since).
+func (p *Product) heldRecord(call growth.Call, m made, concrete bool) growth.Record {
+	if concrete {
+		return recordOf(call, m)
+	}
+	return growth.Record{Product: Kind, Tool: call.Tool, Class: classOfTool(call.Tool), Handle: call.Handle,
+		Turn: call.Turn, HeldCall: call.HeldCall, Operation: argsDigest(call), Account: accountOf(call.Args),
+		Connection: p.connectionOf(call.Args)}
+}
+
+// connectionOf is the connection a call names for the log, the only one where
+// it names none, else "unknown".
+func (p *Product) connectionOf(args map[string]any) string {
+	name, _ := args["connection"].(string)
+	teams, err := p.teamsNow()
+	for _, t := range teams {
+		if err == nil && (t.id == name || (name == "" && len(teams) == 1)) {
+			return t.id
+		}
+	}
+	return "unknown"
+}
+
+// failEarly records the failed outcome of an allowed held call that ended
+// before its request was sent, and answers err as the agent is told it.
+func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
+	if held {
+		rec.Failure = earlyFailure(err)
+		p.note(ctx, growth.StepFailed, rec)
+	}
+	return said(err)
+}
+
+// earlyFailure is why an allowed call ended before its request was sent: the
+// seat's access lowered, Apple's refusal of a read, or the engine's own.
+func earlyFailure(err error) growth.Failure {
+	var refused *growth.Refusal
+	var apiErr *APIError
+	switch {
+	case errors.As(err, &refused) && refused.Kind == growth.RefusedForbidden:
+		return growth.FailureAccessLowered
+	case errors.As(err, &apiErr), errors.Is(err, context.DeadlineExceeded):
+		return failureOf(err)
+	}
+	return growth.FailureEngineError
 }
 
 // engineActor is who the engine's own answer names, as its lapse sweep

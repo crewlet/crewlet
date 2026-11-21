@@ -80,7 +80,7 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, adminMay(op, m.class))
+	slot, ok := keyFor(op, m.team.slots, m.class == growth.ClassAdmin)
 	if !ok {
 		return made{}, noKey(op, m.team.slots)
 	}
@@ -186,12 +186,10 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 			return made{}, nil, invalid("`replies[%d].text` is 1 to %d characters; it is %d.", i, replyLimit, n)
 		}
 		seen[id] = true
-		if owner, ok := p.owners.get("customerReviews", id); !ok || owner != app {
-			pl := &placer{owners: p.owners, list: teamLister{t: m.team}, down: downward}
-			if found, err := pl.appOf(ctx, "customerReviews", id, []string{app}); err != nil || found != app {
-				return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
-					"of app %s. No call was made.", id, app))
-			}
+		found, err := placer{owners: p.owners, t: m.team}.appOf(ctx, "customerReviews", id, []string{app})
+		if err != nil || found != app {
+			return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
+				"of app %s. No call was made.", id, app))
 		}
 		rv, rerr := p.readReview(ctx, m, id)
 		if rerr != nil {
@@ -264,10 +262,12 @@ func (p *Product) prepareReplies(ctx context.Context, call growth.Call) (growth.
 	}
 	ask := recordOf(call, m)
 	ask.Operation = replyBinding(m.app, rs)
+	changes := make([]growth.CardChange, 0, len(rs))
 	for _, r := range rs {
-		ask.Changes = append(ask.Changes, growth.RecordChange{Field: "responseBody", Label: "Reply to review " + r.review.ID,
-			Before: r.current, After: r.text, Text: true})
+		changes = append(changes, growth.CardChange{Field: "responseBody", Label: "Reply to review " + r.review.ID,
+			Before: r.current, After: r.text})
 	}
+	ask.Changes = recordChanges(changes, true)
 	return growth.Hold{Class: growth.ClassPublic, Binding: replyBinding(m.app, rs), Question: question,
 		Context: textcut.Within(b.String(), sandbox.MaxAskContextBytes-1024),
 		Subject: delegated.Subject(delegated.KindPublicPost, append([]string{m.app}, ids...)...), Ask: ask}, nil
@@ -306,42 +306,55 @@ type PostedReply struct {
 
 func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved string) (any, error) {
 	m, rs, err := p.replies(ctx, call)
+	rec := p.heldRecord(call, m, err == nil)
+	if err == nil {
+		rec.Operation = replyBinding(m.app, rs)
+	}
+	if aerr := p.allow(ctx, rec, call.Approver); aerr != nil {
+		return nil, aerr
+	}
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, true, rec, err)
 	}
 	release, err := p.hold(ctx, leaseOf(m))
 	if err != nil {
-		return nil, err
+		return nil, p.failEarly(ctx, true, rec, err)
 	}
 	defer release()
-	rec := recordOf(call, m)
-	rec.Operation = replyBinding(m.app, rs)
-	rec.Answerer = call.Approver
-	p.note(ctx, growth.StepAllowed, rec)
-	rec.Answerer = ""
 	if !growth.BindingHolds(approved, replyBinding(m.app, rs)) {
 		p.note(ctx, growth.StepVoid, rec)
 		return nil, growth.ErrMoved
 	}
+	act, cancel := context.WithTimeout(ctx, p.applyBound)
+	defer cancel()
 	out := Posted{App: m.app}
-	failed := 0
+	failed, unknown := 0, false
 	for _, r := range rs {
 		body := map[string]any{"data": map[string]any{"type": "customerReviewResponses",
 			"attributes":    map[string]any{"responseBody": r.text},
 			"relationships": map[string]any{"review": map[string]any{"data": map[string]any{"type": "customerReviews", "id": r.review.ID}}}}}
-		_, err := m.team.client.Do(ctx, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
+		_, err := m.team.client.Do(act, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
 			Reserved: true})
 		pr := PostedReply{Review: r.review.ID, Status: "posted"}
-		if err != nil {
+		switch {
+		case writeFailure(err) == growth.FailureUnknownOutcome:
+			unknown = true
+			pr.Status, pr.Error = "unknown", "the reply was cut before Apple answered: read the review to see "+
+				"whether it was posted."
+		case err != nil:
 			failed++
 			pr.Status, pr.Error = "failed", said(err).Error()
 		}
 		out.Replies = append(out.Replies, pr)
 	}
-	if failed == len(rs) {
+	switch {
+	case unknown:
+		rec.Failure = growth.FailureUnknownOutcome
+		p.note(ctx, growth.StepFailed, rec)
+	case failed == len(rs):
 		rec.Failure = growth.FailureVendorRefused
 		p.note(ctx, growth.StepFailed, rec)
-	} else {
+	default:
 		p.note(ctx, growth.StepApplied, rec)
 	}
 	return out, nil

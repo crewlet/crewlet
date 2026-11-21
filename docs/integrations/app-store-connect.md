@@ -34,7 +34,7 @@ A key's variable may be named at its own field alone: the company document refus
 
 ## Roles and keys
 
-Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another. The Admin key can manage the team's users and keys, so it makes an account change an administrator allowed, or a change Apple lets only Admin make, and nothing else: never a read or an operate change, even where it is the only key that could. Every call through it is on the access log, and a pass checks that it reads as a key without calling Apple with it. Every slot is empty until a person fills it, and removing a key from the company document takes effect on the next call.
+Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another. The Admin key can manage the team's users and keys, so it makes an act an administrator allowed and nothing else: never a read, a check of what a call names or an operate change, even where it is the only key that could. A change Apple lets only Admin make is an admin act, held for an administrator; a target only Admin may read is not read first, and the administrator allows the exact request. Every call through it is on the access log, and a pass checks that it reads as a key without calling Apple with it. Every slot is empty until a person fills it, and removing a key from the company document takes effect on the next call.
 
 | Slot | Apple role | What agents can do with it |
 |---|---|---|
@@ -57,7 +57,7 @@ The Account Holder has no key: an act only it may take is done in App Store Conn
 | `operate` | Also make changes nobody outside the team sees at once (a draft version's text, a draft custom product page or in-app event, internal TestFlight), and ask for anything customers or external testers see |
 | `administer` | Also ask for account changes: users, invitations, devices, certificates, bundle IDs, profiles, sandbox testers, webhooks, and deletes that cannot be undone |
 
-A seat names the apps it may touch (`apps`, required while on). Resources no app owns (users, devices, certificates, profiles, reports across apps) need `team_resources: true` on the seat.
+A seat names the apps it may touch (`apps`, required while on). Every resource a call names that belongs to an app, in its path, its filters or the body it sends, must be in one of those apps; Crewlet finds its app before anything is sent. Resources no app owns (users, beta testers, devices, certificates, territories, reports across apps) need `team_resources: true` on the seat. An answer never shows an app outside the seat's apps, and a read through a resource no app owns that would show another app's resources (a tester's beta groups) is refused unless the seat's apps are all of the team's: read them through one of its apps instead.
 
 ## The agents' tools
 
@@ -70,7 +70,7 @@ A seat names the apps it may touch (`apps`, required while on). Resources no app
 | `app_store_connect_admin` | admin | Asks for an account change or a delete that cannot be undone |
 | `app_store_connect_reviews` | read | An app's reviews, newest first, never the reviewer's name |
 | `app_store_connect_reply_to_reviews` | public | Asks to post 1 to 10 replies to one app's reviews, allowed or denied together |
-| `app_store_connect_sales` | read | One Pacific day's units and proceeds per app, territory and currency |
+| `app_store_connect_sales` | read | One Pacific day's units and proceeds per app, territory and currency; an in-app purchase's or subscription's row counts for the app whose SKU it names |
 
 A write is classed by what its target is when it is made: an edit to a version in Prepare for Submission is operate, the same edit to a live version public. A state Crewlet cannot read keeps the stricter class.
 

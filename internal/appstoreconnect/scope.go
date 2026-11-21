@@ -1,28 +1,34 @@
 package appstoreconnect
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A seat names its apps; every call is held to them (package doc, "Scope").
-// A resource is placed in its app by the request's own path where it names
-// one, else by the owners cache, which every answer an agent was handed fills
-// (an agent learns an ID only through a read the engine scoped), else by a
-// bounded search down from each of the seat's apps through Apple's related
-// lists. A resource no app owns is the team's.
+// A resource type an app owns is generated from Apple's document
+// (ownedTypes); every owned resource a call names is placed in one of the
+// seat's apps, and any other resource it names needs team_resources.
 
 // ErrUnplaced is a resource the engine could not place in any of the seat's
 // apps: nothing is sent.
 var ErrUnplaced = errors.New("appstoreconnect: the resource is in none of this agent's apps")
 
-// teamOwned marks a type no app owns.
+// teamOwned is the app of an owned resource in no app (a bundle ID no app
+// uses): the team's.
 const teamOwned = ""
 
 // owners is a bounded cache of resource to app, per node.
@@ -76,24 +82,16 @@ func (o *owners) get(typ, id string) (string, bool) {
 	return e.Value.(owned).app, true
 }
 
-// remember records every resource of a JSON:API answer as app's.
+// remember records the owned resources of an answer to a request rooted at
+// app through owned hops as app's; any other resource is never remembered.
 func (o *owners) remember(app string, body []byte) {
-	var doc struct {
-		Data     json.RawMessage `json:"data"`
-		Included []resourceRef   `json:"included"`
-	}
-	if app == "" || json.Unmarshal(body, &doc) != nil {
+	if app == "" {
 		return
 	}
-	var many []resourceRef
-	if json.Unmarshal(doc.Data, &many) != nil {
-		var one resourceRef
-		if json.Unmarshal(doc.Data, &one) == nil {
-			many = []resourceRef{one}
+	for _, r := range resourcesOf(body) {
+		if topology().owned[r.Type] {
+			o.put(r.Type, r.ID, app)
 		}
-	}
-	for _, r := range append(many, doc.Included...) {
-		o.put(r.Type, r.ID, app)
 	}
 }
 
@@ -102,77 +100,345 @@ type resourceRef struct {
 	ID   string `json:"id"`
 }
 
-// lister reads one page of a related list, answering its resources and the
-// next page's cursor.
-type lister interface {
-	listPage(ctx context.Context, path string, cursor string) (refs []resourceRef, next string, err error)
+// resourcesOf are an answer's resources, its data and included.
+func resourcesOf(body []byte) []resourceRef {
+	var doc struct {
+		Data     json.RawMessage `json:"data"`
+		Included []resourceRef   `json:"included"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return nil
+	}
+	return append(refsOf(doc.Data), doc.Included...)
 }
 
-// placer places resources in apps for one connection.
-type placer struct {
-	owners *owners
-	list   lister
-	// down is, per type, the related-list paths from an app down to it.
-	down map[string][]string
+// refsOf reads JSON:API data that is one resource, a list or null.
+func refsOf(raw json.RawMessage) []resourceRef {
+	var many []resourceRef
+	if json.Unmarshal(raw, &many) == nil {
+		return many
+	}
+	var one *resourceRef
+	if json.Unmarshal(raw, &one) == nil && one != nil && one.Type != "" {
+		return []resourceRef{*one}
+	}
+	return nil
 }
+
+// upLink is an owned type's instance read and the to-one relationships it
+// includes toward its app, nearest first (topology_gen.go).
+// topologyTables are the generated placement tables (topology_gen.go).
+type topologyTables struct {
+	owned     map[string]bool
+	upward    map[string]upLink
+	downward  map[string][]hop
+	idFilters map[string]map[string]string
+}
+
+type upLink struct {
+	path string
+	rels []string
+}
+
+// hop is one related read below a parent; one answers a resource, not a list.
+type hop struct {
+	path string
+	one  bool
+}
+
+// maxUp bounds an upward walk: the deepest owned type is six to-one links
+// below its app.
+const maxUp = 8
 
 // searchPages bounds the pages one hop of a search reads per parent: twenty
 // pages of 200 is 4,000 children, past which the agent is told to read the
 // resource through its app's list first.
 const searchPages = 20
 
-// appOf is the app of resource typ/id among apps, [teamOwned] for a type no
-// app owns, or [ErrUnplaced].
-func (p *placer) appOf(ctx context.Context, typ, id string, apps []string) (string, error) {
-	if typ == "apps" {
-		return id, nil
+// errElsewhere is a resource its team does not hold: another team may.
+var errElsewhere = errors.New("appstoreconnect: the team does not hold the resource")
+
+// placer places owned resources through one team's readers, never the Admin key.
+type placer struct {
+	owners *owners
+	t      *team
+}
+
+// appOf is the app owned resource typ/id is in, [teamOwned] for one in no
+// app, or [errElsewhere]: read up its to-one links where Apple's document has
+// one, else searched down from apps through owned types alone.
+func (pl placer) appOf(ctx context.Context, typ, id string, apps []string) (string, error) {
+	var walked []resourceRef
+	found := func(app string) (string, error) {
+		for _, r := range walked {
+			pl.owners.put(r.Type, r.ID, app)
+		}
+		return app, nil
 	}
-	if a, ok := p.owners.get(typ, id); ok {
-		return a, nil
-	}
-	chain, ok := p.down[typ]
-	if !ok {
-		return teamOwned, nil
-	}
-	for _, a := range apps {
-		found, err := p.search(ctx, a, chain, typ, id)
-		if err != nil {
+	for range maxUp {
+		if typ == "apps" {
+			return found(id)
+		}
+		if a, ok := pl.owners.get(typ, id); ok {
+			return found(a)
+		}
+		link, ok := topology().upward[typ]
+		if !ok {
+			a, err := pl.search(ctx, typ, id, apps)
+			if err != nil {
+				return "", err
+			}
+			walked = append(walked, resourceRef{Type: typ, ID: id})
+			return found(a)
+		}
+		parent, err := pl.up(ctx, link, typ, id)
+		if err != nil || parent == nil {
+			if err == nil {
+				// EVERY LINK TO AN APP IS EMPTY: the resource is in no app.
+				return found(teamOwned)
+			}
 			return "", err
 		}
-		if found {
-			return a, nil
-		}
+		walked = append(walked, resourceRef{Type: typ, ID: id})
+		typ, id = parent.Type, parent.ID
 	}
 	return "", fmt.Errorf("%w: %s %s", ErrUnplaced, typ, id)
 }
 
-// search walks chain below app looking for typ/id, remembering what it reads.
-func (p *placer) search(ctx context.Context, app string, chain []string, typ, id string) (bool, error) {
-	parents := []string{app}
-	for depth, tmpl := range chain {
-		var next []string
-		for _, parent := range parents {
-			path := strings.Replace(tmpl, "{id}", url.PathEscape(parent), 1)
-			cursor := ""
-			for range searchPages {
-				refs, more, err := p.list.listPage(ctx, path, cursor)
+// up reads typ/id's first non-empty to-one link toward its app.
+func (pl placer) up(ctx context.Context, link upLink, typ, id string) (*resourceRef, error) {
+	path := strings.Replace(link.path, "{id}", url.PathEscape(id), 1)
+	slot, ok := readerOf(pl.t, path)
+	if !ok {
+		return nil, fmt.Errorf("%w: placing %s %s", ErrNoKey, typ, id)
+	}
+	rels := strings.Join(link.rels, ",")
+	resp, err := pl.t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true,
+		Query: url.Values{"include": {rels}, "fields[" + typ + "]": {rels}}})
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		return nil, errElsewhere
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Data struct {
+			Relationships map[string]struct {
+				Data json.RawMessage `json:"data"`
+			} `json:"relationships"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		return nil, fmt.Errorf("appstoreconnect: read %s %s: %w", typ, id, err)
+	}
+	for _, rel := range link.rels {
+		if refs := refsOf(doc.Data.Relationships[rel].Data); len(refs) == 1 && refs[0].ID != "" {
+			return &refs[0], nil
+		}
+	}
+	return nil, nil
+}
+
+// search walks typ's related reads below each of apps looking for typ/id,
+// remembering the owned resources it reads as their app's.
+func (pl placer) search(ctx context.Context, typ, id string, apps []string) (string, error) {
+	chain, ok := topology().downward[typ]
+	if !ok {
+		return "", fmt.Errorf("%w: %s %s cannot be placed in an app", ErrUnplaced, typ, id)
+	}
+	for _, app := range apps {
+		parents := []string{app}
+		for depth, h := range chain {
+			var next []string
+			for _, parent := range parents {
+				refs, err := pl.children(ctx, h, parent)
 				if err != nil {
-					return false, err
+					return "", err
 				}
 				for _, r := range refs {
-					p.owners.put(r.Type, r.ID, app)
+					pl.owners.put(r.Type, r.ID, app)
 					if depth == len(chain)-1 && r.Type == typ && r.ID == id {
-						return true, nil
+						return app, nil
 					}
 					next = append(next, r.ID)
 				}
-				if more == "" {
-					break
+			}
+			parents = next
+		}
+	}
+	return "", errElsewhere
+}
+
+// children are the resources hop reads below parent: one, or a list paged.
+func (pl placer) children(ctx context.Context, h hop, parent string) ([]resourceRef, error) {
+	path := strings.Replace(h.path, "{id}", url.PathEscape(parent), 1)
+	slot, ok := readerOf(pl.t, path)
+	if !ok {
+		return nil, fmt.Errorf("%w: reading %s", ErrNoKey, path)
+	}
+	var out []resourceRef
+	cursor := ""
+	for range searchPages {
+		q := url.Values{}
+		if !h.one {
+			q.Set("limit", "200")
+		}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		resp, err := pl.t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Query: q, Read: true, Reserved: true})
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var doc struct {
+			Data  json.RawMessage `json:"data"`
+			Links struct {
+				Next string `json:"next"`
+			} `json:"links"`
+		}
+		if err := json.Unmarshal(resp.Body, &doc); err != nil {
+			return nil, fmt.Errorf("appstoreconnect: read %s: %w", path, err)
+		}
+		// A TO-ONE HOP ANSWERS ONE RESOURCE, or null; a list hop a page.
+		out = append(out, refsOf(doc.Data)...)
+		if cursor = cursorOf(doc.Links.Next); cursor == "" || h.one {
+			break
+		}
+	}
+	return out, nil
+}
+
+// placeOwned is the app among the seat's that owned resource typ/id is in,
+// and its team: [teamOwned] for one in no app, a refusal for one elsewhere.
+func (p *Product) placeOwned(ctx context.Context, seat *config.RoleAppStoreConnect, typ, id string) (string, *team,
+	error) {
+	byTeam := map[*team][]string{}
+	var order []*team
+	for _, app := range seat.Apps {
+		t, err := p.teamOf(ctx, app)
+		if err != nil {
+			continue
+		}
+		if _, seen := byTeam[t]; !seen {
+			order = append(order, t)
+		}
+		byTeam[t] = append(byTeam[t], app)
+	}
+	for _, t := range order {
+		app, err := placer{owners: p.owners, t: t}.appOf(ctx, typ, id, byTeam[t])
+		switch {
+		case errors.Is(err, errElsewhere):
+			continue
+		case errors.Is(err, ErrNoKey):
+			return "", nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key but Admin may "+
+				"read %s %s to find its app, and Crewlet never reads with the Admin key. No call was made.", typ, id))
+		case err != nil:
+			return "", nil, said(err)
+		case app != teamOwned && !slices.Contains(seat.Apps, app):
+			continue
+		}
+		return app, t, nil
+	}
+	return "", nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s %s is in none of this agent's apps (%s), "+
+		"as far as the engine can find: read it through its app's list first. No call was made.", typ, id,
+		words.And(seat.Apps)))
+}
+
+// cutApps removes from an answer every apps resource, and every link to one,
+// outside allowed.
+func cutApps(body []byte, allowed []string) ([]byte, error) {
+	var doc map[string]any
+	// NUMBERS KEPT AS WRITTEN: a float would round an ID or a size past 2^53.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("appstoreconnect: read the answer: %w", err)
+	}
+	outside := func(v any) bool {
+		r, _ := v.(map[string]any)
+		t, _ := r["type"].(string)
+		id, _ := r["id"].(string)
+		return t == "apps" && !slices.Contains(allowed, id)
+	}
+	cutLinks := func(v any) {
+		r, _ := v.(map[string]any)
+		rels, _ := r["relationships"].(map[string]any)
+		for _, rel := range rels {
+			m, _ := rel.(map[string]any)
+			switch d := m["data"].(type) {
+			case []any:
+				m["data"] = slices.DeleteFunc(d, outside)
+			case map[string]any:
+				if outside(d) {
+					m["data"] = nil
 				}
-				cursor = more
 			}
 		}
-		parents = next
 	}
-	return false, nil
+	for _, key := range []string{"data", "included"} {
+		switch d := doc[key].(type) {
+		case []any:
+			d = slices.DeleteFunc(d, outside)
+			for _, r := range d {
+				cutLinks(r)
+			}
+			doc[key] = d
+		case map[string]any:
+			if outside(d) {
+				return nil, growth.Refuse(growth.RefusedForbidden, "the answer is an app outside this agent's "+
+					"apps. Nothing is shown.")
+			}
+			cutLinks(d)
+		}
+	}
+	return json.Marshal(doc)
+}
+
+// namesOwned reports whether an answer holds or links to an owned resource.
+func namesOwned(body []byte) bool {
+	var doc struct {
+		Data     json.RawMessage   `json:"data"`
+		Included []json.RawMessage `json:"included"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return true
+	}
+	var all []json.RawMessage
+	if json.Unmarshal(doc.Data, &all) != nil {
+		all = []json.RawMessage{doc.Data}
+	}
+	for _, raw := range append(all, doc.Included...) {
+		var r struct {
+			Type          string `json:"type"`
+			Relationships map[string]struct {
+				Data json.RawMessage `json:"data"`
+			} `json:"relationships"`
+		}
+		if json.Unmarshal(raw, &r) != nil {
+			continue
+		}
+		if topology().owned[r.Type] {
+			return true
+		}
+		for _, rel := range r.Relationships {
+			if slices.ContainsFunc(refsOf(rel.Data), func(x resourceRef) bool { return topology().owned[x.Type] }) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// covers reports whether the seat's apps are every app t reaches.
+func (p *Product) covers(ctx context.Context, seat *config.RoleAppStoreConnect, t *team) (bool, error) {
+	apps, err := p.appsOf(ctx, t)
+	if err != nil {
+		return false, err
+	}
+	return !slices.ContainsFunc(apps, func(a appInfo) bool { return !slices.Contains(seat.Apps, a.ID) }), nil
 }

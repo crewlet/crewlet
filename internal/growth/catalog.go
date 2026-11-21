@@ -328,29 +328,32 @@ func Permits(op Operation, roles []string) bool {
 
 var (
 	catalogsMu sync.Mutex
-	catalogs   = map[string]Catalog{}
+	catalogs   = map[string]func() Catalog{}
 )
 
-// Register adds a product's catalog, from its package's init: an invalid
-// catalog, a second one for a kind, or a tool another catalog lists is a
-// build fault, and panics.
-func Register(c Catalog) {
-	if err := c.Validate(); err != nil {
-		panic(err)
-	}
+// Register adds a product's catalog, from its package's init: an invalid or
+// second catalog for a kind is a build fault, and panics.
+func Register(c Catalog) { RegisterFunc(c.Kind, func() Catalog { return c }) }
+
+// RegisterFunc adds kind's catalog, built and validated at first use, so a
+// catalog of thousands of rows costs nothing at init (every push's hook runs
+// the binary's init).
+func RegisterFunc(kind string, build func() Catalog) {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
-	if _, dup := catalogs[c.Kind]; dup {
-		panic("growth: a second catalog for " + c.Kind)
+	if _, dup := catalogs[kind]; dup {
+		panic("growth: a second catalog for " + kind)
 	}
-	for _, other := range catalogs {
-		for _, t := range c.Tools {
-			if _, listed := other.Tool(t.Name); listed {
-				panic("growth: " + c.Kind + " lists tool " + t.Name + ", which " + other.Kind + " lists")
-			}
+	catalogs[kind] = sync.OnceValue(func() Catalog {
+		c := build()
+		if c.Kind != kind {
+			panic("growth: the catalog registered as " + kind + " says it is " + c.Kind)
 		}
-	}
-	catalogs[c.Kind] = c
+		if err := c.Validate(); err != nil {
+			panic(err)
+		}
+		return c
+	})
 }
 
 // Catalogs is every registered catalog, by kind.
@@ -359,7 +362,7 @@ func Catalogs() []Catalog {
 	defer catalogsMu.Unlock()
 	out := make([]Catalog, 0, len(catalogs))
 	for _, c := range catalogs {
-		out = append(out, c)
+		out = append(out, c())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
 	return out
@@ -380,5 +383,8 @@ func CatalogOf(kind string) (Catalog, bool) {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
 	c, ok := catalogs[kind]
-	return c, ok
+	if !ok {
+		return Catalog{}, false
+	}
+	return c(), true
 }
