@@ -1635,6 +1635,11 @@ func TestRedactingAKeyTwiceIsRedactingItOnce(t *testing.T) {
 // to over every fixture.
 func settle(t testing.TB, text string, sizes []int) (string, []string) {
 	t.Helper()
+	return settleBy(func(text string) int { return settledByBoth(t, text) }, text, sizes)
+}
+
+// settleBy is [settle], asking ask where it asks Settled.
+func settleBy(ask func(string) int, text string, sizes []int) (string, []string) {
 	var shown strings.Builder
 	var steps []string
 	pending := ""
@@ -1648,7 +1653,7 @@ func settle(t testing.TB, text string, sizes []int) (string, []string) {
 		pending += piece
 		at += n
 		if !held || strings.Contains(piece, "\n") {
-			cut := settledByBoth(t, pending)
+			cut := ask(pending)
 			shown.WriteString(redact.Secrets(pending[:cut]))
 			pending = pending[cut:]
 			held = cut == 0
@@ -1705,6 +1710,9 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 		if got := byByte[name].shown; got != want {
 			t.Errorf("%s a byte at a time:\n got %q\nwant %q", name, got, want)
 		}
+		for _, d := range byByte[name].differ {
+			t.Errorf("%s a byte at a time: %s", name, d)
+		}
 		for _, sizes := range [][]int{{7}, {64}, {3, 50, 1, 200}, {len(text)}} {
 			if got, _ := settle(t, text, sizes); got != want {
 				t.Errorf("%s in pieces of %v:\n got %q\nwant %q", name, sizes, got, want)
@@ -1719,17 +1727,26 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 var byteAtATime = sync.OnceValue(func() map[string]settled {
 	out := map[string]settled{}
 	for name, text := range keyFixtures() {
-		shown, steps := settle(t, text, []int{1})
-		out[name] = settled{shown: shown, steps: steps}
+		var differ []string
+		shown, steps := settleBy(func(text string) int {
+			swept, looped := redact.SettledTwoWays(text)
+			if swept != looped {
+				differ = append(differ, fmt.Sprintf("Settled settled %q at %d, and a hold a pass at %d", text, swept, looped))
+			}
+			return swept
+		}, text, []int{1})
+		out[name] = settled{shown: shown, steps: steps, differ: differ}
 	}
 	return out
 })
 
 // settled is what [settle] returns: everything shown, and what had been shown
-// after each piece.
+// after each piece; and where the sweep and a loop resolving one hold a pass
+// answered otherwise ([settledByBoth]).
 type settled struct {
-	shown string
-	steps []string
+	shown  string
+	steps  []string
+	differ []string
 }
 
 // NOTHING SHOWN BEFORE THE END IS A SECRET, at any moment: a key's body shown
