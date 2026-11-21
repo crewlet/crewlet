@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/panics"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -52,6 +53,14 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // package doc's "A collection's read of a thread"): so the takes at their base
 // hold no more than every read of the tier does.
 const SessionTakesAtOnce = 29
+
+// takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
+// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]).
+const takeBaseHeldBytes = 11838 << 10
+
+// The takes at their base hold no more than the box host's reads for its peers
+// at [baseTierReadBytes] each: a negative constant does not compile.
+const _ = uint(queue.ConcurrentAnswers*baseTierReadBytes - SessionTakesAtOnce*takeBaseHeldBytes)
 
 // sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
 var sessionTakes = make(chan struct{}, SessionTakesAtOnce)
