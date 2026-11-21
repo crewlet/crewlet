@@ -228,6 +228,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, lateCases...)
 	cases = append(cases, lateItemCases...)
 	cases = append(cases, wakeItemCases...)
+	cases = append(cases, foldInCases...)
 	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)

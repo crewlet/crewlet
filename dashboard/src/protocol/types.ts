@@ -6758,12 +6758,40 @@ export interface CompanyFeedAnswer {
   complete: boolean;
 }
 
+/**
+ * A fold-in waiting on a person's decision: whether another person's request,
+ * waiting behind a running executor, joins that executor's work on the apps of
+ * whom the work is for. Answered with `answer_executor{turn_id, launch_id,
+ * fold_in, choice}`, `choice` one of the decision's options.
+ */
+export interface FoldInItem {
+  id: string;
+  turn_id: string;
+  launch_id: string;
+  /** The busy seat, and whom its running work is for. */
+  seat: string;
+  requester: string;
+  /** Who asked, where, and their words as the row keeps them; `cut` more
+   *  characters are where they were written. */
+  asker: string;
+  asker_kind: string;
+  conversation: string;
+  words: string;
+  cut: number;
+  /** Whom it was put to, the requester first. */
+  put_to: string[];
+  asked_at: string;
+  decision: WorkDecision;
+  work_item?: WorkItemRef | null;
+}
+
 /** One thing waiting on a person's decision. */
 export interface DecisionItem {
-  kind: "ask" | "run";
+  kind: "ask" | "run" | "fold_in";
   at: string;
   ask?: WorkAskRow;
   run?: ExecutorRow;
+  fold_in?: FoldInItem;
   /**
    * The agent that asked was asked under access it no longer holds: what
    * changed in its access since, as the lines it is told. Empty where the

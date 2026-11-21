@@ -348,10 +348,16 @@ func TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays(t *testing.T)
 	if got := r.filed(t); len(got) != 0 {
 		t.Fatalf("the record holds wakes %v, want none", got)
 	}
-	for _, ev := range []*events.Event{chatter, owing, ask, unsure} {
+	for _, ev := range []*events.Event{chatter, owing, unsure} {
 		if !memo.done(r.job, ev.ID.String()) {
 			t.Errorf("wake %q is undecided after its triage", ev.ID)
 		}
+	}
+	// ANOTHER WRITER'S REQUEST waits undecided on the people who may let it
+	// join (foldin.go), and joins nothing meanwhile.
+	_, asked := mustRow(t, r.store, "run-1").FoldInFor(ask.ID.String())
+	if decided := memo.done(r.job, ask.ID.String()); !asked || decided {
+		t.Errorf("the other writer's request was decided (%v) or put to nobody (asked %v)", decided, asked)
 	}
 	var observed []*events.Event
 	d := &Dispatcher{Completions: r.ledger, Ledgered: inbox.Ledgered,

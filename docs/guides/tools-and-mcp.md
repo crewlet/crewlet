@@ -1447,6 +1447,13 @@ answered, while its run still holds it. The **Servers** tab's **Waiting on
 you** figure counts calls waiting and servers whose changed tools wait for a
 review.
 
+The same Inbox row asks a running agent's requester and its leads whether
+somebody else's request may join that agent's work, in a held call's shape:
+who asked, their words, the work it would join and whose apps it would run on,
+answered **Add it to the running work** or **Run it on its own** with
+`answer_executor` ([Folding another writer's request
+in](../concepts/code-sandbox.md#folding-another-writers-request-in)).
+
 ### Narrowing a server for a team
 
 An administrator grants a server and sets its tools' levels on its entry. A

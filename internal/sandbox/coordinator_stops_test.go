@@ -1236,6 +1236,20 @@ func (s *refusingStore) FileWake(ctx context.Context, turnID string, filing Wake
 	return s.inner.FileWake(ctx, turnID, filing)
 }
 
+func (s *refusingStore) AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error) {
+	if s.called("AskFoldIn") {
+		return FoldIn{}, errRefusedCall
+	}
+	return s.inner.AskFoldIn(ctx, turnID, f)
+}
+
+func (s *refusingStore) AnswerFoldIn(ctx context.Context, turnID, id string, a FoldInAnswered) (FoldIn, error) {
+	if s.called("AnswerFoldIn") {
+		return FoldIn{}, errRefusedCall
+	}
+	return s.inner.AnswerFoldIn(ctx, turnID, id, a)
+}
+
 func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
 	if s.called("TakeNotes") {
 		return nil, errRefusedCall

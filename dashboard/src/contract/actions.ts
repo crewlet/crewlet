@@ -275,7 +275,11 @@ export const ACTIONS = {
     // screen drew) rides every answer: a run that moved on to another
     // question refuses it `conflict` rather than taking an answer to a
     // question nobody showed.
-    args: ["turn_id", "launch_id", "choice", "answer"],
+    //
+    // AND A FOLD-IN (`fold_in`): whether another person's request joins a
+    // running executor's work, `choice` approve or refuse, `launch_id` the
+    // running job's.
+    args: ["turn_id", "launch_id", "fold_in", "choice", "answer"],
     domain: null,
     apps: [],
     refreshes: ["executors", "decisions"],

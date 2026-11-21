@@ -43,6 +43,7 @@ import { firstLine } from "~/lib/format.ts";
 import { useMemo, useState, type ReactNode } from "react";
 import { CodeBlock, Disclosure, Stack, Text } from "@crewlethq/ui";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
+import { FoldInButtons } from "./FoldInButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
@@ -57,12 +58,12 @@ import type { DecisionSubject, SeatCondition } from "~/lib/decisions.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { relTime } from "~/lib/format.ts";
-import type { ExecutorRow, WorkAskRow } from "~/protocol/index.ts";
+import { possessive, relTime } from "~/lib/format.ts";
+import type { ExecutorRow, FoldInItem, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
-import { Said } from "./Said.tsx";
+import { InPlace, Said } from "./Said.tsx";
 import { CHECKED_WORDS, renderQuoted } from "~/lib/markdown.ts";
 import { EscalationNote, ReleaseRequestFacts } from "./Delegation.tsx";
 import { delegationEscalated, releaseRequestOf } from "~/lib/delegation.ts";
@@ -87,6 +88,8 @@ export function subjectKey(s: DecisionSubject): string {
       return `ask:${s.ask.comment}`;
     case "run":
       return `run:${s.run.turn_id}`;
+    case "fold_in":
+      return `fold_in:${s.foldIn.id}`;
     case "seat":
       return `seat:${s.seat.row.id}`;
   }
@@ -117,6 +120,8 @@ export function DecisionRow({ subject, now }: { subject: RowSubject; now: number
   switch (subject.kind) {
     case "run":
       return <RunRow run={subject.run} index={index} now={now} />;
+    case "fold_in":
+      return <FoldInRow item={subject.foldIn} others={subject.others} index={index} now={now} />;
     case "seat":
       return <SeatRow seat={subject.seat} index={index} now={now} />;
   }
@@ -572,6 +577,43 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
           />
         ) : null
       }
+    />
+  );
+}
+
+/**
+ * Another person's request asking to join an agent's running work, as its row
+ * draws it: who asked, the agent and whom its work is for, their words quoted,
+ * and the two answers ([FoldInButtons]). Approving is primary only where it is
+ * put to the reader; one they may answer though put to somebody else draws
+ * both quietly.
+ */
+function FoldInRow({
+  item,
+  others,
+  index,
+  now,
+}: {
+  item: FoldInItem;
+  others: boolean | undefined;
+  index: OrgIndex;
+  now: number;
+}) {
+  const asker = seatOf(index, item.asker);
+  const seat = seatOf(index, item.seat).name;
+  const requester = seatOf(index, item.requester).name;
+  const words = item.words.trim();
+  return (
+    <Row
+      who={asker}
+      status="needs"
+      waiting={others ? YOU_CAN_ANSWER : undefined}
+      title={`Asks to add this to ${possessive(seat)} running work for ${requester}`}
+      sub={joined([words ? <InPlace key="w">{firstLine(words)}</InPlace> : ""])}
+      item={item.work_item ?? null}
+      at={item.asked_at}
+      now={now}
+      actions={<FoldInButtons item={item} seat={seat} primary={!others} />}
     />
   );
 }
