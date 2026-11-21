@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -482,5 +485,156 @@ func TestTheRunCallsCounterNamesEveryValueItCounts(t *testing.T) {
 		if !strings.Contains(shows, "`"+value+"`") {
 			t.Errorf("%s's catalogue text names no `%s`, a value it counts", metrics.SeatRunCalls, value)
 		}
+	}
+}
+
+// launchOn is turn's run of seat working for requester, charged to item and in
+// conversation, under a harness that reads notes; it answers the run's job.
+func (r *runsRig) launchOn(t *testing.T, turn, seat, requester, item, conversation string) string {
+	t.Helper()
+	agent := uuid.NewSHA1(uuid.NameSpaceOID, []byte(seat)).String()
+	run := sandbox.PendingRun{TurnID: turn, AgentID: agent, AgentHandle: seat, Role: seat, Harness: "claude-code",
+		Requester: requester, TaskDescription: "work of " + turn, ConversationKey: conversation, TraceID: "tr-1",
+		CreatedAt: time.Now().UTC(), Steer: sandbox.RunSteer{Seat: r.steers.anchor(turn, agent, seat)}}
+	if item != "" {
+		run.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: item, Key: item}
+	}
+	opened, err := r.store.BeginLaunch(t.Context(), run, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch %s: %v", turn, err)
+	}
+	if suspended, err := r.store.MarkSuspended(t.Context(), turn,
+		sandbox.Suspension{State: json.RawMessage(`{"version":4}`), Iteration: 1}); err != nil || !suspended {
+		t.Fatalf("MarkSuspended %s = %v, %v", turn, suspended, err)
+	}
+	return opened.LaunchID
+}
+
+// charted is r over the chart the audience cases read: agent seats cto, swe
+// and qa, and ada, a person.
+func (r *runsRig) charted(t *testing.T) *runsRig {
+	t.Helper()
+	r.e.epoch.current.Store(&Company{Org: audienceChart(t)})
+	return r
+}
+
+// OTHER SEATS' RUNS ON THE SAME WORK ARE LISTED BY HOW THEY RELATE. A run is
+// shown, after its own seat's, other seats' runs on its work item, in its
+// conversation or on an item the tracker links to its item, each naming its
+// seat and relation, another requester's by stage and item alone; a run of
+// another seat on other work is not shown.
+//
+// Mutation: drop the linked items from the listing's work (own-item-only), or
+// show another seat's run on other work, and this goes red.
+func TestOtherSeatsRunsOnTheSameWorkAreListedByHowTheyRelate(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newRunsRig(t)
+	r.desk.links = func(context.Context, types.WorkItem) []string {
+		return []string{types.WorkItem{Backend: types.WorkWorklet, ID: "ENG-2"}.Ref()}
+	}
+	r.launchOn(t, "run-a", "swe", "ana", "ENG-1", "chatlet:c1")
+	r.launchOn(t, "run-own", "swe", "ana", "", "")
+	r.launchOn(t, "run-item", "qa", "ana", "ENG-1", "")
+	r.launchOn(t, "run-thread", "pm", "ana", "", "chatlet:c1")
+	r.launchOn(t, "run-linked", "ops", "bob", "ENG-2", "")
+	r.launchOn(t, "run-far", "qa", "ana", "ENG-9", "chatlet:c9")
+	around, err := r.desk.Around(ctx, "run-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]prompts.RunAround{}
+	var order []string
+	for _, run := range around {
+		got[run.Turn], order = run, append(order, run.Turn)
+	}
+	if len(order) != 4 || order[0] != "run-own" || !got["run-own"].OwnSeat {
+		t.Fatalf("run-a is shown %v, want its seat's run first and three of other seats'", order)
+	}
+	for turn, want := range map[string]prompts.RunRelation{"run-item": prompts.RelationSameItem,
+		"run-thread": prompts.RelationSameConversation, "run-linked": prompts.RelationLinkedItem} {
+		if run := got[turn]; run.OwnSeat || run.Relation != want {
+			t.Errorf("%s is shown as %+v, want another seat's run %s", turn, run, want)
+		}
+	}
+	if linked := got["run-linked"]; linked.SameRequester || linked.Title != "" {
+		t.Errorf("another requester's run of another seat is shown as %+v", linked)
+	}
+	if brief := prompts.RunsAround(around, provenance.NewBoundary()); !strings.Contains(brief,
+		"turn `run-item` (seat qa), running, on the same work item as yours") {
+		t.Errorf("the brief does not relate another seat's run:\n%s", brief)
+	}
+}
+
+// A MESSAGE TO ANOTHER SEAT'S RUN CARRIES ITS REQUESTER AND NEEDS REACH. A run
+// messages another seat's run on its work only where both work for one
+// requester and its seat may reach that seat as a colleague's ask does (an
+// agent's seat the chart offers it the ask to, never a person's nor one the
+// chart lacks), and the message carries the sending run's requester, composed
+// from its row, and names its seat.
+//
+// Mutation: skip the reach for another seat (reach-anyone), or file the
+// message carrying nobody, and this goes red.
+func TestAMessageToAnotherSeatsRunCarriesItsRequesterAndNeedsReach(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newRunsRig(t).charted(t)
+	job := r.launchOn(t, "run-a", "swe", "founder", "ENG-1", "")
+	r.launchOn(t, "run-qa", "qa", "founder", "ENG-1", "")
+	r.launchOn(t, "run-bob", "qa", "bob", "ENG-1", "")
+	r.launchOn(t, "run-ada", "ada", "founder", "ENG-1", "")
+	r.launchOn(t, "run-ghost", "ghost", "founder", "ENG-1", "")
+	for target, want := range map[string]builtin.RunRefusal{"run-bob": builtin.RunRefusedRequester,
+		"run-ada": builtin.RunRefusedUnreachable, "run-ghost": builtin.RunRefusedUnreachable} {
+		if got := refusedFor(r.desk.Message(ctx, "run-a", job, target, "I have ENG-1")); got != want {
+			t.Errorf("a message to %s was refused %q, want %q", target, got, want)
+		}
+	}
+	if err := r.desk.Message(ctx, "run-a", job, "run-qa", "I have ENG-1's API half"); err != nil {
+		t.Fatalf("a message to another seat's run of the same requester: %v", err)
+	}
+	row := mustRow(t, r.store, "run-qa")
+	item := row.Steer.Notes[len(row.Steer.Notes)-1]
+	w, ok := r.steers.openWake("run-qa", row.LaunchID, item.Wake.Wakes[0])
+	carrier := notify.WorkingForKey(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"})
+	if !ok || w.FromSeat != "swe" || w.FromRun != "run-a" || w.WorkingFor != carrier || w.By != "founder" {
+		t.Errorf("the message opens as %+v (%v), want it from swe's run carrying founder", w, ok)
+	}
+}
+
+// A WAIT CYCLE THROUGH ANOTHER SEAT'S RUN IS REFUSED. The walk follows each wait
+// into another seat's runs, reading a run the caller is not shown, so a ring
+// through two seats is refused as one within a seat is; a wait on another
+// seat's run of another requester is refused before it.
+//
+// Mutation: walk only the runs the caller is shown (shown-only), and the ring
+// through a run of another item is recorded.
+func TestAWaitCycleThroughAnotherSeatsRunIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newRunsRig(t).charted(t)
+	jobs := map[string]string{
+		"run-a":   r.launchOn(t, "run-a", "swe", "founder", "ENG-1", ""),
+		"run-b":   r.launchOn(t, "run-b", "qa", "founder", "ENG-1", ""),
+		"run-d":   r.launchOn(t, "run-d", "qa", "founder", "ENG-7", ""),
+		"run-bob": r.launchOn(t, "run-bob", "qa", "bob", "ENG-1", ""),
+	}
+	// run-b waits on run-d, its own seat's, and run-d on run-a, a run it is
+	// not shown, as a record of its wait any writer could make.
+	if err := r.desk.Wait(ctx, "run-b", jobs["run-b"], "run-d", "its migration first", ""); err != nil {
+		t.Fatal(err)
+	}
+	wait := &sandbox.RunWait{Turn: "run-a", Seat: "swe", Reason: "the API first"}
+	if got, err := r.store.RecordAsk(ctx, "run-d", jobs["run-d"], sandbox.Ask{
+		Question: sandbox.RunWaitQuestion(wait.Reason), Wait: wait}); err != nil || got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk of run-d's wait = %v, %v", got, err)
+	}
+	if got := refusedFor(r.desk.Wait(ctx, "run-a", jobs["run-a"], "run-b", "its tests first", "")); got !=
+		builtin.RunRefusedCycle {
+		t.Errorf("a ring through another seat's runs was refused %q, want cycle", got)
+	}
+	if got := refusedFor(r.desk.Wait(ctx, "run-a", jobs["run-a"], "run-bob", "its tests first", "")); got !=
+		builtin.RunRefusedRequester {
+		t.Errorf("a wait on another seat's run of another requester was refused %q, want requester", got)
 	}
 }

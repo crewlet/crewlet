@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -15,11 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The runs in flight around an executor's run, as it sees and reaches them
@@ -35,6 +43,10 @@ import (
 type runsDesk struct {
 	engine *Engine
 	tools  []tools.Callable
+
+	// links is the references of the items linked to an item; nil is the
+	// engine's tracker ([runsDesk.linkedTo]), and a case hands its own.
+	links func(ctx context.Context, item types.WorkItem) []string
 }
 
 var (
@@ -133,10 +145,20 @@ func (d *runsDesk) refuse(ctx context.Context, tool runCallTool, caller, target 
 	return &builtin.RunRefused{Reason: reason, Said: said}
 }
 
-// seatRuns is turnID's run and every other run of its seat in flight, by turn
-// id, read in one listing: nil caller where the run has no row or this node no
-// sandbox runtime.
-func (d *runsDesk) seatRuns(ctx context.Context, turnID string) (*sandbox.PendingRun, map[string]sandbox.PendingRun,
+// aroundRun is one run in flight around a run, and how it bears on that
+// run's work: "" for a run of its own seat, a [prompts.RunRelation] for
+// another seat's.
+type aroundRun struct {
+	run      sandbox.PendingRun
+	relation prompts.RunRelation
+}
+
+// runsAround is turnID's run and every run in flight around it, by turn id:
+// every other run of its seat, in one listing of the seat's runs, and other
+// seats' runs on its work item, in its conversation or on an item linked to
+// its item, in one listing of the fleet's ([sandbox.PendingStore.ListActiveOn]).
+// A nil caller is a run with no row, or a node with no sandbox runtime.
+func (d *runsDesk) runsAround(ctx context.Context, turnID string) (*sandbox.PendingRun, map[string]aroundRun,
 	error) {
 	rt := d.engine.sandbox.Load()
 	if rt == nil {
@@ -150,19 +172,121 @@ func (d *runsDesk) seatRuns(ctx context.Context, turnID string) (*sandbox.Pendin
 	if err != nil {
 		return nil, nil, err
 	}
-	byTurn := make(map[string]sandbox.PendingRun, len(runs))
+	out := make(map[string]aroundRun, len(runs))
 	for _, run := range runs {
-		if run.TurnID != turnID && run.Ending == nil && sandbox.StageOf(run) != "" {
-			byTurn[run.TurnID] = run
+		if inFlight(run, turnID) {
+			out[run.TurnID] = aroundRun{run: run}
 		}
 	}
-	return &caller, byTurn, nil
+	on := d.workOf(ctx, caller)
+	others, err := rt.pending.ListActiveOn(ctx, on)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, run := range others {
+		if inFlight(run, turnID) {
+			out[run.TurnID] = aroundRun{run: run, relation: relationOf(caller, run, on)}
+		}
+	}
+	return &caller, out, nil
+}
+
+// inFlight reports whether run is one a run of turn other than it is shown:
+// in a stage, its ending undecided.
+func inFlight(run sandbox.PendingRun, turn string) bool {
+	return run.TurnID != turn && run.Ending == nil && sandbox.StageOf(run) != ""
+}
+
+// workOf is the work other seats' runs are found on for caller's run: its
+// item and the items the tracker links to it, and its conversation where that
+// is one two seats can share (never a schedule's, which each seat it fans out
+// to works on its own, nor an event's own fallback).
+func (d *runsDesk) workOf(ctx context.Context, caller sandbox.PendingRun) sandbox.RunsOn {
+	on := sandbox.RunsOn{Except: caller.AgentHandle}
+	if kind := conversationKind(caller.ConversationKey); kind != "" && kind != "schedule" {
+		on.Conversation = caller.ConversationKey
+	}
+	if caller.WorkItem != nil {
+		on.Items = append([]string{caller.WorkItem.Ref()}, d.linkedTo(ctx, *caller.WorkItem)...)
+	}
+	return on
+}
+
+// relationOf is how run, another seat's found on the work on names, bears on
+// caller's: the same item first, then the same conversation, else an item
+// linked to caller's.
+func relationOf(caller, run sandbox.PendingRun, on sandbox.RunsOn) prompts.RunRelation {
+	switch {
+	case caller.WorkItem != nil && run.WorkItem != nil && run.WorkItem.Ref() == caller.WorkItem.Ref():
+		return prompts.RelationSameItem
+	case on.Conversation != "" && run.ConversationKey == on.Conversation:
+		return prompts.RelationSameConversation
+	}
+	return prompts.RelationLinkedItem
+}
+
+// maxLinkedItems bounds the items linked to a run's item whose runs it is
+// shown: SIXTEEN, the item's own dependencies, links and duplicates. An item
+// linked to more is a hub, an epic, whose links name the work around it
+// rather than this run's.
+const maxLinkedItems = 16
+
+// linkedKinds are the relations an item's runs are related by: a dependency,
+// an untyped link and a duplicate; never a page's or an atlas entry's.
+var linkedKinds = []worklet.RelationKind{worklet.RelationWaitingOn, worklet.RelationLinked,
+	worklet.RelationDuplicates}
+
+// linkedTo is the references of the items the tracker links item to, either
+// way, at most [maxLinkedItems]: the engine's own tracker's alone, which keeps
+// its links; none where the read fails, which is said, and the run is shown
+// the runs on its own item and conversation.
+func (d *runsDesk) linkedTo(ctx context.Context, item types.WorkItem) []string {
+	if d.links != nil {
+		return d.links(ctx, item)
+	}
+	if item.Backend != types.WorkWorklet || item.ID == "" {
+		return nil
+	}
+	halves, ok := d.engine.trackerHalves()
+	if !ok {
+		return nil
+	}
+	detail, err := halves.reader.Task(ctx, item.ID, worklet.DetailWants{Links: true},
+		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
+	if err != nil {
+		log.WarnContext(ctx, "seat_run_links_unread", "item", item.ID, "error", err.Error(),
+			"detail", "the items linked to the run's item could not be read, so it is shown no run on them")
+		return nil
+	}
+	var out []string
+	for _, link := range detail.Links {
+		ref := types.WorkItem{Backend: types.WorkWorklet, ID: link.Other}.Ref()
+		if slices.Contains(linkedKinds, link.Kind) && link.Other != "" && !slices.Contains(out, ref) &&
+			len(out) < maxLinkedItems {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// seatRuns is [runsDesk.runsAround] as runs alone, by turn id.
+func (d *runsDesk) seatRuns(ctx context.Context, turnID string) (*sandbox.PendingRun,
+	map[string]sandbox.PendingRun, error) {
+	caller, around, err := d.runsAround(ctx, turnID)
+	if caller == nil || err != nil {
+		return caller, nil, err
+	}
+	out := make(map[string]sandbox.PendingRun, len(around))
+	for turn, a := range around {
+		out[turn] = a.run
+	}
+	return caller, out, nil
 }
 
 // Around is every other run of turnID's seat in flight, oldest first, each as
 // [aroundOf] shows it to turnID's run.
 func (d *runsDesk) Around(ctx context.Context, turnID string) ([]prompts.RunAround, error) {
-	caller, runs, err := d.seatRuns(ctx, turnID)
+	caller, runs, err := d.runsAround(ctx, turnID)
 	if err != nil {
 		d.count(ctx, runToolList, runFailed, turnID, "", err)
 		return nil, fmt.Errorf("engine: reading the runs around run %s: %w", turnID, err)
@@ -170,19 +294,25 @@ func (d *runsDesk) Around(ctx context.Context, turnID string) ([]prompts.RunArou
 	if caller == nil {
 		return nil, nil
 	}
-	ordered := make([]sandbox.PendingRun, 0, len(runs))
+	ordered := make([]aroundRun, 0, len(runs))
 	for _, run := range runs {
 		ordered = append(ordered, run)
 	}
-	slices.SortFunc(ordered, func(a, b sandbox.PendingRun) int {
-		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+	// THE SEAT'S OWN FIRST, then other seats', each oldest first.
+	slices.SortFunc(ordered, func(a, b aroundRun) int {
+		if own := cmp.Compare(otherSeat(a), otherSeat(b)); own != 0 {
+			return own
+		}
+		if c := a.run.CreatedAt.Compare(b.run.CreatedAt); c != 0 {
 			return c
 		}
-		return strings.Compare(a.TurnID, b.TurnID)
+		return strings.Compare(a.run.TurnID, b.run.TurnID)
 	})
 	out := make([]prompts.RunAround, 0, len(ordered))
 	for _, run := range ordered {
-		out = append(out, d.aroundOf(*caller, run))
+		line := d.aroundOf(*caller, run.run)
+		line.Relation = run.relation
+		out = append(out, line)
 	}
 	if len(out) > 0 {
 		d.count(ctx, runToolList, runListed, turnID, "", nil)
@@ -312,6 +442,9 @@ func (d *runsDesk) messageRefusal(ctx context.Context, caller, run sandbox.Pendi
 			"Run "+run.TurnID+" works for another requester. A run's words carry its requester's data, and no "+
 				"label decides whom data is for, so no message passes between runs working for different "+
 				"people. If its work bears on yours, tell your requester instead: say it in your final reply.")
+	case run.AgentHandle != caller.AgentHandle && !d.reaches(ctx, caller.AgentHandle, run.AgentHandle):
+		return d.refuse(ctx, runToolMessage, caller.TurnID, run.TurnID, builtin.RunRefusedUnreachable,
+			unreachableSaid(run))
 	case run.Ending != nil || !slices.Contains(sandbox.ItemStatuses, run.Status):
 		return d.refuse(ctx, runToolMessage, caller.TurnID, run.TurnID, builtin.RunRefusedNotWorking,
 			"Run "+run.TurnID+" is "+strings.ReplaceAll(string(sandbox.StageOf(run)), "_", " ")+", not working "+
@@ -352,8 +485,11 @@ func (d *runsDesk) file(ctx context.Context, caller, run sandbox.PendingRun, job
 		d.count(ctx, runToolMessage, runFailed, caller.TurnID, run.TurnID, err)
 		return fmt.Errorf("engine: counting run %s's message: %w", caller.TurnID, err)
 	}
+	// THE REQUESTER RIDES THE MESSAGE as an ask's does (ADR-0109): composed
+	// from the sending run's row, never from what its model wrote.
 	w := steer.Wake{ID: id, By: sandbox.RequesterName(caller), At: d.engine.now().UTC(), Text: text,
-		Label: provenance.Executor(caller.AgentHandle), FromRun: caller.TurnID, FromSeat: caller.AgentHandle}
+		WorkingFor: notify.WorkingForKey(sandbox.CarrierOf(caller)),
+		Label:      provenance.Executor(caller.AgentHandle), FromRun: caller.TurnID, FromSeat: caller.AgentHandle}
 	err := steers.fileRunMessage(ctx, run.TurnID, run.LaunchID, w)
 	if err == nil {
 		d.count(ctx, runToolMessage, runSent, caller.TurnID, run.TurnID, nil)
@@ -422,12 +558,18 @@ func (d *runsDesk) Wait(ctx context.Context, turnID, job, target, reason, branch
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedUnknown,
 			"No run in flight around this one has turn "+target+": call `"+builtin.ListRunsTool+
 				"` for the runs there are.")
+	case run.AgentHandle != caller.AgentHandle && !sandbox.SameRequester(*caller, run):
+		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedRequester,
+			"Run "+target+" is another seat's, working for another requester: a run waits on another seat's "+
+				"run only where both work for one requester. Tell your requester instead.")
+	case run.AgentHandle != caller.AgentHandle && !d.reaches(ctx, caller.AgentHandle, run.AgentHandle):
+		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedUnreachable, unreachableSaid(run))
 	case !slices.Contains(sandbox.Holding, run.Status):
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedNotWorking,
 			"Run "+target+" is "+strings.ReplaceAll(string(sandbox.StageOf(run)), "_", " ")+", so it holds no "+
 				"slot of its seat, and nothing says when it would carry on. Carry on with your own work, or ask "+
 				"your requester.")
-	case sandbox.WaitCycle(turnID, target, withRun(runs, *caller)):
+	case d.waitCycle(ctx, turnID, target, withRun(runs, *caller)):
 		return d.refuse(ctx, runToolWait, turnID, target, builtin.RunRefusedCycle,
 			"Run "+target+" waits, directly or through other runs, on this one: waiting for it would leave "+
 				"each run waiting on the other. Carry on with your own work, or tell it what you need with `"+
@@ -470,4 +612,74 @@ func withRun(runs map[string]sandbox.PendingRun, run sandbox.PendingRun) map[str
 	}
 	out[run.TurnID] = run
 	return out
+}
+
+// otherSeat orders a's run after the caller's own seat's: 1 for another
+// seat's, 0 for its own.
+func otherSeat(a aroundRun) int {
+	if a.relation == "" {
+		return 0
+	}
+	return 1
+}
+
+// unreachableSaid is why run, another seat's, cannot be reached from the
+// caller's.
+func unreachableSaid(run sandbox.PendingRun) string {
+	return "Run " + run.TurnID + " is " + run.AgentHandle + "'s, which your seat may not reach as a colleague's " +
+		"ask does: tell your requester what bears on its work instead."
+}
+
+// reaches reports whether from's seat may reach to's as a colleague's ask does
+// (ADR-0176's amendment), in the chart this node runs now ([reachesIn]).
+func (d *runsDesk) reaches(ctx context.Context, from, to string) bool {
+	c := d.engine.Company()
+	if c == nil || c.Org == nil {
+		return false
+	}
+	ok, err := reachesIn(ctx, c.Org, from, to)
+	if err != nil {
+		log.WarnContext(ctx, "seat_run_reach_undecided", "seat", from, "target", to, "error", err.Error(),
+			"detail", "whether the seat may reach the other could not be decided, so it is refused")
+	}
+	return ok
+}
+
+// reachesIn is the A2A reachability `a2a_ask` is held to, asked of o for one
+// seat reaching another: the seat to is an agent's the A2A directory addresses
+// ([agentSeats]), never from's own, and the chart's authority offers from's
+// seat the ask's verb, as the tool's gate decides it ([builtin.Admits]).
+func reachesIn(ctx context.Context, o *org.Organization, from, to string) (bool, error) {
+	seat := o.SeatByHandle(from)
+	if seat == nil || from == to {
+		return false, nil
+	}
+	if _, agent := (agentSeats{org: o}).SeatInbox(to); !agent {
+		return false, nil
+	}
+	ctx = iam.WithPrincipal(ctx, turnctx.SeatPrincipal(o, seat))
+	switch err := builtin.Admits(ctx, builtin.Decide(orgchart.Of(o)), builtin.A2AAskTool); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, builtin.ErrRefused):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// waitCycle is [sandbox.WaitCycle] over runs, the caller's and the runs
+// around it, reading a run of another seat a chain reaches that runs does not
+// hold: at most [sandbox.MaxRunWaitHops] reads, never a walk of every seat's
+// rows. A run that cannot be read ends the chain as one waiting on nobody: the
+// wait it would refuse cannot hang (ADR-0176).
+func (d *runsDesk) waitCycle(ctx context.Context, caller, target string, runs map[string]sandbox.PendingRun) bool {
+	rt := d.engine.sandbox.Load()
+	return sandbox.WaitCycle(caller, target, func(turn string) (sandbox.PendingRun, bool) {
+		if run, ok := runs[turn]; ok || rt == nil {
+			return run, ok
+		}
+		run, found, err := rt.pending.Get(ctx, turn)
+		return run, found && err == nil
+	})
 }
