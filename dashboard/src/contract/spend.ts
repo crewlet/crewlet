@@ -37,8 +37,8 @@ export const ADMIN_GROUPS: readonly string[] = ["provider"];
  * and everything that is not the turn's own
  * work is Auxiliary — every call to the seat's auxiliary model (the turn-start
  * context, every compaction rewrite, the reflection workers, the background
- * learning passes, a person's answered question), the round-cap judge and the
- * first-turn onboarding), so no screen folds a phase itself.
+ * learning passes, a person's answered question), the round-cap judge, the
+ * first-turn onboarding and a busy seat's wake triage), so no screen folds a phase itself.
  *
  * `series` is the 1-based data hue, in stacking order; `internal/api/queries`'
  * band gate holds `value` against `tokens.Bands` in both directions.
@@ -72,6 +72,7 @@ export const PHASE_BANDS = {
   auxiliary: "auxiliary",
   judge: "auxiliary",
   onboarding: "auxiliary",
+  triage: "auxiliary",
 } as const;
 
 /**

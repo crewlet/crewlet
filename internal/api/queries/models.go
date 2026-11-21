@@ -798,6 +798,7 @@ var usedByPhases = []struct {
 	{phase.Subagent, config.JobSubagent},
 	{phase.Auxiliary, config.JobAuxiliary},
 	{phase.Judge, config.JobJudge},
+	{phase.Triage, config.JobTriage},
 }
 
 // usedBy is every job the entry key runs, or is a fallback in the chain of:

@@ -100,7 +100,7 @@ Split by phase, the chart draws **four bands**, folded once by the engine so no 
 | **Execute** | The seat's own turn doing its work: the executor, its harness's own run in a box. What the run spent is recorded from the box once per launch (`executor_collected`), which names no phase and is filed here; the executor's own record carries no tokens |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
-| **Auxiliary** | Everything not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) (turn-start context, compaction rewrites, reflection workers, background passes, a person's answered questions), the round-cap judge and the first-turn onboarding |
+| **Auxiliary** | Everything not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) (turn-start context, compaction rewrites, reflection workers, background passes, a person's answered questions), the round-cap judge, a busy seat's wake triage and the first-turn onboarding |
 
 The other splits (model, provider entry, seat, unit, worker) draw the four biggest and fold the rest into one "other" band.
 
@@ -115,7 +115,7 @@ Each call states its **stage** (whose cost it is) and its **purpose**:
 
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
-| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what its executor cost between two parts of the turn: its bridged tools and the condensing of a collected launch's report or failure (`condense_report`, `condense_tool_error`) | the seat and the company | **yes**; the part that resumes from the executor pays for what it cost between parts |
+| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what its executor cost between two parts of the turn: its bridged tools and the condensing of a collected launch's report or failure (`condense_report`, `condense_tool_error`); and the triage of a wake that reached the seat while its run worked, on the seat's `llm_triage` chain (`wake_triage`, in the turn's cost but not its task's spend, since no part of the turn is open to pay it) | the seat and the company | **yes**; the part that resumes from the executor pays for what it cost between parts |
 | `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) | the seat and the company | no; drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`), and the probe of a model entry at its usage limit when tried again, one per seat parked on it, charged to the parked seat it runs as (`provider_probe`) | the seat and the company (the company alone for a unit a person leads) | no, there is no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no, no turn |

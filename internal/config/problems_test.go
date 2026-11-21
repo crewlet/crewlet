@@ -208,6 +208,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"llm_subagent", "main", agentOnlyOnHuman},
 	{"llm_auxiliary", "main", agentOnlyOnHuman},
 	{"llm_judge", "main", agentOnlyOnHuman},
+	{"llm_triage", "main", agentOnlyOnHuman},
 	{"sandbox", "{max_turns: 5}", agentOnlyOnHuman},
 	{"token_budget", "{day: 5}", agentOnlyOnHuman},
 	{"workers", "[researcher]", agentOnlyOnHuman},

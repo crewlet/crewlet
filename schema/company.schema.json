@@ -3936,6 +3936,29 @@
                       "type": "array"
                     }
                   ]
+                },
+                "triage": {
+                  "anyOf": [
+                    {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "items": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "type": "array"
+                    }
+                  ]
                 }
               },
               "type": "object"
@@ -4038,6 +4061,30 @@
             }
           ],
           "description": "Provider chain for spawned sub-agents."
+        },
+        "llm_triage": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "Cheap model that triages a wake from somebody other than the requester while the seat's run works."
         },
         "manages": {
           "description": "Seat handles or unit keys this seat manages; a unit key expands to its seats.",

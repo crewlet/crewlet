@@ -53,12 +53,13 @@ const role = (doc: CompanyDocument, handle: string) =>
   agentRoles(doc as unknown as Record<string, unknown>).get(handle)!;
 
 describe("the categories", () => {
-  // PAIRED BY THE MODEL EACH JOB WANTS: the review with the delegated work (a
-  // strong model), the routines with the onboarding judge (a fast one, each
-  // under a fixed deadline), so one model chosen serves both jobs it writes.
-  it("pair the jobs that want the same kind of model", () => {
+  // GROUPED BY THE MODEL EACH JOB WANTS: the review with the delegated work (a
+  // strong model), the routines with the onboarding judge and a busy seat's
+  // wake triage (a fast one, each a bounded call under a fixed deadline), so
+  // one model chosen serves every job it writes.
+  it("group the jobs that want the same kind of model", () => {
     expect(CATEGORY_JOBS.reviews).toEqual(["review", "subagent"]);
-    expect(CATEGORY_JOBS.routines).toEqual(["auxiliary", "judge"]);
+    expect(CATEGORY_JOBS.routines).toEqual(["auxiliary", "judge", "triage"]);
   });
 
   it("cover every seat job exactly once", () => {
@@ -69,7 +70,7 @@ describe("the categories", () => {
   it("name the fields they write", () => {
     expect(categoryFields("coding")).toEqual(["llm"]);
     expect(categoryFields("reviews")).toEqual(["llm_review", "llm_subagent"]);
-    expect(categoryFields("routines")).toEqual(["llm_auxiliary", "llm_judge"]);
+    expect(categoryFields("routines")).toEqual(["llm_auxiliary", "llm_judge", "llm_triage"]);
   });
 });
 
@@ -162,7 +163,13 @@ describe("applyUses", () => {
     for (const handle of ["flat", "mapped"]) {
       const r = role(doc, handle);
       expect(r.llm).toBe("big");
-      for (const field of ["llm_review", "llm_subagent", "llm_auxiliary", "llm_judge"])
+      for (const field of [
+        "llm_review",
+        "llm_subagent",
+        "llm_auxiliary",
+        "llm_judge",
+        "llm_triage",
+      ])
         expect(r[field]).toBeUndefined();
     }
     expect(role(doc, "lead").llm).toBe("old");
