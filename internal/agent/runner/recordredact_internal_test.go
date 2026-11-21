@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,29 @@ func holdsNone(t *testing.T, where, text string, p plant) {
 	}
 }
 
+// modelsCopyKept fails where recording rec changed what the loop handed the
+// model, which must stay as it came: only the record is redacted. The calls
+// and the rounds are named, so a red line says which copy the redaction was
+// written into; the strings rec holds by value are covered by the whole.
+func modelsCopyKept(t *testing.T, where string, rec, asCame phaseRecord) {
+	t.Helper()
+	got, want := rec.Result, asCame.Result
+	for i := range want.Executions {
+		if got.Executions[i].Output != want.Executions[i].Output ||
+			!reflect.DeepEqual(got.Executions[i].Args, want.Executions[i].Args) {
+			t.Errorf("%s: call %d's answer or arguments were changed: the model's copy must stay as it came", where, i)
+		}
+	}
+	for i := range want.Narration {
+		if got.Narration[i].Content != want.Narration[i].Content {
+			t.Errorf("%s: round %d's prose was changed: the model's copy must stay as it came", where, i)
+		}
+	}
+	if !reflect.DeepEqual(rec, asCame) {
+		t.Errorf("%s: the loop's own result was changed: the model's copy must stay as it came", where)
+	}
+}
+
 // encoded is the one event pub holds, as the store keeps it.
 func encoded(t *testing.T, pub *collector) (string, *types.AgentPhaseCompleted) {
 	t.Helper()
@@ -125,25 +149,30 @@ func TestAPhasesRecordHoldsNoSecretItsWordsCarried(t *testing.T) {
 			return phaseRecord{Phase: phase.Review, Iteration: 1, Result: toolloop.Result{
 				Executions: []toolloop.Execution{{Round: 1, Name: name, Origin: origin, Output: said, Failed: failed}}}}
 		}
-		for name, rec := range map[string]phaseRecord{
-			"the answer":           {Phase: phase.Review, Result: toolloop.Result{Text: said}},
-			"the notes":            {Phase: phase.Review, Notes: said},
-			"the failure":          {Phase: phase.Review, Failed: true, Err: errors.New("the deploy failed: " + said)},
-			"the system prompt":    {Phase: phase.Review, System: outlined(said)},
-			"the user prompt":      {Phase: phase.Review, User: outlined(said)},
-			"the prose":            {Phase: phase.Review, Result: toolloop.Result{Narration: []toolloop.Narration{{Round: 1, Content: said}}}},
-			"a builtin's answer":   call("read_file", tools.OriginBuiltin, false),
-			"an MCP tool's answer": call("search_issues", "mcp:github", false),
-			"an agent's answer":    call("a2a_ask", tools.OriginBuiltin, false),
-			"a failed call":        call("post_message", "mcp:slack", true),
-			"a call's arguments": {Phase: phase.Review, Result: toolloop.Result{Executions: []toolloop.Execution{{
-				Round: 1, Name: "run_command", Output: "ok",
-				Args: map[string]any{"command": said, "env": map[string]any{"note": said}, "argv": []any{said}},
-			}}}},
-		} {
+		recs := func() map[string]phaseRecord {
+			return map[string]phaseRecord{
+				"the answer":           {Phase: phase.Review, Result: toolloop.Result{Text: said}},
+				"the notes":            {Phase: phase.Review, Notes: said},
+				"the failure":          {Phase: phase.Review, Failed: true, Err: errors.New("the deploy failed: " + said)},
+				"the system prompt":    {Phase: phase.Review, System: outlined(said)},
+				"the user prompt":      {Phase: phase.Review, User: outlined(said)},
+				"the prose":            {Phase: phase.Review, Result: toolloop.Result{Narration: []toolloop.Narration{{Round: 1, Content: said}}}},
+				"a builtin's answer":   call("read_file", tools.OriginBuiltin, false),
+				"an MCP tool's answer": call("search_issues", "mcp:github", false),
+				"an agent's answer":    call("a2a_ask", tools.OriginBuiltin, false),
+				"a failed call":        call("post_message", "mcp:slack", true),
+				"a call's arguments": {Phase: phase.Review, Result: toolloop.Result{Executions: []toolloop.Execution{{
+					Round: 1, Name: "run_command", Output: "ok",
+					Args: map[string]any{"command": said, "env": map[string]any{"note": said}, "argv": []any{said}},
+				}}}},
+			}
+		}
+		asCame := recs()
+		for name, rec := range recs() {
 			pub := &collector{}
 			var mu sync.Mutex
 			quietEmitter(pub, &mu).completed(context.Background(), rec)
+			modelsCopyKept(t, p.name+" in "+name, rec, asCame[name])
 			text, got := encoded(t, pub)
 			holdsNone(t, p.name+" in "+name, text, p)
 			if !strings.Contains(text, "then check the logs") || !strings.Contains(text, "[REDACTED:") {
@@ -168,13 +197,21 @@ func TestAPhasesRecordHoldsNoSecretItsWordsCarried(t *testing.T) {
 			}
 		}
 
+		worker := func() subagent.Result {
+			return subagent.Result{ID: "t1", Worker: "w",
+				Status: subagent.StatusOK, Text: said, SystemPrompt: outlined(said), UserPrompt: outlined(said),
+				Narration:  []toolloop.Narration{{Round: 1, Content: said}},
+				Executions: []toolloop.Execution{{Round: 1, Name: "read_file", Args: map[string]any{"q": said}, Output: said}},
+				Error:      said}
+		}
 		pub := &collector{}
 		var mu sync.Mutex
-		quietEmitter(pub, &mu).subagentCompleted(context.Background(), subagent.Result{ID: "t1", Worker: "w",
-			Status: subagent.StatusOK, Text: said, SystemPrompt: outlined(said), UserPrompt: outlined(said),
-			Narration:  []toolloop.Narration{{Round: 1, Content: said}},
-			Executions: []toolloop.Execution{{Round: 1, Name: "read_file", Args: map[string]any{"q": said}, Output: said}},
-			Error:      said})
+		res := worker()
+		quietEmitter(pub, &mu).subagentCompleted(context.Background(), res)
+		if !reflect.DeepEqual(res, worker()) {
+			t.Errorf("%s in a worker's record: the worker's own result was changed: the model's copy must "+
+				"stay as it came", p.name)
+		}
 		text, _ := encoded(t, pub)
 		holdsNone(t, p.name+" in a worker's record", text, p)
 
@@ -247,6 +284,15 @@ func TestAPhasesRecordHoldsNoSecretWhereverItsCutFalls(t *testing.T) {
 			pub := &collector{}
 			var mu sync.Mutex
 			quietEmitter(pub, &mu).completed(context.Background(), c.rec)
+			for j, ex := range c.rec.Result.Executions {
+				if ex.Output != row && ex.Output != big {
+					t.Errorf("%s in %s: call %d's answer was changed: the model's copy must stay as it came",
+						p.name, name, j)
+				}
+			}
+			if n := c.rec.Result.Narration; len(n) == 2 && n[1].Content != prose {
+				t.Errorf("%s in %s: the prose was changed: the model's copy must stay as it came", p.name, name)
+			}
 			_, rec := encoded(t, pub)
 			got := c.field(rec)
 			if !strings.Contains(got, "not kept on") && !strings.Contains(got, "diagnostic truncated") {
@@ -377,6 +423,10 @@ func TestAnExecutorRunsRecordHoldsNoSecretItsLogsCutRanAcross(t *testing.T) {
 			var mu sync.Mutex
 			quietEmitter(pub, &mu).completed(context.Background(), phaseRecord{Phase: phase.Execute,
 				Result: res.Result})
+			if out := res.Result.Executions[0].Output; out != logged {
+				t.Errorf("%s cut %d bytes in: the run's call answers %.40q on the loop's result, want the "+
+					"log's text as it came", p.name, at, out)
+			}
 			_, rec := encoded(t, pub)
 			got := rec.ToolExecutions[0]["result"].(string)
 			holdsNone(t, p.name+" cut "+strconv.Itoa(at)+" bytes in", got, p)
