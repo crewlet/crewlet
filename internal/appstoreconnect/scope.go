@@ -89,7 +89,7 @@ func (o *owners) remember(app string, body []byte) {
 		return
 	}
 	for _, r := range resourcesOf(body) {
-		if ownedTypes[r.Type] {
+		if topology().owned[r.Type] {
 			o.put(r.Type, r.ID, app)
 		}
 	}
@@ -127,6 +127,14 @@ func refsOf(raw json.RawMessage) []resourceRef {
 
 // upLink is an owned type's instance read and the to-one relationships it
 // includes toward its app, nearest first (topology_gen.go).
+// topologyTables are the generated placement tables (topology_gen.go).
+type topologyTables struct {
+	owned     map[string]bool
+	upward    map[string]upLink
+	downward  map[string][]hop
+	idFilters map[string]map[string]string
+}
+
 type upLink struct {
 	path string
 	rels []string
@@ -174,7 +182,7 @@ func (pl placer) appOf(ctx context.Context, typ, id string, apps []string) (stri
 		if a, ok := pl.owners.get(typ, id); ok {
 			return found(a)
 		}
-		link, ok := upward[typ]
+		link, ok := topology().upward[typ]
 		if !ok {
 			a, err := pl.search(ctx, typ, id, apps)
 			if err != nil {
@@ -235,7 +243,7 @@ func (pl placer) up(ctx context.Context, link upLink, typ, id string) (*resource
 // search walks typ's related reads below each of apps looking for typ/id,
 // remembering the owned resources it reads as their app's.
 func (pl placer) search(ctx context.Context, typ, id string, apps []string) (string, error) {
-	chain, ok := downward[typ]
+	chain, ok := topology().downward[typ]
 	if !ok {
 		return "", fmt.Errorf("%w: %s %s cannot be placed in an app", ErrUnplaced, typ, id)
 	}
@@ -414,11 +422,11 @@ func namesOwned(body []byte) bool {
 		if json.Unmarshal(raw, &r) != nil {
 			continue
 		}
-		if ownedTypes[r.Type] {
+		if topology().owned[r.Type] {
 			return true
 		}
 		for _, rel := range r.Relationships {
-			if slices.ContainsFunc(refsOf(rel.Data), func(x resourceRef) bool { return ownedTypes[x.Type] }) {
+			if slices.ContainsFunc(refsOf(rel.Data), func(x resourceRef) bool { return topology().owned[x.Type] }) {
 				return true
 			}
 		}

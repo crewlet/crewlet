@@ -92,7 +92,7 @@ func (p *Product) cut(ctx context.Context, handle string, m made, body []byte) (
 // every resource it answers is an app or owned.
 func rootedAt(m made, body []byte) bool {
 	typ, _ := typeAndID(m.path)
-	if m.app == "" || (typ != "apps" && !ownedTypes[typ]) {
+	if m.app == "" || (typ != "apps" && !topology().owned[typ]) {
 		return false
 	}
 	var doc struct {
@@ -101,7 +101,7 @@ func rootedAt(m made, body []byte) bool {
 	if json.Unmarshal(body, &doc) != nil {
 		return false
 	}
-	return !slices.ContainsFunc(refsOf(doc.Data), func(r resourceRef) bool { return r.Type != "apps" && !ownedTypes[r.Type] })
+	return !slices.ContainsFunc(refsOf(doc.Data), func(r resourceRef) bool { return r.Type != "apps" && !topology().owned[r.Type] })
 }
 
 func nextOf(body []byte) string {
@@ -179,7 +179,7 @@ func (p *Product) listOperations(call growth.Call) (any, error) {
 	class, _ := call.Args["class"].(string)
 	text, _ := call.Args["text"].(string)
 	var out OperationList
-	for _, op := range operations {
+	for _, op := range operations() {
 		lowest := op.Class
 		var lowered []string
 		for _, s := range op.States {

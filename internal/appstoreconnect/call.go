@@ -212,7 +212,7 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 		var t *team
 		switch {
 		case r.Type == "apps":
-		case ownedTypes[r.Type]:
+		case topology().owned[r.Type]:
 			if app, t, err = p.placeOwned(ctx, seat, r.Type, r.ID); err != nil {
 				return err
 			}
@@ -251,7 +251,7 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 	case typ == "apps" && id == "":
 		// THE TEAM'S APP LIST, cut to the seat's apps when answered.
 		return p.placeAnyApp(ctx, seat, m)
-	case ownedTypes[typ] && id == "":
+	case topology().owned[typ] && id == "":
 		return invalid("a list of %s names its app: add query filter[app] with one of this agent's apps, or read it "+
 			"through the app (operation apps_..._getToManyRelated).", typ)
 	}
@@ -278,7 +278,7 @@ func namedBy(m *made) ([]resourceRef, error) {
 	if err := add(typeAndID(m.path)); err != nil {
 		return nil, err
 	}
-	filters := idFilters[m.op.Path]
+	filters := topology().idFilters[m.op.Path]
 	names := slices.Sorted(maps.Keys(m.query))
 	for _, k := range names {
 		f, ok := strings.CutPrefix(k, "filter[")
@@ -385,7 +385,7 @@ func (p *Product) placeTeam(seat *config.RoleAppStoreConnect, m *made, args map[
 // readByTemplate is every read operation by its path template.
 var readByTemplate = sync.OnceValue(func() map[string]growth.Operation {
 	out := map[string]growth.Operation{}
-	for _, op := range operations {
+	for _, op := range operations() {
 		if op.Method == "GET" {
 			out[op.Path] = op
 		}
