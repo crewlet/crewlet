@@ -1045,11 +1045,20 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 // filled is a log's frames after seq after as a stream is handed them: where
 // the log no longer holds every frame after it (gap), a snapshot of the
 // transcript first, then the frames numbered past the snapshot.
+//
+// THE SNAPSHOT IS NUMBERED JUST BELOW THE FIRST FRAME KEPT, never after
+// after: a peer reads a replay a page at a time and asks again after the last
+// frame it drew, and a snapshot filling its page alone would otherwise leave
+// that ask in the gap, answered by another snapshot for every frame evicted.
 func (s *Service) filled(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
 	after uint64, frames []wire.Frame, gap bool) ([]wire.Frame, error) {
 
 	if !gap {
 		return frames, nil
+	}
+	if len(frames) > 0 {
+		// A gap is a first frame past after+1, so this never runs below after.
+		after = frames[0].Seq - 2
 	}
 	snap, err := s.snapshot(ctx, owner, row, after)
 	if err != nil {
