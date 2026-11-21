@@ -37,9 +37,13 @@ const (
 // refused sign-in is said as one, while a 429 retried to an answer, or one
 // whose last attempt met a 500, is neither, though stdout named `rate_limit`.
 //
+// The record is a file a process of the run can write, so it is read only for
+// a run the harness failed: a planted report on a run that answered is nothing.
+//
 // Mutation: drop the profile's limit_events or auth_events, and the spent plan
 // or the refusal is a server failure; read the record's events from stdout,
-// and nothing classifies; match the retry line, and the answered run benches.
+// and nothing classifies; match the retry line, or read the record of a run
+// that answered, and the answered run benches.
 func TestAKimiCode27RunIsJudgedByTheClassItsRecordEndsOn(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("kimi-code")
@@ -62,6 +66,12 @@ func TestAKimiCode27RunIsJudgedByTheClassItsRecordEndsOn(t *testing.T) {
 			record: kimi27Completed}, false, 0, ""},
 		{"a 429, then a 500", harnessOutput{stdout: stdout, stderr: kimi27Stderr, record: kimi27ServerError,
 			failed: true}, false, 0, ""},
+		{"a spent plan planted in the record of a run that answered", harnessOutput{
+			stdout: kimi27Version + "\n" + `{"role":"assistant","content":"pong"}`,
+			record: kimi27Completed + "\n" + kimi27Spent}, false, 0, ""},
+		{"a refusal planted in the record of a run that answered", harnessOutput{
+			stdout: kimi27Version + "\n" + `{"role":"assistant","content":"pong"}`,
+			record: kimi27Refused}, false, 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

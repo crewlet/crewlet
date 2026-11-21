@@ -257,10 +257,10 @@ const (
 	EventsInStdout EventSource = ""
 	// EventsInRecord is the record the harness keeps of its session
 	// ([Profile.Requests] with source file), followed for every run, a text
-	// function's included. For a harness whose stdout and stderr no longer say
-	// how a run ended: Kimi Code 2.7 prints a failed run's class only on its
-	// session's `turn.ended` line. As on stdout, the harness writes the record's
-	// keys and types, and the model only strings inside them.
+	// function's included, and read only for a run the harness failed, since a
+	// process of the run can write the file. For a harness whose stdout and
+	// stderr no longer say how a run ended: Kimi Code 2.7 prints a failed run's
+	// class only on its session's `turn.ended` line.
 	EventsInRecord EventSource = "record"
 )
 

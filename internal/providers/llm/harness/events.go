@@ -61,7 +61,12 @@ func classifyEvents(p harnessprofile.Profile, out harnessOutput) (markerHit, boo
 		}
 	}
 	scan(out.stdout, harnessprofile.EventsInStdout)
-	scan(out.record, harnessprofile.EventsInRecord)
+	// THE RECORD ONLY FOR A RUN THE HARNESS FAILED: it is a file in the
+	// seat's home, which a process of the run can write, so a planted limit
+	// on a run that answered would sit the entry out for every seat on it.
+	if out.failed {
+		scan(out.record, harnessprofile.EventsInRecord)
+	}
 	return last, found
 }
 
