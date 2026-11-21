@@ -2,8 +2,11 @@ package sandbox_test
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -177,7 +180,8 @@ func TestAWaitClosingACycleOfRunsIsFound(t *testing.T) {
 		"an unlisted run": {waits("b", "z"), "b", false},
 		"past the bound":  {waits(long...), "ra", true},
 	} {
-		if got := sandbox.WaitCycle("a", tc.target, tc.runs); got != tc.cycle {
+		lookup := func(turn string) (sandbox.PendingRun, bool) { run, ok := tc.runs[turn]; return run, ok }
+		if got := sandbox.WaitCycle("a", tc.target, lookup); got != tc.cycle {
 			t.Errorf("%s: WaitCycle = %v, want %v", name, got, tc.cycle)
 		}
 	}
@@ -218,5 +222,57 @@ func TestAWaitIsAQuestionPutToNobodyRecordedOnItsJob(t *testing.T) {
 	run.Status = sandbox.StatusAwaiting
 	if stage := sandbox.StageOf(run); stage != sandbox.StageWaiting {
 		t.Errorf("a parked wait's stage is %q, want %q", stage, sandbox.StageWaiting)
+	}
+}
+
+// OTHER SEATS' RUNS ON THE WORK ARE ONE BOUNDED LISTING. A run's item, the items
+// linked to it and its conversation find other seats' unfinished runs on them,
+// never the caller's own seat's nor a run on other work, oldest first and at
+// most [sandbox.MaxRunsAround]; work naming nothing finds none.
+//
+// Mutation: list the caller's own seat too (no-except), or drop the bound, and
+// this goes red.
+func TestOtherSeatsRunsOnTheWorkAreOneBoundedListing(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	at := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	launch := func(turn, seat, item, conversation string, n int) {
+		t.Helper()
+		run := sandbox.PendingRun{TurnID: turn, AgentHandle: seat, Status: sandbox.StatusLaunching,
+			ConversationKey: conversation, CreatedAt: at.Add(time.Duration(n) * time.Minute)}
+		if item != "" {
+			run.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: item}
+		}
+		if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
+			t.Fatalf("BeginLaunch %s: %v", turn, err)
+		}
+	}
+	launch("own", "swe", "i-1", "chatlet:c1", 0)
+	launch("same-item", "qa", "i-1", "", 3)
+	launch("same-conversation", "pm", "", "chatlet:c1", 2)
+	launch("linked", "ops", "i-2", "", 1)
+	launch("elsewhere", "qa", "i-9", "chatlet:c9", 4)
+	item := func(id string) string { return types.WorkItem{Backend: types.WorkWorklet, ID: id}.Ref() }
+	on := sandbox.RunsOn{Items: []string{item("i-1"), item("i-2")}, Conversation: "chatlet:c1", Except: "swe"}
+	runs, err := store.ListActiveOn(ctx, on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, run := range runs {
+		got = append(got, run.TurnID)
+	}
+	if want := []string{"linked", "same-conversation", "same-item"}; !slices.Equal(got, want) {
+		t.Errorf("the runs on the work are %v, want %v", got, want)
+	}
+	for i := range sandbox.MaxRunsAround + 2 {
+		launch(fmt.Sprintf("many-%02d", i), "qa", "i-1", "", 10+i)
+	}
+	if runs, err := store.ListActiveOn(ctx, on); err != nil || len(runs) != sandbox.MaxRunsAround {
+		t.Errorf("a crowded item listed %d runs (%v), want %d", len(runs), err, sandbox.MaxRunsAround)
+	}
+	if runs, err := store.ListActiveOn(ctx, sandbox.RunsOn{Except: "swe"}); err != nil || len(runs) != 0 {
+		t.Errorf("work naming nothing listed %d runs (%v)", len(runs), err)
 	}
 }

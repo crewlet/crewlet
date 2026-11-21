@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,10 @@ type RunAround struct {
 	// Item is the work item it is charged to, "" for none.
 	Item string
 
+	// Relation is how a run of another seat bears on the caller's work
+	// ([RunRelation]); "" for a run of the caller's own seat.
+	Relation RunRelation
+
 	// SameRequester says it works for whom the caller works for. Only then
 	// are its conversation, branch and title shown.
 	SameRequester bool
@@ -52,6 +57,26 @@ type RunAround struct {
 	TakesMessages bool
 }
 
+// RunRelation is how another seat's run bears on a run's work: the same work
+// item, the same conversation, or a work item the tracker links to the
+// caller's.
+type RunRelation string
+
+const (
+	// RelationSameItem is a run charged to the caller's work item.
+	RelationSameItem RunRelation = "same_item"
+	// RelationSameConversation is a run in the caller's conversation.
+	RelationSameConversation RunRelation = "same_conversation"
+	// RelationLinkedItem is a run on an item the tracker links to the caller's.
+	RelationLinkedItem RunRelation = "linked_item"
+)
+
+// RunRelations is the closed set.
+var RunRelations = []RunRelation{RelationSameItem, RelationSameConversation, RelationLinkedItem}
+
+// Valid reports whether r is one of [RunRelations].
+func (r RunRelation) Valid() bool { return slices.Contains(RunRelations, r) }
+
 // KeyRunsAround keys the section [RunsAround] adds to a launch's fresh brief.
 const KeyRunsAround = "runs_around"
 
@@ -67,7 +92,8 @@ func RunsAround(runs []RunAround, b provenance.Boundary) string {
 	}
 	var w strings.Builder
 	w.WriteString(runsAroundHeader + "\n")
-	w.WriteString("Other runs are working while this one does. Before you start, check whether one works on the " +
+	w.WriteString("Other runs are working while this one does: your seat's, and other seats' on the same work. " +
+		"Before you start, check whether one works on the " +
 		"same work item, branch or conversation as you: then call `" + toolname.ListRuns + "` to see where it " +
 		"stands, `" + toolname.MessageRun + "` to tell it what you are doing or found (it reads your message " +
 		"at its next step; only a run working for the same requester as you takes one), or `" +
@@ -92,6 +118,9 @@ func RunLine(r RunAround, b provenance.Boundary) string {
 		parts = append(parts, "a run for another requester")
 	}
 	parts = append(parts, strings.ReplaceAll(r.Stage, "_", " "))
+	if said, ok := relationSaid[r.Relation]; ok {
+		parts = append(parts, said)
+	}
 	if r.Item != "" {
 		parts = append(parts, "on work item "+wakeName(b, r.Item, "unnamed"))
 	}
@@ -118,4 +147,11 @@ func RunLine(r RunAround, b provenance.Boundary) string {
 		line += ":\n" + r.Label.Fence(b, r.Title)
 	}
 	return line
+}
+
+// relationSaid is each relation as a run's line says it.
+var relationSaid = map[RunRelation]string{
+	RelationSameItem:         "on the same work item as yours",
+	RelationSameConversation: "in the same conversation as yours",
+	RelationLinkedItem:       "on a work item linked to yours",
 }

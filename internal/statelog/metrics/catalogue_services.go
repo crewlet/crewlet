@@ -185,7 +185,7 @@ func serviceInstruments() []Instrument {
 				"answered, `failed` when a store or the publish failed, or " +
 				"`refused_` and the reason (`self`, `unknown_run`, `requester`, " +
 				"`not_working`, `harness`, `bound`, `cycle`, `caller_done`, " +
-				"`invalid`). " +
+				"`invalid`, `unreachable` for another seat's run the caller's may not ask). " +
 				"`refused_requester` climbing is runs of one seat working for " +
 				"different people on the same work; `refused_bound` runs talking " +
 				"past what a handoff needs. The `seat_run_*` lines name the runs.",
