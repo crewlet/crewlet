@@ -252,7 +252,8 @@ func TestARemovalSaysWhereAnUnwrittenJobMoves(t *testing.T) {
 	}
 	slices.Sort(moved)
 	want := []string{"pm/auxiliary:default>sonnet", "pm/executor:default>sonnet",
-		"pm/judge:default>sonnet", "pm/review:default>sonnet", "pm/subagent:default>sonnet"}
+		"pm/judge:default>sonnet", "pm/review:default>sonnet", "pm/subagent:default>sonnet",
+		"pm/triage:default>sonnet"}
 	if !slices.Equal(moved, want) {
 		t.Errorf("moves = %v, want %v (qa and backend write their own)", moved, want)
 	}

@@ -269,10 +269,10 @@ func TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn(
 	r := newRouterRig(t)
 	followUp := r.post(t, "lead", "chat:C1", "use staging, not production", 7)
 	other := r.post(t, "ceo", "chat:C1", "and fix the logo", 8)
-	decided := map[string]map[string]bool{}
-	r.e.routeSeat(ctx, "swe", r.subject, r.group, decided)
-	r.e.routeSeat(ctx, "swe", r.subject, r.group, decided)
-	r.e.routeSeat(ctx, "swe", r.subject, r.group, map[string]map[string]bool{})
+	memo := newRouteMemo()
+	r.e.routeSeat(ctx, "swe", r.subject, r.group, memo)
+	r.e.routeSeat(ctx, "swe", r.subject, r.group, memo)
+	r.e.routeSeat(ctx, "swe", r.subject, r.group, newRouteMemo())
 	if got := r.filed(t); !slices.Equal(got, []string{followUp.ID.String()}) {
 		t.Fatalf("the run's record holds wakes %v, want the requester's follow-up once", got)
 	}
@@ -333,7 +333,7 @@ func TestAWakeTheRunReadBindsItsTurnAndReadsItsConversationThrough(t *testing.T)
 	ctx := t.Context()
 	r := newRouterRig(t)
 	followUp := r.post(t, "lead", "chat:C1", "use staging, not production", 7)
-	r.e.routeSeat(ctx, "swe", r.subject, r.group, map[string]map[string]bool{})
+	r.e.routeSeat(ctx, "swe", r.subject, r.group, newRouteMemo())
 	if got := parkedReply(t, r.runs, mustRow(t, r.store, "run-1")); got != turn.NoReply() {
 		t.Fatalf("a wake no step read binds the turn to %v, want nothing", got)
 	}
@@ -375,16 +375,16 @@ func TestAnUnreadOrRefusedWakeRunsAsATurnOfItsOwn(t *testing.T) {
 	ctx := t.Context()
 	r := newRouterRig(t)
 	unread := r.post(t, "lead", "chat:C1", "and ping me after", 9)
-	r.e.routeSeat(ctx, "swe", r.subject, r.group, map[string]map[string]bool{})
+	r.e.routeSeat(ctx, "swe", r.subject, r.group, newRouteMemo())
 	if got := r.filed(t); !slices.Equal(got, []string{unread.ID.String()}) {
 		t.Fatalf("the record holds wakes %v, want the follow-up", got)
 	}
 	refused := r.post(t, "lead", "chat:C1", "one more thing", 10)
 	gone := mustRow(t, r.store, "run-1")
 	gone.LaunchID = "job-replaced"
-	decided := map[string]map[string]bool{}
-	r.e.routeWake(ctx, "swe", []sandbox.PendingRun{gone}, refused, nil, decided)
-	if !decided["job-replaced"][refused.ID.String()] {
+	memo := newRouteMemo()
+	r.e.routeWake(ctx, "swe", []sandbox.PendingRun{gone}, refused, nil, memo, &routeRead{})
+	if !memo.done("job-replaced", refused.ID.String()) {
 		t.Error("a refused filing is not decided for its job, so every read files it again")
 	}
 	if got := r.filed(t); slices.Contains(got, refused.ID.String()) {

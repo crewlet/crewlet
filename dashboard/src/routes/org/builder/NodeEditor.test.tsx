@@ -950,6 +950,7 @@ describe("seat fields", () => {
     Object.assign(doc.units![0]!.roles![1]!, {
       llm_review: ["smart", "fast"],
       llm_judge: "fast",
+      llm_triage: "smart",
       sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
       workers: ["researcher", "writer"],
       learning_enabled: false,
@@ -963,6 +964,9 @@ describe("seat fields", () => {
     expect(
       screen.getByRole("list", { name: "Chosen: Round-cap judge model providers" }).textContent,
     ).toContain("fast");
+    expect(
+      screen.getByRole("list", { name: "Chosen: Wake triage model providers" }).textContent,
+    ).toContain("smart");
     tab("Advanced");
     expect(field("Learning").textContent).toContain("Off");
     expect(screen.getByRole("list", { name: "Chosen: Delegate templates" }).textContent).toContain(
