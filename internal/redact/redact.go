@@ -3,9 +3,9 @@
 //
 // Anything the engine ships to a place a person or a model reads — a tool
 // result, a harness transcript, a setup-step failure, an event-store
-// payload — can carry a credential it never meant to. A cloned repo URL with
-// the token in it, a harness that echoes its key on failure, a provisioning
-// command whose ${VAR} was resolved before it ran.
+// payload — can carry a credential it never meant to: a cloned repo URL with
+// its token, a harness echoing its key on failure, a command whose ${VAR} was
+// resolved before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
 // up redacting a token shape its neighbour already knows about. It imports
@@ -81,11 +81,21 @@
 // value; and a quoted key's name running back that far is the key's own
 // string, its value redacted.
 //
+// # Settled in one pass
+//
+// A hold bars the line starts it covers, moving the settled point to its first
+// line, an unread key's only at or past the rewritable point, which only falls
+// as the point does. So one sweep down the bars ([heldLines]) stops where a
+// hold a pass did: a move skips only barred points, a bar passed bars none
+// below, and it ends where none bars. A claim's key after a block on its line
+// needs no bar: no line start lies between the two, and the block's and the
+// key's own, at a rewritable point that low, bar the rest.
+//
 // # A text that arrives in pieces
 //
 // [Stream] redacts a text written to it in pieces and writes, put together,
 // exactly what [Secrets] returns for the whole, without holding it, or
-// refuses the text (below): a whole PDF's base64 on one line of a transcript
+// refuses it (below): a whole PDF's base64 on one line of a transcript
 // is redacted in what a few hundred KiB a pass hold. It runs the passes
 // Secrets makes, the keys' blocks and then each rule in order, as STAGES, each
 // reading what the one before it wrote, and each deciding with the code
@@ -95,28 +105,25 @@
 // of that at the last marker it holds (below), and by exactly that window
 // however much more it holds. The stages are handed the text a piece at a
 // time at its own offsets, so what each holds when it steps is the text's
-// alone, and how the text is cut into writes changes nothing. Secrets itself
-// reads its text whole at any length: its caller holds the text already, and
-// read by the stages, a text that needs none of their windows paid for them.
+// alone, and how it is cut into writes changes nothing. Secrets reads its
+// text whole at any length: its caller holds it.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
-// [keyReading]) and trusts a decision only where the window holds all it read.
-// Every rule reads no further than MaxReach and the bytes around it from where
-// it decides, so a window holding that much past a decision and behind it
-// decides it as the whole text does. What no window holds is carried from one
-// to the next instead: the SEQUENCE, where the rule looks next and the values
-// it replaced within reach, which the password's rule reads its next value
-// beside; and an open RUN, a match or a value decided where it begins whose
-// rest runs on (a token's body, a JSON Web Token's signature, a password's
-// value), written as its marker, or a marker a piece, and read on with the
-// run's own test rather than held, the dots a Google token may end before and
-// the backslashes a value may end before counted rather than held, and
-// written out a piece at a time once the run ends. Each stage reads its own
+// [keyReading]) and trusts a decision only where the window holds all it read,
+// MaxReach and the bytes around it either side (above). What no window holds is
+// carried from one to the next instead: the SEQUENCE, where the rule looks next
+// and the values it replaced within reach, which the password's rule reads its
+// next value beside; and an open RUN, a match or a value decided where it
+// begins whose rest runs on (a token's body, a JSON Web Token's signature, a
+// password's value), written as its marker, or a marker a piece, and read on
+// with the run's own test rather than held, the dots a Google token may end
+// before and the backslashes a value may end before counted rather than held,
+// and written out a piece at a time once the run ends. Each stage reads its own
 // input, since a marker stands for a run of any length; and so a stage that
 // claims tokens or AWS secrets in the text as written, holding markers that
-// stand for more of it than a step, or one that is still being read, decides
-// up to the last marker it holds, since no token's or AWS secret's read
-// crosses a marker's `[` ([ruleStage.markerToStepAt]).
+// stand for more of it than a step, or one that is still being read, decides up
+// to the last marker it holds, since no token's or AWS secret's read crosses a
+// marker's `[` ([ruleStage.markerToStepAt]).
 //
 // The keys' blocks read what the rules claim in the text as written
 // ([claims]), so the rules run twice: as a second instance of the same stages
@@ -170,10 +177,10 @@
 // # A key's block beside a password
 //
 // The keys' blocks are read beside what the rules claim in the text as
-// written ([claims]), and the rules then read the text the blocks leave, so a
-// password's value is read twice: by the claims, as written, and by the rule,
-// past the keys' markers, and the two readings must name one value, but under
-// a key's line with no gutter (below).
+// written ([claims]), and the rules read the text the blocks leave, so a
+// password's value is read twice, as written and past the keys' markers, and
+// the two readings must name one value but under a key's line with no gutter
+// (below).
 //
 // A PASSWORD IS CLAIMED AS ITS KEY AND ITS VALUE, never the stretch between
 // them. A value read on a line below its key ([readValue]) has between the two
@@ -209,8 +216,8 @@
 // the block's first line where the value's line opens alike, and the word the
 // claims, reading the key's line as written, take for the value is the
 // wrapping's, and shown. So a gutter the value's line repeats letter for
-// letter is the wrapping's, and is shown, though it be a run of base64, even a
-// key's last run where the line below its END repeats it. A key the claims
+// letter is the wrapping's and shown, though a run of base64, even a key's
+// last run the line below its END repeats. A key the claims
 // read no value of has none the cut keeps, and its block is written whole
 // too: where the line below opens with the gutter and then an armour, the
 // claims read no value, the armour ending the read, while the rule reads that
@@ -230,33 +237,30 @@
 // line, so the key's line is still a line of its own
 // ([claims.openingApart]).
 //
-// A KEY'S BLOCK IS WRITTEN APART FROM THE ENDING of the line below a key that
-// its value was read on ([claims.endingApart]). Under a wrapping's suffix the
+// A KEY'S BLOCK IS WRITTEN APART FROM THE ENDING of the line below a key its
+// value was read on ([claims.endingApart]). Under a wrapping's suffix the
 // rule reads the value on the first line that ends as the key's did, in the
 // text the blocks leave ([valueRead.ending]). A block that begins on that
 // line past the value, at a run of base64 an END below reads back or at a
-// BEGIN, and runs on past its end, writes the line's ending and the break
-// after it into its marker, and the line runs on, to the rule, into what the
-// block's last line holds after the block: a password's key there, or words
-// that are no suffix, and the rule takes the key line's own punctuation for
-// the value and publishes the value. So the read says where the ending begins
-// ([aValue]), the claim carries it, and the block is written as two markers
-// around the ending and the line break after it, which are the wrapping's,
-// and shown. A second pass reads the value's line as the first left it, a
-// marker where the value was, and no armour on it.
+// BEGIN, and runs on past its end, writes the ending and the break after it
+// into its marker, and the line runs on, to the rule, into what the block's
+// last line holds after it: a password's key, or words that are no suffix,
+// and the rule takes the key line's punctuation for the value and publishes
+// the value. So the read says where the ending begins ([aValue]), the claim
+// carries it, and the block is written as two markers around the ending and
+// its line break, the wrapping's, and shown. A second pass reads the value's
+// line as the first left it: a marker where the value was, no armour on it.
 //
 // A KEY'S MARKER IS READ AS THE WORDS IT REPLACED where a key's label is read
-// back to the markup its line opened ([labelStart]). The claims read a table
-// row holding a key's text before a password's key as written, the key's
-// letters and digits as words of the label, so the row's closing closes its
-// opening and the value is read below; the rule, reading the key's marker as
-// punctuation, stopped at it, took the closing for the value and published
-// the value, and where that was a key's piece before an END, a second pass
-// redacted it. Where the key's text holds what no label does (a `+`), the
-// claims stop inside it and take the closing for the value, while the rule
-// reads on across the marker and redacts the value below: what the claims
-// take is punctuation, so nothing a claim names is shown, and a second pass,
-// the marker in both readings, reads the row as the first pass's rule did.
+// back to the markup its line opened ([labelStart]). The claims read a key's
+// text in a table row before a password's key as written, its letters and
+// digits as words of the label, so the row's closing closes its opening and
+// the value is read below; a rule stopping at the marker takes the closing
+// for the value and publishes the value, or a key's piece before an END that
+// a second pass redacts. Where the key's text holds what no label does (a
+// `+`), the claims take the closing, the rule the value below: the claims
+// take punctuation, so nothing a claim names is shown, and a second pass, the
+// marker in both readings, reads the row as the first did.
 //
 // A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR where markup closes
 // the key's piece of a string: an escaped break after the markup ends the
@@ -294,8 +298,8 @@
 // # What a password's rule still publishes
 //
 // A password's value is read on its key's line, or on a later one where the
-// wrapping every line of the text shares puts it (readValue). What neither
-// reading finds is published:
+// wrapping every line shares puts it ([readValue]); what neither finds is
+// published:
 //
 //   - a value under a quoted key whose name is more than a name — letters,
 //     digits, `_`, `-` and `.` — such as `{"Admin Password": "x"}`: a quote
@@ -6058,106 +6062,158 @@ func Settled(text string) int {
 // ([readKeys]), the back hold's ([backHold]), the password's rule's
 // ([passwordInput]) and the holds' ([valueHolds]), each over the text once,
 // and the last two once more where the keys were read beside the values
-// ([claims]). A reader called again for every line the text holds is the
-// cost this counts; a rescan inside one reader is that reader's own test's.
-//
-// THE COUNT IS WHAT THE TEST OF ONE READ JUDGES, not the time Settled takes.
-// Read again in every prefix a hold cut the text at, Settled cost its lines
-// times its length, and that was timed first, against [Secrets] and then
-// against Settled itself over a text eight times smaller: both ratios were a
-// claim about how busy the runner was, and each passed on a quiet machine and
-// failed in CI's race job beside the other packages. The bytes the holds read
-// are the property itself, and no scheduler moves them.
+// ([claims]). The test of one read judges that count, not a time: timed
+// against [Secrets], the ratio moved with how busy the runner was, and no
+// scheduler moves the bytes. The holds are resolved in one sweep
+// ([heldLines.settled]); the loop it replaced, a hold a pass, is its oracle in
+// the package's tests.
 func settle(text string) (settled, read int) {
+	h, read := holding(text)
+	return h.settled(), read
+}
+
+// heldLines is what holds a text's complete lines back from settling: the
+// keys' blocks, the one still open and the back hold ([readKeys],
+// [backHold]), and the password keys whose value a later line decides
+// ([valueHolds]); claims are those of the holds read where the keys were read
+// beside the values ([claims]).
+type heldLines struct {
+	whole      string
+	spans      [][2]int
+	open, back int
+	holds      []valueHold
+	claims     []valueHold
+}
+
+// holding reads text's complete lines for what holds them back, and counts
+// the bytes it handed its readers ([settle]).
+func holding(text string) (h heldLines, read int) {
 	end := strings.LastIndexByte(text, '\n') + 1
+	h = heldLines{whole: text[:end], open: -1, back: -1}
 	if end == 0 {
-		return 0, 0
+		return h, 0
 	}
-	whole := text[:end]
 	reading := func(s string) string { read += len(s); return s }
-	spans, open, c := readKeys(reading(whole))
-	back := backHold(reading(whole))
-	keys := func(settled int) (int, bool) {
-		moved := false
-		if open >= 0 && settled > lineStart(whole, open) {
-			settled, moved = lineStart(whole, open), true
-		}
-		if back >= 0 && settled > lineStart(whole, back) {
-			settled, moved = lineStart(whole, back), true
-		}
-		for _, s := range spans {
-			if s[0] < settled && settled < s[1] {
-				settled, moved = lineStart(whole, s[0]), true
-			}
-		}
-		return settled, moved
-	}
-	settled = end
-	for moved := true; moved; {
-		settled, moved = keys(settled)
-	}
-	// rewritable is where the lines the keys hold begin: what is written
-	// next may still read any of them as a key's, or as no longer one — a
-	// one-line key an END below reads back across into a block, a block an
-	// END closes, a block a password's claim may yet cut apart (below) —
-	// and a password's value decided on such a line may be decided again
-	// once it reads otherwise ([passwordInput]).
-	rewritable := settled
-	written := spans
+	var c *claims
+	h.spans, h.open, c = readKeys(reading(h.whole))
+	h.back = backHold(reading(h.whole))
+	written := h.spans
 	if c != nil {
-		written = c.apart(slices.Clone(spans))
+		written = c.apart(slices.Clone(h.spans))
 	}
-	input := passwordInput(reading(whole), written)
-	holds := valueHolds(input.text, &read)
-	for k, h := range holds {
-		holds[k].start, holds[k].decided = input.at(h.start), input.at(h.decided)
+	input := passwordInput(reading(h.whole), written)
+	h.holds = valueHolds(input.text, &read)
+	for k, v := range h.holds {
+		h.holds[k].start, h.holds[k].decided = input.at(v.start), input.at(v.decided)
 	}
 	// The keys were read beside the passwords' values as the text reads
 	// with no block replaced ([claims]), and a value read so is decided
 	// by its own lines too: a key whose claim a cut would decide otherwise
 	// is held with it, since the text after the cut is read with no claim
 	// on that value, and an END there reads it back as the key's.
-	var claimHolds []valueHold
 	if c != nil && c.read {
-		raw := passwordInput(reading(whole), nil)
-		for _, h := range valueHolds(raw.text, &read) {
-			h.start, h.decided = raw.at(h.start), raw.at(h.decided)
-			holds = append(holds, h)
-			claimHolds = append(claimHolds, h)
+		raw := passwordInput(reading(h.whole), nil)
+		for _, v := range valueHolds(raw.text, &read) {
+			v.start, v.decided = raw.at(v.start), raw.at(v.decided)
+			h.holds = append(h.holds, v)
+			h.claims = append(h.claims, v)
 		}
 	}
-	for {
-		var moved bool
-		settled, moved = keys(settled)
-		// A block that reaches the line of a password's key before the
-		// key is written apart from that line's gutter by the line the
-		// value is read on ([claims.apart]): while that is undecided, so
-		// is the block, and its lines are rewritable: once it is cut, a
-		// key line above whose value the rule read no further than the
-		// block reads the gutter the cut leaves as its value.
-		for _, h := range claimHolds {
-			if h.decided < settled {
-				continue
+	return h, read
+}
+
+// bar is a hold as the line starts it keeps the settled point from: q with
+// lo < q <= hi moves up to lo's line. An unread hold's bar stands only where
+// hi is at or past the rewritable point ([heldLines.sweep]).
+type bar struct {
+	lo, hi int
+	unread bool
+}
+
+// settled is the largest line start no bar stands over, an unread hold's
+// counted at the rewritable point of that line start, in one sweep of the
+// bars (the package doc's "Settled in one pass").
+func (h heldLines) settled() int {
+	end := len(h.whole)
+	var bars []bar
+	if h.open >= 0 {
+		bars = append(bars, bar{lo: h.open, hi: end})
+	}
+	if h.back >= 0 {
+		bars = append(bars, bar{lo: h.back, hi: end})
+	}
+	for _, s := range h.spans {
+		bars = append(bars, bar{lo: s[0], hi: s[1] - 1})
+	}
+	slices.SortFunc(bars, byHi)
+	rw := h.sweep(bars, end, end, nil)
+	for _, v := range h.holds {
+		bars = append(bars, bar{lo: v.start, hi: v.decided, unread: v.unread})
+	}
+	slices.SortFunc(bars, byHi)
+	return h.sweep(bars, end, rw, h.claimPairs())
+}
+
+// byHi orders bars by hi, highest first.
+func byHi(a, b bar) int { return cmp.Compare(b.hi, a.hi) }
+
+// sweep is the largest line start at or below q no bar stands over, bars in
+// [byHi] order. rw is the rewritable point, where the lines the keys hold
+// begin: what is written next may still read any of them as a key's, or as no
+// longer one (a one-line key an END below reads back into a block, a block an
+// END closes, a block a claim may yet cut apart), and a password's value
+// decided on such a line may be decided again ([passwordInput]), so an unread
+// hold decided there stands. Each of pairs lowers rw to its lo once q is at or
+// below its hi.
+func (h heldLines) sweep(bars []bar, q, rw int, pairs []bar) int {
+	var waiting []bar // unread bars passed while rw stood above their hi
+	next, woken := 0, 0
+	lower := func() {
+		for {
+			for ; next < len(pairs) && pairs[next].hi >= q; next++ {
+				rw = min(rw, pairs[next].lo)
 			}
-			ls := lineStart(whole, h.start)
-			for _, s := range spans {
-				if s[1] > ls && s[1] <= h.start {
-					rewritable = min(rewritable, lineStart(whole, s[0]))
-					if settled > lineStart(whole, s[0]) {
-						settled, moved = lineStart(whole, s[0]), true
-					}
-				}
+			if woken == len(waiting) || waiting[woken].hi < rw {
+				return
 			}
-		}
-		for _, h := range holds {
-			if h.start < settled && h.decided >= settled && (!h.unread || h.decided >= rewritable) {
-				settled, moved = lineStart(whole, h.start), true
+			if b := waiting[woken]; b.lo < q {
+				q = lineStart(h.whole, b.lo)
 			}
-		}
-		if !moved {
-			return settled, read
+			woken++
 		}
 	}
+	lower()
+	for _, b := range bars {
+		switch {
+		case b.hi < q:
+			return q
+		case b.unread && b.hi < rw:
+			waiting = append(waiting, b)
+		case b.lo < q:
+			q = lineStart(h.whole, b.lo)
+			lower()
+		}
+	}
+	return q
+}
+
+// claimPairs are the claims' holds each beside a block that ends on its key's
+// line before the key, in [byHi] order: until the value's line, the cut apart
+// from that line's gutter ([claims.apart]) is undecided, so the block's lines
+// are rewritable from lo, the block's line, and a key line above whose value
+// the rule read no further than the block may yet read the gutter as its own.
+func (h heldLines) claimPairs() []bar {
+	var pairs []bar
+	for _, v := range h.claims {
+		ls := lineStart(h.whole, v.start)
+		// The spans are apart and in order, so their ends are too.
+		i, _ := slices.BinarySearchFunc(h.spans, ls, func(s [2]int, ls int) int { return cmp.Compare(s[1], ls+1) })
+		for ; i < len(h.spans) && h.spans[i][1] <= v.start; i++ {
+			pairs = append(pairs, bar{lo: lineStart(h.whole, h.spans[i][0]), hi: v.decided})
+		}
+	}
+	slices.SortFunc(pairs, byHi)
+	return pairs
 }
 
 // lineStart is the start of the line holding byte i.
