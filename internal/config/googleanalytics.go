@@ -67,6 +67,9 @@ func (g *GoogleAnalytics) Reaches(id string) bool {
 	return g != nil && (len(g.Properties) == 0 || slices.Contains(g.Properties, id))
 }
 
+// GrowthKind is the seat block's integration kind.
+func (r *RoleGoogleAnalytics) GrowthKind() string { return GoogleAnalyticsKind }
+
 // GrowthSeatLevel is the seat's level where it is on with a property, which
 // internal/authz's Google Analytics grants admit to its tools; "" where it is
 // off.
