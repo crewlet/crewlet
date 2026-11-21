@@ -135,7 +135,7 @@ func rhProbeWhole(t *testing.T, thread string) []string {
 
 // rhRead is what readMainThread answers of lines, the box's main thread, asked
 // takes alone as a stop's or a loss's read asks them, at release.
-func rhRead(t *testing.T, release string, ended bool, lines []string, takes ...sandbox.AskedTake) sandbox.HookReceipts {
+func rhRead(t *testing.T, release string, ended bool, lines []string, takes ...sandbox.AskedTake) sandbox.TakeReceipts {
 	t.Helper()
 	box, paths := cntBox(cntThread(lines...), nil)
 	return ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
@@ -143,7 +143,7 @@ func rhRead(t *testing.T, release string, ended bool, lines []string, takes ...s
 }
 
 // rhWant holds got to the takes held, restarted and absent.
-func rhWant(t *testing.T, at string, got sandbox.HookReceipts, held, restarted, absent []string) {
+func rhWant(t *testing.T, at string, got sandbox.TakeReceipts, held, restarted, absent []string) {
 	t.Helper()
 	norm := func(s []string) []string { return slices.Sorted(slices.Values(s)) }
 	if !slices.Equal(norm(got.Held), norm(held)) || !slices.Equal(norm(got.Restarted), norm(restarted)) ||

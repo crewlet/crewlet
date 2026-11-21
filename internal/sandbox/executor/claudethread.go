@@ -2330,7 +2330,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	var reading sandbox.MainThreadReading
 	takes := ask.Takes
 	if why := unreadTakes(ask); why != "" {
-		reading.Receipts, takes = sandbox.HookReceipts{Why: why}, nil
+		reading.Receipts, takes = sandbox.TakeReceipts{Why: why}, nil
 	}
 	if !ask.Count && !ask.Next && len(takes) == 0 {
 		return reading
@@ -2345,7 +2345,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	unread := func(why string) sandbox.MainThreadReading {
 		marked(sandbox.CountUnread)
 		if len(takes) > 0 {
-			reading.Receipts = sandbox.HookReceipts{Why: why}
+			reading.Receipts = sandbox.TakeReceipts{Why: why}
 		}
 		return reading
 	}

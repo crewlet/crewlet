@@ -28,10 +28,16 @@ func (OpenCode) inboxID(launch, noteID string) string {
 // admits can carry: AT LEAST 4,505, the engine's item bound
 // (internal/engine's maxLateItemUnits) the note contract requires, pending a
 // measurement. The plugin admits each note whole as a user message
-// (opencode_steer.js); TestThePluginAdmitsNotesAtTheRunsNextStep admits one
-// of 100,000 units, and the figure a real OpenCode release delivers to its
-// model whole, with that release, replaces this one.
+// (opencode_steer.js), and its probe admits one of 100,000 units
+// (TestANoteServedIsConfirmedOffItsJobsOwnRecord's OpenCode case); the figure
+// a real OpenCode release delivers to its model whole, with that release,
+// replaces this one.
 const openCodePollCeiling = 4505
+
+// pluginConfirms reports that OpenCode's plugin confirms each note itself: it
+// posts the note's id to the bridge's read route off OpenCode's own delivery
+// event (opencode_steer.js).
+func (OpenCode) pluginConfirms() bool { return true }
 
 // pollCeiling is [openCodePollCeiling].
 func (OpenCode) pollCeiling() int { return openCodePollCeiling }

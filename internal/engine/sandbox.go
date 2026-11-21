@@ -111,20 +111,17 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	})
 }
 
-// sandboxRunners is every harness this build can drive in a box: the harnesses
-// an executor can run on.
-//
-// A FUNCTION rather than a literal at the one call site, because two other
-// readers need the same list: `crewlet llm doctor` reports an executor-chain
-// member whose harness has no runner as skipped, and config refuses a chain with
-// none, both against executor.Names(). Tests hold all three together — a
-// drift would have config pass a chain the engine then refuses at the seat's
-// first launch.
+// sandboxRunners is every harness this build can drive in a box: the runners
+// registered ([executor.Registered]), the one list `crewlet llm doctor` and
+// config read too (executor.Names, config.ExecutorHarnesses), held together by
+// the executor's own test, so config never passes a chain the engine refuses at
+// the seat's first launch.
 func sandboxRunners() map[string]sandbox.Runner {
-	return map[string]sandbox.Runner{
-		executor.ClaudeCodeName: executor.NewClaudeCode(),
-		executor.OpenCodeName:   executor.NewOpenCode(),
+	runners := map[string]sandbox.Runner{}
+	for _, h := range executor.Registered() {
+		runners[h.Name()] = executor.New(h)
 	}
+	return runners
 }
 
 // Every runner [sandboxRunners] registers is offered for a save as its job

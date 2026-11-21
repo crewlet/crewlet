@@ -2277,7 +2277,7 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	}
 	at := readCapture(BoxReadLoss, result, over)
 	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
 		return nil, nil, err
 	}
 	if !c.capturing() {

@@ -457,6 +457,7 @@ func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
 // callIDKeys is the `_meta` key of each harness this build drives
 // ([Names]), read off its built-in profile once: every launch asks.
 var callIDKeys = sync.OnceValue(func() map[string]string {
+	harnesses := Registered()
 	keys := make(map[string]string, len(harnesses))
 	for _, h := range harnesses {
 		if p, ok := harnessprofile.Builtin(h.Name()); ok && p.Requests != nil {
@@ -510,7 +511,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
-	for _, h := range harnesses {
+	for _, h := range Registered() {
 		if a, ok := h.(artifactHolder); ok {
 			ownFiles, ownDirs := a.artifacts(p)
 			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)

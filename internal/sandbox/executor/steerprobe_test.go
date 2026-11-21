@@ -116,7 +116,7 @@ func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledg
 //
 // Mutation: rename the hook input's `event` key and no boundary takes the note;
 // drop Output.Unset and the variables reach the harness.
-func TestARealBoxsHooksReachTheBridgeTool(t *testing.T) {
+func realBoxsHooksReachTheBridgeTool(t *testing.T) {
 	t.Parallel()
 	inbox := &probeInbox{}
 	ledger := &probeLedger{}

@@ -18,9 +18,11 @@ type ThreadTraits struct {
 	// still counted: false where the harness's record of the session (an
 	// export the script takes as it ends) may lack what the copy holds.
 	CountsCutOff bool
-	// HookReceipts says the harness's hooks serve takes its thread shows,
-	// so a read of a copy holding a serve asks the thread its receipts.
-	HookReceipts bool
+	// Receipts says the runner confirms a take off the job's own record:
+	// its hooks' serves its thread shows, or the notes its session record
+	// holds; a read of a copy holding a serve asks it its receipts
+	// ([TakeReceipts]), whether or not it reads a whole thread.
+	Receipts bool
 	// PlacesWithResumeRead says a capture is placed at a save point only
 	// where its release's resume was read ([TakenSession.ResumeRead]).
 	PlacesWithResumeRead bool

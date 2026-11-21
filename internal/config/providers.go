@@ -351,10 +351,19 @@ func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 // with none can never run the turn, and config refuses it
 // ([Company.validateExecutors]).
 //
-// HELD TO THE RUNNERS THAT EXIST by a test against executor.Names(): a runner
-// missing here refuses entries that would run; one listed with no runner
-// admits entries every launch then refuses.
-var ExecutorHarnesses = []Harness{HarnessClaudeCode, HarnessOpenCode}
+// DERIVED FROM THE BUILT-IN PROFILES' executor blocks, in their order
+// ([harnessprofile.ExecutorRunners]): config cannot import the runners, and
+// the executor holds every listed name registered and every runner listed.
+// Read at first use, never at init: a push's hook links this package and pays
+// for nothing it does not read. The caller must not modify the slice.
+var ExecutorHarnesses = sync.OnceValue(func() []Harness {
+	names := harnessprofile.ExecutorRunners()
+	out := make([]Harness, len(names))
+	for i, name := range names {
+		out[i] = Harness(name)
+	}
+	return out
+})
 
 // HarnessAuthMode is how a providers.llm entry's harness authenticates.
 type HarnessAuthMode string
@@ -469,7 +478,7 @@ func (l *LLMProvider) HarnessName() string {
 // runsExecutor reports whether this entry's harness can run a seat's executor:
 // whether it has an in-box runner ([ExecutorHarnesses]).
 func (l *LLMProvider) runsExecutor() bool {
-	return slices.Contains(ExecutorHarnesses, Harness(l.HarnessName()))
+	return slices.Contains(ExecutorHarnesses(), Harness(l.HarnessName()))
 }
 
 // Timeout is the cap on one stretch of the harness's own work, applying the
@@ -634,7 +643,7 @@ func (l *LLMProvider) validate(path Path) error {
 			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
 				"reads where it would be placed: only %s launch an executor run. Remove the "+
 				"field, or move the entry to one of those harnesses",
-			l.HarnessName(), words.And(ExecutorHarnesses))
+			l.HarnessName(), words.And(ExecutorHarnesses()))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -664,6 +673,9 @@ func (l *LLMProvider) validateProfile(path Path) error {
 	}
 	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	switch {
+	case errors.Is(err, harnessprofile.ErrExecutorOverride):
+		p.add(at(path, "overrides.executor"), ErrConflict, "%v", err)
+		return p.err()
 	case errors.Is(err, harnessprofile.ErrOverrides):
 		p.add(at(path, "overrides"), ErrShape, "%v", err)
 		return p.err()

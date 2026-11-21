@@ -96,7 +96,8 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
-`claude-code` and `opencode` only. Any other harness serves a seat's reviewer,
+`claude-code` and `opencode` only, each listed by its built-in profile's
+`executor` block, which no `overrides` can set. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
 its only working tools. A seat whose `llm` chain holds no `claude-code` or

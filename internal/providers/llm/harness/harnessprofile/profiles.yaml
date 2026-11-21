@@ -9,8 +9,17 @@
 #
 # Paths under credential_paths and volatile_paths are relative to the SEAT
 # HOME, so a harness that keeps two directories can name files in both.
+#
+# `executor` is NOT a profile field and no override reaches it: it marks a
+# harness this build runs a seat's executor on, in this file's order, with
+# the facts readers below the runner need (runner.go's Executor).
 
 claude-code:
+  executor:
+    runner: true
+    refuses_root: "--permission-mode bypassPermissions"
+    e2b_template: claude
+    temp_env: CLAUDE_CODE_TMPDIR
   binary: claude
   written_for: "Claude Code CLI 2.1.x, measured on 2.1.303, 2.1.310 and 2.1.312 (`claude --version`); on 2.1.312 a `-p` stream-json run writes a `rate_limit_event` on every run (its `rate_limit_info` carrying `status`, `resetsAt` in epoch seconds and `rateLimitType` `five_hour` or `seven_day`), a refused key or token a result event with `api_error_status: 401`, a refused token `system` `api_retry` events with `error: authentication_failed` first, and `auth status` JSON with `loggedIn`, `authMethod`, `email` and `orgName`, exiting 0 signed in and 1 signed out; token_lifetime_days is the documented one-year `claude setup-token` token (code.claude.com/docs/en/authentication)"
   version_args: ["--version"]
@@ -1671,6 +1680,9 @@ qwen-code:
     - sentinel: "Missing API key for OpenAI-compatible auth"
 
 opencode:
+  executor:
+    runner: true
+    e2b_template: opencode
   binary: opencode
   # OPENCODE 2 ONLY — the `@opencode/cli` package. 1.x (npm's `opencode-ai`)
   # cannot run this profile and is not meant to: it rejects `--standalone`

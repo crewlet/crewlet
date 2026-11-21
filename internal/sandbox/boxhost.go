@@ -110,7 +110,7 @@ func storeSilent(ctx context.Context, err error) error {
 
 // boxAnsweredError is a read's failure at a step made once its box answered:
 // the verdict on its job's served notes the store did not answer
-// ([Coordinator.settleHookReceipts]). It carries how the job's harness ended,
+// ([Coordinator.settleReceipts]). It carries how the job's harness ended,
 // so the hand-back that follows ends the run of failed collections and records
 // that end in its own write ([Coordinator.collectFailedAt]).
 type boxAnsweredError struct {
@@ -158,7 +158,7 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 	if asksMainThread(run, read, traits) {
 		held += MainThreadReadWait
 	}
-	if asksHookReceipts(run, traits) {
+	if asksTakeReceipts(run, traits) {
 		held += hookVerdictWait + coord.MaxValueCrossing
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)

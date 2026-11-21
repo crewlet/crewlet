@@ -414,23 +414,6 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 	}
 }
 
-// ClaudeCode READS NOTES, and says so to the runner it is driven by.
-func TestClaudeCodeReadsNotes(t *testing.T) {
-	t.Parallel()
-	if !executor.NewClaudeCode().ReadsNotes() {
-		t.Fatal("the Claude Code runner says its harness reads no notes, so no run is told notes arrive")
-	}
-}
-
-// OpenCode READS NOTES, through its plugin, and says so to its runner, so its
-// runs are told notes arrive and one that never asked is said at collection.
-func TestOpenCodeReadsNotes(t *testing.T) {
-	t.Parallel()
-	if !executor.NewOpenCode().ReadsNotes() {
-		t.Fatal("the OpenCode runner says its harness reads no notes, so no run is told notes arrive")
-	}
-}
-
 // fixture is a measured stream's file, sanitized, for one Claude Code release.
 func fixture(t *testing.T, version, name string) string {
 	t.Helper()

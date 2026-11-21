@@ -18,16 +18,19 @@ type threadHarness interface {
 }
 
 // ThreadTraits is what the runner's harness's main-thread read settles
-// ([sandbox.ThreadTraits]), zero for a harness that reads none.
+// ([sandbox.ThreadTraits]): zero for a harness that reads no thread, but
+// Receipts for one that confirms off its session record ([recordConfirmer]).
 func (r *Runner) ThreadTraits() sandbox.ThreadTraits {
-	if _, reads := r.harness.(mainThreadHarness); !reads {
-		return sandbox.ThreadTraits{}
-	}
 	traits := sandbox.ThreadTraits{}
-	if h, ok := r.harness.(threadHarness); ok {
-		traits = h.threadTraits()
+	if _, reads := r.harness.(mainThreadHarness); reads {
+		if h, ok := r.harness.(threadHarness); ok {
+			traits = h.threadTraits()
+		}
+		traits.Reads = true
 	}
-	traits.Reads = true
+	if _, records := r.harness.(recordConfirmer); records {
+		traits.Receipts = true
+	}
 	return traits
 }
 
@@ -122,7 +125,7 @@ func SessionTraits(harness string) sandbox.SessionTraits {
 // harnessNamed is the harness named name, nil for one this build does not
 // drive.
 func harnessNamed(name string) Harness {
-	for _, h := range harnesses {
+	for _, h := range Registered() {
 		if h.Name() == name {
 			return h
 		}

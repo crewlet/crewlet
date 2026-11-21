@@ -227,11 +227,11 @@ func TestEveryTempRootOfAHostBoxIsItsOwnTmp(t *testing.T) {
 		t.Fatalf("the box's temporary directory %s does not exist: %v", want, err)
 	}
 	for _, name := range []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"} {
-		if !slices.Contains(TempRootEnv, name) {
+		if !slices.Contains(TempRootEnv(), name) {
 			t.Errorf("%s is missing from TempRootEnv", name)
 		}
 	}
-	for _, name := range TempRootEnv {
+	for _, name := range TempRootEnv() {
 		result, err := box.Exec(t.Context(), `printf %s "$`+name+`"`, ExecOptions{})
 		if err != nil {
 			t.Fatalf("Exec: %v", err)

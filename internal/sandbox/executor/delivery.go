@@ -1,7 +1,11 @@
 package executor
 
 import (
+	"context"
+	"slices"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // UTF16Len is s's length in UTF-16 code units, as a JavaScript harness
@@ -108,14 +112,64 @@ func PollCeiling(harness string) (int, bool) {
 }
 
 // confirms reports whether h, a harness that reads notes ([noteReader]), can
-// confirm a take: by its hooks' receipts on its main thread, or by its
-// plugin's own delivery event. A harness that reads notes but cannot confirm
-// one would leave its wakes unclaimed, run again as turns of their own.
+// confirm a take, by one of three: its hooks' serves its thread shows
+// ([sandbox.ThreadTraits.Receipts]); the notes its session record holds, read
+// for a poll's admitted ids ([recordConfirmer]); or its plugin's own delivery
+// event ([pluginConfirmer]). A harness that reads notes and confirms none
+// would leave its wakes unclaimed, run again as turns of their own.
 func confirms(h Harness) bool {
-	if _, polls := h.(inboxDelivery); polls {
+	_, hooks := h.(hookDelivery)
+	_, polls := h.(inboxDelivery)
+	traits, reads := h.(threadHarness)
+	_, records := h.(recordConfirmer)
+	plugin, posts := h.(pluginConfirmer)
+	switch {
+	case hooks && reads && traits.threadTraits().Receipts:
+		return true
+	case polls && records:
+		return true
+	case polls && posts && plugin.pluginConfirms():
 		return true
 	}
-	_, hooks := h.(hookDelivery)
-	traits, reads := h.(threadHarness)
-	return hooks && reads && traits.threadTraits().HookReceipts
+	return false
+}
+
+// pluginConfirmer is an [inboxDelivery] whose plugin confirms each note itself,
+// off the harness's own delivery event.
+type pluginConfirmer interface{ pluginConfirms() bool }
+
+// recordConfirmer is an [inboxDelivery] whose session record shows the notes
+// its plugin admitted, each by the inbox id it was admitted under
+// ([inboxDelivery.inboxID]): notesHeld is the ids among inboxIDs the record
+// holds whole. The record's shape is the harness's own. An error is a record
+// that could not be read, which decides nothing.
+type recordConfirmer interface {
+	notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, inboxIDs []string) ([]string, error)
+}
+
+// recordReceipts is what h's session record shows of the takes ask asks, each
+// keyed by the inbox id it was admitted under: held where the record holds it
+// whole, undecided with a reason where the record could not be read, never
+// absent, since a record that does not show an id has not proved it absent.
+func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
+	ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
+
+	ids := make([]string, 0, len(ask.Takes))
+	for _, take := range ask.Takes {
+		ids = append(ids, take.Take)
+	}
+	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, ids)
+	if err != nil {
+		return sandbox.TakeReceipts{Why: "the session record could not be read: " + err.Error()}
+	}
+	var out sandbox.TakeReceipts
+	for _, id := range ids {
+		if slices.Contains(held, id) {
+			out.Held = append(out.Held, id)
+		}
+	}
+	if len(out.Held) == 0 {
+		out.Why = "the session record holds none of the notes asked"
+	}
+	return out
 }
