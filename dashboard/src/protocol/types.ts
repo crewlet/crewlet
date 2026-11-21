@@ -822,7 +822,7 @@ export interface Overlay {
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
   /** The turns the seat is on, oldest first by start, `[]` when it is on none:
-   *  up to its `sandbox.max_concurrent_runs` at once, one by default. Always
+   *  up to its `sandbox.max_concurrent_runs` at once, two by default. Always
    *  present, for `stopped_reason`'s reason. */
   turns?: LiveTurn[];
   /** The newest turn the seat ended, or null while none is known. */
@@ -1051,9 +1051,10 @@ export interface ExecutorRow {
   held_call?: McpHeldCall;
   /**
    * What that call would send, opened from its seal: the seat's trail, sent
-   * to an administrator and the seat's lead, who are who may approve it; null
-   * where its seal does not open on the answering node. Absent for every
-   * other reader, and on a run that holds no call.
+   * to an administrator and the seat's lead, as sent to one who may answer
+   * the call while it waits and redacted to every other; null where its seal
+   * does not open on the answering node. Absent for every other reader, and
+   * on a run that holds no call.
    */
   held_arguments?: Record<string, unknown> | null;
 

@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A durable record's words are REDACTED BEFORE THEY ARE CUT (the package doc,
@@ -94,14 +93,14 @@ func recordedNarration(narr []toolloop.Narration) []types.RoundNarration {
 }
 
 // recordedExecutions is a record's tool calls with each call's answer and
-// arguments redacted ([recordedOutput], [tools.RedactedArgs]): a builtin's, an MCP
+// arguments redacted ([recordedOutput], [redact.Args]): a builtin's, an MCP
 // server's and an A2A agent's answers alike, which all arrive as the loop's
 // [toolloop.Execution.Output]. The model was handed them as they came.
 func recordedExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	redacted := slices.Clone(execs)
 	for i := range redacted {
 		redacted[i].Output = recordedOutput(redacted[i].Output, redacted[i].OutputBytes)
-		redacted[i].Args = tools.RedactedArgs(redacted[i].Args)
+		redacted[i].Args = redact.Args(redacted[i].Args)
 	}
 	return toolExecutions(redacted)
 }

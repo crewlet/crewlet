@@ -160,3 +160,39 @@ func limitReport(with map[string]any) map[string]any {
 	maps.Copy(out, with)
 	return out
 }
+
+// A RECORD EVENT NEEDS A RECORD TO BE LOOKED FOR IN: a limit or sign-in event
+// read from the harness's record ([EventsInRecord]) names a file the harness
+// keeps it in (requests: source: file), says where with a source this package
+// reads, and matches the record's event type and a field beside it, since the
+// record names no discriminator of its own. Kimi Code's, as shipped, are such.
+//
+// Mutation: drop validateRecordEvent's requests test, and a profile whose
+// record events can never be read loads.
+func TestARecordEventNeedsARecordToBeLookedForIn(t *testing.T) {
+	t.Parallel()
+	shipped, _ := Builtin("kimi-code")
+	if err := shipped.Validate("kimi-code"); err != nil {
+		t.Fatalf("the shipped kimi-code profile: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*Profile)
+		want   string
+	}{
+		{"no file", func(p *Profile) { r := *p.Requests; r.Source, r.File, r.In = SourceStdout, "", ""; p.Requests = &r },
+			"limit_events[0].in is record, but requests names no file"},
+		{"no source", func(p *Profile) { p.AuthEvents[0].In = "stderr" }, `auth_events[0].in "stderr"`},
+		{"no class", func(p *Profile) { p.AuthEvents[0].Match = p.AuthEvents[0].Match[:1] },
+			"auth_events[0].match must name the record's event type"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p, _ := Builtin("kimi-code")
+			tc.change(&p)
+			if err := p.Validate("kimi-code"); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a refusal saying %q", err, tc.want)
+			}
+		})
+	}
+}

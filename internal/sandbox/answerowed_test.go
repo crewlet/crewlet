@@ -109,11 +109,44 @@ func (s *scheduled) delays() []time.Duration {
 	return out
 }
 
-// holdSpy records the seat-inbox holds an owed answer takes.
+// holdSpy records the seat-inbox holds an owed answer takes, and the keys
+// readmitted on each inbox, handing back what a case set aside under each.
 type holdSpy struct {
-	mu   sync.Mutex
-	held map[string]bool
-	log  []string
+	mu       sync.Mutex
+	held     map[string]bool
+	log      []string
+	aside    map[string]int
+	readmits []string
+}
+
+// Readmit records key readmitted on handle's inbox and hands back what the case
+// set aside under it ([holdSpy.setAside]).
+func (h *holdSpy) Readmit(_ context.Context, handle, key, _ string) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.aside[handle+"/"+key]
+	delete(h.aside, handle+"/"+key)
+	h.readmits = append(h.readmits, handle+"/"+key)
+	return n, nil
+}
+
+// setAside has n deliveries wait aside on handle's inbox under key.
+func (h *holdSpy) setAside(handle, key string, n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.aside == nil {
+		h.aside = map[string]int{}
+	}
+	h.aside[handle+"/"+key] += n
+}
+
+// readmitted is every key readmitted so far, in order, and forgets them.
+func (h *holdSpy) readmitted() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := h.readmits
+	h.readmits = nil
+	return out
 }
 
 func (h *holdSpy) Hold(_ context.Context, handle string, _ queue.Attachment) error {

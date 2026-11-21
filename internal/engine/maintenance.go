@@ -104,6 +104,9 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// unless a decision removes it, and every listing that meets one
 		// pays a leader read. See [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND THE ACTIVATION'S BODIES no pointer names, at their own
+		// horizon. See [maintenance.BodyJobs].
+		jobs = append(jobs, maintenance.BodyJobs(fleet)...)
 		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes' reason:
 		// its bucket has no age, so a removed seat's record is forgotten
 		// only by a decision against the fleet's revision. Registered

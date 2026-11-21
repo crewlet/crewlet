@@ -440,7 +440,7 @@ type Capabilities struct {
 	// A capability because both answers are legitimate (on JetStream, Open
 	// connects and Start is a no-op), but the CONSISTENCY is not optional:
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// twenty-two verbs and refuses a backend that answers some one way and some
+	// twenty-three verbs and refuses a backend that answers some one way and some
 	// the other. After Stop there is no choice: see
 	// a_stopped_queue_refuses_every_verb.
 	RequiresStart bool
@@ -518,6 +518,9 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	group("Withdrawal", s.runWithdrawal)
 	group("Batch", s.runBatch)
 	group("Lane", s.runLane)
+	// A delivery kept unacknowledged under a key until a Readmit. See
+	// runAside.
+	group("Aside", s.runAside)
 	// The read a seat's router makes of its held inbox. See runBacklog.
 	group("Backlog", s.runBacklog)
 	// Not a feature — the reason the engine carries no re-entrancy

@@ -69,6 +69,36 @@ var valueCases = []fleetCase{
 				"want rev-1 as it was", target, found, err)
 		}
 	}},
+	{"an activation whose pointer is past its bound is refused as too large, and the pointer stays", func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
+			h.t.Fatalf("activate the first revision: %v", err)
+		}
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Summary: strings.Repeat("s", coord.MaxPointerBytes), Payload: []byte(`{"v":2}`),
+			At: h.now(), Expect: "rev-1", Origin: anOrigin})
+		h.tooLarge("an activation with a pointer past its bound", err)
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "rev-1" {
+			h.t.Errorf("the pointer after an activation past its bound = %+v (found %t, %v), "+
+				"want rev-1 as it was", target, found, err)
+		}
+	}},
+	// THE BODY IS HELD TO WHAT ONE KEY HOLDS, not to the pointer's bound:
+	// the document rides its own key, so a company at the store's bound is
+	// activated and read back whole.
+	{"an activation whose body is at what a key holds is stored and read back whole", func(h *fleetHarness) {
+		body := []byte(`{"v":"` + strings.Repeat("x", coord.MaxValueBytes-len(`{"v":""}`)) + `"}`)
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: body, At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("an activation whose body is what a key holds was refused: %v", err)
+		}
+		got, found, err := h.f.Body(h.ctx, published)
+		if err != nil || !found || len(got) != len(body) {
+			h.t.Errorf("its body reads back as %d bytes (found %t, %v), want its %d", len(got), found, err, len(body))
+		}
+	}},
 }
 
 // tooLarge fails the case unless err is a refusal of a value past what a key

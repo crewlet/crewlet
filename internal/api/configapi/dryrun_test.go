@@ -651,21 +651,20 @@ func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
 	}
 }
 
-// A DRY RUN IS REFUSED A DOCUMENT ITS ACTIVATION CANNOT CARRY, AS ITS WRITE IS.
+// A DRY RUN IS REFUSED WHAT ITS ACTIVATION CANNOT CARRY, AS ITS WRITE IS.
 //
-// Every write that stores a revision carries its sealed document and summary
-// in the activation pointer, one coordination-store value held to
-// coord.MaxValueBytes: a write whose pointer would pass it is refused 413
-// before anything is stored. A dry run is refused alike on every route that
-// answers one, or it would tell an editor to save a change the write then
-// refuses. A summary as large as one key holds passes it whatever the
-// document, on every route alike.
+// Every write that stores a revision carries its summary in the activation
+// pointer, held to coord.MaxSummaryBytes, and its sealed document as the body
+// the pointer names: a write past either is refused before anything is
+// stored. A dry run is refused alike on every route that answers one, or it
+// would tell an editor to save a change the write then refuses. A summary a
+// byte past its bound is refused whatever the document, on every route alike.
 //
 // Mutation: answer any route's dry run straight after its document is checked,
 // without the check its commit makes, and that route's case answers 200.
-func TestADryRunIsRefusedADocumentItsActivationCannotCarry(t *testing.T) {
+func TestADryRunIsRefusedWhatItsActivationCannotCarry(t *testing.T) {
 	t.Parallel()
-	long := strings.Repeat("s", coord.MaxValueBytes)
+	long := strings.Repeat("s", coord.MaxSummaryBytes+1)
 	type request struct {
 		s                  *surface
 		method, path, body string
@@ -722,8 +721,8 @@ func TestADryRunIsRefusedADocumentItsActivationCannotCarry(t *testing.T) {
 			before := r.s.revisionCount(t)
 			for _, query := range []string{"?dry_run=true", ""} {
 				res := r.s.do(t, r.method, r.path+query, r.body, headers)
-				if res.Code != http.StatusRequestEntityTooLarge || decode(t, res)["error"] != "body_too_large" {
-					t.Fatalf("%s %s%s past what its activation carries = %d %.300s, want 413 body_too_large",
+				if res.Code != http.StatusBadRequest || decode(t, res)["error"] != "summary_too_long" {
+					t.Fatalf("%s %s%s past what its activation carries = %d %.300s, want 400 summary_too_long",
 						r.method, r.path, query, res.Code, res.Body.String())
 				}
 			}
@@ -743,10 +742,10 @@ func TestADryRunIsRefusedADocumentItsActivationCannotCarry(t *testing.T) {
 				"list_projects": level(config.MCPToolAllow)}}}
 		for _, dryRun := range []bool{true, false} {
 			write.DryRun = dryRun
-			var tooLarge *configapi.DocumentTooLargeError
-			if _, err := s.service().SetMCPTools(t.Context(), write); !errors.As(err, &tooLarge) {
+			var tooLong *configapi.SummaryTooLongError
+			if _, err := s.service().SetMCPTools(t.Context(), write); !errors.As(err, &tooLong) {
 				t.Fatalf("tool levels past what their activation carries (dry run %t): %v, "+
-					"want a DocumentTooLargeError", dryRun, err)
+					"want a SummaryTooLongError", dryRun, err)
 			}
 		}
 		if after := s.revisionCount(t); after != before {

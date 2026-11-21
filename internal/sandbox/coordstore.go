@@ -150,8 +150,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// never rewritten: a relaunch keeps the row's.
 	created.TaskDescription, created.Label = keptTitle(run.TaskDescription), keptTitle(run.Label)
 	if ask := run.ColleagueAsk; ask != nil {
-		held := *ask
-		held.Question = keptTitle(ask.Question)
+		held := ask.WithQuestion(keptQuestion(ask.question))
 		created.ColleagueAsk = &held
 	}
 	raw, err := encodeRun(created)
@@ -1390,6 +1389,9 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 	if err := v.validate(); err != nil {
 		return HeldCall{}, false, fmt.Errorf("sandbox: a verdict on held call %s of run %s: %w", heldID, turnID, err)
 	}
+	// REDACTED AFTER THE BOUNDS, which are the verdict tool's own and count
+	// what the delegate wrote.
+	given := v.Redacted()
 	var held HeldCall
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if !waitsOnDelegates(*run, launch, heldID) {
@@ -1400,8 +1402,6 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 			slices.ContainsFunc(d.Given, func(g HeldVerdict) bool { return g.By == v.By }) {
 			return false
 		}
-		given := v
-		given.Findings = slices.Clone(v.Findings)
 		d.Given = append(slices.Clone(d.Given), given)
 		held = *run.HeldCall
 		held.Delegation = &d
@@ -3137,9 +3137,10 @@ func outranked(run PendingRun, fence Fence) bool {
 
 // encodeRun writes a run back whole, unknown keys included (top level from
 // [PendingRun.Extra], sections' own, wirekeys.go) under [marshalCarrying]'s
-// rule: declared fields win.
+// rule: declared fields win. Its colleague's ask is written as stored
+// ([storedRun]), never as served.
 func encodeRun(run PendingRun) ([]byte, error) {
-	raw, err := marshalCarrying(run, pendingRunKeys(), run.Extra)
+	raw, err := marshalCarrying(storedRunOf(run), pendingRunKeys(), run.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
@@ -3203,14 +3204,16 @@ func (u *undecodableReport) skipped(ctx context.Context, key string, err error) 
 }
 
 // decodeRun reads a run and KEEPS what it cannot read (see
-// [PendingRun.Extra] for the rolling upgrade that loses it otherwise).
+// [PendingRun.Extra] for the rolling upgrade that loses it otherwise). Its
+// colleague's ask is read as stored ([storedRun]).
 func decodeRun(record coord.Record) (_ PendingRun, err error) {
 	defer origin.Stamp(&err)
-	var run PendingRun
-	extra, err := unmarshalCarrying(record.Value, &run, pendingRunKeys())
+	var stored storedRun
+	extra, err := unmarshalCarrying(record.Value, &stored, pendingRunKeys())
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
 	}
+	run := stored.run()
 	run.Extra = extra
 	// A null state is NO state: the struct writes null for a run with none, and
 	// a raw field reads it back as four bytes, which every `len(...) == 0` test
