@@ -2081,11 +2081,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			// window: its previous holder may not have lived to ask.
 			e.kickAccessReviews(s.Handle)
 		},
-		// A seat whose turn has ended re-checks what was refused for the turn
-		// running ([node.ErrSeatBusy]): an answer by turn that arrived mid-turn is
-		// the seat's next turn ([Engine.admitResume]).
+		// A SEAT RUNS UP TO ITS CAP OF TURNS, one per conversation, read
+		// fresh so an apply that changes the cap moves the next admission.
+		SeatTurns: e.seatRunCap,
+		// A seat whose turn has ended re-checks what was refused for the turns
+		// running ([node.ErrSeatFull], [node.ErrConversationBusy]): an answer by
+		// turn that arrived mid-turn is the seat's next turn ([Engine.admitResume]).
 		SeatTurnEnded: func(handle string) {
-			e.readmitResumes(waitSeatBusy, handle)
+			e.readmitResumes(waitSeatTurns, handle)
 		},
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
@@ -2355,6 +2358,12 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.HoldSandbox == nil {
 		// Live, as Answer below: the coordinator may arrive by apply.
 		d.HoldSandbox = e.holdSandboxSeat
+	}
+	if d.ConversationBusy == nil {
+		d.ConversationBusy = e.sandboxConversationBusy
+	}
+	if d.HoldConversation == nil {
+		d.HoldConversation = e.holdSandboxConversation
 	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark

@@ -210,14 +210,20 @@
 // In the set its own status names, never by its recorded from and to: an
 // earlier write whose answer was lost may have landed.
 //
+// # The seat's cap
+//
+// A seat holds up to its cap of runs in [Holding], one per conversation
+// (ADR-0169): a launch or an answer's resume reserves a slot with its write,
+// under the lock, or waits ([SeatFull], [ConversationBusy]); a takeover counts
+// what the store holds.
+//
 // # The seat's inbox hold
 //
-// Held while a run is in [Holding] or an answer or ending is owed ([SeatHold]):
-// parked mail would loop through the consumer. A seat busy coding takes no
-// other work, an answer to another run included; an answer by turn travels on
-// the control topic and is recorded on arrival. This node alone agrees on the
-// hold, taken for one [queue.Attachment] so a late one is refused, never
-// carried onto the next.
+// Held while its runs hold every slot, a delivery waits on a conversation one
+// works, or an answer or ending is owed ([SeatHold]): parked mail would loop
+// through the consumer. An answer by turn travels on the control topic and is
+// recorded on arrival. This node alone agrees on the hold, taken for one
+// [queue.Attachment] so a late one is refused, never carried onto the next.
 //
 // # Routing a control-topic delivery
 //

@@ -20,6 +20,12 @@ type runWrites struct {
 	handle  string
 	counted seatRuns
 	out     []*countWrite
+
+	// conversation and served are the run's own conversation and the ones a
+	// wake its steps read came from, which it works while it holds the seat
+	// ([Coordinator.heldRuns]).
+	conversation string
+	served       []string
 }
 
 // countWrite is one write that moves a run between its seat's sets, from the
@@ -31,6 +37,12 @@ type countWrite struct {
 	handle       string
 	from, to     string
 	done, landed bool
+
+	// slot says the write moves its run into [Holding] from outside it, so it
+	// holds one of its seat's slots while it is out ([Coordinator.reserved]),
+	// and conversation is the run's, busy meanwhile (seatcap.go).
+	slot         bool
+	conversation string
 
 	// entry is the run's entry the write was recorded in: one the seat's
 	// release dropped is no longer the run's ([Coordinator.ReleaseSeat]),
@@ -78,11 +90,22 @@ func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite 
 
 // writingCountLocked is [Coordinator.writingCount] for a caller holding c.mu.
 func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *countWrite {
-	w := &countWrite{turn: run.TurnID, handle: run.AgentHandle, from: from, to: to}
+	w := &countWrite{turn: run.TurnID, handle: run.AgentHandle, from: from, to: to,
+		slot:         countOf(to).holding > countOf(from).holding && !c.slotOfLocked(run.TurnID),
+		conversation: run.ConversationKey}
 	writes := c.writing[w.turn]
 	if writes == nil {
 		writes = &runWrites{handle: run.AgentHandle, counted: countOf(from)}
+		if held, ok := c.heldRuns[w.turn]; ok {
+			writes.served = held.conversations
+		}
 		c.writing[w.turn] = writes
+	}
+	if run.ConversationKey != "" {
+		writes.conversation = run.ConversationKey
+	}
+	if w.slot && w.handle != "" {
+		c.reserved[w.handle]++
 	}
 	w.entry = writes
 	writes.out = append(writes.out, w)
@@ -99,10 +122,15 @@ func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *count
 // write that moves a run between its seat's sets moves the count once".
 func (c *Coordinator) takingOver(ctx context.Context, handle string, runs []PendingRun) []*countWrite {
 	takeovers := make([]*countWrite, len(runs))
+	served := c.servedOf(ctx, runs)
 	c.mu.Lock()
 	for i, run := range runs {
 		takeovers[i] = c.writingCountLocked(run, "", "")
+		c.writing[run.TurnID].served = served[run.TurnID]
 	}
+	// HELD AFRESH TOO: every run listed now has a write out, and its answer
+	// says where it is held ([Coordinator.heldMovedLocked]).
+	c.heldFromListingLocked(handle, nil, nil)
 	var counts seatRuns
 	for _, writes := range c.writing {
 		if writes.handle == handle {
@@ -154,10 +182,16 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 		// node no longer holds moves nothing" above.
 		return func() {}
 	}
-	before := writes.counted
+	before, freed := writes.counted, false
 	for len(writes.out) > 0 && writes.out[0].done {
 		next := writes.out[0]
 		writes.out = writes.out[1:]
+		if next.slot && next.handle != "" {
+			// THE SLOT IS GIVEN BACK IN THE STEP ITS MOVE IS MADE: landed,
+			// the run's holding count takes its place; not, it frees.
+			c.unreserveLocked(next.handle)
+			freed = freed || !next.landed
+		}
 		if next.landed {
 			// WHERE THE WRITE PUT THE RUN, whatever the writes before it
 			// did: see "Where each write puts the run" above.
@@ -168,15 +202,36 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 		holding:  writes.counted.holding - before.holding,
 		awaiting: writes.counted.awaiting - before.awaiting,
 	}
+	c.heldMovedLocked(w.turn, writes)
 	if len(writes.out) == 0 {
 		delete(c.writing, w.turn)
 	}
 	if move == (seatRuns{}) || w.handle == "" {
-		return func() {}
+		return c.slotFreed(w.handle, freed)
 	}
 	was, runs := c.adjustLocked(w.handle, move.holding, move.awaiting)
 	return func() {
 		c.seatFreed(w.handle, was, runs)
 		c.reconcileHold(c.life, w.handle)
 	}
+}
+
+// unreserveLocked gives back one of handle's reserved slots. Under mu.
+func (c *Coordinator) unreserveLocked(handle string) {
+	if c.reserved[handle] <= 1 {
+		delete(c.reserved, handle)
+		return
+	}
+	c.reserved[handle]--
+}
+
+// slotFreed is what a write's answer that moved no count still owes: a slot
+// given back by a write that did not land (freed) is room an owed resume may
+// wait on ([SeatFull]). Under mu; the caller runs what it returns once it has
+// let go.
+func (c *Coordinator) slotFreed(handle string, freed bool) func() {
+	if handle == "" || !freed {
+		return func() {}
+	}
+	return func() { c.Readmit(SeatFull, handle) }
 }

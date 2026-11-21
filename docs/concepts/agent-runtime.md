@@ -447,7 +447,7 @@ The engine runs **genuinely parallel** work within one process:
   - a delivery's new turn: at the park, once its executor has launched;
   - a run's completion (arriving on the seat's control topic) and a person's answer retried on the coordinator's schedule: each before it claims the run, until the resume and its settle return, including the review and any relaunch it sends back;
   - an answer carried on inline reuses its delivery's slot.
-  - An executor run in its box holds no slot; each seat runs at most one at a time, so the seats a node holds bound the boxes at work.
+  - An executor run in its box holds no slot; each seat runs at most its `sandbox.max_concurrent_runs` at once (one by default), so the seats a node holds and their caps bound the boxes at work.
 
 **What the gate is for.** A seat's mailbox is a durable subscription handled one batch at a time, so a *seat* is already serial. What is unbounded is how many seats run at once: that is [placement](seat-ownership.md)'s arithmetic over the company's seat count and live node count, not the machine's capacity. A node handed forty seats would open forty simultaneous model round-trips and tool loops. `max_concurrent` says how many the host can take.
 

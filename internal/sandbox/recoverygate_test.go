@@ -83,7 +83,7 @@ type settlingGate struct {
 	asked atomic.Int64
 }
 
-func (g *settlingGate) admit(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *settlingGate) admit(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.asked.Add(1)
 	return ctx, g.store.settle, nil
 }

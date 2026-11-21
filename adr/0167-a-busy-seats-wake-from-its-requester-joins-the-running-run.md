@@ -29,3 +29,7 @@ Objects the run created or wrote as a third match is crewlet/crewlet#1758's late
 ## Amendment: the other wakes about the run's work are triaged
 
 Another writer's wake about the run's work, or a lead's, is no longer left alone: [ADR-0168](0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md) triages what this rule leaves and gates the choice. This rule still decides first and its joins are unchanged.
+
+## Amendment: a seat runs up to its cap of runs
+
+A seat holds up to its cap of runs, one per conversation (ADR-0169); its inbox is held once its runs hold every slot, its router reads it while any run holds, and a wake a run's steps read makes its conversation that run's.

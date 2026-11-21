@@ -73,6 +73,7 @@ func TestAnExecutorRunCarriesWhatItsEnvironmentResolves(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	seat := c.Org.AgentSeatByHandle("swe")
+	roomForRuns(seat, 2)
 
 	if err := launchExecutor(t, e, c, seat, "t1"); err != nil {
 		t.Fatalf("an executor was refused for a code-host token nothing has sealed yet: %v", err)
