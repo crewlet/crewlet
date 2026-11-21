@@ -125,8 +125,7 @@ func liveTexts(r *rand.Rand) (texts []liveText) {
 // claims, and a text in no layout that can refuse is refused.
 func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing.T) {
 	t.Parallel()
-	r := rand.New(rand.NewPCG(1666, 2))
-	texts := liveTexts(r)
+	texts := liveTexts(rand.New(rand.NewPCG(1666, 2)))
 	schedules := []struct {
 		name string
 		most int
@@ -137,61 +136,74 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 		{"up to 8 KiB, flushed 1 in 4", 8 << 10, 4},
 		{"up to 96 KiB, flushed 1 in 2", 96 << 10, 2},
 	}
+	var mu sync.Mutex
 	refused, plains, differ, early := 0, 0, 0, 0
-	for i, tx := range texts {
-		want := sync.OnceValue(func() string { return redact.Secrets(tx.text) })
-		// A long text is read in one schedule, each in turn, and read as a
-		// plain stream only where it is never flushed.
-		long, only := len(tx.text) > 3*redact.WholeBytes, -1
-		switch {
-		case tx.flushedOnly:
-			only = 3
-		case long:
-			only = []int{0, 2, 3}[i%3]
-		}
-		var plain *liveRun
-		for j, sc := range schedules {
-			if only >= 0 && j != only {
-				continue
-			}
-			if plain == nil && (!long || sc.odds == 0) {
-				run := readLive(tx.text, tx.hold, r, 64<<10, nil)
-				plain, plains = &run, plains+1
-				if run.err != nil {
-					refused++
+	// Each text is its own subtest, run beside the others, its cuts drawn
+	// from its own source: a layout's run is read and redacted whole.
+	t.Run("texts", func(t *testing.T) {
+		for i, tx := range texts {
+			t.Run(tx.name, func(t *testing.T) {
+				t.Parallel()
+				r := rand.New(rand.NewPCG(1666, uint64(100+i)))
+				want := sync.OnceValue(func() string { return redact.Secrets(tx.text) })
+				// A long text is read in one schedule, each in turn, and read
+				// as a plain stream only where it is never flushed.
+				long, only := len(tx.text) > 3*redact.WholeBytes, -1
+				switch {
+				case tx.flushedOnly:
+					only = 3
+				case long:
+					only = []int{0, 2, 3}[i%3]
 				}
-			}
-			got := readLive(tx.text, tx.hold, r, sc.most, func() bool { return sc.odds > 0 && r.IntN(sc.odds) == 0 })
-			name := tx.name + ", " + sc.name
-			at, plainAt := redact.RefusedAt(got.err), -2
-			if plain != nil {
-				plainAt = redact.RefusedAt(plain.err)
-			}
-			if plain != nil && at != plainAt {
-				differ++
-			}
-			if sc.odds > 0 && !tx.canRefuse && got.early > 0 {
-				early++
-			}
-			last := got.flushes[len(got.flushes)-1]
-			switch {
-			case got.err != nil && !tx.canRefuse:
-				t.Errorf("%s: a text in no layout that can refuse was refused: %v", name, got.err)
-			case sc.odds == 0 && (at != plainAt || plain.err == nil && got.out != plain.out):
-				t.Errorf("%s: never flushed, the live stream answered %v and wrote another text, or refused otherwise, than a stream, which answered %v", name, got.err, plain.err)
-			case got.err == nil && got.out != want():
-				t.Errorf("%s: Close answered nil, and the live stream wrote another text than Secrets %s", name, streamParted(got.out, want()))
-			case got.err == nil && last[1] != int64(len(got.out)):
-				t.Errorf("%s: Close answered nil, and a flush after it answered %d of the %d bytes it wrote final", name, last[1], len(got.out))
-			}
-			for _, f := range got.flushes {
-				if f[1] > 0 && (f[1] > f[0] || got.out[:f[1]] != want()[:min(int(f[1]), len(want()))]) {
-					t.Errorf("%s: a flush answered %d of %d bytes final, which are not Secrets' %s", name, f[1], f[0], streamParted(got.out[:min(f[1], int64(len(got.out)))], want()))
-					break
+				var plain *liveRun
+				for j, sc := range schedules {
+					if only >= 0 && j != only {
+						continue
+					}
+					if plain == nil && (!long || sc.odds == 0) {
+						run := readLive(tx.text, tx.hold, r, 64<<10, nil)
+						plain = &run
+						mu.Lock()
+						if plains++; run.err != nil {
+							refused++
+						}
+						mu.Unlock()
+					}
+					got := readLive(tx.text, tx.hold, r, sc.most, func() bool { return sc.odds > 0 && r.IntN(sc.odds) == 0 })
+					name := tx.name + ", " + sc.name
+					at, plainAt := redact.RefusedAt(got.err), -2
+					if plain != nil {
+						plainAt = redact.RefusedAt(plain.err)
+					}
+					mu.Lock()
+					if plain != nil && at != plainAt {
+						differ++
+					}
+					if sc.odds > 0 && !tx.canRefuse && got.early > 0 {
+						early++
+					}
+					mu.Unlock()
+					last := got.flushes[len(got.flushes)-1]
+					switch {
+					case got.err != nil && !tx.canRefuse:
+						t.Errorf("%s: a text in no layout that can refuse was refused: %v", name, got.err)
+					case sc.odds == 0 && (at != plainAt || plain.err == nil && got.out != plain.out):
+						t.Errorf("%s: never flushed, the live stream answered %v and wrote another text, or refused otherwise, than a stream, which answered %v", name, got.err, plain.err)
+					case got.err == nil && got.out != want():
+						t.Errorf("%s: Close answered nil, and the live stream wrote another text than Secrets %s", name, streamParted(got.out, want()))
+					case got.err == nil && last[1] != int64(len(got.out)):
+						t.Errorf("%s: Close answered nil, and a flush after it answered %d of the %d bytes it wrote final", name, last[1], len(got.out))
+					}
+					for _, f := range got.flushes {
+						if f[1] > 0 && (f[1] > f[0] || got.out[:f[1]] != want()[:min(int(f[1]), len(want()))]) {
+							t.Errorf("%s: a flush answered %d of %d bytes final, which are not Secrets' %s", name, f[1], f[0], streamParted(got.out[:min(f[1], int64(len(got.out)))], want()))
+							break
+						}
+					}
 				}
-			}
+			})
 		}
-	}
+	})
 	if early == 0 {
 		t.Errorf("no flushed reading of a text in no layout that can refuse decided a window early, so none of them could be refused")
 	}

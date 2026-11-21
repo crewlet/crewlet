@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -222,6 +223,27 @@ type reading struct {
 // readHolding is text written to a stream that holds h, in pieces of 1 to
 // most bytes drawn from r, or of 64 KiB where r is nil.
 func readHolding(text string, h int, r *rand.Rand, most int) reading {
+	return readCut(text, h, cuts(r, len(text), most))
+}
+
+// cuts is the pieces [readHolding] writes n bytes in, drawn before the
+// reading so that it can run apart from what else draws from r.
+func cuts(r *rand.Rand, n, most int) []int {
+	var pieces []int
+	for at := 0; at < n; {
+		k := 64 << 10
+		if r != nil {
+			k = 1 + r.IntN(most)
+		}
+		k = min(k, n-at)
+		pieces = append(pieces, k)
+		at += k
+	}
+	return pieces
+}
+
+// readCut is text written to a stream that holds h, in the pieces cut.
+func readCut(text string, h int, cut []int) reading {
 	var got reading
 	var out bytes.Buffer
 	s := newStreamHolding(&out, h)
@@ -232,12 +254,8 @@ func readHolding(text string, h int, r *rand.Rand, most int) reading {
 			got.decidedAt = append(got.decidedAt, s.p.keys.arrived)
 		},
 	}
-	for at := 0; at < len(text); {
-		n := 64 << 10
-		if r != nil {
-			n = 1 + r.IntN(most)
-		}
-		n = min(n, len(text)-at)
+	at := 0
+	for _, n := range cut {
 		_, _ = s.Write([]byte(text[at : at+n]))
 		at += n
 		if s.p != nil {
@@ -399,14 +417,27 @@ func refusingLayouts(r *rand.Rand) []refusingLayout {
 func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 41))
-	refused := 0
+	// Each reading is its own subtest, run beside the others: a layout's
+	// run past the lag is read and redacted whole, which one goroutine
+	// would do twelve times over in turn.
+	type earlyCase struct {
+		name  string
+		text  func() string
+		hold  int
+		cut   []int
+		check func(t *testing.T, text string, got reading)
+	}
+	var cases []earlyCase
+	var refused atomic.Int32
 	for i := range 3 {
-		text := earlyText(r, 1<<20, 512<<10)
-		got := readHolding(text, 256<<10, r, 96<<10)
-		if got.err != nil {
-			refused++
-		}
-		checkReading(t, fmt.Sprintf("text %d at a hold of 256 KiB", i), text, got)
+		text, name := earlyText(r, 1<<20, 512<<10), fmt.Sprintf("text %d at a hold of 256 KiB", i)
+		cases = append(cases, earlyCase{name: name, text: func() string { return text }, hold: 256 << 10, cut: cuts(r, len(text), 96<<10),
+			check: func(t *testing.T, text string, got reading) {
+				if got.err != nil {
+					refused.Add(1)
+				}
+				checkReading(t, name, text, got)
+			}})
 	}
 	// A shape of every hold, and those that read a claim otherwise: at
 	// this hold a token's claim too can come past it, and these refuse.
@@ -416,35 +447,49 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 		if !slices.Contains(each, s.name[:strings.IndexByte(s.name, ' ')]) {
 			continue
 		}
-		text := s.text()
-		got := readHolding(text, 256<<10, nil, 0)
-		checkReading(t, s.name, text, got)
-		if (got.err != nil) != slices.Contains(refuse, s.name[:strings.IndexByte(s.name, ' ')]) {
-			t.Errorf("%s at a hold of 256 KiB: Close answered %v, %d windows decided early", s.name, got.err, got.early)
-		}
+		cases = append(cases, earlyCase{name: s.name, text: s.text, hold: 256 << 10, check: func(t *testing.T, text string, got reading) {
+			checkReading(t, s.name, text, got)
+			if (got.err != nil) != slices.Contains(refuse, s.name[:strings.IndexByte(s.name, ' ')]) {
+				t.Errorf("%s at a hold of 256 KiB: Close answered %v, %d windows decided early", s.name, got.err, got.early)
+			}
+		}})
 	}
 	for _, s := range holdShapes(lagBytes() + 256<<10) {
 		name := s.name[:strings.IndexByte(s.name, ' ')]
 		if name != "pb1" && name != "gd1" {
 			continue
 		}
-		text := s.text()
-		got := readHolding(text, holdBytes(), nil, 0)
-		if got.err != nil || got.early == 0 {
-			t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
-		}
-		checkReading(t, s.name+" at the stream's own hold", text, got)
+		cases = append(cases, earlyCase{name: s.name + " at the stream's own hold", text: s.text, hold: holdBytes(), check: func(t *testing.T, text string, got reading) {
+			if got.err != nil || got.early == 0 {
+				t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
+			}
+			checkReading(t, s.name+" at the stream's own hold", text, got)
+		}})
 	}
 	// The layouts a key's BEGIN or a gutter makes, each with a run past
 	// the lag after it, and their neighbours that read the run in time.
 	for _, c := range refusingLayouts(r) {
-		got := readHolding(c.text, holdBytes(), nil, 0)
-		if (got.err != nil) != c.refuses {
-			t.Errorf("%s, a run past the lag after it: Close answered %v, %d windows decided early", c.name, got.err, got.early)
-		}
-		checkReading(t, c.name, c.text, got)
+		cases = append(cases, earlyCase{name: c.name, text: func() string { return c.text }, hold: holdBytes(), check: func(t *testing.T, text string, got reading) {
+			if (got.err != nil) != c.refuses {
+				t.Errorf("%s, a run past the lag after it: Close answered %v, %d windows decided early", c.name, got.err, got.early)
+			}
+			checkReading(t, c.name, text, got)
+		}})
 	}
-	t.Logf("%d of 3 random texts refused", refused)
+	t.Run("readings", func(t *testing.T) {
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				t.Parallel()
+				text := c.text()
+				cut := c.cut
+				if cut == nil {
+					cut = cuts(nil, len(text), 0)
+				}
+				c.check(t, text, readCut(text, c.hold, cut))
+			})
+		}
+	})
+	t.Logf("%d of 3 random texts refused", refused.Load())
 }
 
 // AN EARLY WINDOW'S FOOTPRINT HOLDS EVERY CLAIM ITS ANSWERS READ ([claims.asked]):
