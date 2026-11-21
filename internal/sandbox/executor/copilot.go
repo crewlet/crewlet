@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+func init() { Register(Copilot{}) }
+
 // CopilotName is this runner's config name.
 const CopilotName = "copilot"
 

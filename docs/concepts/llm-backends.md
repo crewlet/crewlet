@@ -92,7 +92,8 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | Anthropic's (Claude) | `claude-code` — the default | a Claude Pro / Max login, a headless `CLAUDE_CODE_OAUTH_TOKEN` minted from it, or an Anthropic API key (`auth.mode: api-key`) | yes |
 | OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | no — the other phases only |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
-| Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key (Qwen Code: a key only) | no — the other phases only |
+| GitHub's (Copilot) | `copilot` | a fine-grained PAT with Copilot Requests in `COPILOT_GITHUB_TOKEN` (`auth.mode: api-key`), or a login of Copilot's own | yes |
+| Gemini, Qwen, Cursor, Grok, Muse, Kimi, Hermes, Pi | see [Supported harnesses](#supported-harnesses) | the vendor's own login, or a key (Qwen Code: a key only) | no — the other phases only |
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for

@@ -60,6 +60,9 @@ func CopilotWakeRead(t *testing.T, wake string) []TranscriptEntry {
 	return got.Entries
 }
 
+// CopilotArchiveFormat is the layout a Copilot run packs its session in.
+const CopilotArchiveFormat = copilotArchiveFormat
+
 // CopilotProbeSDK is the stand-in of Copilot's extension SDK the suite runs the
 // rendered extension against (copilot_steer_probe.mjs).
 const CopilotProbeSDK = "copilot_steer_probe.mjs"

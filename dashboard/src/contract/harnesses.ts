@@ -105,6 +105,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
       "Cursor Agent takes effort as part of the model id, such as gpt-5.5-high; cursor-agent --list-models lists them",
   },
   copilot: {
+    executor: true,
     binary: "copilot",
     signIns: ["api-key", "host-login"],
     keyEnv: "COPILOT_GITHUB_TOKEN",
