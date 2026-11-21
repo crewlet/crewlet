@@ -130,6 +130,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/appstoreconnect"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -950,6 +952,13 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindAppStoreConnect:
+		// No roster: no seat holds a key (ADR-0170).
+		block := company.Integrations.AppStoreConnect
+		guide = appstoreconnect.Guide()
+		reqs = appstoreconnect.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
 	case integration.KindDigitalOcean:
 		// No roster, as for Expo.
 		block := company.Integrations.DigitalOcean

@@ -165,8 +165,9 @@ func (f *fakeRuntime) AgentAccess() queries.AgentAccess { return nil }
 
 // MCPApprovals holds no run: what an approval does is held by mcpapi's own
 // suite.
-func (f *fakeRuntime) MCPApprovals() mcpapi.Approvals { return nil }
-func (f *fakeRuntime) MCPAccepted() api.AcceptedStore { return nil }
+func (f *fakeRuntime) MCPApprovals() mcpapi.Approvals  { return nil }
+func (f *fakeRuntime) GrowthCards() mcpapi.GrowthCards { return nil }
+func (f *fakeRuntime) MCPAccepted() api.AcceptedStore  { return nil }
 
 // MCPValues is a secret store over a memory fleet of its own: what a stored
 // value does is held by mcpapi's own suite.
