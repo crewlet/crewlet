@@ -872,17 +872,16 @@ const (
 )
 
 // SessionScrubWait bounds the scrub of a session as it streams out of its box,
-// both readings of its tar.
-//
-// SIX MINUTES, the measured worst rounded up to a minute: the minute a take may
-// wait for its spool's room ([spoolRoomWait]), the archive read twice out of a
-// box at its floor pace of a mebibyte a second (96 s at 48 MiB), and the
-// slowest session a harness writes scrubbed at its 256 MiB of plaintext (a
-// string torn at its last line, 183 s, under the memory limit too): 339 s
-// apart. Only sessions a harness writes set it. A take still scrubbing at its
-// end FAILS CLOSED: nothing is kept, its place is refused and the last kept
-// copy stands, so a box costs only its own session (ADR-0073;
-// docs/concepts/code-sandbox.md, "Six minutes for the scrub").
+// both readings of its tar. SIX MINUTES, the measured worst rounded up: the
+// minute a take may wait for its spool's room ([spoolRoomWait]), the archive
+// read twice out of a box at a mebibyte a second (96 s at 48 MiB), and the
+// slowest session a harness writes at its 256 MiB of plaintext, a string torn
+// at its last line, 183 s: its 177.4 s on the base times the HIGHEST ratio of
+// the alternated runs, 1.03 at the default against 1.00 under the memory limit
+// and at GOGC=10. 339 s apart. A take still scrubbing at its end FAILS CLOSED:
+// nothing is kept, its place is refused and the last kept copy stands, so a
+// box costs only its own session (ADR-0073; docs/concepts/code-sandbox.md,
+// "Six minutes for the scrub").
 const SessionScrubWait = 6 * time.Minute
 
 // SessionTakeBudget is the most a take adds to the read of a box it is made in:
