@@ -26,3 +26,17 @@ func TestTheSummaryAReviewWritesFitsThePointer(t *testing.T) {
 		t.Errorf("the summary a review of %d tools writes: %v", len(tools), err)
 	}
 }
+
+// THE SUMMARY AN ALWAYS ALLOW WRITES FITS THE ACTIVATION POINTER AT ITS WORST:
+// a tool name an MCP server supplied, a server name and a handle, each long and
+// every byte escaping to six. Past coord.MaxSummaryBytes the allow is refused
+// with summary_too_long for words its caller never wrote.
+//
+// Mutation: drop any of the three cuts and the summary is past the bound.
+func TestTheSummaryAnAlwaysAllowWritesFitsThePointer(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("\x01", 2000)
+	if err := coord.HoldSummary(mcpapi.AllowedSummary(long, long, long)); err != nil {
+		t.Errorf("the summary an Always allow writes: %v", err)
+	}
+}

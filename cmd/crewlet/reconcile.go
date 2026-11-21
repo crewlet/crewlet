@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -311,6 +312,17 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 // changing anything, and discards it ([engine.Engine.Buildable]).
 type revisionBuild func(*config.Company) error
 
+// seedSummary is the summary of a boot's import of the seed's file, the path
+// cut to [summaryPartBytes] as an offline import's is: the path is the
+// operator's flag, of any length, and the pointer carries the summary.
+func seedSummary(seed tierBSeed) string {
+	path := textcut.Within(seed.Path, summaryPartBytes)
+	if seed.Override {
+		return "imported from " + path + " at boot"
+	}
+	return "seeded from " + path
+}
+
 // importSeed writes the seed's file as a new revision built on base, and points
 // the fleet at it. A zero base is a company built on nothing: a bootstrap, or
 // an override on a node that knows no company.
@@ -355,10 +367,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	if err != nil {
 		return err
 	}
-	summary := "seeded from " + seed.Path
-	if seed.Override {
-		summary = "imported from " + seed.Path + " at boot"
-	}
+	summary := seedSummary(seed)
 	at := time.Now().UTC()
 	// THE NODE IS THE AUTHOR: a boot imported this file, and no credential
 	// made the write. Named by the node's own id, because which node read

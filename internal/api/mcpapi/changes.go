@@ -306,11 +306,21 @@ func ReviewedSummary(server string, tools []string) string {
 		textcut.Within(words.And(tools), generatedToolsBytes), textcut.Within(server, generatedServerBytes))
 }
 
-// generatedToolsBytes and generatedServerBytes bound the caller's parts of
-// [ReviewedSummary]: at six bytes each when escaped, with the sentence's own
-// words, inside coord.MaxSummaryBytes.
+// AllowedSummary is the summary an Always allow writes when its caller sent
+// none, cut as [ReviewedSummary]'s is: the tool's name and the server's are
+// what an MCP server and an operator chose, of any length.
+func AllowedSummary(tool, server, handle string) string {
+	return fmt.Sprintf("Always allow %s on MCP server %s, answering a call %s held for approval",
+		textcut.Within(tool, generatedToolBytes), textcut.Within(server, generatedServerBytes),
+		textcut.Within(handle, generatedServerBytes))
+}
+
+// generatedToolsBytes, generatedToolBytes and generatedServerBytes bound the
+// caller's parts of [ReviewedSummary] and [AllowedSummary]: at six bytes each
+// when escaped, with the sentence's own words, inside coord.MaxSummaryBytes.
 const (
 	generatedToolsBytes  = 512
+	generatedToolBytes   = 256
 	generatedServerBytes = 128
 )
 

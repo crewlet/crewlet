@@ -777,11 +777,11 @@ type importTarget struct {
 // importSummary is the summary an import records: the -summary flag, refused
 // past what the activation pointer carries ([coord.HoldSummary]) since it is
 // the operator's words, or "imported from <file>", the path cut to
-// [importPathBytes] so that it fits even escaped whole.
+// [summaryPartBytes] so that it fits even escaped whole.
 func importSummary(flag, path string) (string, error) {
 	summary := strings.TrimSpace(flag)
 	if summary == "" {
-		return "imported from " + textcut.Within(path, importPathBytes), nil
+		return "imported from " + textcut.Within(path, summaryPartBytes), nil
 	}
 	if err := coord.HoldSummary(summary); err != nil {
 		return "", fmt.Errorf("config import -summary: %w: write a shorter one", err)
@@ -789,9 +789,10 @@ func importSummary(flag, path string) (string, error) {
 	return summary, nil
 }
 
-// importPathBytes bounds the file path in an import's own summary: six bytes a
-// byte escaped is under coord.MaxSummaryBytes with room for the words.
-const importPathBytes = 512
+// summaryPartBytes bounds the caller's part of a summary this command composes
+// (a file's path, the names a run sealed): six bytes a byte escaped is under
+// coord.MaxSummaryBytes with room for the words.
+const summaryPartBytes = 512
 
 // importCompany writes a company document as a new revision, through whichever
 // route can actually reach the fleet.

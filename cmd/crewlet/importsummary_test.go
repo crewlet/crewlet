@@ -34,3 +34,25 @@ func TestAnImportsSummaryFitsThePointerOrIsRefused(t *testing.T) {
 		t.Errorf("a -summary inside the bound = %q, %v, want it trimmed and kept", got, err)
 	}
 }
+
+// THE SUMMARIES A BOOT'S IMPORT AND A PROVISIONING RUN COMPOSE FIT THE
+// ACTIVATION POINTER AT THEIR WORST: a -company path of any length, and a run
+// that sealed many long names, every byte escaping to six. A boot's import
+// past the bound is refused at its publish, and a run's re-activation leaves
+// the values it sealed inactive.
+//
+// Mutation: drop the path's cut or the names' cut, and its summary is past the
+// bound.
+func TestTheSummariesABootAndAProvisioningRunComposeFitThePointer(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("\x01", 10_000)
+	for _, override := range []bool{false, true} {
+		if err := coord.HoldSummary(seedSummary(tierBSeed{Path: long, Override: override})); err != nil {
+			t.Errorf("the summary of a boot's import (override %v) over a long path: %v", override, err)
+		}
+	}
+	names := []string{long, long, long}
+	if err := coord.HoldSummary(provisionSummary(names)); err != nil {
+		t.Errorf("the summary of a provisioning run that sealed long names: %v", err)
+	}
+}
