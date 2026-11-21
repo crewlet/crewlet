@@ -1,0 +1,293 @@
+// crewlet-notes — the extension a Copilot run loads from its own
+// $COPILOT_HOME/extensions/crewlet-notes/extension.mjs: it hands the run a
+// person's notes between its steps and holds it to its seat's turn cap.
+//
+// The engine embeds this file (copilotsteer.go) and writes it with the run's
+// own settings in place of the `config` placeholder below: the notes route and
+// the cap (copilot.go, Copilot.WriteConfig). It imports only the SDK the
+// Copilot binary serves its extensions (`@microsoft/copilot-sdk/extension`,
+// 1.0.114 and later), runs under the Node the binary embeds, and writes no file.
+//
+// HOW A NOTE ARRIVES. Each note the route answers is sent to the session with
+// `mode: "immediate"` under a clientTurnId made of its inbox id (turnPrefix):
+// sent while a tool runs, Copilot records it as a `user.message` with
+// `delivery: "steering"` and the model reads it right after the tool's result;
+// sent as the main agent stops, as one with `delivery: "queued"`, which the
+// run answers before it ends (measured on 1.0.114). THIS EXTENSION CONFIRMS
+// NOTHING: a note counts as read only once the runner finds that line and a
+// later usage record in the session's own record (copilottranscript.go), so it
+// never posts the route's /read.
+//
+// ONLY WHILE THE MAIN AGENT WORKS. The route is polled from the main agent's
+// `assistant.turn_start` until its `assistant.idle`; a subagent's events (they
+// carry an agentId) open nothing. As the main agent stops (onAgentStop) the
+// route is asked once more, briefly (stopAskMs), so a note waiting then is
+// answered by this run rather than left for its review.
+//
+// THE TURN CAP. Every main-agent `assistant.turn_start` is one model request.
+// Once the cap's last request is made, the run is aborted (`session.abort()`)
+// as that turn's tools answer, so no request past the cap is sent; a turn that
+// starts past it all the same (a note answered at the stop) is aborted as it
+// starts. A log line the run's stream carries (capMessage) comes first. The
+// line labels an ending and never makes one: the runner reads a capped run only
+// where the stream also shows the abort (copilotevents.go).
+//
+// Bounded, paced and refused as opencode_steer.js: every request is bounded,
+// a failure waits a second doubling to thirty, an empty answer is never
+// followed sooner than a second after its poll began, and a 401 or 404 ends
+// the polling for the rest of the run.
+
+import { joinSession } from "@microsoft/copilot-sdk/extension"
+
+// config is the run's: {url, cap}, written over the placeholder by the runner.
+// null in the file as embedded, where the extension does nothing.
+const config = /*crewlet:config*/ null
+
+// pollAbortMs bounds one poll: the route holds an empty one ten seconds
+// (internal/api/mcpbridge, steerHold), and the same again is room for a relay.
+const pollAbortMs = 20_000
+
+// stopAskMs bounds the ask made as the main agent stops. A waiting note is
+// answered at once; an empty ask is held by the route, so this is what every
+// run's end waits when no note waits: one second, a round trip to a relayed
+// node and back many times over.
+const stopAskMs = 1_000
+
+// The pause after a failed request, and the least time from a poll that
+// admitted nothing to the next: opencode_steer.js's, for its reasons.
+const backoffFirstMs = 1_000
+const backoffMostMs = 30_000
+const pollFloorMs = backoffFirstMs
+
+// turnPrefix opens every clientTurnId this extension sends a note under,
+// which the runner's confirm reader keys on (copilotsteer.go, copilotTurnPrefix).
+const turnPrefix = "crewlet-note:"
+
+// capMessage opens the log line written as the cap stops the run
+// (copilotsteer.go, copilotCapMessage).
+const capMessage = "crewlet: this run reached its turn cap of "
+
+if (config !== null && typeof config === "object") {
+  await arm(config)
+}
+
+async function arm({ url, cap }) {
+  const polling = typeof url === "string" && url !== ""
+  const capped = Number.isSafeInteger(cap) && cap > 0
+  if (!polling && !capped) return
+
+  // life is the extension's whole run; a refusal of the route ends its polling.
+  const life = new AbortController()
+  let gate = null
+  let cursor = 0
+  // admitted holds every inbox id sent: two asks that overlap (the loop's and
+  // the stop's) never send one note twice.
+  const admitted = new Set()
+  let turns = 0
+  let aborting = false
+
+  const open = () => {
+    if (!polling || gate !== null || life.signal.aborted) return
+    gate = new AbortController()
+    quietly(poll(gate.signal))
+  }
+  const close = () => {
+    if (gate === null) return
+    gate.abort()
+    gate = null
+  }
+
+  // ask asks the route once for the notes past the cursor, bounded by ms, and
+  // sends those it answers: true where it answered, false otherwise.
+  const ask = async (signal, ms) => {
+    const answer = await call(life, "GET", url + "/notes?after=" + cursor, ms, signal)
+    if (answer.refused) {
+      life.abort()
+      close()
+      return false
+    }
+    return answer.ok && (await admit(answer.text))
+  }
+
+  const poll = async (gated) => {
+    let wait = 0
+    while (!gated.aborted && !life.signal.aborted) {
+      const began = Date.now()
+      const past = cursor
+      if (await ask(gated, pollAbortMs)) {
+        wait = 0
+        const early = pollFloorMs - (Date.now() - began)
+        if (cursor === past && early > 0) await sleep(early, life.signal, gated)
+        continue
+      }
+      if (gated.aborted || life.signal.aborted) return
+      wait = next(wait)
+      await sleep(wait, life.signal, gated)
+    }
+  }
+
+  // admit sends each note of one answer, oldest first, advancing the cursor
+  // past each one sent: false for an answer that is no list of notes, or a
+  // send that failed, which leaves the cursor where it was.
+  const admit = async (text) => {
+    let notes
+    try {
+      notes = JSON.parse(text)?.notes
+    } catch {
+      return false
+    }
+    if (!Array.isArray(notes)) return false
+    for (const note of notes) {
+      if (!wellFormed(note)) return false
+      if (note.seq <= cursor) continue
+      if (!admitted.has(note.inbox)) {
+        admitted.add(note.inbox)
+        try {
+          await session.send({ prompt: note.message, mode: "immediate", clientTurnId: turnPrefix + note.inbox })
+        } catch {
+          admitted.delete(note.inbox)
+          return false
+        }
+      }
+      cursor = note.seq
+    }
+    return true
+  }
+
+  // spent is whether the run has made every model request its cap allows.
+  const spent = () => capped && turns >= cap
+
+  // capNow stops the run once, whichever path got there first.
+  const capNow = async () => {
+    if (aborting) return
+    aborting = true
+    close()
+    await stop(session, cap)
+  }
+
+  // capAfterTool stops the run within the cap-th turn, as its tools answer:
+  // AWAITED by Copilot before the turn goes on, where a turn_start event comes
+  // to the extension only after the next request has gone (measured: the
+  // event path let a fourth request through a cap of three).
+  const capAfterTool = async (input) => {
+    if (mainAgent(input) !== false && spent()) await capNow()
+  }
+
+  // JOINED LAST, every function it can call defined: the hook may fire as
+  // soon as the session is joined.
+  const session = await joinSession({
+    hooks: {
+      onPostToolUse: async (input) => capAfterTool(input),
+      onPostToolUseFailure: async (input) => capAfterTool(input),
+      onAgentStop: async (input) => {
+        if (!polling || mainAgent(input) === false || life.signal.aborted || spent()) return
+        await ask(life.signal, stopAskMs)
+      },
+    },
+  })
+  session.on((event) => {
+    if (event === null || typeof event !== "object" || mainAgent(event) === false) return
+    switch (event.type) {
+      case "assistant.turn_start":
+        turns++
+        if (capped && turns > cap) {
+          quietly(capNow())
+          return
+        }
+        open()
+        return
+      case "tool.execution_start":
+        open()
+        return
+      case "assistant.idle":
+        close()
+        return
+    }
+  })
+}
+
+// stop ends a run past its cap: the line that labels the ending, then the
+// abort that makes it, which happens whether or not the line was written.
+async function stop(session, cap) {
+  try {
+    await session.log(capMessage + cap + " model turns and was stopped", { level: "warning" })
+  } finally {
+    await session.abort()
+  }
+}
+
+// mainAgent is false for an event or a hook input of a subagent, which names
+// its agent; the main agent's name none.
+function mainAgent(v) {
+  return !(typeof v?.agentId === "string" || typeof v?.data?.agentId === "string")
+}
+
+function wellFormed(note) {
+  return (
+    note !== null &&
+    typeof note === "object" &&
+    Number.isSafeInteger(note.seq) &&
+    note.seq > 0 &&
+    typeof note.inbox === "string" &&
+    note.inbox !== "" &&
+    typeof note.message === "string" &&
+    note.message !== ""
+  )
+}
+
+// call makes one request of the route, bounded by ms and ended early by any of
+// signals: refused for a 401 or 404, ok with the text for another success.
+async function call(life, method, target, ms, ...signals) {
+  const { signal, done } = deadline(ms, life.signal, ...signals)
+  try {
+    const response = await fetch(target, { method, signal })
+    const text = await response.text()
+    if (response.status === 401 || response.status === 404) return { refused: true }
+    return { ok: response.ok, text }
+  } catch {
+    return {}
+  } finally {
+    done()
+  }
+}
+
+function next(wait) {
+  return wait === 0 ? backoffFirstMs : Math.min(wait * 2, backoffMostMs)
+}
+
+function sleep(ms, ...signals) {
+  return new Promise((resolve) => {
+    const { signal, done } = deadline(ms, ...signals)
+    signal.addEventListener(
+      "abort",
+      () => {
+        done()
+        resolve()
+      },
+      { once: true },
+    )
+  })
+}
+
+// deadline is a signal ending after ms or with any of signals, and done, which
+// lets go of the timer and every listener (opencode_steer.js's).
+function deadline(ms, ...signals) {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const timer = setTimeout(abort, ms)
+  for (const s of signals) {
+    if (s.aborted) abort()
+    else s.addEventListener("abort", abort, { once: true })
+  }
+  return {
+    signal: controller.signal,
+    done() {
+      clearTimeout(timer)
+      for (const s of signals) s.removeEventListener("abort", abort)
+    },
+  }
+}
+
+function quietly(task) {
+  task.catch(() => {})
+}
