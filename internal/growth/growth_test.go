@@ -151,10 +151,19 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 	if err := validCatalog().Validate(); err != nil {
 		t.Fatalf("a valid catalog was refused: %v", err)
 	}
+	query := validCatalog()
+	query.Operations = append(query.Operations, growth.Operation{ID: "reports.run", Method: "POST",
+		Path: "/reports:run", Class: growth.ClassRead, Reads: true})
+	if err := query.Validate(); err != nil {
+		t.Errorf("a POST that only reads was refused as read: %v", err)
+	}
 	for name, breakIt := range map[string]func(*growth.Catalog){
 		"no kind":              func(c *growth.Catalog) { c.Kind = "" },
 		"a never without why":  func(c *growth.Catalog) { c.Operations[3].Reason = "" },
 		"a write classed read": func(c *growth.Catalog) { c.Operations[2].Class = growth.ClassRead },
+		"a query classed spend": func(c *growth.Catalog) {
+			c.Operations[2].Reads, c.Operations[2].Class = true, growth.ClassSpend
+		},
 		"a read classed spend": func(c *growth.Catalog) { c.Operations[0].Class = growth.ClassSpend },
 		"an unknown role":      func(c *growth.Catalog) { c.Operations[2].Roles = []string{"OWNER"} },
 		"an unknown scope":     func(c *growth.Catalog) { c.Operations[0].Permissions = []string{"ads_write"} },

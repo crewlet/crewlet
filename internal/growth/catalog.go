@@ -25,6 +25,9 @@ type Operation struct {
 	// Class is the operation's class, or, for a write with [Operation.Fields],
 	// the class of changing a field no rule names.
 	Class Class
+	// Reads marks a call that is not a GET and changes nothing: a report, a
+	// query, a search sent as a POST. Only such a call may be read.
+	Reads bool
 	// Fields classes a write by what it changes ([Classify]): pausing and
 	// lowering are operate, enabling and raising spend.
 	Fields []FieldRule
@@ -226,10 +229,11 @@ func (c Catalog) Validate() error {
 			bad("growth: %s operation %s has class %q", c.Kind, op.ID, op.Class)
 		case op.Class == ClassNever && strings.TrimSpace(op.Reason) == "":
 			bad("growth: %s operation %s is never offered and says no reason", c.Kind, op.ID)
-		case op.Method == "GET" && op.Class != ClassRead && op.Class != ClassNever:
+		case (op.Method == "GET" || op.Reads) && op.Class != ClassRead && op.Class != ClassNever:
 			bad("growth: %s operation %s reads, so it is read or never, not %s", c.Kind, op.ID, op.Class)
-		case op.Method != "GET" && op.Class == ClassRead:
-			bad("growth: %s operation %s writes, so it is not read", c.Kind, op.ID)
+		case op.Method != "GET" && !op.Reads && op.Class == ClassRead:
+			bad("growth: %s operation %s writes, so it is not read; a POST that changes nothing says Reads",
+				c.Kind, op.ID)
 		}
 		for _, r := range op.Roles {
 			if !roles[r] {
