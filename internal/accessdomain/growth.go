@@ -153,6 +153,10 @@ type Growth struct {
 	AnsweredBy GrowthAnswerer `json:"answered_by,omitempty"`
 	Answerer   string         `json:"answerer,omitempty"`
 
+	// Via is the vendor role of the credential the call went through, for a
+	// product holding several (growth.Record.Via).
+	Via string `json:"via,omitempty"`
+
 	// Operation and Before are SHA-256 digests in lowercase hex of the exact
 	// vendor operation and the target's before-state.
 	Operation string `json:"operation"`
@@ -187,6 +191,8 @@ type NewGrowth struct {
 	// Answerer is the human seat that allowed or denied a held call, "" for
 	// every other step.
 	Answerer string
+	// Via is the vendor role of the credential the call went through.
+	Via string
 
 	Operation, Before string
 
@@ -312,6 +318,9 @@ func (n NewGrowth) validate() error {
 		return invalid("connection %q is not a connection id", n.Connection)
 	case !growthToolPattern().MatchString(n.Tool):
 		return invalid("tool %q is not a tool's name", n.Tool)
+	case n.Via != "" && !growthProductPattern().MatchString(n.Via):
+		// NOT ECHOED: a value refused here may be the credential itself.
+		return invalid("via is a vendor role's word: lowercase letters, digits and underscores, never a credential")
 	case !n.Class.Callable():
 		return invalid("class %q is not one a call is made in", n.Class)
 	case !n.Step.Valid():
@@ -488,7 +497,7 @@ func (w *Writer) Growth(ctx context.Context, c Call, n NewGrowth) (statelog.Resu
 		V: baseRecordVersion, ID: GrowthID(act, n.Step), Handle: n.Handle, Turn: n.Turn, Call: n.Call,
 		HeldCall: n.HeldCall, Product: n.Product, Connection: n.Connection, Account: n.Account,
 		Target: n.Target, Tool: n.Tool, Class: n.Class, Step: n.Step, AnsweredBy: n.answeredBy(),
-		Answerer: n.Answerer, Operation: n.Operation, Before: n.Before,
+		Answerer: n.Answerer, Via: n.Via, Operation: n.Operation, Before: n.Before,
 		Changes: append([]GrowthChange(nil), n.Changes...), Money: money, Failure: n.Failure,
 	}
 	subject, scope := GrowthSubject(n.Handle, p.ID), ScopeSet{Subject: true}
@@ -509,6 +518,7 @@ type GrowthRow struct {
 	Step       growth.Step
 	AnsweredBy GrowthAnswerer
 	Answerer   string
+	Via        string
 
 	Operation, Before string
 	Changes           []GrowthChange
@@ -530,7 +540,7 @@ func (g GrowthRow) Act() string {
 
 // growthColumns is every column a [GrowthRow] is read from, in [scanGrowth]'s order.
 const growthColumns = `agent_handle, growth_id, turn_id, call_id, held_call, product, connection, account,
-	target, tool, class, step, answered_by, answerer, operation_digest, before_digest, changes, currency,
+	target, tool, class, step, answered_by, answerer, via, operation_digest, before_digest, changes, currency,
 	delta_micros, daily_micros, daily_after_micros, per_change_cap_micros, daily_cap_micros, failure, at,
 	position`
 
@@ -543,7 +553,7 @@ func scanGrowth(row rowScanner) (GrowthRow, error) {
 		at, posn                               int64
 	)
 	if err := row.Scan(&g.Handle, &g.ID, &g.Turn, &g.Call, &g.HeldCall, &g.Product, &g.Connection, &g.Account,
-		&g.Target, &g.Tool, &class, &step, &answeredBy, &g.Answerer, &g.Operation, &g.Before, &changes,
+		&g.Target, &g.Tool, &class, &step, &answeredBy, &g.Answerer, &g.Via, &g.Operation, &g.Before, &changes,
 		&m.Currency, &m.DeltaMicros, &m.DailyMicros, &m.DailyAfterMicros, &m.PerChangeCapMicros,
 		&m.DailyCapMicros, &fail, &at, &posn); err != nil {
 		return GrowthRow{}, err

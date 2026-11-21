@@ -16,8 +16,10 @@
 -- operation and the target's before-state. `changes` is a JSON array of the
 -- changed fields, a published text's values kept as their SHA-256 and length
 -- alone. The money columns are micros of `currency`, '' for a step that spends
--- nothing. `failure` is a closed word. No column holds a token, a credential,
--- a person's personal data or published text: the writer refuses them.
+-- nothing. `via` is the vendor role of the credential a product holding
+-- several made the call through, never the credential. `failure` is a closed
+-- word. No column holds a token, a credential, a person's personal data or
+-- published text: the writer refuses them.
 CREATE TABLE access_growth (
     agent_handle          TEXT    NOT NULL,
     growth_id             TEXT    NOT NULL,
@@ -33,6 +35,7 @@ CREATE TABLE access_growth (
     step                  TEXT    NOT NULL,
     answered_by           TEXT    NOT NULL DEFAULT '',
     answerer              TEXT    NOT NULL DEFAULT '',
+    via                   TEXT    NOT NULL DEFAULT '',
     operation_digest      TEXT    NOT NULL,
     before_digest         TEXT    NOT NULL DEFAULT '',
     changes               TEXT    NOT NULL DEFAULT '[]',

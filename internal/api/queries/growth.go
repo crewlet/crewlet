@@ -77,6 +77,7 @@ func growthRow(g accessdomain.GrowthRow) map[string]any {
 	return map[string]any{"seat": g.Handle, "turn": g.Turn, "act": g.Act(), "held": g.HeldCall != "",
 		"product": g.Product, "connection": g.Connection, "account": g.Account, "target": g.Target,
 		"tool": g.Tool, "class": g.Class, "step": g.Step, "answered_by": g.AnsweredBy, "answerer": g.Answerer,
+		"via":       g.Via,
 		"operation": g.Operation, "before": g.Before, "changes": changes, "money": money,
 		"failure": g.Failure, "at": g.At.UTC()}
 }

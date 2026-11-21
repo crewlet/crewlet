@@ -136,7 +136,7 @@ func newGrowth(step growth.Step, r growth.Record) accessdomain.NewGrowth {
 	n := accessdomain.NewGrowth{
 		Handle: r.Handle, Turn: r.Turn, Call: r.Call, HeldCall: r.HeldCall, Product: r.Product,
 		Connection: r.Connection, Account: r.Account, Target: r.Target, Tool: r.Tool, Class: r.Class,
-		Step: step, Answerer: r.Answerer, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
+		Step: step, Answerer: r.Answerer, Via: r.Via, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
 	}
 	for _, c := range r.Changes {
 		if c.Text {

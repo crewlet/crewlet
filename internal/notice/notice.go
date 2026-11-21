@@ -306,8 +306,8 @@ func FromClockSkews(nodes []NodeGrowth) []Notice {
 			fix = "Fix their time synchronisation."
 		}
 		w.notice.Title = fmt.Sprintf("%s refuses the tokens Crewlet signs", vendor)
-		w.notice.Person = fmt.Sprintf("%s %d seconds %s %s's, so %s refuses the tokens Crewlet signs. %s",
-			who, abs(w.skew.OffsetSeconds), way, vendor, vendor, fix)
+		w.notice.Person = fmt.Sprintf("%s %s %s %s's, so %s refuses the tokens Crewlet signs. %s",
+			who, statelog.Spoken(time.Duration(abs(w.skew.OffsetSeconds))*time.Second), way, vendor, vendor, fix)
 		out = append(out, w.notice)
 	}
 	return Merge(out)

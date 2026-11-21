@@ -105,7 +105,7 @@ func TestAClockSkewIsANoticeWhileANodeReportsIt(t *testing.T) {
 	want := notice.Notice{Class: notice.ClassClockSkew, Since: since, Nodes: []string{"n1"},
 		Subject: advisor.Subject{Kind: advisor.SubjectIntegration, Name: "appstoreconnect"},
 		Title:   "Apple refuses the tokens Crewlet signs",
-		Person: "This node's clock is 75 seconds ahead of Apple's, so Apple refuses the tokens Crewlet signs. " +
+		Person: "This node's clock is 1m 15s ahead of Apple's, so Apple refuses the tokens Crewlet signs. " +
 			"Fix the node's time synchronisation."}
 	if len(one) != 1 || !equalNotice(one[0], want) {
 		t.Errorf("one node's skew is %+v, want %+v", one, want)
@@ -117,7 +117,7 @@ func TestAClockSkewIsANoticeWhileANodeReportsIt(t *testing.T) {
 			{Product: "appstoreconnect", Vendor: "Apple", OffsetSeconds: -120, Since: since.Add(time.Minute)}}}},
 	})
 	if len(two) != 1 || !slices.Equal(two[0].Nodes, []string{"n1", "n2"}) || two[0].Person != "The clocks of 2 "+
-		"nodes are up to 120 seconds behind Apple's, so Apple refuses the tokens Crewlet signs. Fix their time "+
+		"nodes are up to 2m behind Apple's, so Apple refuses the tokens Crewlet signs. Fix their time "+
 		"synchronisation." {
 		t.Errorf("two nodes' skews are %+v", two)
 	}
