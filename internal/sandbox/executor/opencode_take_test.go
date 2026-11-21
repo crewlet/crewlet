@@ -57,7 +57,7 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true,
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true,
 		Scrub: []string{plantedSecret}, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("TakeSession = %+v, %v", taken, err)
@@ -186,7 +186,7 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 		t.Fatalf("the ended job collected as ended %q with capture %+v; want it ended on request, its "+
 			"session exported:\n%s", res.JobEnd, res.Captured, boxFile(t, b, paths(b).Err()))
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("TakeSession of the ended job = %+v, %v", taken, err)
 	}

@@ -265,7 +265,7 @@ func serviceInstruments() []Instrument {
 				"counts too, logged at info, and costs nothing unless the " +
 				"read it stands by for fails); `ended`, the take's " +
 				"own time ran out first. `refused` above zero beside short " +
-				"`taken` waits is a room (240.06 MiB, five sessions at the " +
+				"`taken` waits is a room (481.17 MiB, five takes' spools at the " +
 				"sealed bound) too small for the takes that end at once on " +
 				"the node; beside a `taken` tail of tens of seconds, a store " +
 				"uploading too slowly for the minute. Both are engine " +
@@ -275,10 +275,11 @@ func serviceInstruments() []Instrument {
 			Name: ExecutorSpoolHeldBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: nil,
 			Shows: "Bytes this engine process's executor-session spools hold " +
-				"of the room they share (240.06 MiB): each save's and final " +
-				"take's, from before its pack until its upload ends, at the " +
-				"sealed bound while it packs and its archive's counted size " +
-				"after. Near the room for long is a node whose takes outrun " +
+				"of the room they share (481.17 MiB): each save's and final " +
+				"take's, from before its pack until its upload ends, its " +
+				"sealed spool's at the sealed bound while it packs and its " +
+				"archive's counted size after, beside its scrub's spool's " +
+				"until the scrub ends. Near the room for long is a node whose takes outrun " +
 				"its uploads, where `crewlet.executor.spool.wait` starts " +
 				"counting `refused`; above zero with no run ending or saving " +
 				"on the node is a spool never given back.",

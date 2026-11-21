@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -889,13 +890,13 @@ func (w *readAtWait) Done() <-chan struct{} {
 }
 
 // A TAKE'S PIECE PAST THE BASE WAITS FOR THE LARGE SLOT BEFORE IT IS HELD:
-// a transcript's line twice [scrubPieceBaseBytes], in each reading, an
-// export's string, a `.json` file and a text of short lines as long, each a
-// text the scrub redacts as one, wait for the slot held elsewhere having read
-// at most the base and two fills (the source's, and the scanner's or the
-// text's read ahead) past where the piece began; freed, the rewrite
-// reads to its end and holds nothing once done; with its context ended while
-// it waits, it ends with [errLargeWait].
+// a transcript's line twice [scrubPieceBaseBytes], an export's string, a
+// `.json` file and a text of short lines as long, each a text the first
+// reading redacts as one (the second copies it), wait for the slot held
+// elsewhere having read at most the base and two fills (the source's, and the
+// scanner's or the text's read ahead) past where the piece began; freed, the
+// rewrite reads to its end and holds nothing once done; with its context
+// ended while it waits, it ends with [errLargeWait].
 //
 // Mutation: gate no piece, a line only once it is read whole, or a text by its
 // lines, drop a piece's gate, or keep a hold past the rewrite, and a case goes
@@ -911,25 +912,20 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 		body    string
 		rewrite rewrite
 	}{
-		{"a transcript's line, first reading", line, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-			_, err := measureLines(src, s, &tarPlan{gate: b.gate})
-			return err
-		}},
-		{"a transcript's line, second reading", line, func(dst io.Writer, src io.Reader, s scrubber,
-			b scrubBounds) error {
-			plan := &tarPlan{}
-			if _, err := measureLines(strings.NewReader(line), s, plan); err != nil {
-				return err
-			}
+		{"a transcript's line", line, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+			plan := spooledPlan(t)
 			plan.gate = b.gate
-			return writeLines(dst, src, s, plan, plan.lines.count())
+			_, err := measureLines(src, s, plan)
+			return err
 		}},
 		{"an export's string", prefix + long + `"}`, func(dst io.Writer, src io.Reader, s scrubber,
 			b scrubBounds) error {
 			return rewriteDocument(dst, src, s, b.gate)
 		}},
 		{"a `.json` file", prefix + long + `"}`, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-			_, _, err := measureFile("tasks/s/1.json", src, s, &tarPlan{gate: b.gate})
+			plan := spooledPlan(t)
+			plan.gate = b.gate
+			_, err := measureFile("tasks/s/1.json", src, s, plan)
 			return err
 		}},
 		{"a text of short lines", lines, func(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
@@ -987,28 +983,39 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 }
 
 // THE PLAN PAST THE BASE HOLDS THE SLOT TO THE TAKE'S END: a tar's plan one
-// line short of a byte past [scrubPieceBaseBytes] of bits takes no slot
-// as the first reading plans a transcript's lines; one line further it takes
-// it, and holds it once the lines are read, until the take lets it go.
+// bit short of a byte past [scrubPieceBaseBytes] of bits takes no slot as the
+// first reading plans a transcript's line that loses a loaded tool
+// definition; one bit further it takes it, and holds it once the lines are
+// read, until the take lets it go.
 //
 // Mutation: hold the plan at the base (`>=` for `>`), plan no hold in a
 // transcript's lines, or drop it with the lines, and a case goes red.
 func TestThePlanPastTheBaseHoldsTheSlotToTheTakesEnd(t *testing.T) {
+	s := newScrubber([]string{ltServer})
+	line := ltRecord("2.1.310", "", ltEcho, ltRenamed) + "\n"
+	measured := spooledPlan(t)
+	if _, err := measureLines(strings.NewReader(line), s, measured); err != nil {
+		t.Fatal(err)
+	}
+	cut := measured.edits.count()
+	if cut == 0 {
+		t.Fatal("the line planned no cut")
+	}
 	for _, tc := range []struct {
 		name  string
 		bits  int
 		holds bool
 	}{
-		{"a plan a bit short of past the base", (scrubPieceBaseBytes+1)*8 - 3, false},
-		{"a plan past the base", (scrubPieceBaseBytes+1)*8 - 2, true},
+		{"a plan a bit short of past the base", (scrubPieceBaseBytes+1)*8 - 1 - cut, false},
+		{"a plan past the base", (scrubPieceBaseBytes+1)*8 - cut, true},
 	} {
 		large := testPass(t)
-		plan := &tarPlan{gate: large.gate(t.Context()), bothFrom: 1}
+		plan := spooledPlan(t)
+		plan.gate = large.gate(t.Context())
 		for range tc.bits {
-			plan.lines.put(false)
+			plan.members.put(false)
 		}
-		// TWO LINES, a bit each.
-		if _, err := measureLines(strings.NewReader("ab\ncd\n"), newScrubber(nil), plan); err != nil {
+		if _, err := measureLines(strings.NewReader(line), s, plan); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		if held := len(collectionLargeReads) == 1; held != tc.holds {
@@ -1216,7 +1223,8 @@ func takeWithin(ctx context.Context, archive []byte) (sandbox.TakenSession, erro
 	p := PathsFor(box)
 	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
 	box.Put(p.SessionCapture(), string(archive))
-	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20})
+	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20,
+		Spool: sandbox.SessionSpool{Dir: os.TempDir(), Bytes: math.MaxInt64, Held: func(int64) {}}})
 }
 
 // countedWriter counts what is written to it.

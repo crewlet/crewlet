@@ -1271,6 +1271,10 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// ITS SCRUB SPOOLS NOTHING, so its spool holds nothing.
+	if take.Spool.Held != nil {
+		take.Spool.Held(0)
+	}
 	if session.Taking != nil {
 		session.Taking(ctx)
 	}

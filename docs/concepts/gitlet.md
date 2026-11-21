@@ -2164,7 +2164,7 @@ runs: each pool at its worst, half again for the heap's room under the
 engine's [memory limit](../guides/deployment.md#the-engines-memory-limit), over
 that limit's nine tenths: 97 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
-and on a node running seats too 1 650 MiB at the default `node.max_concurrent`
+and on a node running seats too 1 654 MiB at the default `node.max_concurrent`
 (its collections of runs and reads of its boxes for its peers, 8.0 MiB a
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
@@ -2236,16 +2236,16 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | Node | Seats | Executor's pools | Store's page cache | Read lane | Transfers | Kept for the broker, the engine's own heap and the rest of the store | Background budget |
 |---|---|---|---|---|---|---|---|
 | 2 GiB, one core | no | 97 | 128 | 128 | 3 | 742 | 282 |
-| 2 GiB, one core | yes | 1 650 | 128 | 128 | 1 | 62 | 0 |
+| 2 GiB, one core | yes | 1 654 | 128 | 128 | 1 | 60 | 0 |
 | 4 GiB, two cores | no | 97 | 256 | 256 | 6 | 1 526 | 618 |
-| 4 GiB, two cores | yes | 1 650 | 256 | 256 | 3 | 846 | 416 |
+| 4 GiB, two cores | yes | 1 654 | 256 | 256 | 3 | 844 | 414 |
 | 8 GiB, four cores | no | 97 | 512 | 512 | 13 | 3 094 | 1 066 |
-| 8 GiB, four cores | yes | 1 650 | 512 | 512 | 10 | 2 414 | 864 |
+| 8 GiB, four cores | yes | 1 654 | 512 | 512 | 10 | 2 412 | 862 |
 | 16 GiB, eight cores | no | 97 | 1 024 | 1 024 | 27 | 6 230 | 1 962 |
-| 16 GiB, eight cores | yes | 1 650 | 1 024 | 1 024 | 24 | 5 550 | 1 760 |
+| 16 GiB, eight cores | yes | 1 654 | 1 024 | 1 024 | 24 | 5 548 | 1 758 |
 
 A node keeps at least one transfer, so 2 GiB running seats beside Gitlet keeps
-144 MiB more than its memory. Small and development installs run there, so it
+146 MiB more than its memory. Small and development installs run there, so it
 still boots and serves, and logs `code_cache_memory_short` once at boot with the
 figures; at the default `node.max_concurrent`, give a node running seats beside
 Gitlet 4 GiB of memory or more in all.

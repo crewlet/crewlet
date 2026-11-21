@@ -133,7 +133,7 @@ func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T)
 				"loopback first in NO_PROXY and no_proxy", line)
 		}
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save = %+v, %v", taken, err)
 	}
@@ -341,7 +341,7 @@ func TestATakeOfAnOpenCodeSaveCountsItAndNamesItsNewestCompaction(t *testing.T) 
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save = %+v, %v", taken, err)
 	}

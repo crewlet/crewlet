@@ -39,8 +39,8 @@ func finalTake(t *testing.T, rig *coordRig, run PendingRun, runner Runner) (*spo
 		readCapture(BoxReadCollect, Result{}, true))
 }
 
-// FOUR SAVES AT THE SEALED BOUND LEAVE A FINAL TAKE ITS ROOM. Saves take room
-// for a session at its bound and never wait for it, so with every one of a
+// FOUR SAVES AT THE SEALED BOUND LEAVE A FINAL TAKE ITS ROOM. Saves take a
+// take's room ([takeRoomBytes]) and never wait for it, so with every one of a
 // node's saves under way a final take of a session at its bound still spools
 // at once, and a fifth save finds none.
 //
@@ -59,7 +59,7 @@ func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 		rig.runner.Session.Archive.Size = executorkeep.SessionMaxBytes
 		rig.runner.mu.Unlock()
 		for save := range maxConcurrentSaves {
-			hold := rig.coordinator.trySpoolRoom(executorkeep.SealedMaxBytes)
+			hold := rig.coordinator.trySpoolRoom(takeRoomBytes)
 			if hold == nil {
 				t.Fatalf("save %d of %d found no room at the sealed bound", save+1, maxConcurrentSaves)
 			}
@@ -74,11 +74,52 @@ func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 		if waited := time.Since(began); waited != 0 {
 			t.Errorf("the final take waited %v for room beside every save, want none", waited)
 		}
-		if fifth := rig.coordinator.trySpoolRoom(executorkeep.SealedMaxBytes); fifth != nil {
+		if fifth := rig.coordinator.trySpoolRoom(takeRoomBytes); fifth != nil {
 			fifth.release()
 			t.Errorf("a save past the node's %d found room at the bound beside a final take",
 				maxConcurrentSaves)
 		}
+		rig.coordinator.keepLater(t.Context(), spooled)
+		rig.awaitKeeps()
+	})
+}
+
+// A TAKE'S SCRUB SPOOLS IN WHAT ITS SEALED SPOOL LEAVES OF ITS ROOM: a final
+// take holds a take's room and names its scrub's spool, in its process's own
+// spool directory, the part of it past a sealed session at the bound, which
+// the seal of a session at the bound keeps whole; and once the take is done
+// its scrub's part is back, the room holding the sealed spool alone.
+//
+// Mutation: split the scrub's part off first, give it the take's whole room,
+// or keep it past the take, and the part, the seal or the room goes red.
+func TestATakesScrubSpoolsInWhatItsSealedSpoolLeaves(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		keep.gate = make(chan struct{})
+		rig.runner.mu.Lock()
+		rig.runner.Session.Archive.Size = executorkeep.SessionMaxBytes
+		rig.runner.mu.Unlock()
+		spooled, kept := finalTake(t, rig, run, rig.runner)
+		if spooled == nil || kept == nil || kept.NotKept != "" {
+			t.Fatalf("a take of a session at the bound came to %+v, want it spooled", kept)
+		}
+		takes := rig.runner.Takes()
+		spool := takes[len(takes)-1].Spool
+		dir, err := rig.coordinator.spoolHere()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := takeRoomBytes - executorkeep.SealedMaxBytes; spool.Bytes != want || spool.Dir != dir {
+			t.Errorf("the take named its scrub %d bytes in %s, want %d in the process's own %s", spool.Bytes,
+				spool.Dir, want, dir)
+		}
+		if used := roomInUse(rig.coordinator); used != spooled.spool.Size {
+			t.Errorf("once the take is done the room holds %d bytes, want its sealed spool's %d", used,
+				spooled.spool.Size)
+		}
+		close(keep.gate)
 		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()
 	})
@@ -299,8 +340,9 @@ func stampedBegun(t *testing.T, rig *coordRig, run PendingRun) {
 // save holding room waits for the node's pack slot and then for the take's own
 // slots (the executor's take and large-read slots, held from its TakeSession
 // to its scrub's end), so a final take waiting for room holds neither the pack
-// slot nor a take of its box. Its room, taken at the sealed bound, is shrunk to
-// its archive's counted size before it streams.
+// slot nor a take of its box. Its sealed spool's room, taken at the sealed
+// bound, is shrunk to its archive's counted size before it streams, beside
+// what its scrub's spool holds (the fake's, nothing).
 //
 // Mutation: wait for the room after the pack slot is taken or after the box's
 // session is taken, or keep the bound's room while streaming, and a check
@@ -422,7 +464,7 @@ func TestAFinalTakeRefusedForRoomIsCountedAndLogged(t *testing.T) {
 			}
 		}
 		for _, want := range []string{"level=WARN", "waited_seconds=60 ",
-			fmt.Sprintf(" bytes=%d ", executorkeep.SealedMaxBytes),
+			fmt.Sprintf(" bytes=%d ", takeRoomBytes),
 			fmt.Sprintf(" room_bytes=%d ", spoolRoomBytes),
 			fmt.Sprintf(" others_held_bytes=%d", spoolRoomBytes)} {
 			if !strings.Contains(line, want) {

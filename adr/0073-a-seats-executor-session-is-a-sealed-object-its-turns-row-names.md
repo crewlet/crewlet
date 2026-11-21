@@ -170,9 +170,9 @@ streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
 (`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is seven minutes, from
 its measured worst: the slowest session a harness writes at the scrub's
-256 MiB of plaintext (`scrubPlainMax`), 261 s, and the archive read twice out
+256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read twice out
 of a box at a mebibyte a second, 96 s at 48 MiB, and the minute a take may
-wait for its spool's room (`spoolRoomWait`), 417 s; lines that are no JSON, which
+wait for its spool's room (`spoolRoomWait`), 339 s; lines that are no JSON, which
 only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
 nothing is kept, its place is refused and the last kept copy stands, so a box
 can only cost its own session. The KEEP — the upload at the object store's
@@ -4928,11 +4928,14 @@ never one whose lock is held (`Coordinator.sweepSpools`). The age sweep and
 its bound are gone.
 
 **Every spool of a process shares one room**, `(maxConcurrentSaves + 1) ×
-executorkeep.SealedMaxBytes` (`sandbox.spoolRoomBytes`), 240.06 MiB. A save takes room at
-the sealed bound before its pack slot and never waits, so saves leave a final
-take the fifth session's room; a take waits for room at the sealed bound at
+sandbox.takeRoomBytes` (`sandbox.spoolRoomBytes`), 481.17 MiB: a take's room
+is a sealed session at its bound for its sealed spool, taken first, and as
+much again for its scrub's spool, each with what gzip adds to input it cannot
+shrink and to the scrub spool's members. A save takes a take's room before its pack slot and never waits, so
+saves leave a final take the fifth take's room; a take waits for its room at
 most a minute (`spoolRoomWait`) before its pack slot and its scrub's slots, a
-save's order, shrinks it to its archive's counted size once packed, and past
+save's order, shrinks its sealed part to its archive's counted size once
+packed and its scrub's part as that spool is read back and removed, and past
 the minute keeps nothing and stamps nothing. Every seal is refused before it
 writes past its room, a save's what its seat's ledger counted.
 

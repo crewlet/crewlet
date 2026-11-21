@@ -877,9 +877,9 @@ const (
 // SEVEN MINUTES, from the measured worst: the minute a take may wait for its
 // spool's room ([spoolRoomWait]), the archive read twice out of a box at its
 // floor pace of a mebibyte a second (96 s at 48 MiB), and the slowest session
-// a harness writes scrubbed at its 256 MiB of plaintext (256 s, 261 s at worst
-// under the engine's memory limit): 417 s counted apart though the last two
-// overlap. Only sessions a harness writes set it. A take still scrubbing at
+// a harness writes scrubbed at its 256 MiB of plaintext (a string torn at its
+// last line, 183 s, under the engine's memory limit too): 339 s counted apart
+// though the last two overlap. Only sessions a harness writes set it. A take still scrubbing at
 // its end FAILS CLOSED: nothing is kept, its place is refused and the last
 // kept copy stands, so a box costs only its own session
 // (docs/concepts/code-sandbox.md, "Seven minutes for the scrub"; ADR-0073).
@@ -1361,12 +1361,14 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if err != nil {
 		return nil, refuse(calls, err.Error())
 	}
-	// ROOM FOR ITS SPOOL AT THE SEALED BOUND, before anything the take holds,
+	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, before anything the take holds,
 	// in a save's order: room, the pack slot, then the take's own slots, so no
-	// take waits for room holding what a save holding room waits for. Shrunk to
-	// the archive's counted size once its size is known. None within the wait
-	// keeps nothing and stamps nothing ([spoolRoomWait]).
-	room, refused := c.awaitSpoolRoom(ctx, executorkeep.SealedMaxBytes)
+	// take waits for room holding what a save holding room waits for. The
+	// sealed spool's part is shrunk to the archive's counted size once its size
+	// is known, and the scrub's is shrunk and given back as its spool tells it
+	// ([takeRoomBytes]). None within the wait keeps nothing and stamps nothing
+	// ([spoolRoomWait]).
+	room, refused := c.awaitSpoolRoom(ctx, takeRoomBytes)
 	if refused != nil {
 		why := refused.reason()
 		if standing {
@@ -1386,6 +1388,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			room.release()
 		}
 	}()
+	scrubbing := room.split(takeRoomBytes - executorkeep.SealedMaxBytes)
+	defer scrubbing.release()
+	dir, err := c.spoolHere()
+	if err != nil {
+		return nil, refuse(calls, takeRefusal(ctx, err))
+	}
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]): a take packs on demand, and its pack is
 	// made once TakeSession returns, before the stream the spool reads.
@@ -1394,7 +1402,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Spool: scrubbing.spooling(dir)})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))

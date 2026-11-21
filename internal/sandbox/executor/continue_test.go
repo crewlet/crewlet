@@ -780,7 +780,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil || taken.Context == nil {
 		t.Fatalf("TakeSession = %+v, %v", taken, err)
 	}
@@ -812,7 +812,7 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 		if _, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"}); res.Captured == nil {
 			t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 		if err != nil || taken.Body == nil || taken.Context == nil {
 			t.Fatalf("TakeSession = %+v, %v", taken, err)
 		}

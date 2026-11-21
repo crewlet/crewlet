@@ -58,7 +58,7 @@ func TestAScrubThatPanicsRefusesItsTakeRatherThanEndTheEngine(t *testing.T) {
 	if res.Captured == nil {
 		t.Fatal("the run's session was not captured")
 	}
-	taken, err := runner.TakeSession(t.Context(), panickingBox{b}, sandbox.SessionTake{MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), panickingBox{b}, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take: %+v, %v", taken, err)
 	}

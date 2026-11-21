@@ -46,17 +46,18 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
-// 11.56 MiB, its scrub's 8.22 (BenchmarkATakeAtItsBase) and its meter's 3.34
-// (BenchmarkAMeterAtItsBase) at once, the most of nine runs each, one a
-// process, on a dedicated two-core slot, read in bytes; 29 times over is 335
-// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
-// package doc's "A collection's read of a thread"): so the takes at their base
-// hold no more than every read of the tier does.
+// 11.63 MiB, its scrub's 8.29 (BenchmarkATakeAtItsBase, its spool's gzip
+// writer among it) and its meter's 3.34 (BenchmarkAMeterAtItsBase) at once,
+// the most of nine runs each, one a process, on a two-core slot, read in
+// bytes; 29 times over is 337 MiB, within the base tier's 340.6 MiB (64 reads
+// at [baseTierReadBytes], the package doc's "A collection's read of a
+// thread"): so the takes at their base hold no more than every read of the
+// tier does.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]).
-const takeBaseHeldBytes = 11838 << 10
+// its meter's at once: 11.63 MiB ([SessionTakesAtOnce]).
+const takeBaseHeldBytes = 11910 << 10
 
 // The takes at their base hold no more than the box host's reads for its peers
 // at [baseTierReadBytes] each: a negative constant does not compile.
@@ -114,6 +115,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	if take.MaxBytes <= 0 {
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
+	}
+	if take.Spool.Dir == "" || take.Spool.Bytes <= 0 || take.Spool.Held == nil {
+		return sandbox.TakenSession{}, errors.New("executor: a take names no spool for its scrub, which " +
+			"spools on its process's own disk in the room the take holds")
 	}
 	// ONE OF [SessionTakesAtOnce], held by the scrub's goroutine to its end,
 	// and given back here where none starts.
@@ -184,7 +189,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
 	remembered := &memoUse{memo: r.memo, scope: take.Scope}
-	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered)
+	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered).
+		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held})
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
@@ -255,7 +261,7 @@ func logMemoUse(ctx context.Context, use *memoUse) {
 	}
 	entries, evicted := use.memo.size()
 	log.InfoContext(ctx, "executor_session_scrub_memo", "hits", use.n.hits, "misses", use.n.misses,
-		"diverged", use.n.diverged, "checked", use.n.checked, "entries", entries, "evicted", evicted)
+		"diverged", use.n.diverged, "entries", entries, "evicted", evicted)
 }
 
 // scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
