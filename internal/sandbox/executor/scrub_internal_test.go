@@ -142,8 +142,8 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 	}
 }
 
-// testBounds is the scrub of an archive at a session's bound.
-var testBounds = boundsFor(32 << 20)
+// testBounds is the scrub at the plaintext a kept session's scrub reads.
+var testBounds = plainBounds(256 << 20)
 
 // rewriteLine is one line of a transcript, with no break, as the scrub keeps
 // it ([keptLines]).

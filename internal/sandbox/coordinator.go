@@ -652,12 +652,16 @@ type CoordinatorOptions struct {
 	// coordination store. Nil takes no save.
 	Saves SaveLedgers
 
-	// SpoolDir is where this node spools sealed sessions: a capture's between its
-	// take and keep ([Coordinator.spool]), a relaunch's fetched session between
-	// fetch and run start ([Coordinator.fetchSession]); every take and fetch
-	// sweeps leftovers ([Coordinator.sweepSpools]). Empty is os.TempDir; a test
-	// names its own directory so what is left is the case's to see.
+	// SpoolDir is where this node spools a capture's sealed session between its
+	// take and keep ([Coordinator.spool]), in a directory of the process's own
+	// under it ([Coordinator.spoolHere]). Empty is os.TempDir; a test names its
+	// own directory so what is left is its own.
 	SpoolDir string
+
+	// Spools is told each final take's wait for spool room and the room held
+	// ([SpoolMeter]): the engine's meter records them in the node's metrics. Nil
+	// measures nothing.
+	Spools SpoolMeter
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -760,6 +764,9 @@ type Coordinator struct {
 	// 0.04 to 0.46 s a Claude Code pack of 1 to 20 MiB (package doc, "A pack in a
 	// node's own memory, one at a time").
 	sharedPack chan struct{}
+	// spoolRoom is the room every spool of this process shares, in bytes
+	// ([spoolRoomBytes], spoolroom.go).
+	spoolRoom *spoolRoom
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -772,11 +779,13 @@ type Coordinator struct {
 	// keepLife is the lifetime every keep runs under, off the read that took its
 	// capture ([Coordinator.keepLater]); keeping counts them: [Coordinator.Stop]
 	// lets those under way finish for [sessionKeepDrain], then ends them.
-	// spoolDir is [CoordinatorOptions.SpoolDir], resolved.
+	// spoolDir is [CoordinatorOptions.SpoolDir], resolved, and spools the
+	// coordinator's own directory under it (spooldir.go).
 	keepLife context.Context
 	endKeeps context.CancelFunc
 	keeping  sync.WaitGroup
 	spoolDir string
+	spools   ownSpools
 
 	// mu guards runs, the two seat-level answers the inbox screening reads on
 	// every delivery, and attempts beside them. In memory rather than a store
@@ -1002,6 +1011,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
+		spoolRoom:    newSpoolRoom(opts.Spools),
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1065,6 +1075,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if opts.Takers != nil {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
+	c.sweepSpools()
 	return c, nil
 }
 
@@ -1115,6 +1126,7 @@ func (c *Coordinator) Stop() {
 	}
 	c.endKeeps()
 	<-kept
+	c.closeSpools()
 	if c.taker != nil {
 		c.taker.stop()
 	}

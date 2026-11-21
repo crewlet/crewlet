@@ -135,6 +135,22 @@
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
 //
+// # Each process's own spool directory
+//
+// A spool's age is no proof its process is gone, and a container restart keeps
+// /tmp, so each process spools into a directory of its own, held by an flock
+// the kernel drops however the process ends (spooldir.go). A sweep removes only
+// a directory whose lock it takes; made under a staging name and renamed once
+// locked, a live one is never found unlocked.
+//
+// # Every spool on a node in one room
+//
+// The disk holds what the spools hold, so one room bounds them all
+// (spoolroom.go): saves take room at the sealed bound before their pack slot
+// and never wait, leaving a final take its room; a take waits a minute for
+// room at the bound before its pack slot and its scrub's slots, a save's
+// order, then keeps nothing; a seal is refused before it writes past its room.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // restore.go. A relaunch continues the job before's newest kept capture, the
@@ -157,7 +173,9 @@
 //
 // An unreadable object, a silent log or a box that cannot take the session up
 // starts one of its own (`executor_session_not_continued`). The session is
-// fetched sealed and opened whole before a byte reaches the box. A cut-off
+// read whole before a byte reaches the box, then streamed in held to that
+// read, never spooled ([Coordinator.fetchSession]); one that differs the second
+// time fails the run's start. A cut-off
 // session's calls are read by id (Claude Code) or by content (OpenCode): a held
 // class is never a false hold ([HoldingsByContent]).
 //

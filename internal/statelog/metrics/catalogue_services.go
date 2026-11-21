@@ -1,7 +1,8 @@
 package metrics
 
 // serviceInstruments is the instruments of the services beside the state log: search, the change feed, the
-// notification service's inbound group, the work pickup and the object store's S3 requests.
+// notification service's inbound group, the work pickup, the object store's S3 requests and the code sandbox's
+// session spools.
 func serviceInstruments() []Instrument {
 	return []Instrument{
 		// ---- search ---------------------------------------------------
@@ -221,6 +222,42 @@ func serviceInstruments() []Instrument {
 				"one is a bucket throttling or failing, and `given_up` above " +
 				"zero is a bucket that failed every attempt for most of a " +
 				"minute, or held one for a whole minute without moving it.",
+		},
+
+		// ---- the code sandbox -----------------------------------------
+		{
+			Name: ExecutorSpoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long each final take of an executor run's session " +
+				"waited for room to spool it on this engine process, before " +
+				"it held anything else, by `outcome`: `taken`, it got its " +
+				"room (at once unless other final takes held it: saves never " +
+				"wait, are not counted here, and leave a final take its " +
+				"room); `refused`, the room stayed full for the whole " +
+				"minute, so the take kept nothing and the turn's next launch " +
+				"continues its newest kept capture, logged as " +
+				"`executor_session_not_kept` with `waited_seconds`, `bytes`, " +
+				"`room_bytes` and `others_held_bytes` (a standby's refusal " +
+				"counts too, logged at info, and costs nothing unless the " +
+				"read it stands by for fails); `ended`, the take's " +
+				"own time ran out first. `refused` above zero beside short " +
+				"`taken` waits is a room (240.06 MiB, five sessions at the " +
+				"sealed bound) too small for the takes that end at once on " +
+				"the node; beside a `taken` tail of tens of seconds, a store " +
+				"uploading too slowly for the minute. Both are engine " +
+				"constants, not settings: report it with both readings.",
+		},
+		{
+			Name: ExecutorSpoolHeldBytes, Kind: KindGauge, Unit: UnitBytes,
+			Attributes: nil,
+			Shows: "Bytes this engine process's executor-session spools hold " +
+				"of the room they share (240.06 MiB): each save's and final " +
+				"take's, from before its pack until its upload ends, at the " +
+				"sealed bound while it packs and its archive's counted size " +
+				"after. Near the room for long is a node whose takes outrun " +
+				"its uploads, where `crewlet.executor.spool.wait` starts " +
+				"counting `refused`; above zero with no run ending or saving " +
+				"on the node is a spool never given back.",
 		},
 	}
 }

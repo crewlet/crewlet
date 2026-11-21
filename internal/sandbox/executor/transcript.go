@@ -256,13 +256,12 @@ const (
 	// TranscriptReadBytes is the most bytes one read takes as the archive
 	// inflates, and the most the members of a tar hand the reader.
 	//
-	// 256 MiB: eight times the most an archive is stored as (internal/executorkeep's
-	// SessionMaxBytes, 32 MiB), gzip's ratio over JSON, so an ordinary archive
+	// What a kept session's scrub reads ([scrubPlainMax]), so an archive kept
 	// reads whole and one that inflates past it stops there. A tar's members are
 	// held to it APART, on what they hand out: a sparse member hands out holes
 	// the archive does not hold, and unmetered, a member of 1.5 KiB could hold the
 	// read for its declared size, up to an exbibyte.
-	TranscriptReadBytes = 256 << 20
+	TranscriptReadBytes = scrubPlainMax
 
 	// TranscriptReadLines is the most lines and elements one read frames.
 	//
@@ -419,7 +418,7 @@ const TranscriptReadHeldBytes = 29 << 20
 // tenth more for a node busier than that machine. Every credential shape
 // takes 33 s. Dense tokens and a kept session's text, mostly random bytes,
 // pack to 179 and 177 MiB of 240 ([keptGzipLevel]), so no archive within its
-// 32 MiB bound holds the budget's worth of them. A value of `pwd=x` lines, a
+// 48 MiB bound holds the budget's worth of them. A value of `pwd=x` lines, a
 // password's value every six bytes the budget long, which no harness or tool
 // writes, takes 98 s (129 escaped in a JSON string): it sets no wait, and a
 // read of it fails closed once it runs past [TranscriptAnsweredWithin].

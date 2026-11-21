@@ -108,8 +108,8 @@ const openCodeCallWait = 10 * time.Second
 // data URI.
 //
 // THIRTY SECONDS, about five times the slowest measured: 6.4 s to export a 256
-// MiB session (the most a kept session's export holds unpacked, sandbox's
-// SessionMaxBytes at the scrub's eightfold) on a busy 2-core box, OpenCode
+// MiB session (the most a kept session's export holds unpacked, the scrub's
+// plaintext bound, [scrubPlainMax]) on a busy 2-core box, OpenCode
 // 2.1.4. Past it only the wait is lost: an export it ended is packed on demand
 // once the job is over ([OpenCode.Pack]), and a page it ended leaves the
 // figure carried along the copy's lineage.
