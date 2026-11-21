@@ -3,7 +3,7 @@
 // whole and wrapped (a person allows what they read), and the caps form's
 // fields stay inside its rows. Long names are the vendors' own limits: a
 // 255 character campaign name, a 100 character account name.
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -11,9 +11,32 @@ import type { ReactNode } from "react";
 import { LayerHost } from "@crewlethq/ui";
 import "~/test/layout.tsx";
 import { Router } from "~/app/router.tsx";
-import type { GrowthCard } from "~/contract/growth.ts";
+import type { GrowthCard, GrowthChangeRow } from "~/contract/growth.ts";
 import { GrowthConnections } from "./GrowthConnections.tsx";
 import { GrowthDecisionCard } from "./GrowthDecisionCard.tsx";
+import { RecentChanges } from "./RecentChanges.tsx";
+
+// The recent changes' read and the chart's names, as an engine would answer them.
+const changes = vi.hoisted(() => ({ rows: [] as unknown[] }));
+vi.mock("~/lib/useQuery.ts", () => ({
+  useQuery: () => ({
+    data: { rows: changes.rows, next: "41", complete: false },
+    loading: false,
+    error: null,
+  }),
+}));
+vi.mock("~/lib/store-hooks.ts", async (original) => ({
+  ...(await original<typeof import("~/lib/store-hooks.ts")>()),
+  useOrg: () => ({ roles: [], units: [] }),
+}));
+vi.mock("~/lib/seats.ts", async (original) => ({
+  ...(await original<typeof import("~/lib/seats.ts")>()),
+  indexOrg: () => ({
+    byHandle: new Map([
+      ["growth", { name: "Growth Lead for the whole northern hemisphere's stores" }],
+    ]),
+  }),
+}));
 
 const CAMPAIGN = "Spring sale for every region and every product line ".repeat(5).slice(0, 255);
 const ACCOUNT =
@@ -218,6 +241,63 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       expect(ids.map((id) => id.textContent)).toEqual([site, "123-456-7890"]);
       // A short ID moves to its own line rather than break.
       expect(ids[1]!.getClientRects().length).toBe(1);
+    },
+  );
+
+  test.each([1440, 390])(
+    "twenty recent changes with long targets stay inside %ipx, every name whole",
+    async (width) => {
+      const row = (n: number): GrowthChangeRow => ({
+        seat: "growth",
+        turn: "t",
+        act: `h-${n}`,
+        held: n % 2 === 0,
+        product: "google_ads",
+        connection: "main",
+        account: "123-456-7890",
+        target: CAMPAIGN,
+        tool: "google_ads_budget",
+        class: "spend",
+        step: n % 3 === 0 ? "failed" : n % 3 === 1 ? "allowed" : "applied",
+        answered_by: "person",
+        answerer: "Avery Admin of the European operations",
+        operation: "ab",
+        before: "cd",
+        changes: [
+          {
+            field: "amount",
+            label: "Daily budget",
+            money: true,
+            text: false,
+            before: "40125000",
+            after: "1234567890125000",
+          },
+          {
+            field: "reply",
+            label: "Reply",
+            money: false,
+            text: true,
+            after_sha256: "cd",
+            after_bytes: 4096,
+          },
+        ],
+        money: null,
+        failure: n % 3 === 0 ? "unknown_outcome" : "",
+        at: new Date(Date.now() - n * 3_600_000).toISOString(),
+      });
+      changes.rows = Array.from({ length: 20 }, (_, n) => row(n));
+      await mount(
+        width,
+        theme,
+        <RecentChanges product="google_ads" accounts={new Map([["123-456-7890", "KWD"]])} />,
+      );
+      expect(overflowing(host!, width)).toEqual([]);
+      const targets = [...host!.querySelectorAll<HTMLElement>(".growth-change__what")];
+      expect(targets).toHaveLength(20);
+      for (const target of targets) expect(target.textContent).toBe(CAMPAIGN);
+      for (const money of host!.querySelectorAll<HTMLElement>(".crewlet-money")) {
+        expect(money.getClientRects().length, money.textContent ?? "").toBe(1);
+      }
     },
   );
 
