@@ -277,7 +277,7 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 		_ = q.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf with no member listening opened a queue")
 	}
-	for _, want := range []string{"stream.leaf.urls", "made no link",
+	for _, want := range []string{"stream.leaf.urls", "made no link to any member",
 		"secrets.keys id \"jetstream-test\"", "broker_peer_refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q, so an operator is not told "+

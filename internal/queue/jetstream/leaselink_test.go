@@ -109,7 +109,7 @@ func TestALeafReadsEachOfItsLinksByAccount(t *testing.T) {
 		_ = again.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf whose data link is cut opened a queue")
 	}
-	if !strings.Contains(err.Error(), "made no link (account $G)") {
+	if !strings.Contains(err.Error(), "made no link to any member (account $G)") {
 		t.Errorf("a leaf whose data link is cut is refused for %v, want its data link named "+
 			"as down", err)
 	}

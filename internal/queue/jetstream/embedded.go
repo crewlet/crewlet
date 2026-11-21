@@ -1116,7 +1116,7 @@ func (e *embeddedServer) awaitLinked(ctx context.Context, js jetstream.JetStream
 	if !e.linked(account) {
 		// The key is named: a refusing member looks like an absent one from
 		// here, and only the members' broker_peer_refused lines say which.
-		return fmt.Errorf("leaf %q made no %slink (account %s) to any member within %s — "+
+		return fmt.Errorf("leaf %q made no %slink to any member (account %s) within %s — "+
 			"stream.leaf.urls names no member that is up and listening on its "+
 			"stream.leaf.port, a firewall is between them, or every member "+
 			"refused this node's key (it presents secrets.keys id %q; see "+
