@@ -73,9 +73,9 @@ type Sends struct {
 // on the link (another large write, an object store put's window) nor a link
 // slower than the floor: either can still read as an outage. The worst case is
 // long, about four minutes a send, twelve over [WriteSends], with everything
-// the node sends behind it waiting, lease renewals among them
-// (crewlet/crewlet#1035, not fixed here). A caller's own deadline is not
-// checked by an external client while it waits for the connection's lock.
+// the node sends behind it on its connection waiting; its holds ride another
+// (ADR-0169). A caller's own deadline is not checked by an external client
+// while it waits for the connection's lock.
 func Budget(js jetstream.JetStream, crossing time.Duration) *Sends {
 	return &Sends{deadline: time.Now().Add(WriteBound(js, crossing)), crossing: crossing}
 }

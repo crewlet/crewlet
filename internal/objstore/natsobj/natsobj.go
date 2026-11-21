@@ -178,7 +178,8 @@
 // leader's read of a whole piece, larger than the window, alone
 // ([reading.caughtUp]). A link carries what a node sends in the order it was
 // sent, and what comes back in the order it was sent back, so a request sent
-// behind the node's transfers, a lease renewal among them, waits for what
+// behind the node's transfers (at a first-in, first-out bottleneck, its
+// lease link's too: ADR-0169) waits for what
 // they hold out BOTH WAYS: held to one window, sized to what the floor
 // carries in the request's term less its own round trip
 // ([jsapi.WindowCrossing], four seconds, whatever lease the node holds), it
