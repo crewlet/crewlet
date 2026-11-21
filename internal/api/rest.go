@@ -111,6 +111,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/delegated-decisions/repositories", what: "delegated_repositories"},
 	{method: "GET", pattern: "/delegated-decisions/branches", what: "delegated_branches"},
 	{method: "GET", pattern: "/delegated-decisions/checks", what: "delegated_checks"},
+	// WHAT AGENTS CHANGED ON THE COMPANY'S GROWTH ACCOUNTS, every step of a
+	// call that was not a read, off the access log (ADR-0171).
+	{method: "GET", pattern: "/growth/changes", what: "growth_changes"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
