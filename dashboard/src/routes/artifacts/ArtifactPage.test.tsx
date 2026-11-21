@@ -73,16 +73,18 @@ vi.mock("~/lib/viewer.ts", async () => {
 });
 /** The threads' later pages, in order: the comments panel asks the socket for each. */
 const laterThreads = vi.hoisted(() => [] as unknown[]);
+/** One client for every render, as the app's provider holds one. */
+const client = vi.hoisted(() => ({
+  socket: {
+    query: async (what: string) => (what === "artifact_comments" ? laterThreads.shift() : null),
+  },
+}));
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
   return {
     ...actual,
-    useClient: () => ({
-      socket: {
-        query: async (what: string) => (what === "artifact_comments" ? laterThreads.shift() : null),
-      },
-    }),
+    useClient: () => client,
     useConnection: () => ({ connected: true, accessRefused: null }),
     // THE COMPANY'S NAME, which Move… says who sees a folder in.
     useOrg: () => null,
