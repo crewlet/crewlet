@@ -22,12 +22,18 @@ import (
 // bucket to a single node's leases, keeping tokens monotone across a move to a
 // fleet. It persists with the stream (stream.store_dir), as the rows do.
 type Epochs struct {
+	// js is the HOLD client every epoch write and read rides (package doc,
+	// "Two clients").
 	js jetstream.JetStream
-	// kv is the bucket, settled (settle.go) like every other this package writes.
+	// kv is the bucket over js, settled (settle.go) like every other this
+	// package writes.
 	kv jetstream.KeyValue
-	// read is the bucket's leader read: a counter read off a replica that
-	// is behind would mint a token some tenure already holds.
+	// read is the bucket's leader read over js: a counter read off a replica
+	// that is behind would mint a token some tenure already holds.
 	read *leaderReader
+	// list is the bucket over the READ client, for the placement hints a
+	// listing scans ([Store.PreferredResources]).
+	list jetstream.KeyValue
 }
 
 // EpochsConfig is what the counter's bucket needs, and the part of [Config]
@@ -67,20 +73,21 @@ func (c *EpochsConfig) normalize() error {
 }
 
 // OpenEpochs creates or adopts the epochs bucket alone, for a node whose
-// leases are not on this broker (see [Epochs]). Idempotent, and safe to call
+// leases are not on this broker (see [Epochs]): provisioned over read, its
+// counter written over hold ([Open]). Idempotent, and safe to call
 // concurrently with [Open] on the same prefix, which opens the same bucket.
-func OpenEpochs(ctx context.Context, js jetstream.JetStream, cfg EpochsConfig) (*Epochs, error) {
-	if js == nil {
+func OpenEpochs(ctx context.Context, hold, read jetstream.JetStream, cfg EpochsConfig) (*Epochs, error) {
+	if hold == nil || read == nil {
 		return nil, errNoJetStream
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
 	}
-	return openEpochs(ctx, js, cfg)
+	return openEpochs(ctx, hold, read, cfg)
 }
 
 // openEpochs opens the bucket on a configuration already normalized.
-func openEpochs(ctx context.Context, js jetstream.JetStream, cfg EpochsConfig) (*Epochs, error) {
+func openEpochs(ctx context.Context, hold, js jetstream.JetStream, cfg EpochsConfig) (*Epochs, error) {
 	name := cfg.BucketPrefix + epochsSuffix
 	bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket: name,
@@ -96,11 +103,11 @@ func openEpochs(ctx context.Context, js jetstream.JetStream, cfg EpochsConfig) (
 	// the previous tenure still writes under. A peer's aged bucket is reported,
 	// not refused ([reportRetention]), with the remedy that fixes it.
 	reportRetention(ctx, bucket.Bucket(), 0, facts)
-	read, err := newLeaderReader(js, bucket)
+	held, read, err := bindHold(ctx, hold, bucket, cfg.Reach)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
+		return nil, err
 	}
-	return &Epochs{js: js, kv: settled(js, bucket, cfg.Reach), read: read}, nil
+	return &Epochs{js: hold, kv: held, read: read, list: bucket}, nil
 }
 
 // Next mints resource's next fencing token: strictly above every token the

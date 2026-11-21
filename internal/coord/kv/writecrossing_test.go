@@ -320,7 +320,7 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 		open  func(Reach) error
 	}{
 		{"the lease store", "Config.Reach", func(r Reach) error {
-			_, err := Open(ctx, client, Config{TTL: time.Minute, Reach: r})
+			_, err := Open(ctx, client, client, Config{TTL: time.Minute, Reach: r})
 			return err
 		}},
 		{"the fleet store", "FleetConfig.Reach", func(r Reach) error {
@@ -331,7 +331,7 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 			return err
 		}},
 		{"the epochs", "EpochsConfig.Reach", func(r Reach) error {
-			_, err := OpenEpochs(ctx, client, EpochsConfig{Reach: r})
+			_, err := OpenEpochs(ctx, client, client, EpochsConfig{Reach: r})
 			return err
 		}},
 	} {

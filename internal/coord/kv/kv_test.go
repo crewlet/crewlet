@@ -90,7 +90,7 @@ func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 func openStoreVia(t *testing.T, client jetstream.JetStream, reach Reach, ttl time.Duration) *Store {
 	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix, Reach: reach})
+	s, err := Open(context.Background(), client, client, Config{TTL: ttl, BucketPrefix: prefix, Reach: reach})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSharedContract(t *testing.T) {
 		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 		out := make([]coord.Backend, 3)
 		for i := range out {
-			s, err := Open(t.Context(), jsOf(nc), Config{
+			s, err := Open(t.Context(), jsOf(nc), jsOf(nc), Config{
 				TTL: coordtest.LongTTL, BucketPrefix: prefix, Reach: InProcess,
 			})
 			if err != nil {
@@ -161,7 +161,7 @@ func TestBrowserControlContract(t *testing.T) {
 		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 		out := make([]coordtest.BrowserControlStore, 3)
 		for i := range out {
-			s, err := Open(t.Context(), jsOf(nc), Config{
+			s, err := Open(t.Context(), jsOf(nc), jsOf(nc), Config{
 				TTL: coordtest.LongTTL, BucketPrefix: prefix, Reach: InProcess,
 			})
 			if err != nil {
@@ -325,11 +325,11 @@ func TestConfigIsValidated(t *testing.T) {
 		{"a reach nothing knows", Config{TTL: time.Minute, Reach: "nearby"}},
 	}
 	for _, c := range cases {
-		if _, err := Open(context.Background(), jsOf(nc), c.cfg); err == nil {
+		if _, err := Open(context.Background(), jsOf(nc), jsOf(nc), c.cfg); err == nil {
 			t.Fatalf("Open with %s was accepted", c.name)
 		}
 	}
-	if _, err := Open(context.Background(), nil, Config{TTL: time.Minute, Reach: InProcess}); err == nil {
+	if _, err := Open(context.Background(), nil, nil, Config{TTL: time.Minute, Reach: InProcess}); err == nil {
 		t.Fatal("Open with no connection was accepted")
 	}
 }
@@ -827,7 +827,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	const inForce = 90 * time.Second
-	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix, Reach: InProcess})
+	first, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
@@ -838,7 +838,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 	// THE SECOND NODE ASKS FOR SOMETHING ELSE, as nodes with differing
 	// Tier A files do.
-	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix, Reach: InProcess})
+	second, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
 	}
@@ -872,12 +872,12 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	// THE FLEET STARTED AT ONE REPLICA, as a single node or early cluster does.
-	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
 	// AND THE OPERATOR RAISED IT; the buckets are still single-replica.
-	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3, Reach: InProcess})
+	_, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3, Reach: InProcess})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
 			"coordination and reported itself healthy — the leases, the " +
@@ -895,7 +895,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// AND A BUCKET AT OR ABOVE THE CONFIG STILL OPENS, so a single-replica
 	// development node is not locked out of a replicated fleet.
-	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
 	}

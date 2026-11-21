@@ -1529,10 +1529,11 @@ coordination:
                                     #   address to give it: the coordination KV
                                     #   lives on the stream's OWN broker. On the
                                     #   embedded one it holds a second
-                                    #   connection, and both are watched: either
-                                    #   closing for good stops the node, so it
-                                    #   never holds live leases over one while
-                                    #   the one carrying its inbox is gone
+                                    #   connection, and holds ride a lease
+                                    #   connection of their own; each is
+                                    #   watched: any closing for good stops the
+                                    #   node, so it never holds live leases
+                                    #   while the one carrying its inbox is gone
   # lease_ttl_seconds: 45           # 0 takes the seat layer's own measured
                                     #   default of 45s — three heartbeat
                                     #   intervals, so two consecutive missed
