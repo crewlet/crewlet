@@ -7607,9 +7607,9 @@ export interface ArtifactCommentThread {
   updated_at: string;
   remarks: ArtifactCommentRemark[];
   /** The thread began on the page before: these are the rest of its remarks. */
-  continued?: boolean;
+  continued: boolean;
   /** The next page carries more of this thread's remarks. */
-  remarks_cut?: boolean;
+  remarks_cut: boolean;
 }
 
 /** `artifact_comments{id, version, cursor}`: a page of the threads, placed on the version asked;

@@ -39,6 +39,8 @@ function thread(over: Partial<ArtifactCommentThread> = {}): ArtifactCommentThrea
     created_at: "2026-11-14T10:00:00Z",
     updated_at: "2026-11-14T10:00:00Z",
     remarks: [],
+    continued: false,
+    remarks_cut: false,
     ...over,
   };
 }

@@ -796,7 +796,7 @@ func TestTheAtlasLogShowsAReaderOnlyWhatTheirAtlasShows(t *testing.T) {
 	}
 	// A COUNT THE LOG CUT AT ITS BYTES SAYS SO: a reader is told some days and
 	// entries are missing rather than shown them as quiet.
-	if answer := askAtlas(member, t, s, "atlas_activity", nil); answer["truncated"] != nil {
+	if answer := askAtlas(member, t, s, "atlas_activity", nil); answer["truncated"] != false {
 		t.Errorf("a whole count says truncated %v", answer["truncated"])
 	}
 	cut := acmeLog(t)

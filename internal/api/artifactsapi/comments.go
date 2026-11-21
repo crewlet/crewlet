@@ -126,8 +126,8 @@ type CommentThread struct {
 
 	// Continued says this thread began on the page before, and these are the
 	// rest of its remarks; RemarksCut that the next page carries more.
-	Continued  bool `json:"continued,omitempty"`
-	RemarksCut bool `json:"remarks_cut,omitempty"`
+	Continued  bool `json:"continued"`
+	RemarksCut bool `json:"remarks_cut"`
 }
 
 // CommentRemark is one remark as the question answers it; a removed one keeps

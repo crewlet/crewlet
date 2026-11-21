@@ -126,7 +126,7 @@ type AtlasActivityAnswer struct {
 	// Truncated says the log's count stopped at the bytes one read answers
 	// ([atlasdomain.Activity.Truncated]): some days and entries are missing,
 	// and a reader says so rather than draws them as quiet.
-	Truncated bool `json:"truncated,omitempty"`
+	Truncated bool `json:"truncated"`
 }
 
 // AtlasReviewAnswer is one page of what waits for a person in the atlas:

@@ -286,7 +286,7 @@ export function activityAnswer(fixture: AtlasFixture): AtlasActivityAnswer {
     from: new Date(from).toISOString(),
     days,
     entries: out,
-    ...(fixture.activityCut ? { truncated: true } : {}),
+    truncated: fixture.activityCut ?? false,
   };
 }
 
