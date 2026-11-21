@@ -128,7 +128,6 @@ func signerOfUser(t *testing.T, u processUser) signer {
 // global) or membership (system account).
 // Refused: the operator's key in process, the engine's over a socket, a leaf
 // key as an operator, a key off the ring, a failed proof, a username or token.
-//
 // Mutations, each red: engine or lease key over TCP; any validly signed nkey;
 // operator, system or lease key on the wrong account; leaf key as operator;
 // leaf checked against the active key only (the k1 row).
