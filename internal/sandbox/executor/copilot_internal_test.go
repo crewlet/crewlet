@@ -501,6 +501,24 @@ func TestACopilotInboxIDIsTheJobsAndTheNotes(t *testing.T) {
 	}
 }
 
+// A relaunch of a Copilot session never under-counts its next request: it is
+// judged in a box that can say no compaction point, so it is always told
+// summarized; no reading thins its tellings; a brief counts a token a byte.
+//
+// Mutation: judge it by no rule (FirstRequestNone), which holds it whole
+// whatever its brief, or give it a point reader — the case fails.
+func TestACopilotSessionIsJudgedOnTheSafeSide(t *testing.T) {
+	got := (Copilot{}).sessionTraits()
+	want := sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone, Charge: 1}
+	if got != want {
+		t.Fatalf("sessionTraits = %+v, want %+v", got, want)
+	}
+	point, err := NewCopilot().ReadBoxPoint(t.Context(), sandbox.NewFakeSandbox("b"), sandbox.PointAsk{})
+	if err != nil || point.Mark != sandbox.PointUnread {
+		t.Fatalf("the box's point = %+v (%v), want unread, so it never proves a session whole", point, err)
+	}
+}
+
 // The poll ceiling is the contract's per-message bound, which Copilot was
 // measured to carry whole many times over.
 //

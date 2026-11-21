@@ -38,6 +38,7 @@ var (
 	_ inboxDelivery     = Copilot{}
 	_ artifactHolder    = Copilot{}
 	_ notesOffExplainer = Copilot{}
+	_ sessionJudge      = Copilot{}
 )
 
 // NewCopilot returns the runner.
@@ -591,4 +592,23 @@ func (Copilot) artifacts(p Paths) (files, dirs []string) {
 func (Copilot) notesOffWhy() string {
 	return "a managed policy that allows only managed hooks (allowManagedHooksOnly), which stops the run's " +
 		"notes extension, or an extension Copilot failed to load, which its own log names"
+}
+
+// copilotChargeBytes is the fewest bytes a Copilot session's brief is counted
+// at a token: one, the most tokens any estimate can make of n bytes, since
+// Copilot's own estimate was not read.
+const copilotChargeBytes sandbox.Charge = 1
+
+// sessionTraits is how a relaunch judges a Copilot session, each value the one
+// that never under-counts its next request, since Copilot compacts at a share
+// of a model window this build cannot read (its catalogue's, behind a sign-in):
+//   - FirstRequestBox, with no point its box can say ([Runner.ReadBoxPoint]
+//     marks it unread) and no count of the session: the relaunch always hands
+//     the summarized telling, retelling the round's calls from its start;
+//   - CallKeyingNone: no reading of the session thins a telling, so every
+//     call after the save point is told;
+//   - [copilotChargeBytes].
+func (Copilot) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone,
+		Charge: copilotChargeBytes}
 }
