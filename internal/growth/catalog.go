@@ -331,8 +331,9 @@ var (
 	catalogs   = map[string]func() Catalog{}
 )
 
-// Register adds a product's catalog, from its package's init: an invalid or
-// second catalog for a kind is a build fault, and panics.
+// Register adds a product's catalog, from its package's init: an invalid
+// catalog, a second one for a kind, or a tool another catalog lists is a
+// build fault, and panics.
 func Register(c Catalog) { RegisterFunc(c.Kind, func() Catalog { return c }) }
 
 // RegisterFunc adds kind's catalog, built and validated at first use, so a
@@ -344,7 +345,7 @@ func RegisterFunc(kind string, build func() Catalog) {
 	if _, dup := catalogs[kind]; dup {
 		panic("growth: a second catalog for " + kind)
 	}
-	catalogs[kind] = sync.OnceValue(func() Catalog {
+	built := sync.OnceValue(func() Catalog {
 		c := build()
 		if c.Kind != kind {
 			panic("growth: the catalog registered as " + kind + " says it is " + c.Kind)
@@ -354,6 +355,20 @@ func RegisterFunc(kind string, build func() Catalog) {
 		}
 		return c
 	})
+	// A TOOL NAME IS ONE PRODUCT'S. Each starts with its kind's (Validate), so
+	// two catalogs can share one only where one kind begins the other's: those
+	// pairs alone are built here to compare, and every other stays lazy.
+	for other, theirs := range catalogs {
+		if !strings.HasPrefix(kind+"_", other+"_") && !strings.HasPrefix(other+"_", kind+"_") {
+			continue
+		}
+		for _, t := range built().Tools {
+			if _, listed := theirs().Tool(t.Name); listed {
+				panic("growth: " + kind + " lists tool " + t.Name + ", which " + other + " lists")
+			}
+		}
+	}
+	catalogs[kind] = built
 }
 
 // Catalogs is every registered catalog, by kind.

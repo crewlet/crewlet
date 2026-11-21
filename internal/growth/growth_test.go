@@ -209,7 +209,7 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 // lists is refused at registration, though each name starts with its own
 // kind's, since one kind may begin another's.
 //
-// Mutation: drop Register's walk over the other catalogs, and the second
+// Mutation: drop RegisterFunc's walk over the other catalogs, and the second
 // registers.
 func TestACatalogListingAnothersToolIsRefused(t *testing.T) {
 	t.Parallel()
@@ -377,20 +377,25 @@ func TestARoleOffersTheClassesOfWhatItMayCall(t *testing.T) {
 }
 
 // A CATALOG REGISTERED AS A FUNCTION IS BUILT AT FIRST USE, once: a large
-// catalog costs nothing at init.
+// catalog costs nothing at init, beside a catalog whose kind neither begins
+// its own nor is begun by it, which can share none of its tool names.
 //
 // Mutation: build at registration, or rebuild on each read, and the counter
 // reads one before any read, or two after the second.
 func TestALazyCatalogIsBuiltOnceAtFirstUseAndValidated(t *testing.T) {
+	renamed := func(kind string) growth.Catalog {
+		c := validCatalog()
+		c.Kind = kind
+		for i := range c.Tools {
+			c.Tools[i].Name = kind + strings.TrimPrefix(c.Tools[i].Name, "test_ads")
+		}
+		return c
+	}
+	growth.Register(renamed("lazy_beside"))
 	builds := 0
 	growth.RegisterFunc("lazy_ads", func() growth.Catalog {
 		builds++
-		c := validCatalog()
-		c.Kind = "lazy_ads"
-		for i := range c.Tools {
-			c.Tools[i].Name = "lazy_" + c.Tools[i].Name
-		}
-		return c
+		return renamed("lazy_ads")
 	})
 	if builds != 0 {
 		t.Fatalf("the catalog was built %d times at registration", builds)
