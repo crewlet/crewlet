@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -23,40 +23,10 @@ func Requirements(c *config.Company) []setup.Requirement {
 	if c != nil && c.Integrations.GoogleAnalytics != nil {
 		enabled = c.Integrations.GoogleAnalytics.Enabled
 	}
-	reqs := []setup.Requirement{{
-		// Hidden and on: connecting a switched-off integration is not a
-		// thing anybody means.
-		Field: "enabled", Label: "Let agents reach Google Analytics", Kind: setup.KindToggle,
-		ConfigPath: "integrations.google_analytics.enabled", Required: true, Hidden: true, Default: "true",
-	}}
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
-	if email := readerEmail(c); email != "" {
-		reqs = append(reqs, setup.Requirement{
-			Field: "reader", Label: "Company reader", Kind: setup.KindAddIdentity,
-			// The form draws it after the role: "Viewer: enough to read ...".
-			Hint: "enough to read every report; it changes nothing.",
-			Identity: &setup.IdentityStep{
-				Email: email, Role: setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
-				Where: setup.IdentityWhere{URL: accessManagementURL,
-					Words: "Admin, Property access management, Add users"},
-				Level: "company", State: "unknown",
-			},
-		})
-	}
-	return reqs
-}
-
-// readerEmail is the company's reader's email, "" where the Google Cloud
-// connection names no provisioner to read its identity project from.
-func readerEmail(c *config.Company) string {
-	if c == nil || c.Integrations.GoogleCloud == nil || c.Integrations.GoogleCloud.Provisioning == nil {
-		return ""
-	}
-	identity, ok := config.GoogleCloudServiceAccount(c.Integrations.GoogleCloud.Provisioning.Provisioner)
-	if !ok {
-		return ""
-	}
-	return googleauth.AccountEmail(googleauth.ReaderAccountID(c.Name), identity)
+	return append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
+		googlegrowth.Reader(c, setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
+			setup.IdentityWhere{URL: accessManagementURL, Words: "Admin, Property access management, Add users"},
+			"enough to read every report; it changes nothing.")...)
 }
 
 // Guide is what the connect form says around its fields.

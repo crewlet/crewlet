@@ -107,11 +107,8 @@ func (c *Client) Send(ctx context.Context, handle string, req Request) ([]byte, 
 		body = req.Body
 	}
 	var raw json.RawMessage
-	if req.Reads() {
-		err = conn.DoRead(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
-	} else {
-		err = conn.Do(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
-	}
+	err = conn.Send(ctx, googleauth.Call{Method: req.Op.Method, Address: req.URL(), Bearer: bearer, Header: req.Header,
+		Body: body, Reads: req.Reads()}, &raw)
 	if err != nil {
 		return nil, &CallError{FailureOf(err), c.refused(req, err)}
 	}

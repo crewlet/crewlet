@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -58,6 +59,9 @@ type Request struct {
 	Query   url.Values
 	// Params are the path parameters the call gave, by name.
 	Params map[string]string
+	// Header is what the API asks beyond the engine's own headers: Google
+	// Ads' login-customer-id, naming the manager an account is reached through.
+	Header http.Header
 	// Account is set by the product: "properties/123", a site, a customer;
 	// "" where the call acts in none, and the log then names its target.
 	Account string
