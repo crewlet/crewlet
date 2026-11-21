@@ -1,41 +1,27 @@
 package googlecloud
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// Google holds an account ID to 6 to 30 lowercase letters, digits and dashes,
-// fixed at creation; a display name to 100 bytes and a description to 256.
-// `crewlet-` and a 17-character handle slug, a dash and 4 hex characters of the
-// company and handle are at most 30, so two companies sharing an identity
-// project, or two handles alike for 17 characters, never collide.
+// Google holds a display name to 100 bytes and a description to 256.
 const (
-	accountPrefix    = "crewlet-"
-	handleSlugMax    = 17
-	accountHashChars = 4
-	displayNameMax   = 100
-	descriptionMax   = 256
+	accountPrefix  = "crewlet-"
+	handleSlugMax  = 17
+	displayNameMax = 100
+	descriptionMax = 256
 )
 
-// AccountID is the ID one seat's service account is created under. It labels
-// the account and never identifies it: the ledger keeps its unique ID.
+// AccountID is the ID one seat's Google Cloud service account is created
+// under: `crewlet-`, a 17-character handle slug, a dash and 4 hex characters
+// of the company and handle ([googleauth.ServiceAccountID]).
 func AccountID(company, handle string) string {
-	slug := strings.TrimRight(cut(org.Slugify(handle), handleSlugMax), "-")
-	if slug == "" {
-		slug = "agent"
-	}
-	sum := sha256.Sum256([]byte(org.Slugify(company) + "/" + strings.TrimSpace(handle)))
-	return accountPrefix + slug + "-" + hex.EncodeToString(sum[:])[:accountHashChars]
-}
-
-// AccountEmail is the email an account ID has in the identity project.
-func AccountEmail(id, identity string) string {
-	return id + "@" + identity + ".iam.gserviceaccount.com"
+	return googleauth.ServiceAccountID(accountPrefix, cut(org.Slugify(handle), handleSlugMax), "agent",
+		org.Slugify(company)+"/"+strings.TrimSpace(handle))
 }
 
 // displayName is what the console lists the account as.
