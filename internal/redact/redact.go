@@ -6100,7 +6100,8 @@ type settling[T textual] struct {
 	text          T
 	scanned, asks int
 	// ask, where a test sets it, answers in settle's place, so the test
-	// holds the asks a stream makes to a second reading of their holds.
+	// holds the asks a stream makes to a second reading of their holds
+	// (the tests' HeldToTheLoop); nil, the ask is settle's.
 	ask func(string) int
 }
 
