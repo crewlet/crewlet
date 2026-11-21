@@ -116,7 +116,7 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if tok := spec.Env[sandbox.GitTokenVar]; !strings.HasPrefix(tok, "chk-web-unit-1-") {
+	if tok := spec.Env[sandbox.GitTokenVar]; !strings.Contains(tok, ".chk-web-unit-1-") {
 		t.Errorf("the box's token is %q, want its check's", tok)
 	}
 	f.container.end(box, 0, "")

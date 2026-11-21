@@ -1,3 +1,4 @@
+
 # Configuration Reference
 
 Crewlet companies are defined across **two tiers** (design: [Configuration concept page](../concepts/configuration.md)).
@@ -158,7 +159,7 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   schedule whose fires are further apart never
                                         #   continues: every fire starts fresh
     max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
-                                        #   sessions may hold (33 MiB..64 GiB); past it a
+                                        #   sessions may hold (49 MiB..64 GiB); past it a
                                         #   capture releases the seat's oldest ENDED
                                         #   turns' sessions, keeping how each ended, never
                                         #   one a live turn was handed to continue; also
@@ -282,13 +283,18 @@ roles:
     llm_judge: haiku                    # cheap/fast model for the round-cap extension judge
 ```
 
-Each names a `providers.llm` key (see [Providers](#providers)). Both calls run under a fixed deadline and pay a harness launch each, so they want a fast model, not the seat's own: see
+Each names a `providers.llm` key (see [Providers](#providers)). Both satellite
+calls run under a fixed deadline and pay a harness launch each, which is why they
+want a fast model rather than the seat's own — see
 [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency).
 
-`llm_judge` runs when the first-turn onboarding pass exhausts its tool-round cap and decides whether the pass is progressing (extend) or thrashing (fall through to rescue). It falls back to `llm` -> `"default"`. An
+`llm_judge` is invoked when the first-turn onboarding pass exhausts its tool-round cap;
+it decides whether the pass is making progress (extend) or thrashing
+(fall through to rescue).  Falls back to `llm` -> `"default"` if unset. An
 executor run is its harness's own loop, uncapped unless `role.sandbox.max_turns`
-(else `providers.sandbox.default_max_turns`) caps it; no judge extends it.
-See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge).
+(else `providers.sandbox.default_max_turns`) sets a cap, which no judge extends.
+See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge)
+section for details.
 
 See the [Turn Engine](../concepts/turn-engine.md) and [Agent Learning](../concepts/agent-learning.md) docs for what each field controls.
 

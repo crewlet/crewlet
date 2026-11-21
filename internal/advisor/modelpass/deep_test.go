@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,9 +57,11 @@ func host(t *testing.T) *toolsession.Host {
 // A DEEP RUN INVESTIGATES AND LISTS ONLY WHAT ITS READS SHOW: it reads the
 // snapshot and the allowlisted reads, says what it is doing as it goes, is
 // refused a read off the allowlist, and of what it submits keeps only the
-// findings whose every cited number is in an answer it read and whose
-// headline says no other number. Mutation: let a headline say a number no
-// fact cites, or a read outside the allowlist through, and a check fails.
+// findings whose every cited number is in an answer it read. A headline that
+// says a number no fact cites is sent back with that reason, and one still
+// saying it is said by the engine from its first fact; a number not where it
+// says is dropped. Mutation: let a headline's stray number through, or a read
+// outside the allowlist, and a check fails.
 func TestADeepRunInvestigatesAndListsOnlyWhatItsReadsShow(t *testing.T) {
 	t.Parallel()
 	d := planted(t)
@@ -90,20 +93,28 @@ func TestADeepRunInvestigatesAndListsOnlyWhatItsReadsShow(t *testing.T) {
 			{Name: VerdictTool, Args: `{"id":"A2","verdict":"confirmed","note":"p is out 11 hours",` +
 				`"numbers":[{"label":"Hours out","from":"read_1.entries[0].total_hours"}]}`}}},
 		{Text: "submitting", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
+		{Text: "submitting again", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
+		{Text: "submitting as it is", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
 	}}}}
 	var told []Progress
 	got := RunDeep(t.Context(), Deps{Provider: prov, ProviderKey: "p", Host: host(t),
 		Now: func() time.Time { return monday }}, DeepData{Data: d, Reads: reads}, DefaultDeepBounds,
 		func(p Progress) { told = append(told, p) })
-	if got.Status != advisor.PassDone || got.StoppedBy != StoppedDone || len(got.Findings) != 1 {
-		t.Fatalf("run = %+v, want one finding, done", got)
+	if got.Status != advisor.PassDone || got.StoppedBy != StoppedDone || len(got.Findings) != 2 {
+		t.Fatalf("run = %+v, want two findings, done", got)
 	}
-	if f := got.Findings[0]; f.Headline != "2 seats sat out 11 h on 19 Nov: p hit its usage limit 4 times." ||
-		len(f.Evidence) != 3 {
-		t.Errorf("finding = %+v", f)
+	headlines := []string{got.Findings[0].Headline, got.Findings[1].Headline}
+	if !slices.Contains(headlines, "2 seats sat out 11 h on 19 Nov: p hit its usage limit 4 times.") ||
+		!slices.Contains(headlines, "Times it hit its limit: 4.") {
+		t.Errorf("headlines = %q, want the grounded one as written and the stray one said from its first fact", headlines)
 	}
-	if got.Dropped[advisor.DropWords] != 1 || got.Dropped[advisor.DropWrongFact] != 1 {
-		t.Errorf("dropped %v, want the 99-hour headline and the wrong count", got.Dropped)
+	if len(got.Dropped) != 1 || got.Dropped[advisor.DropWrongFact] != 1 || got.Repaired[advisor.RepairEngineWords] != 1 {
+		t.Errorf("dropped %v, repaired %v: want the wrong count dropped and the stray headline said by the engine",
+			got.Dropped, got.Repaired)
+	}
+	sent := slices.IndexFunc(prov.Results(), func(r llmtest.Result) bool { return r.Name == SubmitTool })
+	if r := prov.Results()[sent]; !r.Failed || !strings.Contains(r.Output, "headline says 99, which no fact cites") {
+		t.Errorf("the first submission was answered %+v, want it sent back saying why", r)
 	}
 	if !slices.ContainsFunc(told, func(p Progress) bool { return p.Text == "reading capacity" }) ||
 		len(got.Progress) != len(told) {

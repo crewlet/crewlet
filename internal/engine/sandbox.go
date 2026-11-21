@@ -1276,6 +1276,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
 	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher), e.leads)
+	// AND EVERY WAKE A CONTINUATION OF THE RUN'S SESSION MAY HOLD, off the same
+	// record: each one read, and each its job was served and never read.
+	input.Resume.Wakes = e.runSteers.carriedWakes(in.Run)
 	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -2821,6 +2824,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// SHOWED IT TOOK is recorded delivered by every read of the job's box
 		// that settles its serves. See runsteer.go.
 		SteersConfirmed: e.runSteers.confirmed,
+		// AND EVERY WAKE A JOB A RELAUNCH REPLACED NEVER READ is reported once
+		// the relaunch's write removed it, its delivery left to a turn of its
+		// own. See wakeitem.go.
+		WakesEnded: e.runSteers.wakesEnded,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -2890,6 +2897,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// paused and no setup rewrites them (see
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
+		// A final take's wait for spool room, and the room held, recorded in
+		// the node's metrics. See spoolmeter.go.
+		Spools: spoolMeter{metrics: e.metrics},
 	}
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the

@@ -117,20 +117,16 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// WHAT TO RUN: the rules (an empty body, as before), or a deep run.
+	// ONE RUN, NO KIND TO CHOOSE: the checks, then the investigation where
+	// none concluded lately (ADR-0166). The body is empty, or {}.
 	raw, err := httpjson.ReadBody(w, r, maxAdvisorDecisionBytes)
 	if err != nil {
 		return
 	}
-	var body struct {
-		Kind advisordomain.RunKind `json:"kind"`
-	}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err = json.Unmarshal(raw, &body); err != nil || !body.Kind.Valid() {
-			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-				"detail": `the body is {"kind": "rules"} or {"kind": "deep"}`})
-			return
-		}
+	if body := bytes.TrimSpace(raw); len(body) > 0 && string(body) != "{}" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": "a run takes no body: it runs the checks, then the deep investigation where none concluded lately"})
+		return
 	}
 	pending, err := a.advisor.PendingRequests(r.Context(), statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
@@ -151,7 +147,7 @@ func (a *App) serveAdvisorRun(w http.ResponseWriter, r *http.Request) {
 	// THE ASKER BY THE NAME THE CALL RECORDS: a seat's handle, or an API
 	// token's or an operator's own name, never a seat that is not there.
 	if _, err := a.advisor.RequestRun(r.Context(), call, advisordomain.RunRequest{Run: run,
-		By: call.By.Name, RunKind: body.Kind}); err != nil {
+		By: call.By.Name}); err != nil {
 		refuseAdvisorLog(w, r, log, "advisor_run", err)
 		return
 	}

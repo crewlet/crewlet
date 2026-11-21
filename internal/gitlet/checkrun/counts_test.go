@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/checkrun"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -64,11 +65,12 @@ func numbered(n, width int) string {
 }
 
 // A FAILED RUN COUNTS ITS OUTPUT'S LINES IN ITS BOX, container and e2b alike: an output shorter
-// than the tail is counted whole from line 1; a longer one up to the tail's end, the tail cut where
-// the byte before it is no newline and whole where it is one; in each, the tail's first line plus
-// its own lines less one is the output's last.
+// than the tail is counted whole from line 1; a longer one up to the tail's end, the tail opening on
+// a whole line whether or not the byte before CheckTailBytes is a newline; a last line longer than
+// the tail is its end alone, cut; in each, the tail's first line plus its own lines less one is the
+// output's last.
 //
-// Mutation: read CheckTailBytes rather than one byte more (the cut is never seen, red).
+// Mutation: leave KeepEnd's mark on a line kept in part and the ending uncut (red).
 func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
 	t.Parallel()
 	// 100-byte lines put the byte before a 16 KiB tail inside a line; a last line of 84 bytes
@@ -88,7 +90,8 @@ func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
 				output string
 				lines  int
 				cut    bool
-			}{{numbered(1201, 13), 1201, false}, {cutTail, 410, true}, {wholeTail, 410, false}} {
+			}{{numbered(1201, 13), 1201, false}, {cutTail, 410, false}, {wholeTail, 410, false},
+				{"a\n" + strings.Repeat("x", gitlet.CheckTailBytes+100) + "\n", 2, true}} {
 				key := f.queue(oidOf(fmt.Sprintf("%x", i+10)), d)
 				c.end(c.box(t), 1, tc.output)
 				f.ended(key)
@@ -104,6 +107,32 @@ func TestAFailedRunCountsItsOutputsLinesInItsBox(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A KEY'S BLOCK THE REDACTION TAKES OUT MOVES NO LINE ABOVE IT: an output whose tail holds a
+// private key's block, which the tail shows as one marker, numbers its tail from line 1, as the
+// lines it shows run.
+//
+// Mutation: count the output's newlines raw, less none the redaction took out (numbered past 1, red).
+func TestAKeysBlockTheRedactionTakesOutMovesNoLineAboveIt(t *testing.T) {
+	t.Parallel()
+	const line = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"
+	output := "starting\nthe key:\n-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(line+"\n", 4) +
+		"Zq9XwV==\n-----END RSA PRIVATE KEY-----\nFAIL web\n"
+	if strings.Contains(redact.Secrets(output), "Zq9XwV") {
+		t.Fatal("the redaction keeps the key's body; the case needs one it takes out")
+	}
+	f := newFleet(t)
+	f.runner(f.options("git-a", 1, &order{nodes: []string{"git-a"}}))
+	key := f.queue(oidOf("a"), def("unit", time.Minute))
+	f.container.end(f.container.box(t), 1, output)
+	f.ended(key)
+	got := f.detail(key)
+	if strings.Contains(got.Tail, "Zq9XwV") || got.TailFirstLine != 1 ||
+		got.LogLines != gitlet.TailLines(got.Tail) {
+		t.Fatalf("the tail %q is numbered from %d of %d lines; want it redacted, from 1, its own lines",
+			got.Tail, got.TailFirstLine, got.LogLines)
 	}
 }
 

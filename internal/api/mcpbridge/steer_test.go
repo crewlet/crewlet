@@ -744,10 +744,10 @@ func TestAReadBodyIsCapped(t *testing.T) {
 }
 
 // A READ NAMING EVERYTHING ONE JOB CAN BE OWED IS TAKEN: a turn's notes and
-// the job's own items. OpenCode's plugin confirms every note it owes in one
-// read and sends that read again on every retry, so a read refused for its
-// count would confirm nothing more for the rest of the run. One more is
-// refused before the inbox is asked.
+// the job's own items, its late calls and its wakes. OpenCode's plugin
+// confirms every note it owes in one read and sends that read again on every
+// retry, so a read refused for its count would confirm nothing more for the
+// rest of the run. One more is refused before the inbox is asked.
 func TestAReadNamingEveryNoteAndItemOneJobCanOweIsTaken(t *testing.T) {
 	t.Parallel()
 	f := newSteerFixture(t, time.Minute)
@@ -764,7 +764,7 @@ func TestAReadNamingEveryNoteAndItemOneJobCanOweIsTaken(t *testing.T) {
 		_ = res.Body.Close()
 		return res.StatusCode
 	}
-	owed := steer.MaxTurnNotes + sandbox.MaxJobItems
+	owed := steer.MaxTurnNotes + sandbox.MaxJobItems + sandbox.MaxJobWakes
 	ids := make([]string, owed+1)
 	for i := range ids {
 		ids[i] = "n-" + strconv.Itoa(i+1)

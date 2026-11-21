@@ -702,6 +702,16 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 			// The apply rewrites only the words ([editComment]).
 			edited := stored
 			edited.Body, edited.UpdatedAt = patch.Comment.Body, at
+			// An answer that chose still says what it chose once rewritten.
+			if edited.Choice != "" && edited.Answers != nil {
+				ask, err := readAsk(ctx, tx, taskID, *edited.Answers)
+				if err != nil {
+					return TaskPatch{}, err
+				}
+				if err := checkStatesChoice(taskID, ask.id, ask.decision, &edited); err != nil {
+					return TaskPatch{}, err
+				}
+			}
 			patch.Comment = &edited
 			return patch, nil
 		})
@@ -856,6 +866,13 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	if patch.Comment != nil {
 		if err := checkCommentShape(id, patch.Comment); err != nil {
 			return WriteResult{}, err
+		}
+		// A NEW POST SAYS SOMETHING: an edit, a resolve and a removal are formed
+		// from the stored row in their decide, and only a removal blanks it.
+		if postsComment(patch, kind) && strings.TrimSpace(patch.Comment.Body) == "" {
+			return WriteResult{}, invalid("comment %s on task %s says nothing: a "+
+				"comment carries words, and an answer that chooses states its "+
+				"choice in them (ChoiceWords)", patch.Comment.ID, id)
 		}
 	}
 	if patch.FormerKeys != nil {
@@ -1220,6 +1237,9 @@ func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment
 		return err
 	}
 	if err = checkChoice(task, ask.id, ask.decision, comment.Choice); err != nil {
+		return err
+	}
+	if err = checkStatesChoice(task, ask.id, ask.decision, comment); err != nil {
 		return err
 	}
 	// AN ACT'S APPROVING CHOICE IS ITS KIND'S APPROVAL, decided as one by

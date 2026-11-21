@@ -385,19 +385,20 @@
 // beside the base tier, a reading's 43 apart ([HoldingsReadsAtOnce]).
 // One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
 // the count and the next request's estimate, 5.7 s loaded) is through in
-// 11.4 s, within the 27 s.
-// Behind the slot's slowest holder, loaded, it is not: a pass keeping more than
-// [collectionBaseRecords] records holds the slot to its end whatever its lines,
-// so a collection whose chain keeps the records of 2^20 short lines of blocks
-// of an empty kind, at the bound (18.3 to 19.7 s with the count alone, 20.7 to
-// 21.6 s with the next request's estimate,
+// 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded, it is not:
+// a pass keeping more than [collectionBaseRecords] records holds the slot to
+// its end whatever its lines, so a collection whose chain keeps the records of
+// 2^20 short lines of blocks of an empty kind, at the bound (18.3 to 19.7 s
+// with the count alone, 20.7 to 21.6 s with the next request's estimate,
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
-// waiter, a later one, or one behind a take's piece streaming from a slow box
-// ends with [errLargeWait] and reads as no reading (count unread), the safe
-// side, as a read past MainThreadReadWait already is. The wait is spent inside
-// that wait, never added to it.
+// waiter, a later one, or one behind a take's piece (which holds the slot its
+// whole scrub, 238 s at the bound) ends with [errLargeWait] and reads as no
+// reading (count unread), the safe side, as a read past MainThreadReadWait
+// is, the wait spent inside it. The longest piece the archive's bound admits,
+// a 46 MiB OpenCode image (a 64.3 MB data URI), held it 8.7 s (4.8 from the
+// memo) and 19 MiB in a real take.
 //
 // # A hook's note, confirmed off its job's main thread
 //
@@ -834,46 +835,44 @@
 // # The scrub's bounds, and what it holds
 //
 // The archive is the box's own: its code can write a gzip that expands a
-// thousandfold, a value nested a million deep, or a session of nothing but
-// text the redaction has to read. So the scrub reads at most [scrubExpansion]
-// times the archive's bound of plaintext in one reading ([scrubBounds]) and
-// rewrites no value nested deeper than jsonscan.MaxDepth as JSON (a
-// transcript's line or a `.json` file so nested is text, and an export is
-// refused). A session past the plaintext, or one whose text the redaction
-// refuses ([errRedaction], what the redaction said read off its error, and
-// redact.ErrDecidedEarly whether its stream decided a window before what it
-// read there was known, at a write or at its close), is refused, stamped with
-// why, rather than costing the engine host its memory; and the whole scrub is
-// held to the take's time (internal/sandbox's SessionScrubWait). A panic in
-// the scrub is CONTAINED on the take's own goroutine (scrubContained, take.go),
-// which reads every byte of the archive, a `.json` file's two readings
-// included, and refuses the take with the panic's message; one in the meter
-// beside it measures nothing (meterContained, measure.go); each is told under
-// panics.ScopeSessionTake.
+// thousandfold, a value nested a million deep, or a session of nothing but text
+// the redaction has to read. So the scrub reads at most [scrubPlainMax] of
+// plaintext in one reading ([scrubBounds]) and rewrites no value nested deeper
+// than jsonscan.MaxDepth as JSON (a transcript's line or a `.json` file so
+// nested is text, and an export is refused). A session past the plaintext, or
+// one whose text the redaction refuses ([errRedaction], what the redaction said
+// read off its error, and redact.ErrDecidedEarly whether its stream decided a
+// window before what it read there was known, at a write or at its close), is
+// refused, stamped with why, rather than costing the engine host its memory;
+// and the whole scrub is held to the take's time (internal/sandbox's
+// SessionScrubWait). A panic in the scrub is CONTAINED on the take's own
+// goroutine (scrubContained, take.go), which reads every byte of the archive, a
+// `.json` file's two readings included, and refuses the take with the panic's
+// message; one in the meter beside it measures nothing (meterContained,
+// measure.go); each is told under panics.ScopeSessionTake.
 //
 // AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
 // text scrubs at once (a line or a `.json` file read both ways), each its
 // redaction's stages (redact.Stream's own figure) beside its stage's chunk, a
-// [valueStream] and a string's encoder;
-// two JSON rewrites, each its scanner, its read buffer and a frame a container
-// open; the readers and writers of the archive's gzip and tar; and the plan, a
-// sixteenth of the plaintext at most and a 512th for its texts' digests. About
-// 116 MiB at the archive's bound, 16.5 MiB of it the plan, which a real
-// session leaves nearly empty. A test holds the figure at a
-// smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
-// real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
-// On two cores of the build machine, two runs:
+// [valueStream] and a string's encoder; two JSON rewrites, each its scanner,
+// its read buffer and a frame a container open; the readers and writers of
+// the archive's gzip and tar; and the plan, a sixteenth of the plaintext at
+// most and a 512th for its texts' digests. About 116 MiB at the scrub's bound,
+// 16.5 MiB of it the plan, which a real session leaves nearly empty. A test
+// holds the figure at a smaller bound, and BenchmarkTheScrubAtThePlaintextBound
+// measures it at the real one, both readings of the tar from a file on disk.
+// On two cores of the build machine:
 //
 //	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
 //	a million short lines:     33.9 s a scrub, held 1.5 MiB (160 MiB from 19 MiB)
 //	tiny definitions:          29.8 to 30.8 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
+//	a string of `pwd=x `:      237.7 s a scrub
+//	a file of `pwd=x` lines:   234.8 s a scrub
+//	`pwd=` lines, torn:        177.4 s a scrub
 //
-// Against SessionScrubWait, two minutes for the whole take's scrub with the
-// archive's two readings out of a box at its floor pace of a mebibyte a second
-// among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
-// for the scrub's own work where the two do not overlap), each arm fits, the
-// short lines the closest; the string redacts each byte once, as JSON in its
-// first reading, and its second copies it as checked.
+// The last three, a harness's tool results, set SessionScrubWait (its sum and
+// why a take past it fails closed are in code-sandbox.md). The string is
+// redacted once, as JSON in its first reading.
 //
 // # A definition the scrub renamed is cut out of its line
 //

@@ -538,7 +538,8 @@ type Comment struct {
 	Act *delegated.Act `json:"act,omitempty"`
 
 	// Choice is the option an ANSWER chose, by id, checked against the
-	// decision of the ask it answers inside the write's own snapshot.
+	// decision of the ask it answers inside the write's own snapshot, where
+	// its Body is checked to say so ([ChoiceWords]).
 	Choice string `json:"choice,omitempty"`
 
 	Resolved   bool       `json:"resolved,omitempty"`

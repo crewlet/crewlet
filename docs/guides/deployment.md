@@ -1,3 +1,4 @@
+
 # Deployment
 
 **Crewlet requires no infrastructure services.** The engine is one
@@ -96,123 +97,126 @@ until it ends
 
 ### Every machine's clock
 
-**Keep every machine's clock synchronised**: every node's, and every server's
-of an external NATS cluster. Several rules judge an instant one machine
-stamped by another machine's clock. Every one assumes every machine's clock
-keeps within an hour of the fleet's, so any two within two hours of each other:
+**Keep every machine's clock synchronised** — every node's, and every server's
+of an external NATS cluster. Several of the engine's rules judge an instant
+one machine stamped by another machine's clock, and every one assumes every
+machine's clock keeps within an hour of the fleet's, so any two within two
+hours of each other:
 
 - The [object collector](../concepts/object-store.md#collection-and-audit)
-  deletes an object no row names only once its key (minted by the uploading
-  node) and the store's own write time are both more than a day old by the
-  collector node's clock, while a write may still name a key twelve hours old
-  by the deciding node's clock. That leaves twelve hours: a collector's clock
-  further ahead of the writer's than that deletes an object a write still names.
+  deletes an object no row names only once its key, minted by the node that
+  uploaded it, and the store's own record of when it was written are both more
+  than a day old by the clock of the node running the collector, while a write
+  may still name a key twelve hours old by the clock of the node deciding it.
+  That leaves twelve hours, and a collector's clock running further ahead of
+  the writer's than that deletes an object a write still names.
 - Gitlet's `code-retention` duty removes a
   [retired pack's](../concepts/object-store.md#live-retired-and-derived-references)
-  row once the broker-stamped retirement instant is a day old by the duty
-  holder's clock: two hours and thirty-nine minutes past the longest read of the
-  largest pack. A duty holder's clock further ahead of the broker's than that
-  deletes a pack a clone is still reading.
+  row once the instant the broker stamped on its retirement is a day old by the
+  clock of the node holding the duty: two hours and thirty-nine minutes past
+  the longest read of the largest pack, so a duty holder's clock running
+  further ahead of the broker's than that deletes a pack a clone is still
+  reading.
 - A turn's hold on a
   [scratch repository](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)
   or on a seat's branch ([the ref lifecycle](../concepts/gitlet.md#the-ref-lifecycle))
-  is recorded on the repository only after 22 hours without activity, or the
-  branch 334 hours unset, by the turn's node's clock, while `code-retention`
-  judges the same broker-stamped activity by its own clock against a day at the
-  shortest, or the branch's fourteen days. The two hours between them are all
-  the margin: a turn's node whose clock runs further behind the duty holder's
-  can lose a scratch repository or a seat's branch a live turn still holds.
-- A ref drop (the commit a force-push or deletion moved a branch or tag off) is
-  kept fourteen days after the broker's instant on that push, judged by the
+  is recorded on the repository only once it has gone 22 hours without
+  activity, or the branch 334 hours unset, by the clock of the node running the
+  turn, while the `code-retention` pass judges the same broker-stamped activity
+  by its own clock against a day at the shortest, or the branch's fourteen
+  days. The two hours between them are all the margin there is, so a turn's
+  node whose clock runs further behind the duty holder's than that can lose a
+  scratch repository, or a seat's branch, that a live turn still holds.
+- A ref drop, the commit a force-push or a deletion moved a branch or tag off,
+  is kept fourteen days after the broker's instant on that push, judged by the
   clock of the node expunging the repository
   ([retention and history](../concepts/gitlet.md#retention-and-history)). That
-  is a policy's edge, not a margin: a clock past the bound moves it by the
-  clock's error, so force-pushed history can go that much before or after its fortnight.
+  is a policy's edge rather than a margin: a clock past the bound moves it by
+  the clock's error, and history force-pushed away can go that much before or
+  after its fortnight.
 - A seat's [daily push count](../concepts/gitlet.md#a-seats-push) is kept by
-  each repository's committer on the day its own clock reads, and an older day
-  is forgotten only once a committer has counted the seat on a day beginning a
-  whole day after it ended. That leaves a day: a committer whose clock runs more
-  than a day behind another's counts pushes on a day already forgotten, from
-  nothing, and can land them past `code.limits.pushes_per_seat_day`.
+  each repository's committer on the day its own clock reads, and a seat's
+  older day is forgotten only once a committer has counted the seat on a day
+  beginning a whole day after it ended. That leaves a day, so a committer whose
+  clock runs more than a day behind another's counts a seat's pushes on a day
+  already forgotten, from nothing, and can land them past
+  `code.limits.pushes_per_seat_day`.
 - A repository's [pushes by day](../concepts/gitlet.md#counting-pushes) are
   kept as long as its push history, which drops a push once the broker's
   instant on it is 181 days old, so a read's first day is refused once it is
-  181 days less two hours old by the reader's clock. A reader whose clock runs
-  further behind the broker's than that is counted short for the days already
-  dropped.
+  181 days less two hours old by the clock of the node reading it. A reader
+  whose clock runs further behind the broker's than that is counted short for
+  the days the history already dropped.
 - A [narrowed push history](../concepts/gitlet.md#narrowing-a-push-history)
   reads two hours past each end of a day or window it skips to or stops at,
   since a push's instant, stamped by whichever broker member led the stream,
-  can stand before that of an earlier push. A push stamped further out of order
-  can be left out of a narrowed page, while the unnarrowed history lists it.
+  can stand before that of a push that landed earlier. A push stamped further
+  out of order than that can be left out of a narrowed page, while the
+  unnarrowed history lists it.
 - A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
-  capture is stamped on the run's record by the taking node's clock. Any other
-  node reads it as still kept until its life and two hours have passed by its
-  own clock, about three hours and twelve minutes; a read standing by beside it
-  is read as standing until its window and two hours have passed, about four
-  hours and thirty-seven and a half minutes. Neither wait holds that long on
-  that reading alone: a turn's end holds each capture for its life, and each
-  standby for its window and its takeover's life, from the moment it first sees
-  it, on its own clock. A reader whose clock runs further ahead of the taker's
-  than the two hours can read a kept capture as abandoned, or a standby as gone.
+  capture is stamped on the run's record by the clock of the node taking it,
+  and any other node reads it as still being kept until its life and two
+  hours have passed by its own clock, about three hours and twenty minutes; a
+  read standing by beside it is read as standing until its window and two
+  hours have passed, about four hours and fifty and a half minutes.
+  Neither wait holds that long on that reading alone: a turn's end holds each
+  capture for its life, and each standby for its window and its takeover's
+  life, from the moment it first sees it, on its own clock. A reader whose
+  clock runs further ahead of the taker's than the two hours can read a
+  capture still being kept as abandoned, or a read still standing by as gone.
 - A capture's record still to be answered names an object whose key the
   spooling node's clock minted, and the executor log refuses it once it is
-  twelve hours old by the deciding node's clock, so a reader waits on the answer
-  until the key is twelve hours and two hours old by its own. A reader whose
-  clock runs further ahead of the log's than that stops waiting on a record the
-  log may still take.
+  twelve hours old by the clock of the node deciding the record, so a reader
+  waits on the record's answer until the key is twelve hours and two hours
+  old by its own. A reader whose clock runs further ahead of the log's than
+  that stops waiting on a record the log may still take.
 - A read of a [box on another node's host](../concepts/code-sandbox.md#local-sandboxes)
-  carries how long its asker waits, which the host counts on its own clock; the
-  host takes it until the asker's deadline by the asker's clock, and two hours
-  more by its own. A host whose clock runs ahead of its asker's by more than
-  those two hours and the read's wait refuses every such read, and its asker
-  hears a host that did not answer: a collection is handed back and asked again,
-  and a stop waits for the host.
-- A person's stop of a run whose box is on another node's host is given up with
-  nothing read once that host has been silent for the box timeout by the asking
-  node's clock, or once the stop is the box timeout and two hours old by that
-  clock, judged against the instant the deciding node's clock stamped on it. The
-  two hours keep the second from coming before the box timeout has passed in
-  real time, so a node whose clock runs further ahead of the decider's gives a
-  host up early, and writes off the stopped run's spend while the host may still
-  be restarting.
+  carries how long its asker waits, which the host counts on its own clock,
+  and the host takes it until the asker's deadline, by the asker's clock, and
+  two hours more by its own. A host whose clock runs ahead of its asker's by
+  more than those two hours and the read's wait refuses every such read, and
+  its asker hears a host that did not answer: a collection is handed back and
+  asked again, and a stop waits for the host.
+- A person's stop of a run whose box is on another node's host is given up
+  with nothing read once that host has been silent for the box timeout by the
+  clock of the node asking it, or once the stop is the box timeout and two
+  hours old by that clock, judged against the instant the deciding node's clock
+  stamped on it. The two hours keep the second from ever coming before the box
+  timeout has passed in real time, so a node whose clock runs further ahead of
+  the decider's than that gives a host up early, and writes off the stopped
+  run's spend while the host may still be restarting.
 
-Not among them: who holds a seat, a duty or a node's presence, and how long its
-lease has left on Settings › Nodes and in `fleet_health`. A lease is judged, and
-its time left read, on the coordination store's clock alone, and every node
+Who holds a seat, a duty or a node's presence is not among them, nor how long
+its lease has left on Settings › Nodes and in `fleet_health`: a lease is judged,
+and its time left read, on the coordination store's clock alone, and every node
 takes the store's word for it ([Coordination](../concepts/coordination.md#the-three-valued-answer)).
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
-The same hour bounds one step of a single machine's own clock: a node removes a
-session spool a crash left behind only once it is an hour older than the
-longest a keep may wait to open it, by that machine's clock, so NTP stepping
-the clock forward by up to an hour never removes a spool a keep is still about
-to upload.
-
 Every data node reads the fleet's clocks on its position heartbeat, every ten
-seconds, off the position register in the coordination store. Each data node's
-row carries the instant the node stamped on it and the instant the broker stored
-it at, so each row says how far that node's clock stands from the one broker
-member leading the register, and the median of every data node's is the
-**fleet's clock**. A node whose own clock stands more than an hour from the
+seconds, off the position register in the coordination store, which it reads on
+that beat anyway. Each data node's row there carries the instant the node
+stamped on it and the instant the broker stored it at, so each row says how far
+that node's clock stands from the one broker member leading the register, which
+stores every row, and the median of them is the **fleet's clock**: the median
+of every data node's. A node whose own clock stands more than an hour from the
 fleet's raises [`clock_skew`](../reference/alarms.md) about itself, and every
-node raises it about the broker member once that member's clock does: on an
+node raises it about the broker member once that member's clock does — on an
 embedded broker one of the data nodes, which then raises it about its own clock
 too; on an external NATS cluster the server leading the register's stream. So
 while no node raises it, every data node and that member keep within an hour of
-the fleet's clock, and any two of them within two hours, inside every margin
-above. With two data nodes neither clock outvotes the other, so both are named
-once they stand more than two hours apart.
-
-The alarm measures only data nodes: a node without the `data` role writes no
-row to the register, so nothing measures its clock, and NTP on it is all that
-keeps it inside the bound. That covers rules judged on a node that runs seats
-(a turn's hold, a capture's or standby's age, a box read's admission, a stop's
-give-up). The alarm names a clock that has already drifted rather than keeping
-one from drifting, and it cannot see the other servers of an external NATS
-cluster disagree with the one it reads, so run an NTP client (chrony,
+the fleet's clock, and any two of them — every member of an embedded broker
+among them — within two hours of each other, inside every margin above. A rule
+judged on the clock of a node that runs seats, a turn's hold, a capture's or a
+standby's age, a box read's admission or a stop's give-up above, rests on a
+clock the alarm measures only where that node holds data too: a node without
+the `data` role writes no row to the register, so nothing measures its clock,
+and NTP on it is all that keeps it inside the bound. With two data nodes
+neither clock outvotes the other, so both are named once they stand more than
+two hours apart. The alarm names a clock that has already drifted rather than
+keeping one from drifting, and it cannot see the other servers of an external
+NATS cluster disagree with the one it reads, so run an NTP client (chrony,
 systemd-timesyncd) everywhere the engine or its broker runs. [Watching a
 fleet](fleet.md#watching-a-fleet) says how to read the alarm across the nodes.
 
@@ -1861,7 +1865,10 @@ Every record in the coordination store's custody bucket is written by a claim, w
 
 #### What gets stored, and under which category
 
-`category` is the one column with a closed vocabulary, and it is what the dashboard's filter and `GET /events?category=` group by. It is a property of the **event type**, fixed in `internal/events`; this table is generated from that map and a guard test fails if the two drift.
+`category` is the one column with a closed vocabulary, and it is what the
+dashboard's filter and `GET /events?category=` group by. It is a property of
+the **event type**, fixed in `internal/events`, and this table is generated
+from that map — a guard test fails if the two drift.
 
 | Category | Event types |
 |---|---|
@@ -1871,45 +1878,78 @@ Every record in the coordination store's custody bucket is written by a claim, w
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `agent_capability_told`, `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `mcp_server_acted`, `model_acted`, `operator_acted`, `org_started`, `own_record_marked`, `org_stopped`, `seat_access_drift_restored`, `seat_grant_changed`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped`, `wake_held` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_placed`, `seat_provider_parked`, `seat_provider_released`, `seat_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_joined`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_placed`, `seat_provider_parked`, `seat_provider_released`, `seat_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_fire_superseded`, `scheduled_task_fired`, `task_assigned`, `work_pickup`, `delegated_review` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
-**The map is also the admission list.** A type not in it is not written and does not reach the activity feed; a *new* type nobody placed fails a test rather than vanishing. Each exclusion carries a **cause** (the same decision as a value, so the rule can be checked) and a reason for you, for when you look for a type and do not find it.
+**The map is also the admission list.** A type that is not in it is not written
+and does not reach the activity feed — so the exclusions below are
+deliberate and each one says why, and a *new* type that nobody placed fails a
+test rather than vanishing quietly.
+
+Each exclusion carries a **cause** as well as a reason. The reason is for you,
+when you come looking for a type and do not find it; the cause is the same
+decision as a value, so the rule below can be checked rather than remembered.
 
 | Excluded type | Cause | Why |
 |---|---|---|
-| `agent_turn_progress` | Intermediate state | A live-only signal as each LLM round opens, answers and runs tools; the matching `agent_phase_completed` is its durable record. It still drives the live projection. |
-| `agent_spawned` | Placement | Placement moves a seat between nodes on every rebalance, so a row per claim would log **scheduling**, not the company. It still drives the live projection ("is this seat running, and where"). |
-| `agent_terminated` | Placement | The counterpart, excluded for the same reason. It takes a released instance's call off a live screen; whether the seat still runs anywhere is the seat leases' to say. |
-| `raw_webhook` | Already recorded | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route; categorising it would store every delivery twice. |
-| `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox, same reason as `raw_webhook`. |
+| `agent_turn_progress` | Intermediate state | Fires as each LLM round opens, answers and runs its tools, as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
+| `agent_spawned` | Placement | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
+| `agent_terminated` | Placement | The counterpart, excluded for the same reason. It is what takes a released instance's call off a live screen rather than leaving it showing whatever it last did; whether the seat still runs anywhere is the seat leases' to say. |
+| `raw_webhook` | Already recorded | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
+| `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `executor_answer_given` | Already recorded | The command an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's control topic, and never a turn. What the answer became is **already** a row (`executor_answered`), and that a person gave it is their `operator_acted` row, same reason as `a2a_request`. |
-| `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node; a row would record one wiki edit once per fleet member. |
-| `operator_tools_changed` | Already recorded | A **nudge** between nodes that what one node's [operator catalogue](../reference/api-endpoints.md#operatormcp--your-own-assistant) is built from changed, so every node tells its listening MCP clients to list their tools again. The apply that moved the catalogue is **already** a row (`config_revision_applied`). |
-| `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`) and the reflection is `reflection_completed`, same reason as `a2a_request`. |
-| `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would repeat every event in it. |
-| `seat_inbox_waiting` | Periodic snapshot | A **snapshot** of the inboxes of the seats one node holds, published every five seconds when a count moved and every thirty when none did; each is superseded by the next, and the live projection holds the current one. |
-| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node every 15 seconds and at once when a budget window first refuses a charge; a row per report is about two million a year per node, for what the live projection and `GET /budgets` answer free. The audit log holds the spend itself: per phase in `agent_phase_completed` rows, per launch of an executor's run in `executor_collected` rows and per auxiliary purpose in `auxiliary_spend` rows, which every spend query folds. It still drives the live projection. |
+| `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `operator_tools_changed` | Already recorded | A **nudge** between nodes that what one node's [operator catalogue](../reference/api-endpoints.md#operatormcp--your-own-assistant) is built from changed, so every node tells the MCP clients listening on it to list their tools again — the listing may reach any node, and the last nudge follows the last node's change. The apply that moved the catalogue is **already** a row (`config_revision_applied`), so a durable row per node per change would record one revision once more per member of the fleet. |
+| `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
+| `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
+| `seat_inbox_waiting` | Periodic snapshot | A **snapshot** of what waits in the inboxes of the seats one node holds, published every five seconds when a count moved and every thirty when none did, so a durable row per report is readings the next one supersedes; the live projection holds the current one. |
+| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows, per launch of an executor's run in the `executor_collected` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
-**Nothing an anonymous caller can pace is written here.** Every categorised type also records who authors its rate: this company's own work (`engine`), an admitted caller such as an operator's token, a seat or a signed webhook delivery (`authenticated`), or anybody who can reach the listener with no credential (`anonymous`). Nothing may be in that third group: the file is on a disk you sized, and every backup, snapshot a lagging node installs and integrity check counts a copy of all of it. A failed login is the case to hold in mind, since anyone who can reach the API can author millions a day for free. So the per-attempt fact is the `crewlet.auth.attempts.failed` counter on the
-[metrics](../reference/metrics.md) exporter, and what becomes a row is `iam_login_failures`: one per node per minute, carrying a count per source and never what was presented, published by the engine's own flush loop and so paced by the engine. A type kept out for this reason is excluded with the cause `anonymous_rate`. A test over the taxonomy enforces it.
+**Nothing an anonymous caller can pace is written here.** Every categorised
+type also records who authors its rate — this company's own work (`engine`), an
+admitted caller such as an operator's token, a seat or a signed webhook
+delivery (`authenticated`), or anybody who can reach the listener with no
+credential at all (`anonymous`). Nothing is in that third group, and the rule
+is that nothing may be: this file is on a disk you sized, and every backup,
+every snapshot a lagging node installs and every integrity check taken before
+either counts is a copy of the whole of it. A failed login is the case to hold
+in mind — anyone who can reach the API can author millions a day for free — so
+the per-attempt fact is the `crewlet.auth.attempts.failed` counter on the
+[metrics](../reference/metrics.md) exporter, and what becomes a row is
+`iam_login_failures`: one per node per minute, carrying a count per source and
+never what was presented, published by the engine's own flush loop and therefore
+paced by the engine. A type kept out for this reason is excluded with the cause
+`anonymous_rate`. The rule is enforced by a test over the taxonomy, not by
+review.
 
-Two facts the identity design names as deliberately unrecorded have no event type at all rather than an excluded one: a per-request **authorization decision** (orders of magnitude more voluminous than everything else, and a fact about a poll; a Tier A token refused by a route is a WARN log line on the node it reached) and a **session touch** (a re-issue moves a deadline inside the cookie's own signature, so an hour of use writes nothing anywhere). The exclusion table lists types something publishes, and nothing publishes either.
+Two facts the identity design names as deliberately unrecorded have no event
+type at all rather than an excluded one: a per-request **authorization
+decision** (orders of magnitude more voluminous than everything else here, and
+a fact about a poll rather than about the company — a Tier A token refused by
+a route is a WARN log line on the node it reached instead) and a **session
+touch** (a clock rather than an event; a re-issue moves a deadline inside the
+cookie's own signature, so an hour of use writes nothing anywhere). The
+exclusion table lists types something publishes, and nothing publishes either
+of these.
 
-**Stored is not always fed.** One class of type is written like every other row and kept out of the dashboard's activity feed, a ring of the whole company's last few hundred events (every node's feed is fed fleet-wide). It is in `GET /events`, a turn's history and a trace like any row, and filterable by its category.
+**Stored is not always fed.** One class of type is written like every other row
+and kept out of the dashboard's activity feed — a ring of the whole company's
+last few hundred events, since every node's feed is fed fleet-wide. It is in
+`GET /events`, a turn's history and a trace like any row, and filterable by its
+category.
 
 | Stored, not in the activity feed | Why |
 |---|---|
-| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its phases and a compaction a burst, which would push the turns, failures and deliveries a reader watches out of the ring. |
-| `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, published once by the data node that wrote its row on the code log ([Gitlet § Who records a check](../concepts/gitlet.md#who-records-a-check)). Every push ends each check its repository defines, faster than anybody reads a feed; read a change's or repository's checks where they are asked. |
-| `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository (objects, bytes, and until when the object store still holds them), published once a commit by the maintainer that proposed it ([Gitlet § Expunge](../concepts/gitlet.md#expunge)). Most are weekly housekeeping, and a person's purge is already in the feed as their `operator_acted`. The repository's detail keeps only its latest expunge; the event log keeps every one. |
-| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents (fetches whose answers carried a pack, a code tool's answers, or a download of a file or a commit's ZIP, `kind` `raw` or `archive`), coalesced per fifteen-second flush with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). Busy readers (a CI token fetching on every build, seats reading a line range at a time) write a record each every flush. Who read a repository is answered by `GET /gitlet/repos/{name}/readers` and the operator catalogue's readers tool, summed across the fleet. |
-| `code_imported` | **An audit, not activity**: where a repository's contents came from (the source, the chunks, refs and bytes that landed, and the error where it ended short), published once an import by the home Gitlet node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as their `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import; the event log keeps every one. |
-| `code_mirror_pushed` | **An audit, not activity**: what a repository's home Gitlet node pushed to its push mirror at another forge (refs set and onto what, refs deleted, and protected branches held back with no green commit, each list its first 16 refs beside the count of all), published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute and nobody acts on one. A failed push is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
-| `own_record_marked` | **Bookkeeping, not activity**: the runtime audit's record of a call that kept the caller's own bookkeeping (a chat room's read cursor, an inbox's read and snooze marks or pins; the chat, inbox and pin tools that take no name), which nobody else's work reads. It is the same record as `operator_acted`, field for field, under its own type, so a person reading their rooms (a row a room) does not push the company's turns, failures and deliveries out of Live's Activity card and the event log. The audit keeps every one ([The runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator)). |
-| `wake_held` | **Counted, not watched**: an agent seat a change told and did not wake, published once per seat and notice under an id derived from the one its wake would have had, so a redelivery collapses onto it and it never shares an id with a wake. Every comment, chat post and page edit that reaches a seat without asking it anything holds one, which would push out the turns and failures a reader watches; a seat's held wakes are read from the turn ledger they are counted into |
+| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
+| `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Gitlet § Who records a check](../concepts/gitlet.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
+| `code_expunged` | **An audit, not activity**: what an expunge's commit took out of a repository — its objects and bytes, and until when the object store still holds them — published once a commit, by the maintainer that proposed it ([Gitlet § Expunge](../concepts/gitlet.md#expunge)). Most are the maintainer's weekly housekeeping, and a person's purge is already in the feed as that person's `operator_acted`. The repository's detail keeps only its latest expunge, so the event log is where every one is kept. |
+| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, a code tool's answers, or a download of a file or a commit's ZIP (`kind` `raw` or `archive`), its bytes sent — coalesced per fifteen-second flush, with how many and their bytes ([Gitlet § Who read it](../concepts/gitlet.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /gitlet/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_imported` | **An audit, not activity**: where a repository's contents came from — the source it was imported from, the chunks, refs and bytes that landed, and the error where it ended short of its source — published once an import, by the home Gitlet node that ended it ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A person's import is already in the feed as that person's `operator_acted`, and a declared one is the company document's. The repository's row keeps only its latest import, so the event log is where every one is kept. |
+| `code_mirror_pushed` | **An audit, not activity**: what a repository's home Gitlet node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit, each list its first 16 refs beside the count of all of them — published once a push that moved something ([Gitlet § Mirrors and imports](../concepts/gitlet.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
+| `own_record_marked` | **Bookkeeping, not activity**: the runtime audit's record of a call that kept the caller's own bookkeeping, a chat room's read cursor, an inbox's read and snooze marks or their pins (the chat, inbox and pin tools that take no name), which nobody else's work reads. It is the same record as `operator_acted`, field for field, under a type of its own: a person reading their rooms writes one a room, and in the feed they pushed the company's turns, failures and deliveries out of Live's Activity card and the event log. The audit keeps every one ([The runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator)). |
+| `wake_held` | **Counted, not watched**: an agent seat a change told and did not wake, published once per seat and notice under an id derived from the one its wake would have had, so a redelivery collapses onto it and it never shares an id with a wake. Every comment, chat post and page edit that reaches a seat without asking it anything holds one, so in the feed they would push out the turns and failures a reader is watching; a seat's held wakes are read from the turn ledger they are counted into |
 
 #### Querying events
 

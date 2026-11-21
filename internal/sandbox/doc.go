@@ -135,6 +135,22 @@
 // and an OpenCode save checks its room first ([ErrSaveNoRoom]); a final pack
 // does not, since refusing it loses the job's newest state.
 //
+// # Each process's own spool directory
+//
+// A spool's age is no proof its process is gone, and a container restart keeps
+// /tmp, so each process spools into a directory of its own, held by an flock
+// the kernel drops however the process ends (spooldir.go). A sweep removes only
+// a directory whose lock it takes; made under a staging name and renamed once
+// locked, a live one is never found unlocked.
+//
+// # Every spool on a node in one room
+//
+// The disk holds what the spools hold, so one room bounds them all
+// (spoolroom.go): saves take room at the sealed bound before their pack slot
+// and never wait, leaving a final take its room; a take waits a minute for
+// room at the bound before its pack slot and its scrub's slots, a save's
+// order, then keeps nothing; a seal is refused before it writes past its room.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // restore.go. A relaunch continues the job before's newest kept capture, the
@@ -157,7 +173,9 @@
 //
 // An unreadable object, a silent log or a box that cannot take the session up
 // starts one of its own (`executor_session_not_continued`). The session is
-// fetched sealed and opened whole before a byte reaches the box. A cut-off
+// read whole before a byte reaches the box, then streamed in held to that
+// read, never spooled ([Coordinator.fetchSession]); one that differs the second
+// time fails the run's start. A cut-off
 // session's calls are read by id (Claude Code) or by content (OpenCode): a held
 // class is never a false hold ([HoldingsByContent]).
 //
@@ -371,6 +389,16 @@
 // item ([RunNote.LateCall]), only by the write that finds it late, unsealed
 // since it is the log's account (ADR-0067, ADR-0073). A call outliving its
 // round's collection is a late call of the round after, with no place.
+//
+// # A wake joins a running run
+//
+// The engine may file somebody's message about a job's work as that job's wake
+// item ([PendingStore.FileWake]), sealed in a domain of its own. Nothing in
+// this build files one: every node reads wakes before any files them, so no
+// node mid-upgrade meets one it would take for a note. Wakes between two steps
+// join one unserved item; a hook serves an item once. A read item is the
+// turn's and outlives its job; an unread one goes with it, its delivery left
+// to a turn of its own.
 //
 // # Stopping a seat's running work
 //
