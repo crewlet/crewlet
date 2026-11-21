@@ -259,19 +259,23 @@ type Capabilities struct {
 
 	// AND NOTHING HIDDEN BEHIND AN UNREPORTED FAILURE, which is the same
 	// class of promise as the paragraphs above and was broken the same way.
-	// The two reads below can fail — they are broker round trips on the
-	// backend that ships — and their adapters discarded the error, so "the
+	// The reads of a subscription's mail can fail (broker round trips on the
+	// backend that ships), and their adapters once discarded the error, so "the
 	// broker did not answer" arrived here as "the seat is holding no mail".
 	// That is the engine's most incident-hardened rule broken inside the
 	// suite that exists to enforce it: held, definitively not held, and
 	// could-not-tell are three facts, and NegativePaths asserts absences
 	// almost exclusively. Hence the *testing.T — an adapter reports the
 	// failure as a failure instead of returning it as an emptiness, and no
-	// case has to thread an error through a polling predicate to get it.
+	// case has to thread an error through a polling predicate to get it
+	// (the backlog's own read reports one the same way: [suite.backlog]).
 
-	// Backlog reports the events a subscription retains and has not
-	// delivered — the mail an unowned seat is holding.
-	Backlog func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event
+	// Inspect is the client the suite reads a subscription's mail through
+	// ([queue.EventQueue.Backlog]): one beside q on q's broker, started, so a
+	// case's reads cost q none of the consumer proposals it counts and still
+	// answer once q is stopped. Required: a case reads the mail a stopped
+	// client left on the broker.
+	Inspect func(t *testing.T, q queue.EventQueue) queue.EventQueue
 
 	// DeadLetters reports the events a subscription gave up on.
 	DeadLetters func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event
@@ -476,6 +480,10 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 			"nothing more was delivered reads its journal behind it, and without it each " +
 			"would decide on a quiet window again")
 	}
+	if caps.Inspect == nil {
+		t.Fatal("queuetest: Capabilities.Inspect is required: cases read the mail a stopped " +
+			"client left on its broker, which only a client beside it can")
+	}
 	if caps.Parked == nil {
 		t.Fatal("queuetest: Capabilities.Parked is required: every case publishing " +
 			"under a hold waits for the consumer to take the hold in, and without it a " +
@@ -510,6 +518,8 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	group("Withdrawal", s.runWithdrawal)
 	group("Batch", s.runBatch)
 	group("Lane", s.runLane)
+	// The read a seat's router makes of its held inbox. See runBacklog.
+	group("Backlog", s.runBacklog)
 	// Not a feature — the reason the engine carries no re-entrancy
 	// guard. See runReentrancy.
 	group("Reentrancy", s.runReentrancy)
@@ -1610,29 +1620,23 @@ func recordingBatchHandler(b *batchJournal) queue.BatchHandler {
 	}
 }
 
-func (s *suite) needBacklog(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
-	t.Helper()
-	if s.caps.Backlog == nil {
-		t.Skip("backend cannot report a subscription's retained mail")
-	}
-	// Bound to this test's own T so a case keeps calling it with three
-	// arguments — including from inside a polling predicate, which is where
-	// most of these reads happen and where returning an error would have to
-	// be swallowed all over again.
-	return func(q queue.EventQueue, topic, group string) []*events.Event {
-		return s.caps.Backlog(t, q, topic, group)
-	}
-}
+// backlogRead is the most a case's read of a subscription's mail asks for
+// ([suite.backlog]): past any mailbox a case fills, so a read is the whole of it.
+const backlogRead = 1 << 12
 
-// optionalBacklog is needBacklog for a case that runs either way: it returns
-// nil when the backend reports no backlog, rather than skipping the case.
-func (s *suite) optionalBacklog(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
+// backlog reads a subscription's whole mail through the backend's inspection
+// client ([Capabilities.Inspect]), bound to this test's own T: a read that fails
+// fails the case rather than reading as an empty mailbox, so no case threads
+// an error through a polling predicate to get it.
+func (s *suite) backlog(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
 	t.Helper()
-	if s.caps.Backlog == nil {
-		return nil
-	}
 	return func(q queue.EventQueue, topic, group string) []*events.Event {
-		return s.caps.Backlog(t, q, topic, group)
+		t.Helper()
+		evs, err := s.caps.Inspect(t, q).Backlog(context.WithoutCancel(t.Context()), topic, group, backlogRead)
+		if err != nil {
+			t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+		}
+		return evs
 	}
 }
 

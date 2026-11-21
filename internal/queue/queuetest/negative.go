@@ -66,10 +66,9 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 		// And it must not have half-landed: nothing is retained for a
 		// delivery the transport refused.
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			if got := backlog(q, topic, group); len(got) != 0 {
-				t.Errorf("a refused publish left %d events in the mailbox", len(got))
-			}
+		backlog := s.backlog(t)
+		if got := backlog(q, topic, group); len(got) != 0 {
+			t.Errorf("a refused publish left %d events in the mailbox", len(got))
 		}
 	})
 
@@ -103,16 +102,15 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		if got := listened.all(); len(got) != 0 {
 			t.Fatalf("a refused publish reached a publish listener: %v", got)
 		}
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			if got := backlog(q, topic, group); len(got) != 0 {
-				t.Errorf("a refused nil publish left %d events in the mailbox", len(got))
-			}
+		backlog := s.backlog(t)
+		if got := backlog(q, topic, group); len(got) != 0 {
+			t.Errorf("a refused nil publish left %d events in the mailbox", len(got))
 		}
 	})
 
 	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail_and_proposes_nothing", func(t *testing.T) {
 		t.Parallel()
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		proposals := s.optionalProposals(t)
 		q := s.start(ctx, t)
 		const topic, group = "crewlet.agent.bob.inbox", "agent-bob"
@@ -165,7 +163,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 	t.Run("delete_subscription_leaves_a_neighbouring_group_untouched", func(t *testing.T) {
 		t.Parallel()
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		const topic = "crewlet.events.agent_phase_started"
 		const doomed, neighbour = "doomed-grp", "neighbour-grp"
@@ -208,7 +206,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// one that would have been guessed. Measured on the twin, where
 		// PauseTopic minted the subscription and every event published to that
 		// topic was then retained for a role that no longer existed.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		const topic, group = "seat.decommissioned", "grp"
 
@@ -340,10 +338,8 @@ type subscriptionState struct {
 func (s *suite) snapshot(t *testing.T, q queue.EventQueue, topic, group string) subscriptionState {
 	t.Helper()
 	var out subscriptionState
-	if s.caps.Backlog != nil {
-		out.backlog = labelsOf(s.caps.Backlog(t, q, topic, group))
-		out.known = true
-	}
+	out.backlog = labelsOf(s.backlog(t)(q, topic, group))
+	out.known = true
 	if s.caps.DeadLetters != nil {
 		out.deadLetters = labelsOf(s.caps.DeadLetters(t, q, topic, group))
 		out.known = true

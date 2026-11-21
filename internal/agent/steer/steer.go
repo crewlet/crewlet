@@ -441,7 +441,7 @@ type Wake struct {
 	WorkingFor string
 
 	// Conversation and Partition are where it was written: its conversation's
-	// identity and the inbox partition its delivery arrived in.
+	// identity and its thread's stamped partition key, never split by writer.
 	Conversation, Partition string
 
 	// Label is the fence its words are handed over in, decided as the turn's
@@ -451,6 +451,13 @@ type Wake struct {
 	// OwesAnswer says it asks for an answer, and At is when it was written.
 	OwesAnswer bool
 	At         time.Time
+
+	// Owes is the delivery obligation its delivery would have put on a turn
+	// of its own (turn.Reply's wire value), "" for none: what the turn whose
+	// run reads it is held to as well. Seen is the log position of the record
+	// it was derived from (notify.TriggerField), "" for a vendor's wake: how
+	// far its conversation is read once the run reads it (ADR-0120).
+	Owes, Seen string
 
 	// Text is its words, at most [MaxWakeRunes] of them, and Cut how many
 	// characters past those its message holds, which its conversation keeps.

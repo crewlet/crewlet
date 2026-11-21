@@ -49,6 +49,7 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 		skipped("s2", "w-2", at(62), types.DispositionAbsorbed),
 		skipped("s3", "w-3", at(63), types.DispositionBreakerHeld),
 		skipped("s4", "w-4", at(64), ""),
+		skipped("s5", "w-5", at(65), types.DispositionJoined),
 	} {
 		if err := log.Append(t.Context(), rec); err != nil {
 			t.Fatalf("append %s: %v", rec.ID, err)
@@ -65,6 +66,7 @@ func TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns(t *testing.T) {
 		{Wake: "work_item:mention", Disposition: "absorbed", Turns: 2},
 		{Wake: "work_item:mention", Disposition: "breaker_held", Turns: 1},
 		{Wake: "work_item:mention", Disposition: "held", Turns: 2},
+		{Wake: "work_item:mention", Disposition: "joined", Turns: 1},
 		{Wake: "work_item:mention", Disposition: "started", Outcome: "words", Turns: 2,
 			Tokens: types.TurnTokens{Input: 200, Output: 20, AuxInput: 10}},
 		{Wake: "work_pickup", Disposition: "started", Outcome: "moved", Turns: 1,

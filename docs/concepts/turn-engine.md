@@ -926,6 +926,13 @@ sequenceDiagram
   `reads: "after_answer"`, its harness takes nothing while it waits, and the launch
   that carries the answer carries the notes in its brief.
 
+A message the turn's own requester sends about its work while the run works
+reaches it the same way without anybody steering: the seat's router hands it
+over from the held inbox as a wake, rendered as that writer's message rather
+than a note, and a wake from anybody else waits for a turn of its own
+([Code Sandbox](code-sandbox.md#notes-to-a-running-run),
+[ADR-0167](../../adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)).
+
 ### Rules
 
 - **It binds the rest of the turn.** A note read once is carried, as the same

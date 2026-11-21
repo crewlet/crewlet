@@ -142,6 +142,15 @@ type runSteers struct {
 	// recorded worked in ([runSteers.claim]); nil records nothing.
 	completions ledgerstore.Completions
 
+	// seen is the seen-through marks a wake a step read moves ([runSteers.seeThrough]);
+	// nil moves none.
+	seen *ledgerstore.SeenThrough
+
+	// handedOver is told, for a seat, the deliveries a step of one of its runs
+	// read as wakes once they are claimed ([Engine.settleWaiting]): a person's
+	// message queued behind the busy seat is queued no longer. Nil tells nobody.
+	handedOver func(ctx context.Context, handle string, triggers []string)
+
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
 	warned sync.Map
@@ -245,6 +254,20 @@ func newRunSteers(seals steerSeals, store sandbox.PendingStore, pub queue.Publis
 // ([runSteers.claim]).
 func (s *runSteers) claimingIn(completions ledgerstore.Completions) *runSteers {
 	s.completions = completions
+	return s
+}
+
+// seeingThrough is s moving the seat's seen-through marks in seen for every
+// wake its runs read ([runSteers.seeThrough]).
+func (s *runSteers) seeingThrough(seen *ledgerstore.SeenThrough) *runSteers {
+	s.seen = seen
+	return s
+}
+
+// telling is s telling handedOver every delivery a run read as a wake, once
+// claimed ([runSteers.handedOver]).
+func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, triggers []string)) *runSteers {
+	s.handedOver = handedOver
 	return s
 }
 

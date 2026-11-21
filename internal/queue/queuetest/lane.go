@@ -171,10 +171,9 @@ func (s *suite) runLane(t *testing.T) {
 		// POLLED: the journal records a batch inside its handler, before
 		// the backend applies the Ack, so the last batch's settlement may
 		// still be in flight the moment every label has been seen.
-		if backlogOf := s.optionalBacklog(t); backlogOf != nil {
-			awaitState(t, "every partition settled, the subscription retaining nothing",
-				func() bool { return len(backlogOf(q, topic, "g")) == 0 })
-		}
+		backlogOf := s.backlog(t)
+		awaitState(t, "every partition settled, the subscription retaining nothing",
+			func() bool { return len(backlogOf(q, topic, "g")) == 0 })
 	})
 
 	t.Run("a_requeued_priority_partition_returns_whole", func(t *testing.T) {
@@ -371,11 +370,9 @@ func (s *suite) runLane(t *testing.T) {
 		if len(subs) != 1 || subs[0] != (queue.Subscription{Topic: topic, Group: "g"}) {
 			t.Fatalf("listed %+v, want the topic's one complete subscription", subs)
 		}
-		backlogOf := s.optionalBacklog(t)
-		if backlogOf != nil {
-			if got := labelsOf(backlogOf(q, topic, "g")); !equalStrings(got, []string{"person"}) {
-				t.Fatalf("the subscription retains %v, want the lane's message", got)
-			}
+		backlogOf := s.backlog(t)
+		if got := labelsOf(backlogOf(q, topic, "g")); !equalStrings(got, []string{"person"}) {
+			t.Fatalf("the subscription retains %v, want the lane's message", got)
 		}
 		if _, err := q.DeleteSubscription(ctx, topic, "g"); err != nil {
 			t.Fatalf("DeleteSubscription: %v", err)
@@ -383,10 +380,8 @@ func (s *suite) runLane(t *testing.T) {
 		if subs, err := q.ListSubscriptions(ctx, topic); err != nil || len(subs) != 0 {
 			t.Fatalf("after a delete the listing is %+v (%v), want nothing", subs, err)
 		}
-		if backlogOf != nil {
-			if got := backlogOf(q, topic, "g"); len(got) != 0 {
-				t.Fatalf("a deleted subscription still retains %v", labelsOf(got))
-			}
+		if got := backlogOf(q, topic, "g"); len(got) != 0 {
+			t.Fatalf("a deleted subscription still retains %v", labelsOf(got))
 		}
 	})
 }

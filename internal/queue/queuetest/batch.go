@@ -549,7 +549,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// window still open on the twin, which never settles; a batch
 		// dispatched on JetStream past every gate the stop shuts) and the
 		// batch is delivered, not retained.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		lingering := s.needLingering(t)
 		onClock := s.needLingerClock(t)
 		clock := &Clock{}
@@ -594,7 +594,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// or from the drain alone, and the consumer never parks; keep the
 		// twin's window on the wall clock, whatever clock it was handed, and
 		// it never settles.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		lingering := s.needLingering(t)
 		onClock := s.needLingerClock(t)
 		clock := &Clock{}
@@ -871,7 +871,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// deferral pushed its partition to the FRONT of the backlog, so
 		// the mail came back in REVERSE partition order. That is the
 		// exact reordering a deferral exists to prevent.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.b", "grp")
 
@@ -919,7 +919,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// exactly the "no turn starts" the hold exists to buy. A suite that
 		// covers only the deferral certifies a behaviour production does not
 		// have.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.hold", "grp")
 
@@ -960,7 +960,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// retained mail that outlives every attachment; that cost is
 		// an_undispatched_partition_pays_for_its_hand_back's subject, not
 		// this case's: it is about the loop STOPPING.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.detach", "grp")
 
@@ -1004,7 +1004,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// in-flight handlers, and landing mid-batch is its ordinary case.
 		// pause_during_linger_retains_pending covers the same verb at the
 		// OTHER gate, a window open when the pause lands.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.drain", "grp")
 
@@ -1172,7 +1172,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// appends at the TAIL: one landing mid-batch makes the delta
 		// over-count and the splice lands inside the pre-existing tail,
 		// reordering the very partitions the guard protects.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.c", "grp")
 
