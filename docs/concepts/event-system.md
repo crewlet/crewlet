@@ -1,3 +1,4 @@
+
 # Event System
 
 All inter-component communication in Crewlet flows through a persistent event queue (`internal/queue`), backed by NATS JetStream: a broker the engine runs **inside its own process** by default, or an external NATS cluster when a fleet needs one.
@@ -442,12 +443,12 @@ DACI discussion happens in the team channel on the company's chat surface (the e
 
 ## Event Types
 
-Grouped by the **category** (`events.Category`) each is filed under, the closed
-set behind the `GET /events?category=` filter and the dashboard's category chips,
-and written as the wire type in `type`. The authoritative list, checked against
-the engine's map by a test, is
+Grouped by the **category** each one is filed under (`events.Category`), the
+same closed set the `GET /events?category=` filter and the dashboard's category
+chips use, and written as the wire type an event carries in `type`. The
+authoritative list, checked against the engine's own map by a test, is
 [Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category);
-this is its shape, with the notes that need a sentence.
+this is the shape of it, with the notes that need a sentence.
 
 ```text
 # lifecycle: the org coming and going, plus the config changes and the
@@ -597,7 +598,9 @@ turn_trigger_skipped       # a redelivery the completion ledger had already
                            # a completed turn already read past carries the
                            # disposition `absorbed`, and one a held
                            # conversation settled unrun `breaker_held`, each
-                           # with its wake, which the turn ledger counts
+                           # with its wake, which the turn ledger counts; one a
+                           # running turn's run read as a wake says it joined
+                           # that turn (`agent_turn_joined` names it)
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
@@ -706,6 +709,23 @@ agent_turn_steered         # what became of a person's note to this running
                            # sent_at: a note crosses an ephemeral scatter or
                            # waits on a run's record that is deleted with the
                            # run, so this row is its only durable record
+agent_turn_joined          # what became of a wake the engine handed this
+                           # turn's running executor as a message about its
+                           # work: `delivered` where a step of the run read
+                           # it (its delivery is then recorded worked and
+                           # starts no turn of its own), `unconfirmed` where
+                           # its harness was handed it and never confirmed
+                           # it, `unread` where nothing handed it over before
+                           # its job ended; each but `unread` at its step
+                           # (`boundary`, `iteration`) and job (`launch_id`).
+                           # One record a wake, under an id from the turn and
+                           # the wake: published by the node whose read
+                           # confirmed it, or by the node that ended its job
+                           # (a relaunch, or the turn's ending). Carries
+                           # wake_id, trigger_ids, written_by,
+                           # written_by_kind, written_on, owes_answer and
+                           # sent_at, never the message's words, which its
+                           # conversation keeps
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
@@ -1006,36 +1026,40 @@ statelog_record_tampered        # a record whose signature fails under a key
 #          stateless node's socket reaches a data node through custody
 ```
 
-**Categorised, published by nothing in this build.** `decision_requested`,
-`decision_resolved`, `contribution_requested` and `contribution_received` are
-mapped but no code publishes them, so filtering on them matches no rows. DACI
-discussion is behavioural guidance on chat surfaces, and a decision somebody
-must make is a structured ask on a work item (a tracker record woken as `asked`
-or `answered`). They stay mapped as the seam an extension writes through, which
-is why the `decision` category exists to filter on.
-**Excluded from the store**, each with a stated CAUSE:
-`agent_turn_progress` (intermediate; its finished record is
-`agent_phase_completed`), `agent_spawned` and `agent_terminated` (placement:
-scheduling, not the company; live seat state answers it), `budget_meters` (a
-periodic snapshot of the fleet's shared token counters, every capped calendar
-window with its engine-computed state, published by every node on a fixed tick
-and at once when a window first turns work away; the next report supersedes it,
-and the live projection reads it), `seat_inbox_waiting` (a periodic snapshot of
-what waits in the inboxes of one node's seats; the next report supersedes it,
-and the live projection reads it), `raw_webhook` (already a row, as the
-`inbound_delivery` its edge publishes beside it), `custody_batch` (a carrier,
-not an event: the data node that keeps a batch writes each event inside it as
-the row it is), `reflection_due` (the wake that puts a finished turn before
-reflection on the seat's holder: the turn is already `turn_completed`, and
-reflecting is `reflection_completed`), the two A2A inbox wakes `a2a_request` and
-`a2a_message` (the ask and the answer are already rows as `a2a_channel_opened`
-and `a2a_message_sent`), `executor_answer_given` (the command an answer by turn
-puts on the seat's control topic: what the answer became is
-`executor_answered`, and that a person gave it is their `operator_acted` row)
-and `tool_skill_page_changed` (a nudge between nodes about an edit the webhook
-receiver already recorded). The cause is a value, not a sentence, because the
-admission rule below is checked by a walk and no walk can read prose. See the
-exclusions table in the Deployment page above.
+**Categorised, and published by nothing in this build.** The category map also
+files four types no code path publishes, so a filter on them matches no rows:
+`decision_requested`, `decision_resolved`, `contribution_requested` and
+`contribution_received`. DACI discussion is behavioural guidance on the org's
+own chat surfaces, and a decision somebody has to make is a structured ask on a
+work item — a tracker record whose wakes are the tracker's own (`asked`,
+`answered`), not one of these types. They stay mapped as the seam an extension
+writes through, which is why the `decision` category exists to filter on at
+all.
+
+**Excluded from the store**, each with a stated CAUSE as well as a reason:
+`agent_turn_progress` (an intermediate state whose finished record is
+`agent_phase_completed`), `agent_spawned` and `agent_terminated` (placement —
+a fact about scheduling rather than about the company, which the live seat
+state answers), `budget_meters` (a periodic snapshot of the fleet's shared
+token counters, every capped calendar window with its engine-computed state,
+published by every node on a fixed tick and at once when a window first turns
+work away on it, which the next report supersedes; the live projection reads
+it), `seat_inbox_waiting` (a periodic snapshot of what waits in the inboxes of
+the seats one node holds, which the next report supersedes; the live projection
+reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its
+edge publishes beside it), `custody_batch` (a carrier rather than an event: the
+data node that keeps a batch writes each event inside it as the row it is),
+`reflection_due` (the wake that puts a finished turn in front of reflection on
+the seat's holder: the turn is already `turn_completed`, and what reflecting on
+it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
+already rows as `a2a_channel_opened` and `a2a_message_sent`),
+`executor_answer_given` (the command an answer by turn puts on the seat's control topic:
+what the answer became is `executor_answered`, and that a person gave it is
+their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+nodes about an edit the webhook receiver already recorded). The cause is a
+value rather than a sentence, because the admission rule below is checked by a
+walk and no walk can read intent out of prose. See the exclusions table in the
+Deployment page above.
 
 ### What an agent record keeps
 

@@ -119,6 +119,8 @@ func TestTheDeepRunAnswersItsWholeAgendaInFewTokens(t *testing.T) {
 		{Text: "answering", Calls: []llmtest.Call{
 			verdict("A5", "refuted", "the jump is cache reads, 1.35B of 1.38B", "read_2.rows[0].cache_read_tokens")}},
 		{Text: "submitting", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
+		{Text: "submitting again", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
+		{Text: "submitting as it is", Calls: []llmtest.Call{{Name: SubmitTool, Args: string(raw)}}},
 	}}}}
 	var told []string
 	got := RunDeep(t.Context(), Deps{Provider: prov, ProviderKey: "p", Host: host(t),
@@ -174,11 +176,17 @@ func TestTheDeepRunAnswersItsWholeAgendaInFewTokens(t *testing.T) {
 		t.Errorf("work_items asked %d times, results %+v: want once, the snapshot served once", asked, results)
 	}
 	// 6d: the token split and each number's unit and range before.
-	if got.Status != advisor.PassDone || len(got.Findings) != 1 || got.Dropped[advisor.DropTokensUnsplit] != 1 ||
-		got.Dropped[advisor.DropWords] != 1 {
-		t.Fatalf("run = %+v, want the split finding alone, the unsplit and the unitless dropped", got)
+	// (A NUMBER THAT SAYS NO UNIT is no longer dropped: its unit is read off
+	// where it was cited, and the finding listed.)
+	if got.Status != advisor.PassDone || len(got.Findings) != 2 || got.Dropped[advisor.DropTokensUnsplit] != 1 ||
+		len(got.Dropped) != 1 || got.Repaired[advisor.RepairEngineWords] != 1 {
+		t.Fatalf("run = %+v, want the split and the unitless findings, the unsplit dropped", got)
 	}
-	f := got.Findings[0]
+	at := slices.IndexFunc(got.Findings, func(f advisor.Finding) bool { return strings.Contains(f.Headline, "cached") })
+	if at < 0 {
+		t.Fatalf("findings = %+v, want the split one", got.Findings)
+	}
+	f := got.Findings[at]
 	input := f.Evidence[slices.IndexFunc(f.Evidence, func(x advisor.Fact) bool { return x.Key == "input" })]
 	if input.Unit != advisor.UnitTokens || input.Was == nil || *input.Was != 138_000_000 {
 		t.Errorf("input = %+v, want tokens beside the week before's 138M", input)

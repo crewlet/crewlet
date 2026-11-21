@@ -1,17 +1,15 @@
 # Releasing
 
-Maintainer runbook for publishing Crewlet. A release is one command — pushing a
-`v*` tag — and everything else is done by
-[`.github/workflows/release.yml`](.github/workflows/release.yml) driving
-[goreleaser](https://goreleaser.com) from
+Maintainer runbook for publishing Crewlet. A release is one command, pushing a
+`v*` tag; [`.github/workflows/release.yml`](.github/workflows/release.yml) does
+the rest, driving [goreleaser](https://goreleaser.com) from
 [`.goreleaser.yaml`](.goreleaser.yaml). The image of `main`, rebuilt on every
 push to `main` by
 [`.github/workflows/main-image.yml`](.github/workflows/main-image.yml), is not
-a release; [Images from main](#images-from-main) covers it.
+a release ([Images from main](#images-from-main)).
 
-Nothing here is needed to *use* Crewlet; it is process for people with commit
-rights on this repository, which is why it lives beside
-[CONTRIBUTING.md](CONTRIBUTING.md) rather than in `docs/`.
+Nothing here is needed to *use* Crewlet; it is for people with commit rights,
+so it lives beside [CONTRIBUTING.md](CONTRIBUTING.md) rather than in `docs/`.
 
 ---
 
@@ -30,24 +28,20 @@ flowchart TD
 ```
 
 Pushing the tag is the whole release. The **GitHub Release is created
-automatically** — you never open the *Draft a new release* form. goreleaser
-titles it from the version, has GitHub generate the body from the pull requests
-merged since the previous tag, and attaches every archive, the checksum file and
-its signature.
+automatically**; never open the *Draft a new release* form. goreleaser titles
+it from the version, has GitHub generate the body from the pull requests merged
+since the previous tag, and attaches every archive, the checksum file and its
+signature.
 
-**The tag is the version.** Nothing in the tree records one, so there is nothing
-for a tag to disagree with and no version bump to make. goreleaser stamps the
-tag into `internal/version.value` at link time — the tag itself, `v` included,
-so `crewlet version` from the release, `go install …@v0.2.0`, the image tag
-`v0.2.0` and the Go module version all read the same string. A binary built any
-other way (`go install`, a local `go build`) reports its module build info
-instead, so it names itself honestly rather than claiming to be a release.
+**The tag is the version.** Nothing in the tree records one, so there is no
+version bump. goreleaser stamps the tag, `v` included, into
+`internal/version.value` at link time, so `crewlet version` from the release,
+`go install …@v0.2.0`, the image tag `v0.2.0` and the Go module version read
+the same string. A binary built any other way (`go install`, a local
+`go build`) reports its module build info instead.
 
-That single source of truth is the one thing this pipeline improves on the
-package-index one it replaced, and it costs something in exchange: a mistyped
-tag is not caught by a version comparison, because there is no second copy to
-compare against. Delete it and re-tag — see [If a release goes
-wrong](#if-a-release-goes-wrong).
+A mistyped tag is not caught by any comparison: delete it and re-tag ([If a release goes
+wrong](#if-a-release-goes-wrong)).
 
 ---
 
@@ -55,8 +49,8 @@ wrong](#if-a-release-goes-wrong).
 
 ### Nothing, and that is the point
 
-There is **no credential to provision**. The workflow authenticates three
-different things with the run's own short-lived identity:
+There is **no credential to provision**. The workflow authenticates with the
+run's own short-lived identity:
 
 | What | How |
 |---|---|
@@ -64,27 +58,23 @@ different things with the run's own short-lived identity:
 | Pushing to `ghcr.io/crewlet/crewlet` | the same token, `packages: write` |
 | Signing the checksums and the image | an OIDC token, `id-token: write` — cosign mints a short-lived certificate from it |
 
-No API token, no stored key, no `~/.docker/config.json`, no private key for
-cosign. That preserves the property the previous pipeline had under PyPI
-Trusted Publishing: a compromised workflow has nothing long-lived to steal.
+No API token, stored key, `~/.docker/config.json` or cosign private key: a
+compromised workflow has nothing long-lived to steal.
 
-The one thing worth checking once, in **Settings → Actions → General**, is that
-the default workflow token is allowed to write packages — otherwise the image
-push fails at the end of an otherwise complete release. The image of `main`
-uses the same token and the same permission, so the first push to `main` after
-`main-image.yml` lands is usually where a missing one shows first.
+Check once, in **Settings → Actions → General**, that the default workflow
+token may write packages, or the image push fails at the end of an otherwise
+complete release. The first push to `main` after `main-image.yml` lands, which
+uses the same token, is usually where a missing permission shows first.
 
-Once the package exists, check two things on it (**Package settings** for
-`ghcr.io/crewlet/crewlet`): its visibility is **public** — GHCR makes a package
-that a workflow creates private, and then nobody without a token can pull it —
-and **Manage Actions access** gives this repository the **Admin** role: the
-release workflow needs write access to push, and `main-image.yml` needs Admin
-to delete the images `main` no longer names, which fails with a 403 under
-anything less.
+Once the package exists, check in **Package settings** for
+`ghcr.io/crewlet/crewlet` that its visibility is **public** (GHCR makes a
+workflow-created package private, so nobody without a token can pull it) and
+that **Manage Actions access** gives this repository the **Admin** role: the
+release needs write access to push, and `main-image.yml` needs Admin to delete
+the images `main` no longer names, which fails with a 403 under less.
 
-Releasing from a workstation is not supported. It skips the signature and the
-provenance the OIDC identity carries, and it would produce binaries nobody
-checksummed.
+Releasing from a workstation is not supported: it skips the signature and
+provenance the OIDC identity carries and produces binaries nobody checksummed.
 
 ---
 
@@ -97,41 +87,36 @@ checksummed.
    nothing never receives one.
 
    While the major number is `0`, a **break in a surface an earlier tag
-   shipped** moves the minor too, and it is exactly the kind of thing worth a
-   paragraph in `release.header` (see [Release notes](#release-notes)) —
-   a title alone cannot tell an operator what to change. A change to a surface
-   **no tag has shipped** is not a break: nobody could be running it, so it
-   needs no paragraph, no `!` and no `BREAKING CHANGE:` footer, and the
-   contributor was free to make it outright. What settles which of the two you
-   are looking at is whether the previous tag carried the path at all —
-   `git log <previous tag>..HEAD -- <path>`;
+   shipped** moves the minor too, and merits a paragraph in `release.header`
+   (see [Release notes](#release-notes)), since a title cannot tell an operator
+   what to change. A change to a surface **no tag has shipped** is not a break
+   and needs no paragraph, no `!` and no `BREAKING CHANGE:` footer. Settle which
+   it is by whether the previous tag carried the path:
+   `git log <previous tag>..HEAD -- <path>`.
    [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)
-   carries the rule contributors work to.
+   has the contributors' rule.
 
-   The first tag that carries Go code is also the first point at which an
-   **upgrade in place** is owed. Until then no compatibility is kept with an
-   older unreleased build — nothing it wrote is read or migrated, and no
-   peer of one joins a fleet beside a newer one. From that tag on, the next
-   release must read what the tag wrote and run beside it in one fleet, so a
-   change that breaks either is a break in a shipped surface and is treated
-   as one above. The forward mechanisms that let it are listed in
-   [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it),
-   and one of them is an operator's to plan for: a data node of the older
-   build refuses, rather than runs short, a newer node's request — a write,
-   or a read — that sets a field its build does not declare, so a release
-   that adds a field to a routed request is rolled out to the data nodes
-   first. That order has a cost of its own, which its notes say: once a newer
-   data node holds a newer field set, a node not yet upgraded is refused the
-   answers it would carry into another request — a publish keeping a
-   version's files, a view save and the views listed to make one, a catalogue
-   sent back whole — until it is upgraded too. What is owed is owed to a TAG:
-   an unreleased build between two tags is still owed nothing.
+   The first tag that carries Go code is also the first that owes an **upgrade
+   in place**. Until then nothing an older unreleased build wrote is read or
+   migrated, and none of its peers joins a fleet beside a newer one. From that
+   tag on, the next release must read what the tag wrote and run beside it in
+   one fleet; a change breaking either is a break in a shipped surface. The
+   forward mechanisms that allow it are listed in
+   [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it).
+   One is the operator's to plan for: a data node of the older build refuses a
+   newer node's request, write or read, that sets a field its build does not
+   declare, so a release that adds a field to a routed request is rolled out to
+   the data nodes first. That order has its own cost: once a newer data node
+   holds a newer field set, a not-yet-upgraded node is refused the answers it
+   would carry into another request (a publish keeping a version's files, a
+   view save and the views listed to make one, a catalogue sent back whole)
+   until it is upgraded too. What is owed is owed to a TAG: an unreleased build
+   between two tags is owed nothing.
 
-2. **Skim the merged pull requests** since the previous tag — they *are* the
-   release notes. GitHub builds the body from their titles, so a title that
-   reads as a commit log rather than a release note is worth editing on the
-   pull request *before* you tag; the body is assembled at release time from
-   whatever the titles say then.
+2. **Skim the merged pull requests** since the previous tag; they *are* the
+   release notes. GitHub assembles the body from their titles at release time,
+   so edit a title that reads as a commit log on the pull request *before* you
+   tag.
 
 3. **Run the checks CI runs:**
 
@@ -139,30 +124,28 @@ checksummed.
    make check
    ```
 
-   That one target and not a list of its commands: a bare `go test ./...`
-   runs the cluster-forming packages beside everything else and bypasses
+   Run that target, not its commands: a bare `go test ./...` runs the
+   cluster-forming packages beside everything else and bypasses
    `internal/skipgate`, and `gofmt -l .` reads every nested checkout under
-   `.claude/worktrees/` as this tree — [CONTRIBUTING.md](CONTRIBUTING.md)
-   spells out what `make check` runs and why.
+   `.claude/worktrees/` as this tree. [CONTRIBUTING.md](CONTRIBUTING.md) says
+   what `make check` runs.
 
-   Then ask whether the git the image will build is still upstream's newest
-   of its series — the one question `make check` cannot answer, because it
-   reads no network:
+   Then ask whether the git the image builds is still upstream's newest of its
+   series, which `make check` cannot answer because it reads no network:
 
    ```bash
    scripts/git-pin-check.sh
    ```
 
-   Exit 0 is current. Exit 1 prints the pins that are behind, each with the
-   two lines of the bump and its pull request's title, and is what the weekly
-   issue `git pin behind upstream` already says; a pin behind a security patch
-   of its series is a release to hold (see [What ships in a
-   release](#what-ships-in-a-release)). Exit 2 could not tell — kernel.org
-   unreachable, a signature that does not verify — and is never a pass.
+   Exit 0 is current. Exit 1 prints each pin that is behind, with the two lines
+   of the bump and its pull request's title (the weekly issue
+   `git pin behind upstream` says it too); a pin behind a security patch of its series is a
+   release to hold (see [What ships in a
+   release](#what-ships-in-a-release)). Exit 2 could not tell (kernel.org
+   unreachable, a signature that does not verify) and is never a pass.
 
 4. **Rehearse the release itself** if anything about the release surface
-   changed (see below). This is cheap and offline — do it whenever you are
-   unsure.
+   changed (see below). It is cheap and offline; do it whenever unsure.
 
 5. **Freeze the issue report catalogue this tag publishes**, and merge the file:
 
@@ -185,9 +168,9 @@ checksummed.
    git push origin v0.2.0
    ```
 
-7. **Watch the run.** When it is green the archives, checksums and signature
-   are on the Release, `ghcr.io/crewlet/crewlet:v0.2.0` is pullable, and there
-   is nothing to publish by hand.
+7. **Watch the run.** When green, the archives, checksums and signature are on
+   the Release and `ghcr.io/crewlet/crewlet:v0.2.0` is pullable; nothing is
+   published by hand.
 
 ---
 
@@ -201,44 +184,38 @@ make snapshot   # goreleaser check
                 # goreleaser release --snapshot --clean --skip=sign
 ```
 
-That is the snapshot job's own pair of commands. `check` runs first so a
-config error is reported as a config error rather than as whatever the build
-does with a bad field, and **`--skip=sign` is not optional**: signing is not
-part of the publish phase `--snapshot` already skips, so without it a
-rehearsal runs `cosign sign-blob --yes` over the checksums and tries to mint a
-real Sigstore certificate from a machine with no OIDC token to mint it from.
+`check` runs first so a config error reads as one. **`--skip=sign` is not optional**: `--snapshot` does
+not skip signing, so without it the rehearsal runs `cosign sign-blob --yes` and
+tries to mint a real Sigstore certificate from a machine with no OIDC token.
 
 It builds all four targets, the archives, the checksums *and the container
-image*. The image is worth a note: buildx cannot assemble a multi-platform
-manifest without pushing it, so `dockers_v2` builds and pushes in one step and
-runs in goreleaser's **publish** phase. `--skip=publish` therefore skips the
-image build entirely and leaves the `Dockerfile` untested — which is why both
-the CI job and `make snapshot` skip only signing. A snapshot pushes nothing
-regardless: it loads each architecture into the local Docker under its own
-suffixed tags — `ghcr.io/crewlet/crewlet:v0.2.0-SNAPSHOT-<commit>-amd64` and
-`-arm64` after a `v0.2.0` tag, the version every binary of the build reports
-too, and `latest-amd64` and `latest-arm64` beside them — so nothing reaches the
-registry and there is no multi-platform manifest to find afterwards. (A
-shallow clone has no tag to start from and builds `v0.0.0-SNAPSHOT-…`.)
+image*. buildx cannot assemble a multi-platform manifest without pushing it, so
+`dockers_v2` builds and pushes in goreleaser's **publish** phase, and
+`--skip=publish` would skip the image build and leave the `Dockerfile` untested;
+hence both the CI job and `make snapshot` skip only signing. A snapshot still
+pushes nothing: it loads each architecture into the local Docker under suffixed
+tags, `ghcr.io/crewlet/crewlet:v0.2.0-SNAPSHOT-<commit>-amd64` and `-arm64`
+after a `v0.2.0` tag (the version every binary of the build reports), with
+`latest-amd64` and `latest-arm64` beside them, and no multi-platform manifest
+exists afterwards. (A shallow clone has no tag and builds `v0.0.0-SNAPSHOT-…`.)
 
 Building the `linux/arm64` image on an amd64 machine needs binfmt registered
 (`docker run --privileged --rm tonistiigi/binfmt --install all`), or the arm64
 leg fails inside `apt-get` with an exit code and no explanation. Add
-`--skip=docker` if you only care about the binaries.
+`--skip=docker` if you only want the binaries.
 
-CI runs the same thing for you: the snapshot job fires on demand
-(**Actions → release → Run workflow**) and on any pull request touching
-`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
-`scripts/notices/**`, the git pin or its recipe (`scripts/git-pin.env`,
-`scripts/git.sh`) or the workflow. That is what stops the release pipeline
-running for the first time on the tag that publishes.
+CI runs the snapshot job on demand (**Actions → release → Run workflow**) and
+on any pull request touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`,
+`internal/version/**`, `scripts/notices/**`, the git pin or its recipe
+(`scripts/git-pin.env`, `scripts/git.sh`) or the workflow, so the pipeline never
+first runs on the tag that publishes.
 
-Neither release job saves a cache. Both restore the module cache `ci.yml`'s
-`build + vet` job saves on `main`, read-only, and neither restores a build
-cache: goreleaser builds with `-trimpath` and its own `-ldflags`, which share
-no build action with any `ci.yml` job, so a release compiles its four targets
-cold — a few minutes, once per tag — and a pull request touching the release
-surface never stores an entry only its own ref could read.
+Neither release job saves a cache. Both restore, read-only, the module cache
+`ci.yml`'s `build + vet` job saves on `main`, and no build cache: goreleaser
+builds with `-trimpath` and its own `-ldflags`, which share no build action with
+any `ci.yml` job. A release compiles its four targets cold (a few minutes, once
+per tag), and a pull request touching the release surface stores no entry only
+its own ref could read.
 
 ---
 
@@ -246,8 +223,7 @@ surface never stores an entry only its own ref could read.
 
 `ghcr.io/crewlet/crewlet:main` is the engine image of `main`, from
 [`.github/workflows/main-image.yml`](.github/workflows/main-image.yml). **It is
-not a release**: it gets no Release page, no notes, and none of what a tag
-promises (see
+not a release**: no Release page, no notes, none of what a tag promises (see
 [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)).
 It is ONE tag, and it moves:
 
@@ -257,37 +233,34 @@ It is ONE tag, and it moves:
   the setting on. Its workflow proves the build recorded the commit it stamps,
   since a report names it.
 - **Every push to `main` rebuilds it** from the push's head commit and moves
-  `main` to that build. Nothing else is ever pushed: no tag per commit, never
+  `main` to that build. Nothing else is pushed: no tag per commit, never
   `latest`, never a release's tag.
-- **A newer push cancels the run before it.** Every run shares one concurrency
-  group with `cancel-in-progress`, so when pushes land close together only the
-  newest commit is built.
-- **A commit that starts no run is never built.** Dependabot's bumps are merged
-  with `GITHUB_TOKEN`, and GitHub starts no workflow for a push that token
-  made, so `main` stays on the last pushed commit's image until the next push
-  to `main`.
+- **A newer push cancels the run before it.** All runs share one concurrency
+  group with `cancel-in-progress`, so only the newest of close pushes is built.
+- **A commit that starts no run is never built.** Dependabot's bumps merge with
+  `GITHUB_TOKEN`, and GitHub starts no workflow for a push that token made, so
+  `main` keeps the last pushed commit's image until the next push.
 - **Re-run only the newest run.** A re-run builds the commit it ran on and
   moves `main` to it, so re-running an older one moves `main` backwards until
-  the next push. It also joins the concurrency group, cancelling a newer run
-  in flight.
+  the next push, and it joins the concurrency group, cancelling a newer run in
+  flight.
 
 ### What the binary reports
 
 `crewlet version` in the image prints `main-` and the first twelve hex digits
-of the commit, then Go's own record of the whole commit:
+of the commit, then Go's record of the whole commit:
 `crewlet main-4e45c6b992a2 (4e45c6b992a2133639abebeec271236969b4ead4)`. The
-commit is the only identity a build of `main` has. `main-` says where it came
-from and has no leading `v`, so nothing — a reader, a version comparison, a
-`latest` guard — takes it for a release; twelve hex digits is the length Go
-gives a commit in a pseudo-version, and never names two commits of this
-repository. The image's `org.opencontainers.image.revision` label carries the
-whole commit too.
+commit is a build of `main`'s only identity. `main-` says where it came from and
+has no leading `v`, so nothing (reader, version comparison, `latest` guard)
+takes it for a release; twelve hex digits is Go's pseudo-version length and
+never names two commits of this repository. The image's
+`org.opencontainers.image.revision` label carries the whole commit too.
 
 ### How it is built
 
-Not by goreleaser, which fits neither way it runs: a release run needs a
-semver tag on the commit, and a snapshot run pushes nothing. The workflow runs
-the same build plainly, in four steps:
+Not by goreleaser, which fits neither way it runs: a release run needs a semver
+tag on the commit, and a snapshot run pushes nothing. The workflow runs the same
+build plainly, in four steps:
 
 1. **The binaries.** `make image-context` builds the two linux targets with
    `.goreleaser.yaml`'s settings (`CGO_ENABLED=0`, `-trimpath`, `-s -w`, the
@@ -305,12 +278,11 @@ the same build plainly, in four steps:
    `main`) is deleted once it is an hour old, with the signatures of the
    images deleted.
 
-A change to the release build is a change to both `.goreleaser.yaml` and the
-Makefile's `image-context`, and each says so. `main` moves at the push and is signed a moment
-later, so a run that fails or is cancelled between the two leaves `main` on
+A release-build change touches both `.goreleaser.yaml` and the
+Makefile's `image-context`, and each says so. `main` moves at the push and is signed later,
+so a failed or cancelled run in between leaves `main` on
 an image `cosign verify` refuses until a later run signs one. A failed run is
-red on `main`'s commit; a cancelled one was superseded by a newer push, whose
-run is already on its way.
+red on `main`'s commit; a cancelled one was superseded by a newer push.
 
 ### Verifying the image of main
 
@@ -321,34 +293,31 @@ cosign verify ghcr.io/crewlet/crewlet:main \
 ```
 
 The identity names `main-image.yml` on `main`, which no release image carries,
-so a check that an image came from `main` is never satisfied by a release and
-the other way round. To bind the check to one commit as well, add
-`--certificate-github-workflow-sha` with the commit's **full** hash: Fulcio
-writes the commit a run was based on into the certificate. Verify with cosign
-3, or cosign 2 with `--new-bundle-format`. `main` moves, and the image it
-moved from is deleted within the hour, so a digest of `main` is not one to
-pin: a deployment that must keep running one build runs a release.
+so a release never passes a check for `main`, nor the reverse. To bind the check to one commit, add
+`--certificate-github-workflow-sha` with the commit's **full** hash (Fulcio
+writes the run's base commit into the certificate). Use cosign
+3, or cosign 2 with `--new-bundle-format`. The previous `main` image is deleted within the hour, so
+never pin a digest of `main`; a deployment that must keep one build runs a release.
 
 ### What it costs
 
-Each run compiles two targets and builds the two-platform image once, its
-arm64 leg under QEMU. Cancelling a superseded run keeps a burst of merges to
-one finished build. The package keeps the image of `main` and the releases:
-each run deletes the images no tag names once they are an hour old, the hour
-covering an image still being pushed, whose platform manifests are uploaded
-just before the index that tags them.
+Each run compiles two targets and builds the two-platform image once (arm64 under QEMU). Cancelling a superseded run keeps a burst of merges to
+one build. The package keeps `main`'s image and the releases:
+each run deletes images no tag names once an hour old (the hour
+covers an image mid-push, whose platform manifests upload
+just before the index that tags them).
 
 ### Rehearsing it
 
-The workflow runs only on a push to `main`; no pull request runs it. A pull
-request that changes what the image is built from — the `Dockerfile`,
-`go.mod`, `internal/version/**`, `scripts/notices/**` — runs release.yml's
+The workflow runs only on a push to `main`. A pull
+request changing what the image is built from (the `Dockerfile`,
+`go.mod`, `internal/version/**`, `scripts/notices/**`) runs release.yml's
 snapshot job, which builds the release image from the same `Dockerfile` and
-checks the binary's version. A change to `main-image.yml` itself is first
+checks the binary's version. A change to `main-image.yml` is first
 exercised on `main`: read its run after the merge. Locally,
 `make image-context VERSION=main-dev` stages the context in `build/image`, and
 `docker buildx build --platform linux/amd64 --load -f Dockerfile build/image`
-builds the image from it; the push, the signature and the cleanup run on
+builds the image from it; push, signature and cleanup run on
 `main` only.
 
 ---
@@ -357,185 +326,172 @@ builds the image from it; the push, the signature and the cleanup run on
 
 [`ci.yml`](.github/workflows/ci.yml) runs the build, the race suite, the
 end-to-end gates, a cross-compile of every release target and the linter on
-every pull request. The release surface itself is guarded only by what the
+every pull request. The release surface is guarded only by what the
 release pipeline does when it runs:
 
 - **`goreleaser check`** runs first in both release jobs, so a malformed or
-  unknown field in `.goreleaser.yaml` is reported as a config error rather than
-  as whatever the build does with it.
+  unknown field in `.goreleaser.yaml` is a config error.
 - **The publish job holds a tag to its frozen issue report catalogue**: it
   refuses a tag whose export differs from `schema/issue-report-history/<schema>.json`.
-- **The snapshot job builds everything** — all four targets, the archives, the
-  checksums and the container image — on demand and on any pull request
+- **The snapshot job builds everything** (four targets, archives,
+  checksums, container image) on demand and on any pull request
   touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
   `scripts/notices/**`, `scripts/git-pin.env`, `scripts/git.sh` or the
-  workflow. A dependency that needs cgo, or a `Dockerfile` that no longer
-  copies from `${TARGETPLATFORM}`, fails there rather than at tag time.
+  workflow. A dependency needing cgo, or a `Dockerfile` that no longer
+  copies from `${TARGETPLATFORM}`, fails there, not at tag time.
 - **The image checks its own git** in the `Dockerfile`'s last git step, on
-  both platforms, every time the image is built: its `git version` is the
+  both platforms, every build: its `git version` is the
   node pin's, `git-remote-https` links nothing the image lacks — GnuTLS's
   libcurl, and no OpenSSL of git's own — and reaches curl's connect on a
   loopback port, its checksums are block-sha1 (`git version
   --build-options`), it reads its system configuration from `/etc`, git's
   licence is there, and the source tarball beside it hashes to the pin's
-  SHA-256. A stage that stopped building the pin, built another, built it
-  without the recipe's choices, or linked a library the runtime stage does
-  not install fails the snapshot job on the pull request that did it.
-- **Both release jobs run the built binary** and compare what it reports against
-  the version goreleaser recorded in `dist/metadata.json`. That is the only
-  symptom the ldflags stamp has: rename `internal/version.value`, move the
-  package or change the module path and the `-X` flag silently applies to
-  nothing — the link still succeeds and the binary falls back to its build
-  info. The comparison is equality, never a sentinel: sniffing the output for
-  `dev` is what this used to do, and since Go 1.24 an unstamped build in a
-  repository reports a tag-derived pseudo-version instead, so a stamp that
-  applied to nothing shipped green. The publish job also checks that the tag
-  goreleaser built is the ref the run was triggered by. Only the **snapshot**
-  comparison can fail on a stamp that applies to nothing: a release builds at
-  its tagged commit, where the module version an unstamped binary falls back to
-  is the tag itself, so the publish job's check proves the published binary
-  names its tag but not that the `-X` flag put it there. Keep the snapshot
+  SHA-256. A stage that stopped building the pin, built another, dropped
+  the recipe's choices, or linked a library the runtime stage does
+  not install fails the snapshot job on that pull request.
+- **Both release jobs run the built binary** and compare its report with
+  the version goreleaser recorded in `dist/metadata.json`: the only
+  symptom of a broken ldflags stamp. Rename `internal/version.value`, move the
+  package or change the module path and `-X` silently applies to
+  nothing; the binary falls back to its build
+  info. The comparison is equality, never a sentinel (since Go 1.24 an unstamped build reports a tag-derived pseudo-version, so sniffing for
+  `dev` passes it). The publish job also checks that the tag
+  goreleaser built is the ref that triggered the run. Only the **snapshot**
+  comparison catches an inapplicable stamp: a release builds at
+  its tagged commit, where an unstamped binary's fallback version
+  is the tag itself, so the publish check proves the binary
+  names its tag, not that `-X` put it there. Keep the snapshot
   job's paths covering `internal/version/**` for that reason.
 - **The binary of `main` is checked before its image is pushed.** The amd64
-  binary must report `main-<commit>` on every push to `main`, which sees a
-  stamp that applies to nothing as the snapshot job's comparison does, since
-  an unstamped build never reports `main-<commit>`. Then the image is pushed
+  binary must report `main-<commit>` on every push to `main`, which catches an
+  inapplicable stamp like the snapshot comparison. Then the image is pushed
   and signed by its digest.
 
 ### What nothing guards — check these by hand
 
-`internal/version` used to assert most of these against the file that carries
-it. Those tests were dropped, and nothing replaced them: there is no actionlint,
-no yamllint and no schema validation anywhere in the tree, and GitHub accepts
-every one of these mistakes as valid configuration. Each fails **silently**
-unless its bullet says it does not — the pipeline stays green and simply stops
-doing the thing, or starts doing more — so read the file when you touch it:
+No actionlint, yamllint or schema validation exists in the tree (`internal/version` asserts none of these), and GitHub accepts
+each mistake below as valid configuration. Each fails **silently**
+unless its bullet says otherwise (the pipeline stays green and stops
+doing the thing, or does more), so read the file when you touch it:
 
 - **`.github/release.yml` keeps its catch-all `*` category.** Without it an
-  unlabelled pull request is omitted from the release body with no warning, and
-  nothing at release time diffs that body against the merged pull requests. The
-  notes are the only record a release has, and the failure reads as a quiet
-  week.
+  unlabelled pull request is omitted from the release body without warning, and
+  nothing diffs that body against the merged pull requests. The
+  notes are the release's only record.
 - **`prerelease: auto`, and the `latest` image tag stays guarded on the release
   being stable.** Lose either and a release candidate becomes GitHub's "Latest"
   or answers `docker pull crewlet` for everyone who pinned nothing.
 - **The `signs:` arguments match the cosign the publish job installs.** The
   snapshot job and `make snapshot` both pass `--skip=sign`, so the checksum
-  signature is first exercised by the tag that publishes. cosign 3 (from
+  signature is first exercised by the publishing tag. cosign 3 (from
   `sigstore/cosign-installer` v4) writes one `.sigstore.json` bundle and
   refuses the older `--output-signature`/`--output-certificate` pair without
-  `--bundle`; a cosign major that changes the form again lands as a
-  Dependabot bump of the installer, which CI passes green. Read the cosign
-  release notes against `signs:` before merging one, and update the verify
-  commands here and in `docs/getting-started/installation.md` with it.
+  `--bundle`. A later cosign major arrives as a green
+  Dependabot bump of the installer: read its release
+  notes against `signs:` before merging, and update the verify
+  commands here and in `docs/getting-started/installation.md`.
 - **`changelog.use: github-native`.** Any other mode builds the body from commit
-  subjects instead of pull request titles and makes `.github/release.yml` a dead
-  file that keeps being maintained.
+  subjects, not pull request titles, leaving `.github/release.yml` dead.
 - **Exactly one workflow carries `push: tags: ["v*"]`.** Two race to create one
-  Release for one tag and the loser fails after its artifacts are built — and
-  the opposite mistake, a trigger that ends up somewhere Actions ignores, means
-  pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
+  Release and the loser fails after building; a trigger
+  somewhere Actions ignores publishes nothing. Both `.yml` and `.yaml` count.
 - **`main-image.yml` runs only on a push to `main`.** Its job holds
   `packages: write` and `id-token: write`, and the trigger list is the only
-  guard: the job has no event condition, so adding a `pull_request`,
+  guard (the job has no event condition), so a `pull_request`,
   `pull_request_target`, `workflow_run` or `workflow_dispatch` trigger would
   hand the registry and an OIDC signing identity to a run something other than
   a merge started. Its `if:` checks only the repository's name, which keeps a
-  fork's own `main` from running a job that holds the fork's token and could
+  fork's `main` from running a job that holds the fork's token and could
   only fail.
 - **Its runs keep ONE concurrency group with `cancel-in-progress`.** Key the
-  group per run or per commit and two runs push side by side, the older one
-  able to land last and move `main` backwards. Every run stays green either
-  way.
-- **The sign step signs the digest the push reported.** Sign `:main` by tag
-  instead and a newer run's push landing in between gets this run's signature
+  group per run or commit and two runs push side by side, the older able
+  to land last and move `main` backwards. Every run stays green.
+- **The sign step signs the digest the push reported.** Signing `:main` by tag
+  lets a newer run's push in between get this run's signature
   over an image it did not build. It stays green.
 - **`make image-context` builds as `.goreleaser.yaml` does.** The flags, the
   `-X` stamp's path, the platforms and the staged context are written in both,
-  and nothing compares them: a change to one alone gives the image of `main` a
-  different build from a release's, and the run passes as long as the binary
-  still reports its version.
+  uncompared: changing one gives `main`'s image a
+  different build from a release's, and the run passes while the binary
+  reports its version.
 - **The cleanup deletes untagged IMAGES, never untagged package versions.**
   GHCR lists each platform manifest, attestation and signature of a tagged
-  image as a version of its own, so a cleanup deleting every untagged version
+  image as its own version, so deleting every untagged version
   (`actions/delete-package-versions` with `delete-only-untagged-versions`)
-  deletes them out from under `main` and every release, and the next pull of
-  either fails with *manifest unknown*. Its `older-than` keeps an image still
-  being pushed. The run stays green either way.
-- **The image of `main` is its own workflow, named `main image`.** Fold it into
-  `release.yml` and `docs-publish.yml`, which reads every completed `release`
-  run whose event was a push as a new tag, republishes the docs site on every
+  removes them from under `main` and every release, and the next pull
+  fails with *manifest unknown*. Its `older-than` keeps an image mid-push. The run stays green.
+- **The image of `main` is its own workflow, named `main image`.** Folded into
+  `release.yml`, it would make `docs-publish.yml` (which reads every completed `release`
+  run whose event was a push as a new tag) republish the docs site on every
   merge.
 - **`docs-publish.yml` watches the release workflow by its exact `name:`.**
   GitHub reports nothing when that string matches no workflow, so a rename on
-  either side just means the trigger never fires again: the site has no
-  schedule of its own, so a release is not published until something else
+  either side stops the trigger: the site has no
+  schedule, so a release is not published until something else
   rebuilds it.
-- **Every dependency surface has a `.github/dependabot.yml` entry.** A manifest
-  nobody told Dependabot about produces no pull requests, which looks exactly
-  like a manifest with nothing to update — that is how `go.mod` went unwatched
-  for the length of the rewrite. Ecosystem names must match whole: as a
+- **Every dependency surface has a `.github/dependabot.yml` entry.** An
+  unlisted manifest produces no pull requests, like one with
+  nothing to update. Ecosystem names must match whole: as a
   substring, `docker` is satisfied by the `docker-compose` entry.
 - **`.github/workflows/dependabot-merge.yml`'s guard and its merge flags.** The
   job holds `contents: write` and `pull-requests: write` and approves a pull
-  request; its `if:` is the only thing stopping it approving a commit a person
+  request; its `if:` alone stops it approving a commit a person
   pushed onto a Dependabot branch, and `--auto` queues the merge behind the checks
-  `main` requires (drop it and, while `main` requires them, the step goes red
-  instead; with no such rule it would merge before a check had reported). It
+  `main` requires (drop it and, while `main` requires them, the step goes red;
+  with no such rule it would merge before a check reported). It
   approves only while `reviewDecision` is neither `APPROVED` nor
   `CHANGES_REQUESTED`, and an EMPTY decision must keep approving: GitHub has been
-  reported to leave it empty while a ruleset's requirement still blocks the merge,
-  so a skip on doubt would stall every bump with nothing red to show. Loosening
+  reported to leave it empty while a ruleset still blocks the merge,
+  so skipping would stall every bump with nothing red. Loosening
   the `if:` makes the workflow run *more*; narrowing the approval silently stops
   it approving.
 - **`.github/workflows/dependabot-recreate.yml`'s filter, its command and its
   environment.** It comments `@dependabot recreate` on a bump in
-  conflict that Dependabot will not rebase by itself: one holding a commit that is
-  neither Dependabot's nor marked `[dependabot skip]`. Widen that and it races
-  Dependabot on bumps it rebases itself; narrow it and a stuck bump is never
+  conflict that Dependabot will not rebase itself: one holding a commit that is
+  neither Dependabot's nor marked `[dependabot skip]`. Widen the filter and it races
+  Dependabot; narrow it and a stuck bump is never
   asked. `recreate` overwrites every commit on the branch. Each request carries the head
-  it was made for in a hidden marker, which keeps it to one request per head and
-  three per bump. The comment must come from a user account, with
+  it was made for in a hidden marker: one request per head, three per bump. The comment must come from a user account, with
   `DEPENDABOT_RECREATE_TOKEN`: fine-grained, this repository alone, Pull requests:
   read and write, as a secret of the `dependabot-recreate` ENVIRONMENT limited to
   the selected branch `main`, because that scope can also approve pull requests.
-  Create the environment first (a workflow that names a missing one creates it
+  Create the environment first (a workflow naming a missing one creates it
   open to every branch) and never reuse the bundle token, which can push. An empty
   secret fails the run, and so does Dependabot answering "only users with push
-  access"; weakening the filter, the environment or the token's scope leaves it
+  access"; weakening the filter, the environment or the token's scope stays
   green.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split and
   the token's scope.** The `push` job holds a personal access token that can
   write to a branch; its `if:` (author AND actor both Dependabot, repeated on the
-  job that holds the token and not only the one that builds) stops a run a person
+  job holding the token, not only the builder) stops a run a person
   triggered reaching it. The `build` job runs a dependency's install scripts, so
-  it must keep `contents: read`, no secrets and no persisted checkout credential.
-  The `push` job's allowlist of file names stays an allowlist: every tree it
-  writes is inside the Go module, so a `.go` file in one would run on every
+  it keeps `contents: read`, no secrets and no persisted checkout credential.
+  The `push` job's file-name allowlist stays an allowlist: every tree it
+  writes is inside the Go module, so a `.go` file would run on every
   contributor's machine. Where it writes stays its own reading of the
   Makefile's `UI_OUT`, as text from its own checkout, held to directories
   directly under `static/` and refusing a file outside them; never a list the
   `build` job hands over, and never `make`, which would run the checkout beside
-  the token. The token stays fine-grained, for this repository alone, at
-  Contents: read and write — Workflows would let it rewrite workflows, a
+  the token. The token stays fine-grained, this repository alone, at
+  Contents: read and write (Workflows would let it rewrite workflows, a
   classic token reaches every repository its account can, Pull
-  requests would let it approve them — and `v*` needs a tag ruleset its account
+  requests would let it approve them), and `v*` needs a tag ruleset its account
   cannot bypass. It expires, so the date wants a calendar entry. While `main`'s
   ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
   branch merges once CI is green, so the token's scope is the only limit on what
   it can land. Weakening any of these makes the workflow reach *more*, never fail.
 - **`.github/workflows/pins.yml` runs, on its schedule, with `contents: read`
   and `issues: write` and no secret.** It is the only watcher of
-  `scripts/git-pin.env` and `scripts/chromium-pin.env`, one leg of its matrix
+  `scripts/git-pin.env` and `scripts/chromium-pin.env`, one matrix leg
   each; `scripts/git-pin_test.sh` and `scripts/chromium-pin_test.sh` hold the
   scripts it runs, and nothing holds the workflow. Each leg finds its issue by
   an exact title, `git pin behind upstream` or `chromium pin behind upstream`,
-  so renaming a title in one place opens a second issue beside the first; and
-  each reports a pin behind by that issue and a failed run, and the git leg a
-  key near its expiry by a failed run alone, whose notification GitHub sends to
-  whoever last edited the schedule. GitHub also DISABLES a public repository's
-  scheduled workflows after 60 days without activity in it, and says so only
-  by e-mail — after which a pin falls behind with nothing red anywhere. Before
+  so renaming a title in one place opens a second issue; each
+  reports a pin behind by that issue and a failed run, the git leg a
+  key near expiry by a failed run alone (notified to
+  whoever last edited the schedule). GitHub DISABLES a public repository's
+  scheduled workflows after 60 days without activity, saying so only
+  by e-mail, after which a pin falls behind with nothing red. Before
   a tag, `scripts/git-pin-check.sh` (step 3 above) asks the git leg's question
   by hand; the Chromium pin ships in no release, so no tag waits on it.
 
@@ -550,87 +506,17 @@ doing the thing, or starts doing more — so read the file when you touch it:
 | **`checksums.txt.sigstore.json`** | the keyless cosign signature, its certificate and its Rekor entry, as one Sigstore bundle |
 | **`ghcr.io/crewlet/crewlet:vX.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), tagged with the release tag itself, also `:latest` on a stable tag, and signed by digest with the same keyless identity as the checksums. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/`; the git it builds carries its own under `/usr/local/share/doc/git/` — git's licence texts, its source tarball, the recipe that built it and a `SOURCE` file saying which is which |
 
-The binary is self-contained: the dashboard's assets are embedded, the store is
-a file it creates, and the event stream is an embedded NATS JetStream server.
-There is no runtime to install and nothing to point a DSN at.
+The binary is self-contained: dashboard assets embedded, the store a file it creates, the event stream an embedded NATS JetStream server. There is no runtime to install and no DSN.
 
-The image is `debian:trixie-slim` with `ca-certificates`, `libcurl3t64-gnutls`
-and `tini`, rather than `distroless` or `scratch`, because the engine **spawns
-process trees** — the local sandbox backend runs a harness as a child process,
-setup recipes are shell, stdio MCP servers are child processes launched by
-whatever the config names, and Gitlet runs git. On `scratch` all four
-fail at the moment they are used, from an image that started perfectly happily.
-The reasoning is at the top of the [`Dockerfile`](Dockerfile).
+The image is `debian:trixie-slim` with `ca-certificates`, `libcurl3t64-gnutls` and `tini`, not `distroless` or `scratch`, because the engine **spawns process trees**: the local sandbox backend runs a harness as a child process, setup recipes are shell, stdio MCP servers are child processes the config names, and Gitlet runs git. On `scratch` all four fail when used, from an image that started fine. Reasoning is at the top of the [`Dockerfile`](Dockerfile).
 
-**Its git is the pin's, built rather than installed.** Debian trixie ships git
-2.47; the image builds the release [`scripts/git-pin.env`](scripts/git-pin.env)
-names, from its checksummed tarball, with [`scripts/git.sh`](scripts/git.sh) —
-the recipe CI and `make git` run, so the suite tests the git the image ships —
-in a stage of the `Dockerfile` that runs on the build platform and
-cross-compiles for each target. Cross-compiling is what keeps it cheap: the
-linux/arm64 image is built under QEMU, where compiling git took 812 s against
-87 s cross-compiled (four vCPUs of a 2.1 GHz Xeon, when the stage was
-designed), and the cross-compiled stage runs beside the runtime stage's
-emulated `apt-get`, which the arm64 image pays anyway. Measured back to back on
-one development machine (four vCPUs of a 2.8 GHz Xeon; each build from an
-empty build cache with the base image pulled again, both platforms in one
-buildx run as a release does, twice in alternating order): 187–191 s with
-Debian's git, 246–248 s with the pin's, so **about a minute more a release** —
-the two git stages compile beside the arm64 runtime stage's emulated
-`apt-get` and slow it from 175 s to 214 s — where a stage built under QEMU
-would add about fourteen minutes. Those are that development machine's
-figures. On the release runner (GitHub's `ubuntu-24.04` image, in the
-snapshot job of `release.yml`, whose goreleaser step builds the four binaries,
-their archives and both platforms' images), that step took 10 min 31 s with the
-pin's git ([run 39377818703](https://github.com/crewlet/crewlet/actions/runs/39377818703),
-commit `5ccb7d89a`) against 9 min 46 s with Debian's
-([run 39258293385](https://github.com/crewlet/crewlet/actions/runs/39258293385),
-the newest successful snapshot run of a head without the git stage): 45 s
-more, the same minute. Each is one run on a shared runner, whose speed moves
-from run to run, and the two heads differ in more than the git stage, so read
-the difference as about a minute and no finer. Every pull request touching the
-pin or the recipe runs the snapshot job again, and its goreleaser step is where
-a later figure is read. With the pin and the recipe unchanged, a builder that
-keeps its layer cache pays none of it.
-The image checks its own git as it is built (see
-[What CI already guards](#what-ci-already-guards)), and it carries git's licence
-texts, its source tarball, the recipe and a `SOURCE` file under
-`/usr/local/share/doc/git/`, because the image redistributes a git binary it
-built and owes its corresponding source (GPLv2 §3).
+**Its git is the pin's, built rather than installed.** Debian trixie ships git 2.47. The image builds the release [`scripts/git-pin.env`](scripts/git-pin.env) names, from its checksummed tarball, with [`scripts/git.sh`](scripts/git.sh) (the recipe CI and `make git` run, so the suite tests the git the image ships), in a `Dockerfile` stage that runs on the build platform and cross-compiles per target. Under QEMU, compiling git for linux/arm64 took 812 s against 87 s cross-compiled, and the cross-compiled stage runs beside the runtime stage's emulated `apt-get`. Measured on one four-vCPU machine (cold cache, both platforms in one buildx run): 187-191 s with Debian's git, 246-248 s with the pin's, so **about a minute more a release**, where a QEMU-built stage would add about fourteen minutes. On the release runner (`ubuntu-24.04`, the snapshot job of `release.yml`, whose goreleaser step builds the four binaries, archives and both platforms' images) the step took 10 min 31 s with the pin's git ([run 39377818703](https://github.com/crewlet/crewlet/actions/runs/39377818703), commit `5ccb7d89a`) against 9 min 46 s with Debian's ([run 39258293385](https://github.com/crewlet/crewlet/actions/runs/39258293385), the newest successful snapshot run without the git stage). These are single shared-runner runs, so read it as about a minute; every pull request touching the pin or recipe reruns the snapshot job for a later figure. A builder that keeps its layer cache pays none of it.
 
-**What of OpenSSL a git process holds, and what the image relies on.** git is
-GPLv2-only, and OpenSSL 3 is Apache-2.0, a licence the FSF reads as one GPLv2
-cannot be combined with. So the recipe builds git with no OpenSSL of its own
-(`NO_OPENSSL`) and the image's libcurl does its TLS through GnuTLS
-(`libcurl3t64-gnutls`) — Debian's own pairing for its git, and what the image
-shipped before it built one. That keeps OpenSSL out of everything git links
-itself. It does NOT keep OpenSSL out of git's processes: libcurl's own
-dependencies link it — on trixie, libssh2 links OpenSSL 3's `libcrypto.so.3`
-and OpenLDAP its `libssl.so.3` and `libcrypto.so.3` — so every
-`git-remote-https` the image starts maps both, exactly as Debian's own git
-does under the same libcurl, and `libssl3t64` is in the image as their
-dependency, as it was beside Debian's git. For that transitive load the image
-relies on Debian's reading, the one Debian ships its git under, and on no
-reading of its own. A git whose processes hold no OpenSSL at all would need a
-libcurl built without libssh2 and LDAP, which the image does not build.
+The image checks its own git as it is built (see [What CI already guards](#what-ci-already-guards)). It carries git's licence texts, source tarball, the recipe and a `SOURCE` file under `/usr/local/share/doc/git/`, because it redistributes a git binary it built and owes the source (GPLv2 §3).
 
-**A git security release is an engine release.** Every Gitlet node runs the
-image's git, so a git CVE reaches a deployment only through a bump of the pin
-and an image built from it — Debian's security updates to its own git never do.
-A release cut while the pin is behind a security patch of its series is one to
-hold until the pin moves: a bump changes a version and its SHA-256 together in
-`scripts/git-pin.env`, the pull request runs the snapshot job (the image builds
-and checks the new git on both platforms) and the suite on it, and it lands
-before the tag. Nothing has to remember to look:
-[`pins.yml`](.github/workflows/pins.yml) runs
-[`scripts/git-pin-check.sh`](scripts/git-pin-check.sh) every Monday, and while
-any pin is behind it keeps ONE issue open, `git pin behind upstream`, naming
-each stale pin's two new lines — the SHA-256 that of a tarball whose signature
-it verified against the git maintainer's key — and the pull request that
-moves it, and fails its run; it closes the issue once every pin is current. The
-same run fails 60 days before that key's signing subkeys expire, because once
-they have, no release can be verified and every later run fails instead
-(CONTRIBUTING.md, "The git pin is checked every week", says how to refresh it).
+**What of OpenSSL a git process holds.** git is GPLv2-only; OpenSSL 3 is Apache-2.0, which the FSF reads as not combinable with GPLv2. So the recipe builds git with no OpenSSL of its own (`NO_OPENSSL`) and the image's libcurl does TLS through GnuTLS (`libcurl3t64-gnutls`), Debian's own pairing. That keeps OpenSSL out of everything git links itself, but not out of git's processes: libcurl's dependencies link it (on trixie, libssh2 links `libcrypto.so.3`; OpenLDAP links `libssl.so.3` and `libcrypto.so.3`), so every `git-remote-https` maps both, as Debian's git does, and `libssl3t64` is in the image as their dependency. For that transitive load the image relies on Debian's reading of the licence, not its own. No OpenSSL at all in git's processes would need a libcurl built without libssh2 and LDAP, which the image does not build.
+
+**A git security release is an engine release.** Every Gitlet node runs the image's git, so a git CVE reaches a deployment only through a pin bump and an image built from it; Debian's security updates never do. Hold a release cut while the pin is behind a security patch of its series until the pin moves. A bump changes a version and its SHA-256 together in `scripts/git-pin.env`; the pull request runs the snapshot job (the image builds and checks the new git on both platforms) and the suite, and lands before the tag. Nothing has to remember to look: [`pins.yml`](.github/workflows/pins.yml) runs [`scripts/git-pin-check.sh`](scripts/git-pin-check.sh) every Monday, and while any pin is behind it keeps ONE issue open, `git pin behind upstream`, naming each stale pin's two new lines (the SHA-256 of a tarball whose signature it verified against the git maintainer's key) and the pull request that moves it, and fails its run; it closes the issue once every pin is current. The run also fails 60 days before the key's signing subkeys expire, because after that no release can be verified and every later run fails (CONTRIBUTING.md, "The git pin is checked every week", says how to refresh it).
 
 ### Verifying a download
 
@@ -643,15 +529,7 @@ cosign verify-blob checksums.txt \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-One signature over the file that covers every artifact: verify the checksums
-file, then the checksum of what you downloaded. The identity flags are not
-optional — `verify-blob` without them accepts a signature from *any* identity,
-which proves the file was signed by someone rather than by this repository —
-and the identity names the release workflow at the one tag you downloaded,
-exactly, rather than the repository as a whole, because any workflow here that
-is granted an OIDC token can sign. Not a `refs/tags/v` prefix either: that
-accepts the run of any release for this one. The bundle is cosign 3's format;
-an older cosign reads it only with `--new-bundle-format`.
+One signature covers every artifact: verify the checksums file, then the checksum of what you downloaded. The identity flags are required: without them `verify-blob` accepts a signature from *any* identity. The identity names the release workflow at the one tag you downloaded, exactly, not the repository (any workflow here granted an OIDC token can sign) and not a `refs/tags/v` prefix (that accepts any release's run for this one). The bundle is cosign 3's format; an older cosign reads it only with `--new-bundle-format`.
 
 ### Verifying an image
 
@@ -661,83 +539,35 @@ cosign verify ghcr.io/crewlet/crewlet:v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-goreleaser signs every image it pushes by **digest** (`docker_signs` in
-[`.goreleaser.yaml`](.goreleaser.yaml)), so the signature covers the bytes and
-not the tag: `cosign verify` resolves the tag to its digest and checks that, and
-a deployment that pins the digest it verified gets those bytes for good. The
-identity is the release workflow at that exact tag: an image signed by any
-other workflow of this repository carries a different one, and so does the
-image of any other release, so a `v0.2.0` tag moved onto another release's
-image fails the check rather than passing a `refs/tags/v` prefix. The identity
-is the only thing that tells them apart.
+goreleaser signs every image it pushes by **digest** (`docker_signs` in [`.goreleaser.yaml`](.goreleaser.yaml)), so the signature covers the bytes, not the tag: `cosign verify` resolves the tag to its digest and checks that, and a deployment pinning the digest it verified gets those bytes for good. The identity is the release workflow at that exact tag, so an image signed by another workflow or another release carries a different one, and a `v0.2.0` tag moved onto another release's image fails rather than passing a `refs/tags/v` prefix.
 
-The signature is written by cosign 3 (`sigstore/cosign-installer` v4's
-default), whose `cosign sign` stores it in the Sigstore bundle format. Verify
-with cosign 3, or with cosign 2 and `--new-bundle-format`; cosign 2 without
-that flag looks for the older signature layout and finds nothing.
+The signature is written by cosign 3 (`sigstore/cosign-installer` v4's default) in the Sigstore bundle format (`cosign sign` stores it so). Verify with cosign 3, or cosign 2 with `--new-bundle-format`; cosign 2 without it looks for the older layout and finds nothing.
 
 ---
 
 ## Release notes
 
 The Release body is [generated by
-GitHub](https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes)
-from the pull requests merged since the previous tag. Nothing is hand-assembled
-at release time, and the notes stay accurate for whatever actually landed.
+GitHub](https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes) from the pull requests merged since the previous tag. Nothing is hand-assembled.
 
-**They are the whole record of a release** — there is no `CHANGELOG.md` — which
-puts the weight on pull request titles: a title is what a reader deciding
-whether to upgrade sees, and it is fixed once the pull request merges.
-`CONTRIBUTING.md` asks for titles written as release notes for that reason.
+**They are the whole record of a release** (there is no `CHANGELOG.md`), so pull request titles carry the weight: a title is what a reader deciding whether to upgrade sees, and it is fixed once merged. `CONTRIBUTING.md` asks for titles written as release notes for that reason.
 
-[`.github/release.yml`](.github/release.yml) groups the list into two
-categories: everything substantive first, then Dependabot's bumps (matched on
-the `dependencies` label Dependabot applies itself) sorted to the bottom. The
-last category carries the catch-all `*`, so a pull request with no labels still
-appears.
+[`.github/release.yml`](.github/release.yml) groups the list into two categories: everything substantive first, then Dependabot's bumps (matched on the `dependencies` label it applies) at the bottom. The last category carries the catch-all `*`, so an unlabelled pull request still appears.
 
-**A release that changes what the fleet keyring signs needs a paragraph**, and
-it is the one operator consequence a pull request title reliably cannot carry.
-The keyring signs every state-log record, the two per-run sandbox tokens and
-every session cookie, and the rotation runbook's last step — drop the old key —
-now also ends every session still signed under it. An operator who reads only
-the titles will do that step at the old cadence and sign their whole company
-out.
+**A release that changes what the fleet keyring signs needs a paragraph**, the one operator consequence a title cannot reliably carry. The keyring signs every state-log record, the two per-run sandbox tokens and every session cookie, and the rotation runbook's last step, dropping the old key, now also ends every session still signed under it. An operator reading only titles would do that step at the old cadence and sign the whole company out.
 
-If a release ever needs prose the titles cannot carry — a migration note, a
-breaking change worth a paragraph — put it in `release.header` or
-`release.footer` in `.goreleaser.yaml`, which wrap the generated list rather
-than replacing it. Editing the body on GitHub afterwards works too, but is
-lost if the tag is ever re-run: `release.mode` is `replace`, so a re-run
-regenerates the body it built the first time instead of duplicating it.
+For other prose titles cannot carry (a migration note, a breaking change), put it in `release.header` or `release.footer` in `.goreleaser.yaml`, which wrap the generated list. Editing the body on GitHub afterwards works but is lost if the tag is re-run: `release.mode` is `replace`, so a re-run regenerates the body rather than duplicating it.
 
 ---
 
 ## If a release goes wrong
 
-**Before the workflow reached the release step** — delete the tag
-(`git push --delete origin v0.2.0 && git tag -d v0.2.0`), fix the problem,
-re-tag. Nothing is published yet.
+**Before the workflow reached the release step**: delete the tag (`git push --delete origin v0.2.0 && git tag -d v0.2.0`), fix the problem, re-tag. Nothing is published yet.
 
-**After the Release exists** — the artifacts are downloadable and the image tag
-is pullable, so treat the version as spent and fix forward with a new patch
-release. Deleting a Release and re-pushing the tag is possible and is the wrong
-instinct: anyone who already pulled the image by digest, or scripted the
-download URL, is left with something that no longer matches what the tag now
-means.
+**After the Release exists**: the artifacts and image tag are public, so treat the version as spent and fix forward with a new patch release. Deleting a Release and re-pushing the tag is the wrong instinct: anyone who pulled the image by digest or scripted the download URL is left with something that no longer matches what the tag means.
 
-If the bad release is actively harmful (broken binary, wrong contents, a leaked
-credential), mark the Release as a pre-release so it stops being "Latest", cut
-the fix immediately, and say so in the fixing release's notes. Container tags
-are mutable and binaries are not, so also re-point `latest` by releasing the
-fix rather than by retagging the image by hand.
+If the bad release is actively harmful (broken binary, wrong contents, a leaked credential), mark the Release as a pre-release so it stops being "Latest", cut the fix immediately, and say so in the fixing release's notes. Container tags are mutable and binaries are not, so re-point `latest` by releasing the fix, not by retagging the image by hand.
 
-**The image push was rejected** — the run's token could not write packages.
-Check **Settings → Actions → General** (workflow permissions) and that the
-package at `ghcr.io/crewlet/crewlet`, if it already exists, lists this
-repository under its *Manage Actions access*.
+**The image push was rejected**: the run's token could not write packages. Check **Settings → Actions → General** (workflow permissions) and that the package at `ghcr.io/crewlet/crewlet`, if it exists, lists this repository under its *Manage Actions access*.
 
-**A signature step failed** (the checksums' or the image's) — cosign could not
-mint a certificate, which means the job did not get an OIDC token. Confirm `id-token: write` is still in
-the `publish` job's `permissions`; it is not inherited from the workflow-level
-block.
+**A signature step failed** (the checksums' or the image's): cosign could not mint a certificate, so the job got no OIDC token. Confirm `id-token: write` is still in the `publish` job's `permissions`; it is not inherited from the workflow-level block.

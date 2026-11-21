@@ -59,7 +59,7 @@ func tallyOf(items []AgendaItem) AgendaTally {
 // whatever the run did.
 func (r DeepRun) Kept() DeepRun {
 	out := DeepRun{Pass: r.Pass, StoppedBy: cut(r.StoppedBy, keptWordBytes), Minutes: r.Minutes, Bounds: r.Bounds,
-		Progress: []Progress{}, Resumed: r.Resumed}
+		Progress: []Progress{}, Resumed: r.Resumed, Skipped: cut(r.Skipped, keptWordBytes), KeptFrom: r.KeptFrom}
 	out.Findings, out.Explained = nil, nil
 	out.Model, out.Reason = cut(r.Model, keptWordBytes), cut(r.Reason, keptReasonByte)
 	out.Unread = []string{}
@@ -74,6 +74,13 @@ func (r DeepRun) Kept() DeepRun {
 			out.Dropped[drop] = n
 		}
 	}
+	// A REPAIR IS ONE OF THE ENGINE'S OWN, so the map is as small as their list.
+	out.Repaired = map[advisor.Repair]int{}
+	for repair, n := range r.Repaired {
+		if slices.Contains(advisor.Repairs(), repair) {
+			out.Repaired[repair] = n
+		}
+	}
 	for _, p := range r.Progress[max(0, len(r.Progress)-keptLines):] {
 		out.Progress = append(out.Progress, Progress{At: p.At, Text: cut(p.Text, keptLineBytes)})
 	}
@@ -86,7 +93,7 @@ func (r DeepRun) Kept() DeepRun {
 func knownDrop(d advisor.Drop) bool {
 	return slices.Contains([]advisor.Drop{advisor.DropNoEvidence, advisor.DropUnread, advisor.DropWrongFact,
 		advisor.DropRepeat, advisor.DropFix, advisor.DropWords, advisor.DropAnswered, advisor.DropTokensUnsplit,
-		advisor.DropExplanation}, d)
+		advisor.DropExplanation, advisor.DropTooMany}, d)
 }
 
 // cut is s at most n bytes, whole runes.

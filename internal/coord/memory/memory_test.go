@@ -6,9 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The twin is certified by the same suite as every other backend. A
@@ -26,6 +29,15 @@ func TestSharedContract(t *testing.T) {
 	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
 		b := memory.New()
 		return []coord.Backend{b, b, b}
+	})
+}
+
+// A person's control of a run's browser, through three handles on one twin,
+// the shape the suite's shared cases hold a replicated store to.
+func TestBrowserControlContract(t *testing.T) {
+	coordtest.RunBrowserControls(t, func(t *testing.T) []coordtest.BrowserControlStore {
+		b := memory.New()
+		return []coordtest.BrowserControlStore{b, b, b}
 	})
 }
 
@@ -76,6 +88,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	b := memory.New()
+	take := controlTake(uuid.New(), "Ada Lovelace")
 
 	// EVERY verb, because a dead context is a point in this store's life and
 	// the suite's job is to send each verb at each such point. Three of the
@@ -129,6 +142,35 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 			}
 			return err
 		}},
+		{"TakeBrowserControl", func() error {
+			_, taken, err := b.TakeBrowserControl(ctx, take, time.Minute)
+			if taken != "" {
+				t.Errorf("TakeBrowserControl answered %q on a cancelled context", taken)
+			}
+			return err
+		}},
+		{"RenewBrowserControl", func() error {
+			_, renewed, err := b.RenewBrowserControl(ctx, take.Launch, take.Owner, 1, time.Minute)
+			if renewed {
+				t.Error("RenewBrowserControl reported success on a cancelled context")
+			}
+			return err
+		}},
+		{"EndBrowserControl", func() error {
+			_, ended, err := b.EndBrowserControl(ctx, take.Launch, take.Owner, 1, coord.ControlReleased)
+			if ended {
+				t.Error("EndBrowserControl reported success on a cancelled context")
+			}
+			return err
+		}},
+		{"BrowserControl", func() error {
+			_, found, err := b.BrowserControl(ctx, take.Launch)
+			if found {
+				t.Error("BrowserControl found a record on a cancelled context")
+			}
+			return err
+		}},
+		{"WatchBrowserControls", func() error { _, err := b.WatchBrowserControls(ctx); return err }},
 	}
 	for _, v := range verbs {
 		if err := v.call(); err == nil {
@@ -221,7 +263,110 @@ func TestNodeStatusRecordContract(t *testing.T) {
 
 // The memory twin, held mid-mint through its epoch counter.
 func TestMintingContract(t *testing.T) {
-	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {
+	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coordtest.BrowserControlStore {
 		return &memory.Backend{Epochs: coordtest.NewMintCounter(hold)}
 	})
+}
+
+// controlTake is a take of launch by a person of their own, shown as name.
+func controlTake(launch uuid.UUID, name string) coord.BrowserControlTake {
+	return coord.BrowserControlTake{
+		Launch: launch, Turn: uuid.New(), Seat: uuid.New(),
+		Owner: coord.BrowserControlOwner{
+			Person: uuid.New(), Credential: iam.SessionName(uuid.NewString()), Take: uuid.New(),
+		},
+		Holder: coord.BrowserControlHolder{Seat: uuid.New(), Name: name},
+	}
+}
+
+// A BROWSER CONTROL LAPSES ON THE STORE'S CLOCK, NOT THE CALLER'S: live a
+// nanosecond before its TTL is out by the twin's clock and lapsed at it, ended
+// at exactly its deadline, however long the test itself takes.
+//
+// Mutation: judge the row with time.Now(), and it is still live at 30 s.
+func TestABrowserControlLapsesOnTheStoresClockNotTheCallers(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	start := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	now := start
+	b := &memory.Backend{Clock: func() time.Time { return now }}
+	take := controlTake(uuid.New(), "Ada Lovelace")
+	control, taken, err := b.TakeBrowserControl(ctx, take, coord.BrowserControlTTL)
+	if err != nil || taken != coord.ControlTaken {
+		t.Fatalf("TakeBrowserControl = (%q, %v)", taken, err)
+	}
+	epoch := control.Current.Epoch
+
+	now = start.Add(coord.BrowserControlTTL - time.Nanosecond)
+	read, _, err := b.BrowserControl(ctx, take.Launch)
+	if held, ok := read.Held(); err != nil || !ok || held.Epoch != epoch {
+		t.Fatalf("a nanosecond before its TTL by the store's clock the control reads (%+v, %v), want live",
+			read.Current, err)
+	}
+
+	now = start.Add(coord.BrowserControlTTL)
+	read, _, err = b.BrowserControl(ctx, take.Launch)
+	switch lapsed, ok := read.Of(epoch); {
+	case err != nil:
+		t.Fatal(err)
+	case !ok || lapsed.EndedBy != coord.ControlLapsed:
+		t.Fatalf("at its deadline by the store's clock the control reads %+v, want lapsed", read.Current)
+	case !lapsed.EndedAt.Equal(start.Add(coord.BrowserControlTTL)):
+		t.Fatalf("the control lapsed at %v, want its deadline %v", lapsed.EndedAt, start.Add(coord.BrowserControlTTL))
+	case !lapsed.TakenAt.Equal(start):
+		t.Fatalf("the lapsed tenure began at %v, want %v", lapsed.TakenAt, start)
+	}
+}
+
+// THE TWIN FORGETS AN ENDED BROWSER CONTROL AT THE DUTY BUCKET'S AGE PAST ITS
+// END, on the next take of the class, and keeps every live one: on a single
+// node it is the production lease store, and a row per launch anybody took
+// would otherwise grow for the life of the process. An end is readable until
+// then, as the KV duty bucket keeps a key for as long past its last write.
+//
+// Mutation: never remove a row, and the ended one is still read at its age.
+func TestTheTwinForgetsAnEndedBrowserControlAtTheDutyBucketsAge(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	start := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	now := start
+	b := &memory.Backend{Clock: func() time.Time { return now }}
+	takeAt := func(take coord.BrowserControlTake) int64 {
+		t.Helper()
+		control, taken, err := b.TakeBrowserControl(ctx, take, coord.BrowserControlTTL)
+		if err != nil || taken != coord.ControlTaken {
+			t.Fatalf("TakeBrowserControl = (%q, %v)", taken, err)
+		}
+		return control.Current.Epoch
+	}
+	found := func(launch uuid.UUID) bool {
+		t.Helper()
+		_, found, err := b.BrowserControl(ctx, launch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+
+	ended := controlTake(uuid.New(), "Ada Lovelace")
+	epoch := takeAt(ended)
+	if _, ok, err := b.EndBrowserControl(ctx, ended.Launch, ended.Owner, epoch, coord.ControlReleased); err != nil || !ok {
+		t.Fatalf("EndBrowserControl = (%v, %v)", ok, err)
+	}
+
+	now = start.Add(coord.MaxDutyTTL - time.Nanosecond)
+	live := controlTake(uuid.New(), "Grace Hopper")
+	takeAt(live)
+	if !found(ended.Launch) {
+		t.Fatal("an ended control was forgotten a nanosecond before the duty bucket's age past its end")
+	}
+
+	now = start.Add(coord.MaxDutyTTL)
+	takeAt(controlTake(uuid.New(), "Katherine Johnson"))
+	if found(ended.Launch) {
+		t.Fatal("an ended control is still read the duty bucket's age past its end")
+	}
+	if !found(live.Launch) {
+		t.Fatal("a live control was forgotten")
+	}
 }

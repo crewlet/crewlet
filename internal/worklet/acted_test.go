@@ -29,16 +29,16 @@ func TestAnAnswerGivesTheSeatADecisionOnlyWhereAPersonAnswered(t *testing.T) {
 			CreatedAt: at.Add(time.Duration(hours) * time.Hour)})
 	}
 	ask("op-1", "q-1", "bo", "jane", 0)
-	answerOn(t, r, "op-2", "a", "a-1", "jane", "q-1", "hold", "Hold it", at.Add(time.Hour))
+	answerOn(t, r, "op-2", "a", "a-1", "jane", "q-1", "hold", worklet.ChoiceWords("Hold it", ""), at.Add(time.Hour))
 	ask("op-3", "q-2", "bo", "jane", 2)
-	answerOn(t, r, "op-4", "a", "a-2", "jane", "q-2", "ship", "Ship it", at.Add(3*time.Hour))
+	answerOn(t, r, "op-4", "a", "a-2", "jane", "q-2", "ship", worklet.ChoiceWords("Ship it", ""), at.Add(3*time.Hour))
 	ask("op-5", "q-3", "bo", "cy", 4)
 	q3 := "q-3"
 	askOn(t, r, "op-6", "a", worklet.Comment{ID: "a-3", Task: "a", Author: "cy",
-		AuthorKind: worklet.AuthorAgent, Body: "Ship it", Answers: &q3, Choice: "ship",
+		AuthorKind: worklet.AuthorAgent, Body: worklet.ChoiceWords("Ship it", ""), Answers: &q3, Choice: "ship",
 		CreatedAt: at.Add(5 * time.Hour)})
 	ask("op-7", "q-4", "cy", "jane", 6)
-	answerOn(t, r, "op-8", "a", "a-4", "jane", "q-4", "ship", "Ship it", at.Add(7*time.Hour))
+	answerOn(t, r, "op-8", "a", "a-4", "jane", "q-4", "ship", worklet.ChoiceWords("Ship it", ""), at.Add(7*time.Hour))
 
 	read := func(answers ...string) *worklet.ActedDecision {
 		t.Helper()

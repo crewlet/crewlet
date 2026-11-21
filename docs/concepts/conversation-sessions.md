@@ -1,3 +1,4 @@
+
 # Conversation Sessions
 
 A seat that answered a Jira comment on Monday and is woken by a follow-up on
@@ -355,60 +356,70 @@ turn_engine:
                                   #   turn's last record, read at every pass
     max_bytes_per_seat: 67108864  # object-store bytes one seat's sessions
                                   #   may hold, and again its saves'
-                                  #   allowance (33 MiB..64 GiB)
+                                  #   allowance (49 MiB..64 GiB)
     save_interval_seconds: 600    # shortest time between saves of a running
                                   #   executor job's session (300..3600;
                                   #   0 takes 600), paced by size beyond it
 ```
 
-It is nested under `turn_engine` so it hot-reloads with the live turn-engine
-settings cell.
+Nested under `turn_engine` rather than beside it, which is load-bearing: it
+rides the live turn-engine settings cell, so it hot-reloads through the
+existing turn-engine diff handler with no extra apply-config wiring.
 
-**`enabled: false`** keeps no executor launch's session
-([Code Sandbox](code-sandbox.md#each-launchs-session-kept)), continues none, reads
-no conversation's head, tells no turn how earlier turns ended, and offers no seat a
-tool to read its sessions
-([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)). Sessions kept
-before are read by no model (a launch already running when its node applies the
-revision is refused at its next call to either tool) and stay a person's to read as
-the seat's trail. Each turn's end is still recorded on the executor log, so turning
-it back on finds the endings.
+**`enabled: false`** keeps no executor launch's session — nothing is captured
+or stamped ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) —
+continues none, reads no conversation's head, tells no turn how its
+conversation's earlier turns ended, and offers no seat a tool to read its
+sessions ([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)): one
+switch for everything a conversation carries between turns. The sessions kept
+before it went off are read by no model — a launch already running when its
+node applies the revision is refused at its next call to either tool, which
+asks the revision its node runs — and stay a person's to read as the seat's
+trail. How each turn ended is still recorded on the executor log, so
+turning it back on finds the conversation's endings.
 
-**`retention_days`** is how long a seat's sessions are kept past their turn's last
-record: the trash reaper deletes a row, and the session it names, that no later turn
-took up first, reading the value off the revision the fleet runs at every hourly
-pass, and never deletes one whose turn's run is still live or whose session a live
-turn holds. A turn that never ended, a day past its last record with no run live,
-first ends as `lost`, so a lost end holds the seat's budget for a day, not the whole retention. A conversation quiet for longer than the retention starts its
-next turn fresh ([Schedules](#schedules)).
+**`retention_days`** is how long a seat's sessions are kept past their turn's
+last record: the trash reaper deletes a row, and the session it names, that no
+later turn took up first, reading the value off the revision the fleet runs at
+every hourly pass — a revision that moves it is honoured at the next pass, not
+the next start — and never deletes one whose turn's run is still live or whose
+session a live turn holds. A turn that never ended, a day past its last record
+with no run of it live, it first ends as `lost`, so a lost end holds the seat's
+budget for a day rather than for the whole retention. A conversation quiet for
+longer than the retention starts its next turn fresh, and so a schedule whose
+fires come further apart than the retention starts every fire fresh
+([Schedules](#schedules)).
 
-**`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a capture
-releases the seat's oldest ended sessions first, keeping how each turn ended, and a
-capture the seat's live turns leave no room for is refused, so that turn's next
-launch starts fresh. A session a live turn's first launch was handed is held until
-that turn keeps a session of its own or ends, so it counts beside the seat's live
-turns meanwhile. The default, 64 MiB, holds a live turn's session at its 32 MiB
-bound beside about twenty ordinary ones (a day's work compresses to one or two
-mebibytes); the least it accepts, 33 MiB, is one session at that bound once sealed.
-It is also the **allowance of the seat's saves** of its running sessions: the
-object store keeps a replaced save until its collector deletes it, a day and more,
-so a seat holds up to twice its budget. Every seat's sessions share the object
-store with the company's files; on the default `nats` bucket, about 2.6 GiB at the
+**`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a
+capture releases the seat's oldest ended sessions first, keeping how each turn
+ended, and a capture the seat's live turns leave no room for is refused, so
+that turn's next launch starts fresh. A session a live turn's first launch was
+handed is held until that turn keeps a session of its own or ends, so it
+counts beside the seat's live turns for as long. The default, 64 MiB, holds a
+live turn's session at its 48 MiB bound beside about ten ordinary ones (a
+day's work compresses to one or two mebibytes); the least it accepts, 49 MiB,
+is one session at that bound once sealed. It is also the **allowance of the
+seat's saves** of its running sessions: a save another replaces is kept by the
+object store until its collector deletes it, a day and more, so a seat holds up
+to twice its budget. Every seat's sessions share the object store with the
+company's files, and on the default `nats` bucket, about 2.6 GiB at the
 smallest data volume crewlet-operator admits, five seats at both halves take a
 quarter of it, so a company of twenty seats or more belongs on S3
-(`store.objects.backend`): a full bucket refuses every upload, the company's files
-included.
+(`store.objects.backend`): a full bucket refuses every upload, the company's
+files included.
 
 **`save_interval_seconds`** is the shortest time between saves of a running
-executor job's session, 600 s by default; 300 to 3600 is taken and anything else
-refused, never clamped (0 takes the default). It bounds what a run lost with its box
-does again: about the interval and one save's take. Saves are spaced by size beyond
-it so a seat's superseded saves stay within its allowance: at the defaults a session
-past about 0.4 MiB sealed is saved about every 27 minutes per sealed MiB, about
-every 54 once the seat has saved for a day, so a session growing 1.2 to 1.8 MiB
-sealed an hour is saved every 0.54 to 0.81 times its age, 1.1 to 1.6 in a busy seat
-([Paced by size](code-sandbox.md#a-running-jobs-session-saved-as-it-works)). Each
-node reads it off the revision it runs.
+executor job's session, 600 s by default, 300 to 3600 taken and anything
+else refused, never clamped (0 takes the default). It bounds what a run lost
+with its box does again: about the interval and one save's take. A seat's saves
+are spaced by size beyond it, so its superseded saves stay within its
+allowance: at the defaults a session past about 0.4 MiB sealed is saved about
+every 27 minutes per sealed MiB, about every 54 once the seat has saved for a
+day, so a session growing 1.2 to 1.8 MiB sealed an hour is saved every 0.54 to 0.81
+times its age, 1.1 to 1.6 in a busy seat
+([Paced by size](code-sandbox.md#a-running-jobs-session-saved-as-it-works)).
+Each node reads it off the revision it runs, since a cadence binds only the
+node driving the box.
 
 ---
 

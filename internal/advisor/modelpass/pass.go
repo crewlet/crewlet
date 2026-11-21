@@ -106,16 +106,17 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 	if deps.Now != nil {
 		now = deps.Now
 	}
-	findings, dropped := advisor.Ground(submitted, surf.served, advisor.Grounding{
+	grounded := advisor.Ground(submitted, surf.served, advisor.Grounding{
 		Company: d.Company, Rules: d.Rules, DryRun: deps.DryRun, Answered: d.Answers.Holding(now())})
 	// THE EXPLANATIONS' DROPS STAY COUNTED beside the findings'.
 	for drop, n := range out.Dropped {
-		dropped[drop] += n
+		grounded.Dropped[drop] += n
 	}
+	findings := grounded.Findings
 	for i := range findings {
 		findings[i] = advisor.SayNumbers(findings[i])
 	}
-	out.Findings, out.Dropped = findings, dropped
+	out.Findings, out.Dropped, out.Repaired = findings, grounded.Dropped, grounded.Repaired
 	out.Listed = len(out.Findings)
 	return out
 }

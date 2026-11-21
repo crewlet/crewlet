@@ -164,9 +164,9 @@ hours of each other:
 - A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
   capture is stamped on the run's record by the clock of the node taking it,
   and any other node reads it as still being kept until its life and two
-  hours have passed by its own clock, about three hours and twelve minutes; a
+  hours have passed by its own clock, about three hours and twenty minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and thirty-seven and a half minutes.
+  hours have passed, about four hours and fifty and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose
@@ -201,12 +201,6 @@ takes the store's word for it ([Coordination](../concepts/coordination.md#the-th
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
-
-The same hour bounds one step of a single machine's own clock: a node removes
-a session spool a crash left behind only once it is an hour older than the
-longest a keep may wait to open it, by that machine's clock, so NTP stepping
-the clock forward by up to an hour to correct it never removes a spool a keep
-is still about to upload.
 
 Every data node reads the fleet's clocks on its position heartbeat, every ten
 seconds, off the position register in the coordination store, which it reads on
@@ -2858,7 +2852,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `agent_capability_told`, `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `mcp_server_acted`, `model_acted`, `operator_acted`, `org_started`, `own_record_marked`, `org_stopped`, `seat_access_drift_restored`, `seat_grant_changed`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped`, `wake_held` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_placed`, `seat_provider_parked`, `seat_provider_released`, `seat_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_joined`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_placed`, `seat_provider_parked`, `seat_provider_released`, `seat_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_fire_superseded`, `scheduled_task_fired`, `task_assigned`, `work_pickup`, `delegated_review` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 

@@ -21,8 +21,10 @@ import {
   entriesAnswer,
   facetsAnswer,
   generatedCompany,
+  GROWN_LANES,
   grownCompany,
   mapAnswer,
+  shapedCompany,
   sparseCompany,
   summary,
   type AtlasFixture,
@@ -88,11 +90,12 @@ async function mount(
   hash = "#/company/atlas",
   narrow: (params: Record<string, unknown>) => AtlasFixture = () => fixture,
   gutter = 0,
+  height = 900,
 ) {
   location.hash = hash;
-  await page.viewport(width, 900);
+  await page.viewport(width, height);
   host = document.createElement("div");
-  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
+  host.style.cssText = `width: ${width}px; height: ${height}px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
   document.body.append(host);
   root = createRoot(host);
   const ask = (what: string, params: Record<string, unknown>) =>
@@ -222,6 +225,123 @@ test.each([1440, 390])(
     expect(sidewaysScrollers(host!)).toEqual([]);
   },
 );
+
+/** The fitted map's zoom, from the world's transform. */
+function zoom(): number {
+  const world = document.querySelector<HTMLElement>(".crewlet-canvas__world")!;
+  return Number(/scale\(([0-9.e-]+)\)/.exec(world.style.transform)?.[1]);
+}
+
+/** Whether two boxes share any area, past half a pixel. */
+const overlap = (a: DOMRect, b: DOMRect) =>
+  a.left < b.right - 0.5 &&
+  b.left < a.right - 0.5 &&
+  a.top < b.bottom - 0.5 &&
+  b.top < a.bottom - 0.5;
+
+// THE FITTED MAP FILLS ITS CANVAS, on a wide screen, a laptop, a tablet and a
+// phone. One shape on every canvas fitted a grown company's eighty-one entries
+// at 39% on a wide screen, a narrow block in the middle of it with nearly every
+// name cut, and at 20% on a phone, marks with no name. Nothing stands outside
+// the canvas, under the zoom bar or over another frame. Mutation: draw
+// `MAP_ROWS` at fixed columns again, and each fit falls under its floor.
+const FITS = [
+  { width: 1920, height: 860, floor: 0.46, share: 0.44 },
+  { width: 1440, height: 900, floor: 0.46, share: 0.55 },
+  { width: 1024, height: 768, floor: 0.44, share: 0.45 },
+  { width: 390, height: 844, floor: 0.25, share: 0.4 },
+];
+test.each(FITS)(
+  "a grown company's map fills its canvas at $width by $height",
+  async ({ width, height, floor, share }) => {
+    await mount(width, shapedCompany(GROWN_LANES), "#/company/atlas", undefined, 0, height);
+    const canvas = await shownMap();
+    const lanes = drawn(".crewlet-graph-canvas__lane").map((el) => el.getBoundingClientRect());
+    expect(lanes).toHaveLength(LANES.length);
+    for (const lane of lanes) expect(inside(lane, canvas), "a frame is in view").toBe(true);
+    lanes.forEach((a, i) =>
+      lanes.slice(i + 1).forEach((b) => expect(overlap(a, b), "two frames overlap").toBe(false)),
+    );
+    const bar = document
+      .querySelector("[aria-label='Zoom in']")!
+      .closest(".crewlet-canvas__bar")!
+      .getBoundingClientRect();
+    for (const el of [
+      ...drawn(".crewlet-graph-canvas__items .crewlet-graph-canvas__card"),
+      ...drawn(".crewlet-graph-canvas__lane-title"),
+    ]) {
+      expect(overlap(el.getBoundingClientRect(), bar), "under the zoom bar").toBe(false);
+    }
+    const covered =
+      lanes.reduce((sum, lane) => sum + lane.width * lane.height, 0) /
+      (canvas.width * canvas.height);
+    expect(zoom()).toBeGreaterThanOrEqual(floor);
+    expect(covered).toBeGreaterThanOrEqual(share);
+    expect(sidewaysScrollers(host!)).toEqual([]);
+  },
+);
+
+// THE SAME COMPANY ON THE SAME CANVAS IS DRAWN ALIKE: the arrangement reads
+// the canvas and the entries, and nothing else. Mutation: let it read the time.
+test("the same company on the same canvas draws its lanes in the same places", async () => {
+  const company = shapedCompany(GROWN_LANES);
+  const places = () =>
+    drawn(".crewlet-graph-canvas__lane").map((el) => {
+      const box = el.getBoundingClientRect();
+      return [box.left, box.top, box.width, box.height].map(Math.round);
+    });
+  await mount(1440, company);
+  await shownMap();
+  const first = places();
+  flushSync(() => root?.unmount());
+  host?.remove();
+  await mount(1440, company);
+  await shownMap();
+  expect(places()).toEqual(first);
+});
+
+// FULLSCREEN ARRANGES FOR THE SCREEN: the map's box keeps its size while the
+// canvas fills the screen, so a map arranged for the box would stand small in
+// it. A screen-sized element stands in for the held one, which a headless
+// browser does not resize. Mutation: measure the box alone.
+test("a map held fullscreen is arranged for the screen, and for its box again after", async () => {
+  await mount(1024, shapedCompany(GROWN_LANES), "#/company/atlas", undefined, 0, 768);
+  await shownMap();
+  const box = document.querySelector<HTMLElement>(".atlas-map")!;
+  const card = () => getComputedStyle(box).getPropertyValue("--crewlet-graph-canvas-card-width");
+  const boxed = card();
+  const screen = document.createElement("div");
+  screen.style.cssText = "position: fixed; inset: 0 auto auto 0; width: 1920px; height: 1080px;";
+  box.append(screen);
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => screen });
+  try {
+    document.dispatchEvent(new Event("fullscreenchange"));
+    await eventually(() => expect(card()).not.toBe(boxed));
+  } finally {
+    Reflect.deleteProperty(document, "fullscreenElement");
+    screen.remove();
+  }
+  document.dispatchEvent(new Event("fullscreenchange"));
+  await eventually(() => expect(card()).toBe(boxed));
+});
+
+// A PHONE'S LANES KEEP THEIR TITLES: a grown company on a phone fits as marks,
+// so each lane's title and tally are what reads, and a lane one column wide
+// cut its title to a letter. Mutation: drop the titles from the arrangement.
+test("on a phone, every lane's title says at least the first letters of its name", async () => {
+  await mount(390, shapedCompany(GROWN_LANES), "#/company/atlas", undefined, 0, 844);
+  await shownMap();
+  const labels = drawn(".crewlet-graph-canvas__lane-label");
+  expect(labels).toHaveLength(LANES.length);
+  for (const label of labels) {
+    const text = label.textContent ?? "";
+    const shown =
+      label.scrollWidth <= label.clientWidth + 0.5
+        ? text.length
+        : Math.floor(label.clientWidth / (label.scrollWidth / text.length)) - 1;
+    expect(shown, text).toBeGreaterThanOrEqual(Math.min(4, text.length));
+  }
+});
 
 // A FILTER FITS THE MAP IT ANSWERS: the last answer stays on screen while the
 // new one is read, so a fit keyed on the question landed on the old map and

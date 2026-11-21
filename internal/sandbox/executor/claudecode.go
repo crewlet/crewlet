@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -701,15 +700,14 @@ const heldClockWaits = 50
 // heldPlainMax is the most plaintext a pack beside a working harness packs
 // ([claudeHeldTar]), and the most an OpenCode pack on demand exports
 // ([openCodePack]): the most one reading of an archive yields to a kept
-// session's scrub, [scrubExpansion] times the bound a kept session's archive is
-// held to (executorkeep.SessionMaxBytes), a quarter of a gibibyte. A session
+// session's scrub ([scrubPlainMax]). A session
 // whose files add up past it is refused by the take once packed, so it is not
 // packed at all: its tar beside a working harness would cost that harness's box
 // some seconds of a core — a pack runs at about 43 MiB/s on one, measured — and
 // a moment of as much disk, for an archive nothing would keep. A file's size
 // is its plaintext and not quite the tar's, which adds a header to each, so
 // the bound refuses what the scrub would and never more.
-const heldPlainMax = scrubExpansion * executorkeep.SessionMaxBytes
+const heldPlainMax = scrubPlainMax
 
 // floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
 func floorParts(version string) (major, minor, patch string) {
