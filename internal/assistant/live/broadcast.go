@@ -84,8 +84,8 @@ const (
 	// ReplayPageBytes is the most encoded frames one replay answer carries:
 	// the frame log's own bound, so a whole log is one page at most, and
 	// with the AEAD's base64 and the seal still under the queue's largest
-	// message ([queue.MaxPayloadBytes]). One frame larger than it travels
-	// alone.
+	// message ([queue.MaxPayloadBytes]). No frame is larger: the log admits
+	// none, and a gap's snapshot is cut to [wire.FrameMaxBytes].
 	ReplayPageBytes = FrameLogBytes
 
 	// PublishBacklog is how many frames this node holds for the broker

@@ -347,13 +347,13 @@
 //
 // # A busy seat's wake router
 //
-// While one of a seat's executor runs holds it, the node holding the seat
-// reads the held inbox through the queue's backlog read, which consumes and
-// spends nothing, and files to the run, as a wake item for its job, each wake
-// from the run's own requester in its conversation or about its work item
-// ([routeOf]); another writer's never on that rule (ADR-0109). One router per busy seat
-// ([Engine.seatRunsMoved]), nudged by a stream subscription on the inbox and
-// its lane and by the seat's dispatch going idle, with a backstop read
+// While a seat's executor run holds it, the seat's node reads the held inbox
+// with the queue's backlog read, which spends nothing, and files to the run as
+// a wake item each wake from its requester in its conversation, about its work
+// item or about a record its calls wrote, by exact identity ([routeOf],
+// [sandbox.BridgeLog.Wrote]); another writer's never on that rule (ADR-0109).
+// One router per busy seat ([Engine.seatRunsMoved]), nudged by the inbox's and
+// lane's streams, the seat's dispatch going idle and a backstop
 // ([routeBackstop]); each wake decided once per job. A claimed wake's delivery
 // is skipped `joined`, naming its turn, its seen-through mark moved at the
 // claim and its owed answer the resumed turn's ([runSteers.turnReply]); an
@@ -363,7 +363,11 @@
 // described once per job by one call on the role's `triage` chain
 // ([runTriage]) and the engine gates the description ([gateOf]): input joins
 // as information, a lead's steer as their note ([Engine.fileSteer]), noise
-// owing nothing is absorbed, the rest waits (ADR-0168).
+// owing nothing is absorbed, the rest waits (ADR-0168). Another writer's
+// request is put to the run's requester and the seat's leads as a fold-in on
+// the run's row ([Engine.askFoldIn]); approved, it joins as the approver's
+// note ([Engine.fileFoldIn]), else it waits (ADR-0109). A waiting person is
+// told why, once ([Engine.tellWaiting]).
 package engine
 
 import (

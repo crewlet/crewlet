@@ -70,6 +70,7 @@ import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
+import { FOLD_IN_REFUSE, FoldInButtons } from "~/components/FoldInButtons.tsx";
 import { runStanding } from "~/lib/runStanding.ts";
 import { PUT_OFF_CHOICES, putOffHolds, usePutOff } from "~/lib/putOff.ts";
 import type { McpHeldCall } from "~/contract/mcp.ts";
@@ -88,7 +89,7 @@ import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { useFocusLanding } from "~/lib/focusLanding.ts";
 import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, closedAt, type GivenAnswer } from "./answerFate.ts";
-import { fmtAt } from "~/lib/format.ts";
+import { fmtAt, plural, possessive } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
 import {
   CHECKED_WORDS,
@@ -114,6 +115,7 @@ import type {
   AnsweredDecision,
   AnsweredWorkAsk,
   ExecutorRow,
+  FoldInItem,
   WorkAskRow,
   WorkDecisionEvidence,
   WorkItem,
@@ -366,6 +368,15 @@ function OpenPane({
               index={index}
               now={now}
               answered={answered}
+              onSettled={onSettled}
+            />
+          );
+        case "fold_in":
+          return (
+            <FoldInPane
+              item={row.subject.foldIn}
+              frame={frame}
+              index={index}
               onSettled={onSettled}
             />
           );
@@ -1635,6 +1646,77 @@ function StandingLine({ run, index }: { run: ExecutorRow; index: OrgIndex }) {
  * reply and no "Something else": the run's own answer is refused for a held
  * call, and the call is decided by the people its approval admits.
  */
+/**
+ * Another person's request asking to join an agent's running work: who asked,
+ * which agent and whose work it would join, on whose apps, their words quoted
+ * as they wrote them (the row keeps an excerpt, `cut` more where they wrote
+ * it), and the two answers ([FoldInButtons]).
+ */
+function FoldInPane({
+  item,
+  frame,
+  index,
+  onSettled,
+}: {
+  item: FoldInItem;
+  frame: Frame;
+  index: OrgIndex;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
+}) {
+  const [said, setSaid] = useState<string | null>(null);
+  const landing = useFocusLanding(said !== null);
+  const name = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const seat = name(item.seat);
+  const requester = name(item.requester);
+  const words = item.words.trim();
+  return (
+    <>
+      {frame.byline(
+        <>
+          <strong>{frame.name}</strong>
+          {` asks to add this to ${possessive(seat)} running work`}
+          {frame.task && <> on {frame.task}</>}
+        </>,
+      )}
+      <ReadingPaneTitle>{item.decision.question}</ReadingPaneTitle>
+      {words && (
+        <ReadingPaneLead>
+          {renderMarkdown(words, { ...CHECKED_WORDS, scoped: true })}
+          {item.cut > 0 && (
+            <Text variant="caption" tone="secondary">
+              {`${plural(item.cut, "more character")} of their message ${item.cut === 1 ? "is" : "are"} where they wrote it.`}
+            </Text>
+          )}
+        </ReadingPaneLead>
+      )}
+      <Text variant="caption" tone="secondary">
+        {`Approved, ${seat} works on it as part of what it is doing for ${requester}, with ${possessive(requester)} apps.`}
+      </Text>
+      {said && (
+        <ReadingPaneOutcome {...landing} tone="done">
+          {said}
+        </ReadingPaneOutcome>
+      )}
+      {said ? null : (
+        <Inline gap={2}>
+          <FoldInButtons
+            item={item}
+            seat={seat}
+            onAnswered={(choice) => {
+              setSaid(
+                choice === FOLD_IN_REFUSE
+                  ? "Left to run as its own turn once the running work ends."
+                  : `Added to ${possessive(seat)} running work.`,
+              );
+              onSettled("Answered");
+            }}
+          />
+        </Inline>
+      )}
+    </>
+  );
+}
+
 function HeldRunPane({
   run,
   held,

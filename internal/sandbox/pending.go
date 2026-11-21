@@ -788,6 +788,10 @@ type BridgeAppend struct {
 	// count them.
 	Absorbed []ElidedCall
 
+	// Wrote is the records Call's committed writes created or wrote, folded
+	// into the log's set ([BridgeLog.Wrote]). A record's alone.
+	Wrote []types.WrittenRecord
+
 	// Spent is the session's running total of what its bridged calls cost the
 	// engine. A record's alone.
 	Spent EngineSpend
@@ -1584,6 +1588,13 @@ type PendingRun struct {
 	// the same turn.
 	Steer RunSteer `json:"steer,omitzero"`
 
+	// FoldIns are the questions the job's running work asked of the people who
+	// may let another writer's request join it ([FoldIn], foldin.go), at most
+	// [MaxJobFoldIns]. The JOB's: cleared when the next job opens
+	// ([PendingStore.BeginLaunch]), so no answer reaches work it was not
+	// asked for.
+	FoldIns []FoldIn `json:"fold_ins,omitempty"`
+
 	// BriefNotes is TRANSIENT, an instruction to [PendingStore.BeginLaunch] like
 	// [PendingRun.Continues]: the notes the job's brief carries, which the write
 	// opening the job records read by it. A note the record holds, or never held
@@ -1756,6 +1767,21 @@ type BridgeLog struct {
 	// in too ([takeEarlier]), so only a kind folded in after the turn's last
 	// collection read is in no outcome.
 	Committed []string `json:"committed,omitempty"`
+
+	// Wrote is every record the TURN'S calls created or wrote, each once, in
+	// the order the logs took them, named as a wake about it is
+	// ([types.WrittenRecord]): what a busy seat's router hands a wake about to
+	// the running run (internal/engine, ADR-0167). Folded in by the append
+	// taking a call's record ([BridgeAppend.Wrote]; late, abandoned and an
+	// earlier round's alike, as each ran), and KEPT BY EVERY OPENING as
+	// [BridgeLog.Committed] is, so it lives as long as the log through a park,
+	// a relaunch and a takeover. HERE, NOT ON THE RECORD: the append is the one
+	// step that knows what a call wrote, and the store writes no two keys at
+	// once. Held to [types.MaxWrittenRecords]; WroteMore says a record was
+	// refused for want of room, which the append that first refused one says
+	// ([CoordStore.AppendBridgeCall]). Read through [PendingStore.TurnLog].
+	Wrote     []types.WrittenRecord `json:"wrote,omitempty"`
+	WroteMore bool                  `json:"wrote_more,omitempty"`
 
 	// InFlight are the round's calls that have BEGUN AND NOT FINISHED: each entry,
 	// written by the bridge before its tool runs ([AppendBegin]), carries the call's
@@ -2573,6 +2599,21 @@ type PendingStore interface {
 	// [MaxWakeItemBytes] is [ErrWakeTooLarge]. A retry of a wake held answers
 	// its item. No fence. See the package doc, "A wake joins a running run".
 	FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error)
+
+	// AskFoldIn records fold-in f on the run's row for its job ([FoldIn]):
+	// only while the row holds that job in [ItemStatuses] and no ending is
+	// decided, else [ErrFoldInClosed]; once per job and wake, a repeat
+	// answering the one recorded; within [MaxJobFoldIns] for the job, else
+	// [ErrFoldInsSpent]; and [ErrFoldInTooLarge] past [MaxFoldInBytes]. The
+	// store stamps its AskedAt.
+	AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error)
+
+	// AnswerFoldIn records the answer to fold-in id: only while the row holds
+	// its job in [ItemStatuses], else [ErrFoldInClosed]; the first answer
+	// alone, a later one refused [ErrFoldInAnswered] with the fold-in naming
+	// the first; never its asker's ([ErrFoldInAsker]). The store stamps its
+	// AnsweredAt.
+	AnswerFoldIn(ctx context.Context, turnID, id string, a FoldInAnswered) (FoldIn, error)
 
 	// TakeNotes records the notes a take names read, where its Read says, and answers
 	// the ones THIS CALL recorded, each with its read. Pinned ([NoteTake]): a failed

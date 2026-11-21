@@ -186,7 +186,7 @@ test("a parked turn is marked parked, and an open one running or not settled by 
         handle: "ceo",
         role: "CEO",
         activity: "working",
-        turn: { turn_id: "t-live", stage: "phase" },
+        turns: [{ turn_id: "t-live", stage: "phase" }],
       },
     ],
   );

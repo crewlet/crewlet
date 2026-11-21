@@ -128,3 +128,31 @@ func (d AnswerDesk) Deliver(ctx context.Context, given types.ExecutorAnswerGiven
 	}
 	return ev.ID, nil
 }
+
+// AnswerFoldIn records a person's answer to fold-in id on run's row
+// ([PendingStore.AnswerFoldIn]), then tells the seat holding the run, on its
+// control topic, to read it ([CoordinatorOptions.FoldInAnswered]).
+//
+// RECORDED HERE, by whichever node took the answer, unlike an answer that
+// resumes a parked run: a fold-in resumes nothing, the row's one write decides
+// the first answer, and the person is told at once what became of theirs. The
+// nudge is best effort: a seat that misses it reads the row at its router's
+// backstop, so its failure fails nothing.
+func (d AnswerDesk) AnswerFoldIn(ctx context.Context, run PendingRun, id string, a FoldInAnswered) (FoldIn, error) {
+	f, err := d.Pending.AnswerFoldIn(ctx, run.TurnID, id, a)
+	if err != nil {
+		return f, err
+	}
+	if control := controlSubject(run.AgentID); control != "" {
+		ev := events.New(types.ExecutorAnswerGiven{TurnID: run.TurnID, Agent: run.AgentID,
+			AgentHandle: run.AgentHandle, Choice: string(a.Answer), AnsweredBy: a.By,
+			AnsweredByKind: string(a.ByKind), FoldIn: id}, events.TraceContext{})
+		ev.Source = types.OperatorSource
+		if err := d.Queue.Publish(ctx, control, ev); err != nil {
+			log.WarnContext(ctx, "fold_in_answer_unannounced", "turn_id", run.TurnID, "fold_in", id,
+				"seat", run.AgentHandle, "error", err.Error(),
+				"detail", "the answer is recorded; the seat reads it at its router's next read")
+		}
+	}
+	return f, nil
+}

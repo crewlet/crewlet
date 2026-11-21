@@ -819,18 +819,20 @@ describe("the board on the work screen", () => {
     role: "SWE",
     handle: "swe",
     activity: "working",
-    live_call: {
-      versions: ZERO_VERSIONS,
-      turn_id: "t-1",
-      work_key: key,
-      phase: "execute",
-      // THE THIRD ROUND IN FLIGHT: `round_num` is zero-based.
-      round_num: 2,
-      rounds_used: 2,
-      max_rounds: 20,
-      work_item: { id: item.toLowerCase(), key: item, project: "ENG" },
-    },
-    turn: { started_at: "2031-04-16T11:54:00Z", stage: "running" },
+    live_calls: [
+      {
+        versions: ZERO_VERSIONS,
+        turn_id: "t-1",
+        work_key: key,
+        phase: "execute",
+        // THE THIRD ROUND IN FLIGHT: `round_num` is zero-based.
+        round_num: 2,
+        rounds_used: 2,
+        max_rounds: 20,
+        work_item: { id: item.toLowerCase(), key: item, project: "ENG" },
+      },
+    ],
+    turns: [{ started_at: "2031-04-16T11:54:00Z", stage: "running" }],
   });
 
   // THE STRIP IS ON THE TASK THE ENGINE READS WORKING (ADR-0162), and on no

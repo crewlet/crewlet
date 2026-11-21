@@ -598,6 +598,9 @@ type Written struct {
 
 	// changes are the kinds of change the writes committed ([Written.Commit]).
 	changes []types.CommittedChange
+
+	// records are the records the writes created or wrote ([Written.Wrote]).
+	records []types.WrittenRecord
 }
 
 // WrittenFrom rebuilds a set a suspended turn carried across its park: the
@@ -630,6 +633,9 @@ func (w *Written) Add(item types.WorkItem) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// A RECORD OF ITS OWN, past [MaxWritten] too: the run's router asks whether
+	// a wake is about this item, not how many items the turn wrote.
+	w.records, _ = types.FoldWritten(w.records, types.ItemWritten(item))
 	ref := item.Ref()
 	if _, seen := w.refs[ref]; seen {
 		return

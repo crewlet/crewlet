@@ -99,6 +99,21 @@ func (s *Statuses) Queue(ctx context.Context, handle, wake string, metadata map[
 	return false
 }
 
+// Explain says why a person's message waits behind the seat's current work,
+// on whichever backend the message came from ([StatusDriver.Explain]); it
+// reports whether any did.
+func (s *Statuses) Explain(ctx context.Context, handle, wake string, metadata map[string]string, why string) bool {
+	if s == nil {
+		return false
+	}
+	for _, d := range s.drivers {
+		if d.Explain(ctx, handle, wake, metadata, why) {
+			return true
+		}
+	}
+	return false
+}
+
 // Dequeue takes the waits of these wakes away on every backend
 // ([StatusDriver.Dequeue]): a driver that queued none of them does nothing.
 func (s *Statuses) Dequeue(ctx context.Context, handle string, wakes []string) {

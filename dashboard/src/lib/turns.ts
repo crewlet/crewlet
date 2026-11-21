@@ -13,6 +13,7 @@
 import { pathOf } from "~/app/frame/objects.ts";
 import { href } from "~/app/router.tsx";
 import { doingWords, RUNNING_ROWS, workingLongestFirst } from "./seats.ts";
+import { callOf, narrowTo, turnOf } from "./seatturn.ts";
 import { WORKLET_ITEM_BACKEND } from "./work.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
@@ -65,21 +66,23 @@ export function runningNow(
   if (turn.complete) return null;
   const seat = seatOnTurn(agents, turn.turn_id);
   if (!seat) return null;
-  const parked = seat.turn?.stage === "parked";
+  const parked = turnOf(seat)?.stage === "parked";
   return {
     words: `${parked ? "parked" : "running"} · ${doingWords(seat)}`,
-    item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
+    item: callOf(seat)?.work_item ?? turnOf(seat)?.work_item ?? null,
   };
 }
 
 /**
- * The turn a seat's live overlay says it is on — its turn record first, then
- * its call in flight, the order [seatOnTurn] reads them in — or "" while it
- * names none: a seat the engine calls working can be a frame or two ahead of
- * the turn id, and a link to `#/live/turns/` with no id is a link to nothing.
+ * The turn a seat's live overlay says it is on — its first turn record, then
+ * its call in flight (`lib/seatturn.ts`) — or "" while it names none: a seat
+ * the engine calls working can be a frame or two ahead of the turn id, and a
+ * link to `#/live/turns/` with no id is a link to nothing. A seat on several
+ * turns is several rows of a running list (`workingLongestFirst`), each read
+ * here as its own.
  */
 export function turnIdOf(row: AgentRow | null | undefined): string {
-  return row?.turn?.turn_id || row?.live_call?.turn_id || "";
+  return turnOf(row)?.turn_id || callOf(row)?.turn_id || "";
 }
 
 /**
@@ -141,9 +144,10 @@ export function watchHref(turnId: string): string {
  * turn, and a seat whose turn has published no id yet has nowhere to go — a
  * link to `#/live/turns/` with no id is a link to nothing — so it is not a
  * row, and it does not take one of the four places either. It is still
- * COUNTED: `working` is every working seat, for a list's figure, and `more`
- * is what the short list leaves out, id-less seats included, which Live ›
- * Now running lists one row each.
+ * COUNTED: `working` is every running turn of every working seat (a seat on
+ * two turns is two rows, `workingLongestFirst`), for a list's figure, and
+ * `more` is what the short list leaves out, id-less seats included, which
+ * Live › Now running lists one row each.
  */
 export function runningShortList(agents: readonly AgentRow[]): {
   working: AgentRow[];
@@ -172,8 +176,9 @@ export function runningTarget(agents: readonly AgentRow[]): {
 }
 
 /**
- * The seat whose live overlay says it is on this turn — its turn record
- * first, then its call in flight — or undefined when no seat is.
+ * The seat whose live overlay says it is on this turn — one of its turn
+ * records, else one of its calls in flight — narrowed to that turn
+ * (`narrowTo`), or undefined when no seat is.
  *
  * ONE READING FOR EVERY SURFACE THAT ASKS "is anybody running this turn?",
  * because two readings is how the same turn was "not settled" on its own page
@@ -181,10 +186,11 @@ export function runningTarget(agents: readonly AgentRow[]): {
  * the list assumed that no completion record meant running.
  */
 export function seatOnTurn(agents: readonly AgentRow[], turnId: string): AgentRow | undefined {
-  return (
-    agents.find((a) => a.turn?.turn_id === turnId) ??
-    agents.find((a) => a.live_call?.turn_id === turnId)
-  );
+  for (const a of agents) {
+    const narrowed = narrowTo(a, turnId);
+    if (narrowed) return narrowed;
+  }
+  return undefined;
 }
 
 /**

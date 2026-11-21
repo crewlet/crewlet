@@ -117,7 +117,7 @@ func TestTheDrainSavesBesideItsWaitForTurns(t *testing.T) {
 	r.runner.SavesSessions = true
 	armed.Store(true)
 
-	_, finish, err := e.node.AdmitTurn(t.Context(), "swe")
+	_, finish, err := e.node.AdmitTurn(t.Context(), "swe", "")
 	if err != nil {
 		t.Fatalf("AdmitTurn: %v", err)
 	}

@@ -7,16 +7,27 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// commit records on the turn's write record the change a write committed: a
+// commit records on the turn's write record the change a write committed and
+// the records it created or wrote, each named as a wake about it names it
+// ([types.WrittenRecord]), which a running run's router reads (ADR-0167): a
 // record appended (applied or pending), never one nobody heard back from.
-func commit(turn *turnctx.Turn, outcome statelog.Outcome, change types.CommittedChange) {
+func commit(turn *turnctx.Turn, outcome statelog.Outcome, change types.CommittedChange,
+	wrote ...types.WrittenRecord) {
+
 	if turn == nil {
 		return
 	}
 	switch outcome {
 	case statelog.OutcomeApplied, statelog.OutcomePending:
 		turn.Written.Commit(change)
+		turn.Written.Wrote(wrote...)
 	}
+}
+
+// changeRecord is the record a write to change id wrote, named as every wake
+// about the change is stamped ([gitlet.ChangeConversation]).
+func changeRecord(id string) types.WrittenRecord {
+	return types.ConversationWritten(gitlet.ChangeConversation(id))
 }
 
 // conversed is the change a write to a change's conversation is: a comment is

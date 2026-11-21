@@ -643,3 +643,50 @@ func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 		}
 	}
 }
+
+// A SEAT'S POST AND EVERY REPLY IN ITS THREAD ARE ONE CONVERSATION: the
+// identity the post records (MessageConversation) is the one a wake about a
+// reply there is stamped with, exactly, so a running run's router finds the
+// reply (ADR-0167). In a room it is the thread, its root's own post included;
+// in a direct conversation the line, whatever thread; another thread of the
+// room is another conversation.
+//
+// Mutation: anchor a room's post on its own id when it replies in a thread, or
+// key a direct line by thread, and a case goes red.
+func TestAReplyIsStampedWithTheConversationThePostRecords(t *testing.T) {
+	t.Parallel()
+	reg := company(t, []string{"jane", "eng"}, "jane")
+	prompts := notify.NewPrompts(chatlet.NewPrompt())
+	stamped := func(kind chatlet.Kind, message, root string) string {
+		rec := aPost()
+		rec.Notify.ChannelKind, rec.Notify.MessageID, rec.Notify.ThreadRoot = kind, message, root
+		routed := wakes(t, rec, reg)
+		if len(routed) != 1 {
+			t.Fatalf("the reply woke %d seats, want one", len(routed))
+		}
+		return prompts.Conversation(routed[0].Inbound)
+	}
+	for _, tc := range []struct {
+		name   string
+		kind   chatlet.Kind
+		posted chatlet.Message
+	}{
+		{"a room's post, replied to", chatlet.KindPublic, chatlet.Message{ID: "msg-0"}},
+		{"a reply in a room's thread", chatlet.KindPublic, chatlet.Message{ID: "msg-5", ThreadRoot: "msg-0"}},
+		{"a direct message", chatlet.KindDM, chatlet.Message{ID: "msg-0"}},
+		{"a reply in a direct line's thread", chatlet.KindDM, chatlet.Message{ID: "msg-5", ThreadRoot: "msg-3"}},
+	} {
+		got := chatlet.MessageConversation(chatlet.Channel{ID: "room-1", Kind: tc.kind}, tc.posted)
+		if want := stamped(tc.kind, "msg-9", "msg-0"); got == "" || got != want {
+			t.Errorf("%s records %q, and a reply in its thread is stamped %q", tc.name, got, want)
+		}
+	}
+	elsewhere := stamped(chatlet.KindPublic, "msg-7", "")
+	if got := chatlet.MessageConversation(chatlet.Channel{ID: "room-1", Kind: chatlet.KindPublic},
+		chatlet.Message{ID: "msg-0"}); got == elsewhere {
+		t.Errorf("a post's thread and another top-level message of the room are one conversation, %q", got)
+	}
+	if chatlet.MessageConversation(chatlet.Channel{Kind: chatlet.KindPublic}, chatlet.Message{ID: "msg-0"}) != "" {
+		t.Error("a message in no room records a conversation")
+	}
+}

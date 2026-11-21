@@ -156,12 +156,18 @@ func serviceInstruments() []Instrument {
 				"when its triage found it noise owing nothing, `refused` when " +
 				"the run's record took no more, and `left_queued` when it waits " +
 				"for a turn of its own. `rule` names what decided: the " +
-				"requester rule's `conversation` or `work_item`; the triage's " +
+				"requester rule's `conversation`, `work_item` or `wrote` (a " +
+				"record the run created or wrote); the triage's " +
 				"`triage_input`, `triage_steer`, `triage_request`, " +
 				"`triage_noise`, or `triage_failed` for a triage that decided " +
-				"nothing; or `none`. `triage_failed` climbing is a seat whose " +
-				"triage chain is failing. The `seat_wake_left_queued` and " +
-				"`seat_wake_triaged` lines name the reason.",
+				"nothing; another writer's request put to the people who may " +
+				"let it join, `foldin_asked` (`left_queued` while it waits), " +
+				"then `foldin_approved` (`joined` as the approver's note), " +
+				"`foldin_refused`, or `foldin_expired` when its job ended " +
+				"unanswered; or `none`. `triage_failed` climbing is a seat whose " +
+				"triage chain is failing, and `foldin_expired` beside few " +
+				"answers is approvers not reached. The `seat_wake_left_queued`, " +
+				"`seat_wake_triaged` and `seat_wake_foldin_*` lines name the reason.",
 		},
 
 		// ---- the object store's S3 requests ---------------------------

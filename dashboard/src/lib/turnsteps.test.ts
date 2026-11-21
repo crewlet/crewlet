@@ -13,9 +13,9 @@ const row = (call: Partial<LiveCall> | null, over: Partial<AgentRow> = {}): Agen
   ({
     role: "SWE",
     activity: "working",
-    live_call: call
-      ? { turn_id: "t", phase: "execute", round_num: 0, rounds_used: 0, ...call }
-      : null,
+    live_calls: call
+      ? [{ turn_id: "t", phase: "execute", round_num: 0, rounds_used: 0, ...call }]
+      : [],
     ...over,
   }) as unknown as AgentRow;
 
@@ -55,7 +55,9 @@ test("the round can leave the step's label and is still said once", () => {
 // THERE IS NO DELIVERY STEP: whether a turn reached anybody is decided as it
 // closes, and a step that could never be current is a promise nothing keeps.
 test("a turn walks three steps, and a parked one is in Execute, in its box", () => {
-  const parked = turnSteps(row(null, { turn: { turn_id: "t", started_at: "", stage: "parked" } }));
+  const parked = turnSteps(
+    row(null, { turns: [{ turn_id: "t", started_at: "", stage: "parked" }] }),
+  );
   expect(parked.current).toBe("execute");
   expect(parked.steps.map((s) => s.label)).toEqual(["Context", "Execute · in its box", "Review"]);
   const onboarding = turnSteps(row({ phase: "onboarding" }));
@@ -143,7 +145,7 @@ test("with no word in a step, the steps are the same at every stage of a turn", 
   expect(words({ current_phase: "context" })).toEqual({ steps, detail: "" });
   expect(words({ current_phase: "onboarding" })).toEqual({ steps, detail: "onboarding" });
   expect(words({ current_phase: "review" })).toEqual({ steps, detail: "" });
-  expect(words({ turn: { turn_id: "t", started_at: "", stage: "parked" } })).toEqual({
+  expect(words({ turns: [{ turn_id: "t", started_at: "", stage: "parked" }] })).toEqual({
     steps,
     detail: "in its box",
   });

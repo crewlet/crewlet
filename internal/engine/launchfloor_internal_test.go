@@ -1468,3 +1468,32 @@ func TestAFloorTurnedOffHoldsNoLaunchWhoseContextIsUnknown(t *testing.T) {
 		}
 	})
 }
+
+// A LAUNCH'S FLOOR COUNTS THE SEAT'S OTHER RUNS (ADR-0169). An executor run's
+// spend is charged at its collection, so a launch beside a running run read
+// room that run was about to take, and two together overshot the window. With
+// one other run held, a launch the window has room for alone is refused, saying
+// why, and held until a window has room for both; with none, it goes.
+//
+// Mutation: leave beside out of the headroom check and the launch goes; leave
+// it out of the hold and the refused resume is released into the same refusal.
+func TestALaunchFloorCountsTheSeatsOtherRuns(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "50")
+	r.spend(t, 40)
+	alone := staticFloor(r.e.Company())
+	if err := executorHeadroom(t.Context(), staticRemaining{left: 60}, alone); err != nil {
+		t.Fatalf("a launch with 60 tokens left and a floor of 50, beside no run = %v, want it to go", err)
+	}
+	beside := alone
+	beside.beside = alone.static
+	refused := executorHeadroom(t.Context(), staticRemaining{left: 60}, beside)
+	if !errors.Is(refused, toolloop.ErrBudgetExhausted) || !strings.Contains(refused.Error(), "other running runs") {
+		t.Fatalf("a launch with 60 tokens left beside a run counted at 50 = %v, want a budget refusal "+
+			"naming the other runs", refused)
+	}
+	held := r.e.heldByBudget(t.Context(), r.e.Company(), "lead", refused)
+	if held == nil || held.Refusal.Condition != waitBudget || !strings.Contains(held.Refusal.Reason, "other running runs") {
+		t.Fatalf("held = %+v, want the resume held until a window has room beside the other run", held)
+	}
+}

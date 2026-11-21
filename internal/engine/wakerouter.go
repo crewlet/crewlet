@@ -22,7 +22,8 @@ import (
 // A busy seat's router (ADR-0167): while one of a seat's executor runs holds
 // it, the node holding the seat reads the seat's held inbox without consuming
 // it ([queue.EventQueue.Backlog]) and hands the run, as a wake item, every
-// wake from the run's own requester about the run's work ([routeOf]). A wake
+// wake from the run's own requester about the run's work or about a record the
+// run created or wrote ([routeOf], [wroteAbout]). A wake
 // the run reads is claimed and its delivery dropped after the run; one it never
 // reads runs as a turn of its own. Another wake about the run's work, or from
 // a lead of the seat, is triaged and gated (waketriage.go, ADR-0168). The
@@ -73,6 +74,8 @@ const (
 	ruleConversation routeRule = "conversation"
 	// ruleWorkItem: about the work item the run was charged to.
 	ruleWorkItem routeRule = "work_item"
+	// ruleWrote: about a record the run's calls created or wrote ([wroteAbout]).
+	ruleWrote routeRule = "wrote"
 	// ruleNone: it matched neither, or is not a wake a run takes.
 	ruleNone routeRule = "none"
 	// The triage's verdict on a wake the fixed rule left ([triageVerdict.rule]),
@@ -82,11 +85,18 @@ const (
 	ruleTriageRequest routeRule = "triage_request"
 	ruleTriageNoise   routeRule = "triage_noise"
 	ruleTriageFailed  routeRule = "triage_failed"
+	// A request from another writer put to the people who may let it join
+	// (foldin.go): asked, approved, refused, or closed unanswered with its job.
+	ruleFoldInAsked    routeRule = "foldin_asked"
+	ruleFoldInApproved routeRule = "foldin_approved"
+	ruleFoldInRefused  routeRule = "foldin_refused"
+	ruleFoldInExpired  routeRule = "foldin_expired"
 )
 
 // routeRules is the closed set.
-var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleNone, ruleTriageInput, ruleTriageSteer,
-	ruleTriageRequest, ruleTriageNoise, ruleTriageFailed}
+var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleWrote, ruleNone, ruleTriageInput,
+	ruleTriageSteer, ruleTriageRequest, ruleTriageNoise, ruleTriageFailed, ruleFoldInAsked, ruleFoldInApproved,
+	ruleFoldInRefused, ruleFoldInExpired}
 
 // Valid reports whether r is one of [routeRules].
 func (r routeRule) Valid() bool { return slices.Contains(routeRules, r) }
@@ -98,7 +108,7 @@ const (
 	stayWorked      = "worked"        // the completion ledger records it worked
 	stayNoRequester = "no_requester"  // the run works for nobody it could be from
 	stayWriter      = "other_writer"  // from somebody other than the run's requester
-	stayOtherWork   = "other_work"    // neither the run's conversation nor its item
+	stayOtherWork   = "other_work"    // not the run's conversation, its item or a record it wrote
 	stayNoWords     = "no_words"      // carries none of its writer's words to hand over
 	stayRefused     = "record_closed" // the run's record took no more
 )
@@ -131,8 +141,9 @@ func (e *Engine) originOf(handle string, ev *events.Event) wakeOrigin {
 // routeOf is whether wake ev, from o, joins run, and by which rule, else why it
 // stays. ONLY THE RUN'S OWN REQUESTER'S WAKES JOIN: a run is held to one
 // requester (ADR-0109), so another writer's words never reach it here.
-// worked says the completion ledger records one of ev's keys worked.
-func routeOf(run sandbox.PendingRun, ev *events.Event, o wakeOrigin, worked bool) (routeRule, string) {
+// worked says the completion ledger records one of ev's keys worked, wrote
+// that ev is about a record the run created or wrote ([wroteAbout]).
+func routeOf(run sandbox.PendingRun, ev *events.Event, o wakeOrigin, worked, wrote bool) (routeRule, string) {
 	switch {
 	// A TYPE THE LEDGER DOES NOT KEY would be claimed and run again. A
 	// delegated review and a colleague's ask or answer are answered on a
@@ -154,8 +165,26 @@ func routeOf(run sandbox.PendingRun, ev *events.Event, o wakeOrigin, worked bool
 		return ruleConversation, ""
 	case sameItem(run.WorkItem, o.item):
 		return ruleWorkItem, ""
+	case wrote:
+		return ruleWrote, ""
 	}
 	return ruleNone, stayOtherWork
+}
+
+// wroteAbout reports whether o is about a record in wrote, what a run's calls
+// created or wrote ([sandbox.BridgeLog.Wrote]): its work item by ref, or its
+// conversation, the identity a write records ([types.WrittenRecord]). AN EXACT
+// COMPARE, never a likeness the wake's own words could sway (ADR-0167).
+func wroteAbout(wrote []types.WrittenRecord, o wakeOrigin) bool {
+	var item, conversation types.WrittenRecord
+	if o.item != nil {
+		item = types.ItemWritten(*o.item)
+	}
+	if notify.Derived(o.conversation) {
+		conversation = types.ConversationWritten(o.conversation)
+	}
+	return (item.Valid() && slices.Contains(wrote, item)) ||
+		(conversation.Valid() && slices.Contains(wrote, conversation))
 }
 
 // ownChannel is the wake types answered on a channel of their own ([routeOf]).
@@ -344,6 +373,7 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 		}()
 	}
 	memo := newRouteMemo()
+	defer e.routerEnded(ctx, handle, memo)
 	backstop := time.NewTimer(routeBackstop)
 	defer backstop.Stop()
 	for {
@@ -364,7 +394,9 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 // keeps which, by job and wake id), a lead's steers filed once all are weighed.
 // NOTHING WHILE A DISPATCH OF THE SEAT RUNS here: the turn that launched the
 // run may not have recorded its own triggers worked yet ([Dispatcher.Idle]
-// nudges after).
+// nudges after). NOR WITHOUT EACH RUN'S WRITTEN SET ([Engine.writtenOf]): a
+// wake is decided once per job, so one decided without it is never weighed
+// with it.
 func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, memo *routeMemo) {
 	if e.dispatch != nil && e.dispatch.Running(handle) {
 		return
@@ -377,6 +409,7 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, m
 	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
 		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
 	})
+	e.expireFoldIns(ctx, handle, runs, memo)
 	memo.prune(runs)
 	if len(runs) == 0 {
 		return
@@ -391,12 +424,38 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, m
 			return !memo.done(run.LaunchID, ev.ID.String())
 		})
 	})
+	if len(mail) == 0 {
+		return
+	}
+	wrote, ok := e.writtenOf(ctx, handle, runs)
+	if !ok {
+		return
+	}
 	worked := e.workedOf(ctx, handle, mail)
-	read := &routeRead{}
+	read := &routeRead{wrote: wrote}
 	for _, ev := range mail {
 		e.routeWake(ctx, handle, runs, ev, worked, memo, read)
 	}
 	e.fileSteers(ctx, handle, read, memo)
+}
+
+// writtenOf is what each of runs created or wrote, by turn, off its turn's log
+// ([sandbox.PendingStore.TurnLog], [sandbox.BridgeLog.Wrote]); false where a
+// log could not be read, which leaves the read undecided for the next.
+func (e *Engine) writtenOf(ctx context.Context, handle string, runs []sandbox.PendingRun) (
+	map[string][]types.WrittenRecord, bool) {
+
+	wrote := make(map[string][]types.WrittenRecord, len(runs))
+	for _, run := range runs {
+		turnLog, err := e.runSteers.store.TurnLog(ctx, run)
+		if err != nil {
+			log.DebugContext(ctx, "seat_router_log_unread", "seat", handle, "turn_id", run.TurnID,
+				"error", err.Error())
+			return nil, false
+		}
+		wrote[run.TurnID] = turnLog.Wrote
+	}
+	return wrote, true
 }
 
 // workedOf is which of mail's keys the completion ledger records worked, in
@@ -432,9 +491,10 @@ func (e *Engine) routeWake(ctx context.Context, handle string, runs []sandbox.Pe
 		if memo.done(run.LaunchID, id) {
 			continue
 		}
-		rule, stay := routeOf(run, ev, o, isWorked)
+		wrote := wroteAbout(read.wrote[run.TurnID], o)
+		rule, stay := routeOf(run, ev, o, isWorked, wrote)
 		if rule == ruleNone {
-			if rel := e.relationsOf(ctx, handle, run, o); candidate(stay, rel) {
+			if rel := e.relationsOf(ctx, handle, run, o, wrote); candidate(stay, rel) {
 				e.triageRun(ctx, handle, run, ev, o, rel, memo, read)
 				return
 			}
@@ -471,6 +531,11 @@ func (e *Engine) routeWake(ctx context.Context, handle string, runs []sandbox.Pe
 	}
 	if why != "" {
 		e.noteRouted(ctx, handle, sandbox.PendingRun{}, id, routeLeftQueued, ruleNone, why, nil)
+		// A MESSAGE THAT RUNS AFTER the running work is told so, once; one
+		// worked already runs nothing.
+		if why != stayWorked {
+			e.tellWaiting(ctx, handle, ev, id, o.login == "" && e.seatIsHuman(o.requester), runsAfterLine)
+		}
 	}
 }
 

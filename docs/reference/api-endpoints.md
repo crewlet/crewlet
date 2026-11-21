@@ -182,8 +182,8 @@ The CLI and dashboard rely on it. A non-2xx answer with no code was written by s
 |--------|------|-------------|
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic. Before the node serves it answers a shorter body: `503` while recovering, `200` after (see [While a node is starting](#while-a-node-is-starting)) |
 | `GET` | `/ready` | Readiness for a load balancer: `503` with `reason: "starting"` before the node serves (see [While a node is starting](#while-a-node-is-starting)), then `503` while draining, before the first config revision applies, on a `shed` or `stuck` posture, or while this node can no longer route the estate's reads and writes; `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, then `estate_behind`, in that order of precedence. `estate_behind` also gives a node's seats back ([`unserviceable`](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)): its calls need another data node (its own copy is out of service) and its view of who serves the estate has been unreadable over 60 seconds. A copy that is merely behind never takes a node out of rotation. The deciding term is logged at debug (`ready_withheld_for_the_estate`), never in the body. It never reads the fleet's presence or alarm counts. A node without the `ingress` role answers a different question here, whether it is doing its work: see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
-| `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded; they appear only in `/org` with `"kind": "human"` |
-| `GET` | `/agents/{id}` | Single agent: `handle`, `agent_id`, `role` (its name), the live overlay (incl. `live_call`), and `llm_history`, the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle** (every roster row's `id`); a role name is NOT accepted (two seats may share one). A handle no agent seat answers to is `404` |
+| `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_calls`). [Human seats](../concepts/humans-in-the-org.md) are excluded; they appear only in `/org` with `"kind": "human"` |
+| `GET` | `/agents/{id}` | Single agent: `handle`, `agent_id`, `role` (its name), the live overlay (incl. `live_calls`), and `llm_history`, the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle** (every roster row's `id`); a role name is NOT accepted (two seats may share one). A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). `{id}` is the seat's handle, resolved to the derived agent id the diary is keyed by |
 | `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole**, ask and account complete (the memory listing carries only their openings; see [below](#get-agentsidmemoryepisodesepisode)) |
 | `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, latest begun first, paged: each turn whose executor captured its harness's session or read its conversation, how it ended, what it was asked, whether its session is still kept, and whether a relaunch of it (or, once ended, its conversation's next turn) would continue it. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
@@ -3182,7 +3182,7 @@ Every stored type reaches the activity feed (the snapshot's `events` and each `e
 
 ### A seat's LLM history
 
-`llm_history` is the seat's **finished** phases, read from the event store of **every live data node** (placement moves a seat, and the phases it ran are kept by the data node it ran on, or, where it ran on a node without `data`, by the data node keeping that node's events in custody): one row per `agent_phase_completed` and per `executor_collected`, newest first, capped at 50, with the answer's `coverage` saying which nodes it heard from (see [Reading the fleet's history](#reading-the-fleets-history-coverage)). The call *in flight* is `live.live_call`, from the projection. Each history row carries the same fields a live one does (`turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`, `round_narration`, `partial_round`, `total_tokens`) plus the envelope's `timestamp` and `failed`.
+`llm_history` is the seat's **finished** phases, read from the event store of **every live data node** (placement moves a seat, and the phases it ran are kept by the data node it ran on, or, where it ran on a node without `data`, by the data node keeping that node's events in custody): one row per `agent_phase_completed` and per `executor_collected`, newest first, capped at 50, with the answer's `coverage` saying which nodes it heard from (see [Reading the fleet's history](#reading-the-fleets-history-coverage)). The calls *in flight* are `live.live_calls`, from the projection. Each history row carries the same fields a live one does (`turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`, `round_narration`, `partial_round`, `total_tokens`) plus the envelope's `timestamp` and `failed`.
 
 It is the stored record, its payloads held to their shares of one message, so a long phase's row may list some of its calls and say the rest (`calls_elided`, `elided_calls`, `rounds_elided`; see [what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)). It also carries the phase's price where its own harness reported one (`cost_usd`), which the dashboard never reads ([rule 19](dashboard-design.md#rules-a-change-has-to-keep)).
 
@@ -3235,7 +3235,7 @@ It holds what has **happened**: a phase, an in-flight call, a spend. Who the sea
 
 What the projection computes, it also **pushes**; a dashboard mirrors it rather than re-deriving it. Applying an event yields a change set, and the changed agents' overlays, the sandbox list and the spend rollup go out as their own envelopes.
 
-The projection holds each agent's **in-flight LLM call**, the latest `agent_turn_progress` (phase, round, model, accumulated response, tool calls so far), and surfaces it as `live_call` on the agent in every snapshot, so a tab that refreshes or reconnects mid-call re-renders the live row at once. `agent_turn_progress` is *stream-only*, never written to the event store. Its `response` is built by the function that builds the finished phase record's, so the live row and the expanded turn are the same text ([Turn Engine § What streams during a turn](../concepts/turn-engine.md#what-streams-during-a-turn)).
+The projection holds each agent's **in-flight LLM calls**, one per turn it runs, each the latest `agent_turn_progress` of its turn (phase, round, model, accumulated response, tool calls so far), and surfaces them as `live_calls` on the agent in every snapshot, so a tab that refreshes or reconnects mid-call re-renders the live row at once. `agent_turn_progress` is *stream-only*, never written to the event store. Its `response` is built by the function that builds the finished phase record's, so the live row and the expanded turn are the same text ([Turn Engine § What streams during a turn](../concepts/turn-engine.md#what-streams-during-a-turn)).
 
 - Each phase publishes an opening `agent_turn_progress` (`round_num = -1`) before its first provider call, carrying the prompt.
 - `round_num` is ZERO-BASED, so the round a reader counts is `round_num + 1`. `-1` is neither round zero nor missing: it is the phase's FIRST round, in flight and unanswered. The frame carries `max_rounds`, so a row can say "round 1 of 24" at once.
@@ -3247,7 +3247,7 @@ Every comparison first normalizes to one ordering key. The same instant arrives 
 
 A **failed** phase is first-class: the projection stamps its in-flight call `failed`, keeps it on screen, and records the classified cause on the agent as `last_error`.
 
-The agent detail page paints from an `agent` query, then stays current from pushes. `agent_phase_completed` / `agent_turn_completed` envelopes append to the phase transcript live, and the agent's `live_call`, pushed every round, is the in-flight row inside its turn card until the completed record replaces it. Progress envelopes carry `turn_id` / `phase` / `iteration` for this correlation.
+The agent detail page paints from an `agent` query, then stays current from pushes. `agent_phase_completed` / `agent_turn_completed` envelopes append to the phase transcript live, and each of the agent's `live_calls`, pushed every round, is the in-flight row inside its turn's card until the completed record replaces it. Progress envelopes carry `turn_id` / `phase` / `iteration` for this correlation.
 
 The **spend rollup** HOLDS the spend records of its own 24-hour window: each phase's and each `auxiliary_spend` record (what the auxiliary model cost), the newest 24 000 of them. It is the WHOLE COMPANY's, since every projection is fed fleet-wide (about 2 600 turns a day; a company past that sees a rollup covering slightly less than a day, not a wrong total). It folds them with `internal/tokens`, which folds the named windows' company days into the same breakdown, so changing the window cannot change what a phase counts as. The window ROLLS, aged on the serving node's clock and never a record's stamp; every read leaves out what the window has aged past, and an arriving record and the shared tick both drop it:
 
@@ -3284,11 +3284,11 @@ Single-shot bundle equal to the WebSocket handshake's first envelope: every sect
   "health":    { /* the whole health envelope described below */ },
   "agents":    [ { /* /agents row: activity (working | needs | stopped |
                       idle) + stopped_reason (paused | unplaced | budget |
-                      provider, or null) + budget meter + live_call (the
-                      in-flight LLM call, or null between turns) +
+                      provider, or null) + budget meter + live_calls (the
+                      in-flight LLM calls, one per turn, [] between turns) +
                       last_error (the phase failure that stopped this
-                      seat, or null) + turn (the turn the seat is on,
-                      or null) + last_turn (the newest turn it ended,
+                      seat, or null) + turns (the turns the seat is on,
+                      or []) + last_turn (the newest turn it ended,
                       or null) + paused ({by, at, reason, stop_running}
                       while a person has the seat paused, or null) */ }, ... ],
   "events":    [ { /* recent event row, newest first — payload-free, plus
@@ -3787,7 +3787,8 @@ reading rather than drawing zeroes.
 It is never persisted: a report reads a counter that
 moves every round, so a replayed copy would show stale figures as current.
 
-Each agent's `live_call` is `null` between turns, or
+Each agent's `live_calls` is a list, `[]` between turns, of one call per turn the
+seat runs (paired with its turn by `turn_id`), oldest first, each
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
 tool_executions, calls_elided, elided_calls, round_narration, partial_round,
 round_num, rounds_used, rounds, rounds_elided, invocations, max_rounds, round_ceiling, round_started_at,
@@ -3810,20 +3811,20 @@ way:
 - `node` is the node running the call.
 - `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each heavy field. `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` with its `calls_elided` and `elided_calls`, and `rounds` the `rounds`. A number the node's projection never hands out twice, taken whenever the field is written: every field when the call begins, then each field a frame changes. So on the node a tab's socket reads, a version only grows for every call under every key, and a call cleared and rebuilt under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held before. A reconnecting tab is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
-Beside `live_call`, each seat carries `live_call_seq`: the node projection's
-own sequence (the one `versions` come from) read when the seat's call
-last changed: began, took a frame, froze as failed, or was cleared to `null`.
-It is on every surface that carries the call, a `null` call included, and it
-orders the call slot itself where a field's version cannot: across a clear,
+Beside `live_calls`, each seat carries `live_call_seq`: the node projection's
+own sequence (the one `versions` come from) read when any of the seat's calls
+last changed: began, took a frame, froze as failed, or was cleared.
+It is on every surface that carries the calls, an empty list included, and it
+orders the calls themselves where a field's version cannot: across a clear,
 which leaves no version behind, and across two calls, whose fields are never
 compared (see [What the projection carries, and what the wire
 sends](#what-the-projection-carries-and-what-the-wire-sends)). Like a version it
 is a fact about one node's projection, and a snapshot resets what a tab holds.
 
-Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states). A call whose phase failed keeps `in_progress: false`
+Beside `live_calls`, each seat carries `turns`, `last_turn` and `paused`: the turns the seat is on, each with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states). A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure,
 and no `partial_round` (the phase is over). The failed call stays until the
-seat's next work replaces it; the same phase running again under the same
+seat's next call opens, on that turn or another; the same phase running again under the same
 turn and iteration (the review of a parked turn's resume that is held or
 retried) replaces it with a call of its own rather than continuing the failed
 one's rounds.
@@ -3875,7 +3876,7 @@ pushes out of it are trimmed and reassembled on the other side:
   oldest envelope rather than stalling every other tab, and a delta frame, dropped, would
   leave a tab wrong with nothing to say so. Every push names every version, so
   the push after a dropped one names a version past the copy the tab holds,
-  and the tab asks for the call whole ([`live_call`](#queries)) rather than
+  and the tab asks for the seat's calls whole ([`live_call`](#queries)) rather than
   drawing the older copy as current. A field a push carries at a version older
   than the tab's (a push overtaken by a snapshot or an answer) is
   not taken. The handshake snapshot, `GET /agents`, the `agent` answer and the
@@ -3885,15 +3886,15 @@ pushes out of it are trimmed and reassembled on the other side:
   so it carries the seat's `live_call_seq`, which the
   tab compares with the newest it has applied for the seat. An answer at or
   past it is merged like a push carrying everything. One BEHIND it describes
-  the slot before those pushes: when they cleared the call or began
-  another, it is dropped (so a stopped seat never shows the running call
+  each turn's call before those pushes: where they cleared that call or began
+  another, that call is dropped (so a stopped seat never shows the running call
   read just before its completion); when they are the same call, it
   still brings each heavy field it holds at a newer version than the tab's,
   while the light fields stay the pushes'. If a push found the call behind
   while the answer was out, the tab asks again once that answer lands behind
   it, rather than waiting for a next push a frozen call never sends. An
   `agents` push whose `live_call_seq` is behind an answer already applied
-  leaves the call as the answer had it, and its other fields still apply.
+  leaves the calls as the answer had them, and its other fields still apply.
 - **A version is never handed out twice**, so "moved" and "newer" are one
   question. Counted per call, a call cleared and rebuilt under the same
   turn, phase and iteration would number its fields from one again, and a tab
@@ -3961,9 +3962,9 @@ Server → client kinds:
 
 | `kind` | When | `data` |
 |--------|------|--------|
-| `snapshot` | First envelope after the upgrade, and again on reconnect. | Same payload as `GET /stream/snapshot`. Agents carry their in-flight `live_call` and `live_call_seq`, so a reconnect re-renders the live row and restarts the call slot's ordering. |
+| `snapshot` | First envelope after the upgrade, and again on reconnect. | Same payload as `GET /stream/snapshot`. Agents carry their in-flight `live_calls` and `live_call_seq`, so a reconnect re-renders the live rows and restarts the calls' ordering. |
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, agent_id?, channel_id?, payload }`: a `/events` row plus the full `payload` (from which the snapshot feed's `failed` flag derives). `agent_id` is the seat the event concerns and `channel_id` its agent-to-agent channel, filled by the rule that fills the store's own column, so live rows narrow to a seat or channel as pages do. `agent_phase_completed` events carry the system prompt, response and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
-| `agents`   | After an event moved agents, or a read did (a run record reconcile, or the seat-lease read of the five-second tick). | The changed agents' overlays, each with `agent_id`, `role`, `activity` and `stopped_reason`: the *result* of the change, so a client merges rather than running its own state machine. Merge an overlay onto the roster row with the same `agent_id`; DROP one for a seat the roster lacks (a seat reaches the roster through the snapshot or a `seats` push, each already carrying its merged overlay). A `live_call` carries its heavy fields only when their `versions` moved since the last push for that call; keep the copy you hold of one left out. Every row carries the seat's `live_call_seq`, a `null` call included, which orders the call slot against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
+| `agents`   | After an event moved agents, or a read did (a run record reconcile, or the seat-lease read of the five-second tick). | The changed agents' overlays, each with `agent_id`, `role`, `activity` and `stopped_reason`: the *result* of the change, so a client merges rather than running its own state machine. Merge an overlay onto the roster row with the same `agent_id`; DROP one for a seat the roster lacks (a seat reaches the roster through the snapshot or a `seats` push, each already carrying its merged overlay). Each of its `live_calls` carries its heavy fields only when their `versions` moved since the last push for that call (paired by `turn_id`); keep the copy you hold of one left out. Every row carries the seat's `live_call_seq`, an empty list included, which orders the calls against a `live_call` answer (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)). |
 | `seats`    | After anything changed the company (config activation, hire, move, removal). | The COMPLETE seat list, replacing what the client holds, each row with `agent_id`, current `handle` and `role` (name). Not folded into `agents` because a per-seat merge cannot express a seat's deletion. |
 | `executors`| After an executor was launched in its box, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | Every executor in flight. |
 | `tokens`   | On the shared 5-second tick, when a spend record arrived or aged out of the live window since the last one (one aggregation per tick, not per phase). | The spend rollup, same shape as `GET /tokens/breakdown`. |
@@ -4022,7 +4023,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `what` | `params` | Answers with |
 |--------|----------|--------------|
 | `agent` | `{id, history}` | `GET /agents/{id}`: config, live state and `llm_history`. `history=false` answers the seat and its live state with an empty `llm_history` and no `next`, for a caller asking what a seat is doing rather than what it said: the finished calls' payloads are whole transcripts |
-| `live_call` | `{agent_id}` | `GET /query/live_call?agent_id=…`. `{agent_id, handle, live_call, live_call_seq}`: the seat's call in flight with every field and its `versions`, or `live_call: null` while it has none (a seat the projection has never seen included, at `live_call_seq` 0), and the seat's `live_call_seq` beside it either way, which the tab orders the answer by against the pushes that may overtake it. Asked and answered by the seat's AGENT ID, the key every overlay is merged by, and never by its name, which two seats may share; `handle` is a label. From the projection alone, so it costs what a push does — the REPAIR a tab makes when an `agents` push names a version of a heavy field newer than the copy it holds: the push that carried the field was dropped (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)) |
+| `live_call` | `{agent_id}` | `GET /query/live_call?agent_id=…`. `{agent_id, handle, live_calls, live_call_seq}`: the seat's calls in flight, one per turn it runs, each with every field and its `versions`, or `live_calls: []` while it has none (a seat the projection has never seen included, at `live_call_seq` 0), and the seat's `live_call_seq` beside it either way, which the tab orders the answer by against the pushes that may overtake it. Asked and answered by the seat's AGENT ID, the key every overlay is merged by, and never by its name, which two seats may share; `handle` is a label. From the projection alone, so it costs what a push does — the REPAIR a tab makes when an `agents` push names a version of a heavy field newer than the copy it holds: the push that carried the field was dropped (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)) |
 | `agent_memory` | `{id, limit, skills_order}` | `GET /agents/{id}/memory`. A seat's trail, so it takes `audit.seat.read` — the seat's lead, or `admin`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50; the episodes, skills and profiles also end at 1 MiB of text each, so a page can be shorter) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`, newest drafted first, or in `skills_order` — `uses`, the most used first, or `updated`, the most recently changed — which the holder applies to the whole set BEFORE it cuts the page, so the page is the top of the set and never the newest page re-sorted; any other value is `bad_params`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. `traits` is a bag whose keys the model invents, never a fixed schema. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each — the figure a seat is shown of a past turn's words before they are condensed (`learning.EpisodeAccountBytes`) — with each whole text's size in `ask_bytes` and `plan_summary_bytes`. The diary is keyed on the derived agent id and the other three on the seat's handle; both are resolved from the one identifier a caller has, the handle. See [the route](#get-agentsidmemory) |
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
@@ -4814,7 +4815,7 @@ It refuses `conflict` for a schedule switched off (`enabled: false`), a company 
 
 | Argument | |
 |---|---|
-| `turn_id` | The running turn's `turn_id`, as the `agents` push names it on each seat's `live_call`. |
+| `turn_id` | The running turn's `turn_id`, as the `agents` push names it on each of a seat's `live_calls`. |
 | `note` | What the turn should take into account, at most 2,000 characters. Longer is a brief, and belongs on the work item. |
 
 It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending", "reads"}`: the turn took the note, and `reads` says when it reads it — `next_step`, or `after_answer` for a turn whose executor is parked on a question, which reads it once the question is answered. What became of it is recorded as `agent_turn_steered`:
@@ -6398,7 +6399,7 @@ A turn asked with `"mode": "brief"` answers with one `brief` card rather than pr
 
 A server-sent event stream read over `fetch`. Every frame is one event: `id` is `<turn_id>.<seq>`, `event` is the frame's kind (`conversation`, `page_context`, `status`, `delta`, `step`, `card`, `action`, `done`, `error`, `snapshot`), and `data` is the frame as one JSON line with its payload nested under a member named for its kind. `seq` counts from 1 and only grows within a turn, across the segments an approval resumes. A `: keepalive` comment is written every fifteen seconds.
 
-Send `Last-Event-ID` to resume: every frame after it is replayed. A client 512 frames behind is disconnected rather than dropped from, and resumes the same way. A resume after the last frame of an ended segment (a turn waiting on an approval, reopened at the transcript's `open_turn.after_seq`) answers `204 No Content`: the client holds the whole segment, its `done` included, and does not dial again until a decision hands it the next segment's `stream_url`. Frames the running node no longer keeps (it keeps them two minutes after a segment ends) are answered with a `snapshot` of the turn as its transcript holds it, then how it ended.
+Send `Last-Event-ID` to resume: every frame after it is replayed. A client 512 frames behind is disconnected rather than dropped from, and resumes the same way. A resume after the last frame of an ended segment (a turn waiting on an approval, reopened at the transcript's `open_turn.after_seq`) answers `204 No Content`: the client holds the whole segment, its `done` included, and does not dial again until a decision hands it the next segment's `stream_url`. Frames the running node no longer keeps (it keeps them two minutes after a segment ends) are answered with a `snapshot` of the turn as its transcript holds it, then how it ended. A snapshot is one frame of at most 4 MiB, like every frame: a turn whose records pass that leaves out its oldest steps first, then its oldest cards that propose no change, then its oldest answers, then its proposals, never the question, and says so with `"cut": true`; the conversation's transcript still holds everything.
 
 A person holds at most four streams open on a node, and opens at most sixty a minute (ten at once) on a node and across the fleet; past either a stream is refused `429 assistant_busy` with a `Retry-After`, before anything is read.
 

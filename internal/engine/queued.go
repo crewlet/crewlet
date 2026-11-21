@@ -73,8 +73,8 @@ func (e *Engine) heardWaiting(ctx context.Context, subject string, payload []byt
 }
 
 // seatBusy reports whether a message reaching the seat now waits for what it
-// is already doing: a delivery dispatched on this node, or an executor holding
-// it. A paused or parked seat is stopped, not busy; the Live page says so.
+// is already doing: a delivery dispatched on this node, or executors holding
+// every slot of its cap. A paused or parked seat is stopped, not busy; the Live page says so.
 func (e *Engine) seatBusy(handle string) bool {
 	d := e.dispatch
 	if d == nil {
@@ -87,7 +87,9 @@ func (e *Engine) seatBusy(handle string) bool {
 }
 
 // settleWaiting takes away the queued waits of messages a dispatch has
-// finished with, on every chat backend.
+// finished with, or a running turn took, on every chat backend, and forgets
+// what each was told of why it waited.
 func (e *Engine) settleWaiting(ctx context.Context, handle string, wakes []string) {
+	e.waitsTold.forget(handle, wakes)
 	e.Status().Dequeue(ctx, handle, wakes)
 }
