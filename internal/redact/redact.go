@@ -6099,9 +6099,11 @@ func Settled(text string) int {
 type settling[T textual] struct {
 	text          T
 	scanned, asks int
-	// ask, where a test sets it, answers in settle's place, so the test
-	// holds the asks a stream makes to a second reading of their holds
-	// (the tests' HeldToTheLoop); nil, the ask is settle's.
+	// ask, where an in-package test sets it, answers in settle's place, so
+	// the tests' HeldToTheLoop holds every ask a stream makes to a second
+	// reading of its holds; nil, the ask is settle's. Held here, an ask
+	// costs the loop alone: holding the refusing layouts at sampled cuts
+	// instead read each layout's megabytes again, 545 s without race.
 	ask func(string) int
 }
 
