@@ -186,12 +186,10 @@ func (p *Product) replies(ctx context.Context, call growth.Call) (made, []reply,
 			return made{}, nil, invalid("`replies[%d].text` is 1 to %d characters; it is %d.", i, replyLimit, n)
 		}
 		seen[id] = true
-		if owner, ok := p.owners.get("customerReviews", id); !ok || owner != app {
-			pl := &placer{owners: p.owners, list: teamLister{t: m.team}, down: downward}
-			if found, err := pl.appOf(ctx, "customerReviews", id, []string{app}); err != nil || found != app {
-				return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
-					"of app %s. No call was made.", id, app))
-			}
+		found, err := placer{owners: p.owners, t: m.team}.appOf(ctx, "customerReviews", id, []string{app})
+		if err != nil || found != app {
+			return made{}, nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("review %s is not a review "+
+				"of app %s. No call was made.", id, app))
 		}
 		rv, rerr := p.readReview(ctx, m, id)
 		if rerr != nil {

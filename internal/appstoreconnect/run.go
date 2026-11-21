@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -55,46 +56,54 @@ func (p *Product) generic(ctx context.Context, call growth.Call) (any, error) {
 		return nil, said(err)
 	}
 	p.note(ctx, growth.StepMade, rec)
-	body := resp.Body
-	if m.op.Method == "GET" {
-		if m.app != "" {
-			p.owners.remember(m.app, body)
-		} else if m.op.Path == "/v1/apps" {
-			body = onlyApps(body, p.seatApps(call.Handle))
-		}
+	body, err := p.cut(ctx, call.Handle, m, resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: slotRole[m.slot],
 		Document: string(body), NextCursor: nextOf(body)}, nil
 }
 
-func (p *Product) seatApps(handle string) []string {
-	if b := p.deps.Company().AppStoreConnectSeat(handle); b != nil {
-		return b.Apps
+// cut is an answer as the seat may read it (package doc, "Scope"): apps
+// outside its apps removed, and, for a seat whose apps do not cover the team,
+// a read not rooted at its app that holds an owned resource refused. Only an
+// answer rooted at the seat's app through owned hops fills the cache.
+func (p *Product) cut(ctx context.Context, handle string, m made, body []byte) ([]byte, error) {
+	seat, err := p.seat(handle)
+	if err != nil {
+		return nil, err
 	}
-	return nil
-}
-
-// onlyApps is the team's app list with the apps outside allowed removed.
-func onlyApps(body []byte, allowed []string) []byte {
-	var doc map[string]any
-	if json.Unmarshal(body, &doc) != nil {
-		return []byte(`{"data": []}`)
-	}
-	data, _ := doc["data"].([]any)
-	kept := make([]any, 0, len(data))
-	for _, d := range data {
-		r, _ := d.(map[string]any)
-		if id, _ := r["id"].(string); slices.Contains(allowed, id) {
-			kept = append(kept, d)
+	if rootedAt(m, body) {
+		p.owners.remember(m.app, body)
+	} else if namesOwned(body) {
+		covers, err := p.covers(ctx, seat, m.team)
+		if err != nil {
+			return nil, said(err)
+		}
+		if !covers {
+			return nil, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s answered resources of the team's "+
+				"apps through a resource no app owns, and this agent's apps are not all of the team's: read "+
+				"them through one of its apps. Nothing is shown.", m.op.ID))
 		}
 	}
-	doc["data"] = kept
-	delete(doc, "included")
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return []byte(`{"data": []}`)
+	return cutApps(body, seat.Apps)
+}
+
+// rootedAt reports whether m's answer is rooted at m's app through owned
+// hops: its path starts at an app or an owned resource placed in m's app, and
+// every resource it answers is an app or owned.
+func rootedAt(m made, body []byte) bool {
+	typ, _ := typeAndID(m.path)
+	if m.app == "" || (typ != "apps" && !ownedTypes[typ]) {
+		return false
 	}
-	return out
+	var doc struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return false
+	}
+	return !slices.ContainsFunc(refsOf(doc.Data), func(r resourceRef) bool { return r.Type != "apps" && !ownedTypes[r.Type] })
 }
 
 func nextOf(body []byte) string {

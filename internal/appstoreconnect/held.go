@@ -287,7 +287,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		step = growth.StepApplied
 	}
 	p.note(ctx, step, rec)
-	if m.app != "" {
+	if rootedAt(m, resp.Body) {
 		p.owners.remember(m.app, resp.Body)
 	}
 	return Answer{Operation: m.op.ID, Status: resp.Status, Connection: m.team.id, Role: slotRole[m.slot],

@@ -106,8 +106,29 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"data": [{"type": "appStoreVersionLocalizations", "id": "L1"}]}`)
 	case r.Method == "GET" && r.URL.Path == "/v1/appStoreVersionLocalizations/L1":
 		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersionLocalizations", "id": "L1",
-			"attributes": {"description": "Old"}, "relationships": {"appStoreVersion": {"links":
-			{"related": "https://api.example/v1/appStoreVersionLocalizations/L1/appStoreVersion"}}}}}`)
+			"attributes": {"description": "Old"}, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": "V1"},
+			"links": {"related": "https://api.example/v1/appStoreVersionLocalizations/L1/appStoreVersion"}}}}}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/appStoreVersions/V1":
+		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersions", "id": "V1", "attributes": {"appVersionState": "`+s.state+`"},
+			"relationships": {"app": {"data": {"type": "apps", "id": "111"}}}}}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/appStoreVersions/V1/appStoreVersionSubmission":
+		if r.URL.Query().Has("limit") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"errors": [{"status": "400", "code": "PARAMETER_ERROR.ILLEGAL", "title": "limit"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersionSubmissions", "id": "S1"}}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/appStoreVersionSubmissions/S1":
+		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersionSubmissions", "id": "S1"}}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/betaTesters/T1/apps":
+		_, _ = io.WriteString(w, `{"data": [{"type": "apps", "id": "111", "attributes": {"name": "Notes"}},
+			{"type": "apps", "id": "222", "attributes": {"name": "Other", "sku": "OTHER1"}}]}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/betaTesters/T1/betaGroups":
+		_, _ = io.WriteString(w, `{"data": [{"type": "betaGroups", "id": "G1"}, {"type": "betaGroups", "id": "G2"}]}`)
+	case r.Method == "GET" && (r.URL.Path == "/v1/betaGroups/G1" || r.URL.Path == "/v1/betaGroups/G2"):
+		app := map[string]string{"/v1/betaGroups/G1": "111", "/v1/betaGroups/G2": "222"}[r.URL.Path]
+		_, _ = io.WriteString(w, `{"data": {"type": "betaGroups", "id": "`+strings.TrimPrefix(r.URL.Path, "/v1/betaGroups/")+
+			`", "attributes": {"isInternalGroup": false}, "relationships": {"app": {"data": {"type": "apps", "id": "`+app+`"}}}}}`)
 	case r.Method == "GET" && r.URL.Path == "/v1/appStoreVersionLocalizations/L1/appStoreVersion":
 		_, _ = io.WriteString(w, `{"data": {"type": "appStoreVersions", "id": "V1", "attributes": {"appVersionState": "`+s.state+`"}}}`)
 	case r.Method == "PATCH" && r.URL.Path == "/v1/appStoreVersionLocalizations/L1":
@@ -695,6 +716,68 @@ func TestAHeldCallHoldsOneAnswerAndOneOutcome(t *testing.T) {
 		if st.step == growth.StepFailed && st.rec.Failure == "" {
 			t.Errorf("a failure names no reason: %+v", st.rec)
 		}
+	}
+}
+
+// A SEAT REACHES ITS OWN APPS AND NOTHING ELSE: a list through a resource no
+// app owns that holds another app's beta groups is refused for a seat whose
+// apps are not all the team's, and fills no cache; a call on another app's
+// group, by path or in a write body's relationships, is placed by reading up
+// to its app and refused; another app is cut from every answer; and a
+// resource found below a to-one hop is placed.
+//
+// Mutation: file a cross-app answer under the seat's app, skip the body's
+// related IDs, cut apps from the team's app list alone, or decode a to-one hop as a
+// list, and the agent reaches another app's group or name, or its own
+// submission is refused.
+func TestASeatReachesOnlyItsOwnApps(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "READY_FOR_SALE"}
+	p, _ := product(t, s, "operate", true)
+	ctx := context.Background()
+	read := func(id string, args map[string]any) (string, error) {
+		got, err := p.Run(ctx, growth.Call{ID: id, Handle: "growth", Tool: appstoreconnect.ToolRead, Args: args})
+		if err != nil {
+			return "", err
+		}
+		return got.(appstoreconnect.Answer).Document, nil
+	}
+	if doc, err := read("r1", map[string]any{"operation": "betaTesters_betaGroups_getToManyRelated",
+		"path": map[string]any{"id": "T1"}}); refusal(err) != growth.RefusedForbidden {
+		t.Errorf("a tester's groups across apps answered %s (%v)", doc, err)
+	}
+	doc, err := read("r2", map[string]any{"operation": "betaTesters_apps_getToManyRelated", "path": map[string]any{"id": "T1"}})
+	if err != nil || !strings.Contains(doc, `"111"`) || strings.Contains(doc, `"222"`) || strings.Contains(doc, "OTHER1") {
+		t.Errorf("a tester's apps answered %s (%v)", doc, err)
+	}
+	group := func(id string) map[string]any {
+		return map[string]any{"data": []any{map[string]any{"type": "betaGroups", "id": id}}}
+	}
+	for name, args := range map[string]map[string]any{
+		"another app's group by path": {"operation": "betaGroups_updateInstance", "path": map[string]any{"id": "G2"},
+			"body": map[string]any{"data": map[string]any{"type": "betaGroups", "id": "G2",
+				"attributes": map[string]any{"name": "Everyone"}}}, "reason": "rename"},
+		"another app's group in the body": {"operation": "betaTesters_betaGroups_createToManyRelationship",
+			"path": map[string]any{"id": "T1"}, "body": group("G2"), "reason": "add the tester"},
+	} {
+		if _, err := p.Prepare(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: args}); refusal(err) != growth.RefusedForbidden ||
+			!strings.Contains(err.Error(), "none of this agent's apps") {
+			t.Errorf("%s answered %v", name, err)
+		}
+	}
+	if _, err := p.Prepare(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: map[string]any{
+		"operation": "betaTesters_betaGroups_createToManyRelationship", "path": map[string]any{"id": "T1"},
+		"body": group("G1"), "reason": "add the tester"}}); err != nil {
+		t.Errorf("the seat's own group in the body answered %v", err)
+	}
+	_, err = p.Prepare(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolPublish, Args: map[string]any{
+		"operation": "appStoreVersionSubmissions_deleteInstance", "path": map[string]any{"id": "S1"}, "reason": "withdraw"}})
+	// PLACED: what may refuse it now is the keys alone.
+	if err != nil && !strings.Contains(err.Error(), " key ") {
+		t.Errorf("a submission below a to-one hop answered %v", err)
+	}
+	if len(s.writes) != 0 {
+		t.Errorf("wrote %v", s.writes)
 	}
 }
 
