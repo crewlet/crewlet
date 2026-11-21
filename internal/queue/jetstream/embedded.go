@@ -640,9 +640,8 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	if err := storeOutsideTempDir(cfg); err != nil {
 		return nil, err
 	}
-	// The authenticator, with this start's keys: the engine's, and the system
-	// account's on a clustered member, by the rule [embeddedOptions] reads for
-	// `clustered`.
+	// The authenticator, with this start's keys ([newBrokerAuth]), the system
+	// account's by the rule [embeddedOptions] reads for `clustered`.
 	auth, err := newBrokerAuth(cfg)
 	if err != nil {
 		return nil, err
@@ -740,7 +739,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	routing, servesLeaves := opts.Cluster.Port != 0, opts.LeafNode.Port != 0
 	// Set before Start; read only by connections Start lets in, which the go
 	// statement below orders after it.
-	if err := auth.bind(ns); err != nil {
+	if err = auth.bind(ns); err != nil {
 		ns.Shutdown()
 		tun.close()
 		dirLock.Release()
