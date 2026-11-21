@@ -163,8 +163,11 @@ two estates and [section 5](#5-where-state-lives) for which fact lives where. On
 an external broker it rides the queue's own connection; on the embedded one it
 holds a second connection to the same in-process server, shared with the
 seat-memory replay and the backup's stream copies so none sits on the read loop
-every mailbox consumes through. The two connections can fail independently, so
-both are watched: the NATS client closing either for good stops the node, since one holding leases while its inbox connection is gone lasts no longer than a reconnect. Only
+every mailbox consumes through. A node's holds ride a lease connection of their
+own on every topology, so no bulk the node sends queues a renewal. The
+connections can fail independently, so each is watched: the NATS client closing
+one for good stops the node, and a node holds leases only while its data path
+answers. Only
 the *lease* half follows `coordination.type`: on a single node it falls back to
 an in-process store, while the shared buckets (activation pointer, ledgers,
 counters, the company's secrets) are opened on every topology, because a lone

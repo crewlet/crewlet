@@ -64,6 +64,15 @@ func (e *Engine) FatalCause() error {
 	return nil
 }
 
+// OwnLinkDown reports whether the queue's OWN connection is down now, though
+// [Engine.AcksLost] has not closed: a fatal another connection caused while
+// the queue's own is still reconnecting, whose fate decides the drain. False
+// on a queue with no connection to lose.
+func (e *Engine) OwnLinkDown() bool {
+	linked, ok := e.backends.Queue.(interface{ Link() error })
+	return ok && linked.Link() != nil
+}
+
 // AcksLost is closed once the loss behind [Engine.Fatal] includes the QUEUE'S
 // OWN connection, which every delivery is acked over, not only the
 // coordination store's. The drain then cancels the running turns, whose

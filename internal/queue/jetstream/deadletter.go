@@ -84,8 +84,8 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, 
 	// deadline ([Queue.write]): the request term plus, across a link, the whole
 	// message ([letterMsg]) at the connection's pace. At the ceiling and the
 	// slowest pace that is minutes, which the request term alone would fail as
-	// an outage retried forever; lease renewals behind it on the link wait too
-	// (crewlet/crewlet#1035, not fixed here). Classified on the caller's
+	// an outage retried forever; what the node sends behind it on the data
+	// link waits too, its holds aside (ADR-0169). Classified on the caller's
 	// context, so a budget this set and the broker outlasted reads as silence.
 	ack, err := q.write(ctx, letterMsg(subject, stream, id, header, body))
 	if err != nil {

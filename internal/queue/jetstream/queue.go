@@ -392,9 +392,13 @@ type Queue struct {
 	// pathTiming is ZERO FOR PRODUCTION ([Queue.dataPathTiming]); set only by
 	// this package's tests, before the probe starts.
 	pathTiming dataPathTiming
-	// leases is the lease connection last handed out ([Queue.LeaseLink]);
-	// under mu.
-	leases *nats.Conn
+	// leases is the lease connection last handed out ([Queue.LeaseLink]),
+	// and leasePath its link's probe where it crosses one; under mu.
+	leases    *nats.Conn
+	leasePath *dataPath
+	// leaseTiming is ZERO FOR PRODUCTION ([Queue.leaseLinkTiming]); set only
+	// by this package's tests, before the lease connection is dialled.
+	leaseTiming dataPathTiming
 }
 
 type attachKey struct{ topic, group string }
@@ -1164,35 +1168,113 @@ func (q *Queue) DialLeases(ctx context.Context) (*nats.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the lease connection: %w", err)
 	}
-	if q.embedded != nil && q.embedded.leaf {
-		js, err := q.cfg.API().Client(nc)
-		if err == nil {
-			err = q.embedded.awaitLeaseLink(ctx, js)
-		}
-		if err != nil {
-			at.untrack(nc)
-			nc.Close()
-			return nil, fmt.Errorf("jetstream: the lease connection: %w", err)
-		}
+	js, err := q.cfg.API().Client(nc)
+	if err == nil && q.embedded != nil && q.embedded.leaf {
+		err = q.embedded.awaitLeaseLink(ctx, js)
+	}
+	if err != nil {
+		at.untrack(nc)
+		nc.Close()
+		return nil, fmt.Errorf("jetstream: the lease connection: %w", err)
+	}
+	// PROBED AND MOVED where it crosses a link: a member cut off from its
+	// peers still answers the link's pings, and a remote has no ping of its
+	// own, so only an answer of the fleet's JetStream proves it (ADR-0173).
+	var path *dataPath
+	if move := q.leaseMove(nc); move != nil {
+		//nolint:contextcheck // the probe outlives the dial, stopped by Stop
+		path = startLeaseLink(q.leaseLinkTiming(js), func() error { return q.leaseHop(nc) },
+			move, q.log, time.Now())
 	}
 	q.mu.Lock()
-	q.leases = nc
+	prev, closed := q.leasePath, q.closed
+	if !closed {
+		q.leases, q.leasePath = nc, path
+	}
 	q.mu.Unlock()
+	if closed {
+		// Stopped while dialling: nothing would stop this probe.
+		prev = path
+	}
+	if prev != nil {
+		prev.stop()
+	}
+	if closed {
+		at.untrack(nc)
+		nc.Close()
+		return nil, ErrClosed
+	}
 	return nc, nil
+}
+
+// leaseMove is how the lease link nc rides is moved off a member that answers
+// nothing: on a leaf its link dropped, so its remote dials the next URL
+// ([embeddedServer.relink]); on an external dial a reconnect, which moves to
+// the next server in the pool. Nil on a member, whose lease connection
+// crosses no link.
+func (q *Queue) leaseMove(nc *nats.Conn) func() error {
+	switch {
+	case q.embedded == nil:
+		return nc.ForceReconnect
+	case q.embedded.leaf:
+		return func() error { return q.embedded.relink(LeaseAccount) }
+	}
+	return nil
+}
+
+// leaseLinkTiming is the lease link's probe: the data path's period, bound and
+// "not available" budget, asked over js, a client of the lease connection;
+// its cap the bound, since nothing the lease link carries is bulk a probe's
+// answer could queue behind. Production's in each field tests left unset.
+func (q *Queue) leaseLinkTiming(js jetstream.JetStream) dataPathTiming {
+	t := q.leaseTiming
+	if t.every <= 0 {
+		t.every = dataPathProbeEvery
+	}
+	if t.bound <= 0 {
+		t.bound = dataPathBound
+	}
+	if t.notAvailable <= 0 {
+		t.notAvailable = jsprovision.LookupBudget
+	}
+	if t.cap <= 0 {
+		t.cap = t.bound
+	}
+	if t.probe == nil {
+		t.probe = func(ctx context.Context) error {
+			_, err := js.AccountInfo(ctx)
+			return err
+		}
+	}
+	return t
 }
 
 // LeaseLink reports whether the lease connection [Queue.DialLeases] last
 // handed out reaches the fleet's broker right now: it is connected and, on a
-// leaf, its lease link is up. No round trip, as [Queue.Link].
+// leaf, its lease link is up; and where it crosses a link, the link's probe
+// has not refused it (wrapping [ErrLeaseLinkUnproven]). No round trip.
 func (q *Queue) LeaseLink() error {
 	q.mu.Lock()
-	nc, closed := q.leases, q.closed
+	nc, path, closed := q.leases, q.leasePath, q.closed
 	q.mu.Unlock()
 	switch {
 	case closed:
 		return ErrClosed
 	case nc == nil:
 		return errors.New("jetstream: this node has opened no lease connection")
+	case path != nil:
+		err := path.verdict(time.Now())
+		path.report(err)
+		return err
+	}
+	return q.leaseHop(nc)
+}
+
+// leaseHop is the lease connection's first hop: nc connected and, on a leaf,
+// its lease link up.
+func (q *Queue) leaseHop(nc *nats.Conn) error {
+	if q.isClosed() {
+		return ErrClosed
 	}
 	if status := nc.Status(); status != nats.CONNECTED {
 		return fmt.Errorf("jetstream: this node's lease connection to the broker is %s",
@@ -1340,8 +1422,8 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// event may be the transport's whole eight mebibytes, about four minutes
 	// at the slowest pace allowed, and held to the request term alone it
 	// failed as an outage while the link was carrying it. For those minutes
-	// everything the node sends behind it on the link waits too, its lease
-	// renewals among them (crewlet/crewlet#1035, which this does not fix).
+	// everything the node sends behind it on the data link waits too; its
+	// holds ride the lease link (ADR-0169).
 	// Classified on the CALLER's context, for the keep's reason
 	// ([Queue.KeepDeadLetter]).
 	if _, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
@@ -1957,8 +2039,11 @@ func (q *Queue) Stop(ctx context.Context) error {
 	// And every attachment ended with them: a stopped client carries no
 	// hold, and no attachment one could be asked for, into anything.
 	q.current = map[attachKey]queue.Attachment{}
-	path := q.path
+	path, leasePath := q.path, q.leasePath
 	q.mu.Unlock()
+	if leasePath != nil {
+		leasePath.stop()
+	}
 
 	// Stop attachments concurrently so one unresponsive consumer bounds
 	// this step instead of stranding every attachment behind it.

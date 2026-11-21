@@ -1135,6 +1135,26 @@ func (e *embeddedServer) linked(account string) bool {
 	return err == nil && leafz.NumLeafs > 0
 }
 
+// relink drops this leaf's link in account, so its remote dials the next of
+// its URLs once the leaf's reconnect interval has passed (leafnode.go
+// pickNextURL, v2.15.3): how the lease link leaves a member that answers
+// nothing ([Queue.DialLeases]).
+func (e *embeddedServer) relink(account string) error {
+	leafz, err := e.ns.Leafz(&server.LeafzOptions{Account: account})
+	if err != nil {
+		return fmt.Errorf("jetstream: find the leaf's link in account %s: %w", account, err)
+	}
+	if len(leafz.Leafs) == 0 {
+		return fmt.Errorf("jetstream: the leaf has no link in account %s to move", account)
+	}
+	for _, l := range leafz.Leafs {
+		if err := e.ns.DisconnectClientByID(l.ID); err != nil {
+			return fmt.Errorf("jetstream: drop the leaf's link in account %s: %w", account, err)
+		}
+	}
+	return nil
+}
+
 // embeddedReconnectWait is how long a connection to this process's own broker
 // waits between reconnect attempts: the external dial's second, since nothing
 // about the wait differs by where the server runs.
@@ -1389,8 +1409,8 @@ const externalHandshake = jsapi.RequestTerm
 // So: one message at queue.MaxPayloadBytes behind the larger buffer, at the
 // floor (jsapi.Sending). The cost: a dead connection under a large Write is
 // given up only at this deadline, holding the connection's lock, so every
-// caller (a lease renewal too) waits behind each large Write ahead of it;
-// bounding that needs the write windowed (crewlet/crewlet#1035).
+// caller on the queue's connection waits behind each large Write ahead of it;
+// a renewal rides the lease connection, whose lock no bulk takes (ADR-0169).
 var externalWriteDeadline = jsapi.Sending(
 	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
 

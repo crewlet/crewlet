@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue`
-- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that the queue's own connection and every second one `DialWatched` opens are watched on both dials while a donor's `DialOwned` one is not, and `internal/engine.TestTheCoordinationConnectionIsWatched`, which holds that the embedded broker's coordination connection is one of the watched kind
+- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that the queue's own connection and every second one `DialWatched` opens are watched on both dials while a donor's `DialOwned` one is not, `internal/engine.TestTheCoordinationConnectionIsWatched`, which holds that the embedded broker's coordination connection is one of the watched kind, and `internal/engine.TestTheLeaseConnectionIsWatched`, which holds the same of the lease connection on every topology
 - **Measured:** creating a durable consumer with nothing attached is an ordinary API call at about 1.7 ms. The delivery budget before a message is dead-lettered is 25 rather than the ~10 a broker with a free handoff would need, because every path back to the broker — the Nak a node uses to hand a seat back included — increments the delivery count.
 - **Cost-when-tried:** the Apache Pulsar backend. It has no compare-and-set, so it could not hold the coordination state at all, and every Pulsar deployment ran a second NATS estate beside it to serve one company. And a second connection to the one broker, dialled UNWATCHED: the embedded broker's coordination connection was opened with no closed handler, so NATS closing it for good left a node consuming work over the queue's connection while every lease renewal failed, reported by nothing.
 - **Tag-status:** unreleased
@@ -27,28 +27,31 @@ connection it cannot run without is open**.
 
 How many connections that is depends on the topology:
 
-- **On an external broker, one.** The coordination store rides the queue's own
-  connection.
-- **On the embedded broker — the default — two.** The coordination store has a
+- **On an external broker, two.** The coordination store rides the queue's own
+  connection, and the node's holds a second dial of their own
+  (`jetstream.Queue.DialLeases`, [ADR-0169](0169-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+- **On the embedded broker — the default — three.** The coordination store has a
   second connection to the in-process server
   (`jetstream.Queue.DialWatched`), and the seat-memory replay and the backup's
   copies of the streams ride it too. That is deliberate: a seat's memory replay
   is an ordered consumer over its whole history and a backup copies whole
   streams, and on the queue's own connection either would sit on the read loop
-  every mailbox consumes through.
+  every mailbox consumes through. The node's holds ride a third
+  (`jetstream.Queue.DialLeases`), which on a leaf crosses a second leaf link,
+  on the same port, so no bulk the node sends queues a renewal.
 
 A snapshot donor's connection (`jetstream.Queue.DialOwned`) is held to the same
 broker and is not one of them: it serves peers that fell behind, a node whose
 donor is down still serves its own company, and its loss is the donor's to
 notice and dial again.
 
-**Both connections are watched.** NATS closing either one for good — rather
+**Every connection the node cannot run without is watched.** NATS closing one for good — rather
 than reconnecting — stops the node: it drains, tears down and exits non-zero
 for whatever supervises it to restart it (`internal/engine`'s `Engine.Fatal`).
 So the split the obvious alternative risks — a node holding live leases over
-one connection while the other, carrying its inbox, is gone — lasts no longer
-than a reconnect: while the client is still reconnecting it expects both back,
-and once it gives up on either, the node leaves.
+one connection while another, carrying its inbox, is gone — lasts no longer
+than a reconnect: while the client is still reconnecting it expects each back,
+and once it gives up on any, the node leaves.
 
 ## Why the obvious alternative is wrong
 
@@ -65,8 +68,16 @@ notice. One broker makes that state unrepresentable: the leases and the mail
 are on the same servers, so reaching one is reaching the other, which is worth
 more than any broker feature the second estate would have brought.
 
+Two links to one broker can still reach it apart: a leaf's data link and its
+lease link land on members independently, and a member cut off from its peers
+keeps answering. [ADR-0173](0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md)
+keeps that "alive to its peers, deaf to its work" bounded: a node takes or
+keeps a hold only while its data path answers, refused 30 s after the broker
+says it is not available, and a request's term after it says nothing over a quiet
+link.
+
 What one broker leaves is narrower: a connection to it can close on its own,
-and on the embedded broker a node depends on two. That residue is closed by
+and a node depends on two or three. That residue is closed by
 WATCHING rather than by sharing — sharing one connection would put the replay
 and the backup's bulk reads on the mailboxes' read loop, and a watched second
 connection costs the split nothing but the length of a reconnect.
