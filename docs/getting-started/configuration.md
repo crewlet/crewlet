@@ -1505,9 +1505,10 @@ store:
                                     #   one a core
 #   max_transfers: 0                #   clones, fetches and pushes served at
                                     #   once; 0 is four a process slot and no
-                                    #   more than one per 512 MiB of the node's
-                                    #   memory — a transfer holds memory for its
-                                    #   whole life, so size it to memory
+                                    #   more than one per 512 MiB of the memory
+                                    #   the executor's pools leave: a transfer
+                                    #   holds memory for its whole life, so
+                                    #   size it to memory
 #   max_checks: 4                   #   the company's checks this node runs at
                                     #   once in container cells; unset is a
                                     #   quarter of its cores, at least one; 0

@@ -355,22 +355,12 @@
 // flight at once: one per seat collecting on this node and up to the box host's
 // boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its worst,
 // 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
-// scrub's base and its meter's at once, each measured apart (one case a process
-// on a dedicated two-core slot, in bytes, the most of nine runs) and
-// summed, each with its benchmark's own heap, so the sum over-counts. The
-// scrub, streaming each text through redact's stages, each holding its window,
-// 8.2 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
-// a text file each at [scrubPieceBaseBytes], the line's and the string's of
-// bytes the decode triples, each ending in a key both readings redact, its
-// meter beside it; 0.11 s). The meter, 3.3 MiB
-// (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
-// verbatim, so a string decodes to three bytes a byte, its facts at the base
-// and the strings a charge covers decoded beside them; 2 MiB on a record line,
-// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past the
-// scrub's base, so the two never meet on one line, but the scrub may read on at
-// its base while the meter is still on it. So every take holds one of
-// [SessionTakesAtOnce] (29), a pool of its own sized so the takes at their base
-// hold at most those 341 MiB.
+// scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
+// (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
+// sum over-counts: the meter's worst line is past the scrub's base, but the
+// scrub may read on at its base while the meter is still on it. So every take
+// holds one of [SessionTakesAtOnce] (29), a pool of its own sized so the takes
+// at their base hold at most those 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
@@ -399,6 +389,18 @@
 // is, the wait spent inside it. The longest piece the archive's bound admits,
 // a 46 MiB OpenCode image (a 64.3 MB data URI), held it 8.7 s (4.8 from the
 // memo) and 19 MiB in a real take.
+//
+// # The memory a node keeps for these pools
+//
+// [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
+// the constant beside its measurement, twice over for the heap's growth at the
+// default GOGC: where it hosts boxes, the base tier at its turns
+// (node.max_concurrent; a run collected at its deadline outside the node's
+// gate is past them) and its peers' reads, the takes and both large slots;
+// and the transcript reads its API or its seats make. A Gitlet node keeps them
+// before sizing its git lanes and background budget (gitproc's
+// Options.Reserve), from the engine, which alone reads the roles: a registry
+// filled at run time would size them by whichever pools had started first.
 //
 // # A hook's note, confirmed off its job's main thread
 //

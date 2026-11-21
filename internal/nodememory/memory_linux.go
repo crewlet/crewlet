@@ -1,4 +1,4 @@
-package gitproc
+package nodememory
 
 import (
 	"bufio"
@@ -14,20 +14,20 @@ import (
 	"strings"
 )
 
-// readNodeMemory reads this node's memory from the running system's /proc and
-// cgroup filesystems (readLinuxMemory).
-func readNodeMemory() (Memory, error) { return readLinuxMemory(os.DirFS("/")) }
+// Read reads this node's memory from the running system's /proc and cgroup
+// filesystems (readLinux).
+func Read() (Memory, error) { return readLinux(os.DirFS("/")) }
 
-// readLinuxMemory reads the memory a process under root may hold: the least of
+// readLinux reads the memory a process under root may hold: the least of
 // the machine's (/proc/meminfo's MemTotal) and every limit the process's
-// cgroups set, at its own cgroup or any above it that the mount shows — v2's
+// cgroups set, at its own cgroup or any above it that the mount shows: v2's
 // memory.max and v1's memory.limit_in_bytes alike, since a host on the v1
 // hierarchy shows a container's limit nowhere else. root is "/" in production
 // and a fixture tree in the suite.
 //
 // From the files, not sysinfo(2), which knows nothing of a container's limit,
 // the figure that decides whether a run is killed.
-func readLinuxMemory(root fs.FS) (Memory, error) {
+func readLinux(root fs.FS) (Memory, error) {
 	physical, err := memTotal(root)
 	if err != nil {
 		return Memory{}, err
@@ -233,7 +233,7 @@ func cgroupLimit(root fs.FS, m cgroupMount, cgroup, file string) (Memory, bool, 
 	}
 }
 
-// within is cgroup's path below the cgroup root shows — "/" for root itself —
+// within is cgroup's path below the cgroup root shows ("/" for root itself)
 // and whether cgroup is root or below it.
 func within(cgroup, root string) (string, bool) {
 	cgroup, root = path.Clean(cgroup), path.Clean(root)
