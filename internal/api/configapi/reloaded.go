@@ -50,6 +50,7 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 	var invalid *ValidationError
 	var tooLarge *DocumentTooLargeError
 	var tooLong *SummaryTooLongError
+	var pointer *PointerTooLargeError
 	switch {
 	case errors.As(err, &raced):
 		return &Reloaded{Error: httpjson.CodeRevisionAdvanced, StoredRevisionID: raced.Stored,
@@ -83,6 +84,12 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 				"encodes it, past the %d it may take, so it was not re-activated; the value is "+
 				"sealed: POST /config/reload with a shorter X-Summary re-activates it",
 				tooLong.SummaryBytes, coord.MaxSummaryBytes)}
+	case errors.As(err, &pointer):
+		return &Reloaded{Error: httpjson.CodeOriginTooLong,
+			Detail: fmt.Sprintf("the re-activation's pointer is %d bytes, past the %d it may be, "+
+				"because the name it was made under is too long, so it was not re-activated; "+
+				"the value is sealed: POST /config/reload through a credential with a "+
+				"shorter name re-activates it", pointer.PointerBytes, coord.MaxPointerBytes)}
 	case errors.Is(err, ErrNoActiveRevision):
 		return &Reloaded{Error: httpjson.CodeNoActiveRevision,
 			Detail: "the fleet runs no company to re-activate"}

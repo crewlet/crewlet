@@ -681,6 +681,23 @@ func (e *SummaryTooLongError) Error() string {
 // Unwrap is [coord.ErrSummaryTooLong].
 func (e *SummaryTooLongError) Unwrap() error { return coord.ErrSummaryTooLong }
 
+// PointerTooLargeError is a write whose activation pointer, at its widest
+// ([coord.ActivationBytes]), is past [coord.MaxPointerBytes] though its summary
+// fits: its origin (the writer's name, credential and source) does not.
+type PointerTooLargeError struct {
+	// PointerBytes is the pointer's size at its widest.
+	PointerBytes int
+}
+
+func (e *PointerTooLargeError) Error() string {
+	return fmt.Sprintf("configapi: the activation pointer is %d bytes, past the %d it may be: "+
+		"the name this write was made under is too long; make it through a credential "+
+		"with a shorter name", e.PointerBytes, coord.MaxPointerBytes)
+}
+
+// Unwrap is [coord.ErrValueTooLarge], the store's word for the same refusal.
+func (e *PointerTooLargeError) Unwrap() error { return coord.ErrValueTooLarge }
+
 // unmintedRevision stands in for the id of a revision not stored yet: the
 // store names every revision with a UUID ([store.Configs]), so one of the
 // same length sizes the pointer exactly where the id goes.
@@ -690,7 +707,7 @@ var unmintedRevision = uuid.Nil.String()
 // summary past [coord.MaxSummaryBytes] ([SummaryTooLongError]), a sealed
 // document payload past what one key holds ([DocumentTooLargeError]), or a
 // pointer, with its summary and origin at the instant at, past
-// [coord.MaxPointerBytes].
+// [coord.MaxPointerBytes] ([PointerTooLargeError]).
 //
 // THE DOCUMENT HAS NO BOUND OF ITS OWN THAT THE BODY'S IS: a body is held to
 // [MaxBodyBytes], and a patch merged onto the active document grows it by up
@@ -714,10 +731,10 @@ func carried(document, payload []byte, summary string, at time.Time, origin coor
 	if err != nil {
 		return fmt.Errorf("configapi: size the activation: %w", err)
 	}
-	// A BACKSTOP: the summary is held above and the other fields are short,
-	// so only an origin no valid writer has reaches this.
-	if err = coord.HoldPointer(size); err != nil {
-		return fmt.Errorf("configapi: %w", err)
+	// The summary is held above and the fixed fields are short, so only an
+	// origin of kilobytes reaches this: a writer's name no person chose.
+	if coord.HoldPointer(size) != nil {
+		return &PointerTooLargeError{PointerBytes: size}
 	}
 	return nil
 }

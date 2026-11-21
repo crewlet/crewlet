@@ -1146,6 +1146,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 	var raise *RaiseError
 	var tooLarge *DocumentTooLargeError
 	var tooLong *SummaryTooLongError
+	var pointer *PointerTooLargeError
 	switch {
 	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
 	// managed document refuses whoever is asking before anything they sent
@@ -1171,6 +1172,14 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 					"past what the activation pointer carries to every node; nothing was " +
 					"stored. Say what the write changed more briefly",
 				"summary_bytes": tooLong.SummaryBytes, "max_summary_bytes": coord.MaxSummaryBytes,
+			})
+	case errors.As(err, &pointer):
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOriginTooLong,
+			httpjson.Detail{
+				"hint": "the name this write was made under, beside its summary, is past " +
+					"what the activation pointer carries to every node; nothing was stored. " +
+					"Make the write through a credential with a shorter name",
+				"pointer_bytes": pointer.PointerBytes, "max_pointer_bytes": coord.MaxPointerBytes,
 			})
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,

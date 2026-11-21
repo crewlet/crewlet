@@ -481,6 +481,13 @@ const (
 	// words. The detail gives `summary_bytes` and `max_summary_bytes`.
 	CodeSummaryTooLong Code = "summary_too_long"
 
+	// CodeOriginTooLong is a configuration write whose origin (the writer's
+	// name, credential and source) leaves the activation pointer past what it
+	// carries (coord's MaxPointerBytes) beside a summary that fits. 400: the
+	// same write through a credential with a shorter name lands. The detail
+	// gives `pointer_bytes` and `max_pointer_bytes`.
+	CodeOriginTooLong Code = "origin_too_long"
+
 	// CodeConfigManaged is a change to a MANAGED company document
 	// (`api.auth.company_writers`, ADR-0030) through a credential that is not one
 	// of its writers. 403: no retry with them changes it. The detail names the
@@ -1544,6 +1551,8 @@ var codes = map[Code]string{
 		"configuration's history. Send it in the X-Summary header.",
 	CodeSummaryTooLong: "This change's summary is longer than the " +
 		"configuration's history keeps. Send a shorter one in the X-Summary header.",
+	CodeOriginTooLong: "The name this change was made under is longer than the " +
+		"configuration's history keeps. Make it through a credential with a shorter name.",
 	CodeConfigManaged: "Managed by another system. Change it there. The " +
 		"detail names its token.",
 
