@@ -124,6 +124,10 @@ const (
 	// AuxAdvisorModel is a round of the Advisor's model pass: company
 	// background spend on no seat, charged to the company's windows (ADR-0164).
 	AuxAdvisorModel AuxPurpose = "advisor_model"
+	// AuxWakeTriage describes one wake that reached a seat while its executor
+	// ran, for the engine's gate (ADR-0168): spent for the running turn and
+	// charged to its seat's meter.
+	AuxWakeTriage AuxPurpose = "wake_triage"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -152,7 +156,7 @@ var auxPurposes = []AuxPurpose{
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
 	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle,
-	AuxAssistantBrief, AuxAssistantSummary, AuxAdvisorModel,
+	AuxAssistantBrief, AuxAssistantSummary, AuxAdvisorModel, AuxWakeTriage,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

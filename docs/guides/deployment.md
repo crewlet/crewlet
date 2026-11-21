@@ -1439,6 +1439,31 @@ may draw. Raise it if the `pool_starved` alarm fires (see
 [Alarms](../reference/alarms.md)), which means reads are queuing before they
 start.
 
+### The page cache
+
+Each connection keeps its own cache of the file's pages, for the B-tree's
+interior pages, so a lookup's descent stays off the file; the file itself sits
+in the operating system's page cache. A node gives its store **a sixteenth of
+its memory** (the least of the machine's and its cgroup limit), shared by every
+connection of both files, the pinned writers included, and never less than
+**2 MiB** nor more than **32 MiB** a connection. A data node on up to eight
+cores holds 32 connections, so at the default readers:
+
+| Memory | Each connection | All of them |
+|---|---|---|
+| 2 GiB | 4 MiB | 128 MiB |
+| 4 GiB | 8 MiB | 256 MiB |
+| 8 GiB | 16 MiB | 512 MiB |
+| 16 GiB or more | 32 MiB | 1 GiB |
+
+A keyed read is about a tenth slower at the 2 MiB floor than at 8 MiB or
+32 MiB (eight readers over a 1 GiB file). The cache is sized once, at boot,
+and logged on `store_opened` as `page_cache_kib`; a node whose memory cannot be
+read keeps the floor and logs `store_page_cache_floor`. A Gitlet node keeps it
+before Gitlet's shares ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)).
+A command that opens the store by itself, a backup's copy, an adoption's,
+keeps the floor.
+
 The load-bearing tables:
 
 - **`agent_diary`**: each agent's private observation log, each note with the vector of the model it came from (a per-agent scan the database ranks; no vector index). Written by the reflect path, which embeds on write; the node holding the seat fills any note left without a vector of the current model. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here: natively it is rows in the replicated estate beside the vectors derived from them, and a Confluence knowledge base has no local copy; see [knowledge system](../concepts/knowledge-system.md).
@@ -1656,7 +1681,8 @@ cache on its own disk. What such a node needs from its host:
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only
   now and then, so `gitlet.max_transfers` defaults to four a core and no more than
-  one for every 512 MiB of the node's memory; reads and background indexing
+  one for every 512 MiB of the memory the executor's pools leave
+  ([Sizing Gitlet nodes](#sizing-gitlet-nodes)); reads and background indexing
   take a core each, `gitlet.max_processes` of them. A large ZIP download is the
   one transfer that takes a core for its whole run, so a node makes one for
   every four of its read slots at once, two at least, and its git holds the
@@ -1747,6 +1773,17 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
+Every figure above is of the memory the executor's pools and the store's
+[page cache](#the-page-cache) leave: a Gitlet node keeps them first and sizes
+Gitlet by what is left
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 116 MiB for the
+transcript reads its API answers and 1 980 MiB where it runs seats too, and a
+sixteenth of its memory for the page cache, so give it that much more. They are the executor's in-process pools alone: a node
+running seats also holds its harness calls and boxes
+([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
+transfer takes it past its memory: it still boots and serves, logging
+`code_cache_memory_short` once, but at the default `node.max_concurrent` give a
+node running seats beside Gitlet 4 GiB of memory or more in all.
 
 The node that publishes also holds:
 

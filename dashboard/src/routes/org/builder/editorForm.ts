@@ -122,7 +122,7 @@ export interface SeatForm {
   readonly space: string;
   /**
    * Each per-phase chain beside `llm` (`llm_review`, `llm_subagent`,
-   * `llm_auxiliary`, `llm_judge`), as keys in order; `null` for one written
+   * `llm_auxiliary`, `llm_judge`, `llm_triage`), as keys in order; `null` for one written
    * as a per-phase mapping, which the editor shows but does not edit.
    */
   readonly phaseModels: Readonly<Record<PhaseModelField, readonly string[] | null>>;

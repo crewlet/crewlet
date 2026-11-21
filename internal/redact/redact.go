@@ -1024,10 +1024,18 @@ var awsSecretKeys = []struct{ key, what string }{
 // key's line: what closes a password's key and separates it from its value
 // ([passwordClose], [passwordSeparator]), or the spaces alone a command's
 // argument is written after its flag with (`aws configure set
-// aws_session_token …`). NEVER A LINE BREAK, so the rule reads nothing
-// [Settled] has to hold back. And [MaxReach] AT MOST ([awsSecretValue]): the
-// value's decision reads back across it to its key.
-const awsSecretSeparator = `(?:` + passwordClose + `[ \t]*` + passwordSeparator + `[ \t]*|[ \t]+)`
+// aws_session_token …`), either's spaces being spaces, tabs or escaped
+// line breaks ([awsSpace]). NEVER A REAL LINE BREAK, so the rule reads
+// nothing [Settled] has to hold back: an escaped one is a string's, on the
+// same real line. And [MaxReach] AT MOST ([awsSecretValue]): the value's
+// decision reads back across it to its key.
+const awsSecretSeparator = `(?:` + passwordClose + awsSpace + `*` + passwordSeparator + awsSpace + `*|` + awsSpace + `+)`
+
+// awsSpace is a space of an AWS secret's separator ([awsSecretSeparator]): a
+// space, a tab, or an escaped line break, the `\n` a JSON string writes for
+// one, with the backslashes each string it is written in adds before it, as
+// a value reads them ([valueBack]).
+const awsSpace = `(?:[ \t]|\\+[nr])`
 
 // awsSecret is the rule that replaces, with the marker for what, the value
 // after an AWS secret's key, key being a pattern of that key's spelling
@@ -1039,7 +1047,7 @@ func awsSecret(key, what string) rule {
 		with:    Marker + what + "]",
 		value:   &valueFunc{awsSecretValue[string], awsSecretValue[[]byte]},
 		valueIn: awsSecretByte,
-		pending: regexp.MustCompile(`(?:` + key + `)` + passwordClose + `[ \t]*\z`),
+		pending: regexp.MustCompile(`(?:` + key + `)` + passwordClose + awsSpace + `*\\*\z`),
 	}
 }
 
@@ -1067,8 +1075,13 @@ func awsSecretValue[T textual](text T, start, end int, _ [][2]int) (int, int) {
 		return end, end
 	}
 	from := end
-	if from < len(text) && tIndexByte("\"'`", text[from]) >= 0 {
-		from++
+	q := from
+	for q < len(text) && text[q] == '\\' {
+		q++
+	}
+	if q < len(text) && tIndexByte("\"'`", text[q]) >= 0 {
+		// The value's opening quote, escaped as its key's close may be.
+		from = q + 1
 	}
 	to, random := from, false
 	for ; to < len(text) && awsSecretByte(text[to]); to++ {
@@ -1084,11 +1097,21 @@ func awsSecretValue[T textual](text T, start, end int, _ [][2]int) (int, int) {
 // awsSeparatorLen is how long the separator ending match, an AWS secret's key
 // and its separator ([awsSecretSeparator]), is: what follows the key's last
 // letter, since every key in [awsSecretKeys] ends in one and a separator holds
-// no letter or digit.
+// no letter or digit but an escaped line break's.
 func awsSeparatorLen[T textual](match T) int {
 	key := len(match)
-	for key > 0 && !isAlnum(rune(match[key-1])) {
-		key--
+	for key > 0 {
+		switch c := match[key-1]; {
+		case !isAlnum(rune(c)):
+			key--
+		case (c == 'n' || c == 'r') && key >= 2 && match[key-2] == '\\':
+			key--
+			for key > 0 && match[key-1] == '\\' {
+				key--
+			}
+		default:
+			return len(match) - key
+		}
 	}
 	return len(match) - key
 }
@@ -1144,20 +1167,20 @@ func PasswordKeyMaxBytes() int {
 
 // passwordClose is what closes a password's key before its separator, and
 // passwordSeparator the separator: the quote or the markup a key is written
-// in, and the operator a language assigns or compares it with.
+// in, and the operator a language assigns or compares it with. Each byte of
+// the close may be escaped, as a key written inside a string is, once for
+// each string around it.
 //
-// THE SEPARATOR IS WHAT THE TEXT WRITES, and a key and its value are written
-// with more than a colon or an equals sign. A JSON object's key is quoted
-// (`{"password": "x"}`), a Markdown label bold (`**Password**: x`), and Go
+// THE SEPARATOR IS WHAT THE TEXT WRITES: a JSON object's key is quoted
+// (`{"password": "x"}`), a Markdown label bold (`**Password**: x`), Go
 // declares with `:=`, a comparison is `==` and PHP and Ruby map with `=>`.
 // Read with a bare `:` or `=` straight after the key, the quoted key and the
 // bold one were no key at all, and the value was published; and the second
-// character of an operator was taken for the value — `password :=
-// "hunter2"` became `password :[REDACTED:password] "hunter2"`. Each operator
-// is tried before the one character it opens with, so `==` is never `=`
-// followed by a value `=`.
+// character of an operator was taken for the value. Each operator is tried
+// before the one character it opens with, so `==` is never `=` followed by a
+// value `=`.
 const (
-	passwordClose     = "[\"'`*_]{0,2}"
+	passwordClose     = `(?:\\*["'` + "`" + `*_]){0,2}`
 	passwordSeparator = `(?::=|==|=>|[:=])`
 )
 
@@ -1235,11 +1258,19 @@ func quotedElsewhere[T textual](text T, at int) bool {
 		i += size
 	}
 	q := byte(0)
-	for j := i; j < len(text) && j < i+2 && tIndexByte("\"'`*_", text[j]) >= 0; j++ {
+	for j, n := i, 0; n < 2; n++ {
+		// Each byte of the close may be escaped ([passwordClose]).
+		for j < len(text) && text[j] == '\\' {
+			j++
+		}
+		if j == len(text) || tIndexByte("\"'`*_", text[j]) < 0 {
+			break
+		}
 		if text[j] == '"' || text[j] == '\'' {
 			q = text[j]
 			break
 		}
+		j++
 	}
 	if q == 0 {
 		return false

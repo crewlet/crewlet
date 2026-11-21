@@ -71,6 +71,7 @@ roles:
       default: fast
       review: [big, bigger]
       judge: cheap
+      triage: cheaper
 `).Roles[0].Seat()
 		if !slices.Equal(seat.LLM, org.ProviderKeys{"fast"}) {
 			t.Fatalf("default = %v", seat.LLM)
@@ -80,6 +81,9 @@ roles:
 		}
 		if !slices.Equal(seat.LLMJudge, org.ProviderKeys{"cheap"}) {
 			t.Fatalf("judge = %v", seat.LLMJudge)
+		}
+		if !slices.Equal(seat.LLMTriage, org.ProviderKeys{"cheaper"}) {
+			t.Fatalf("triage = %v", seat.LLMTriage)
 		}
 		// A phase the mapping did not name stays unset, so the runtime
 		// falls back to the default chain rather than to a fabricated one.
@@ -96,9 +100,13 @@ roles:
   - name: CEO
     llm: {default: fast, review: from-mapping}
     llm_review: from-flat
+    llm_triage: triage-flat
 `).Roles[0].Seat()
 		if !slices.Equal(seat.LLMReview, org.ProviderKeys{"from-flat"}) {
 			t.Fatalf("review = %v", seat.LLMReview)
+		}
+		if !slices.Equal(seat.LLMTriage, org.ProviderKeys{"triage-flat"}) {
+			t.Fatalf("triage = %v", seat.LLMTriage)
 		}
 	})
 }

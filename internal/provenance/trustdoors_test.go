@@ -194,6 +194,13 @@ var trustDoors = map[string]trustDoor{
 	"internal/agent/prompts/endings.go:endingAccounts": {vendor, []string{
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
+	// THE TASK A BUSY SEAT'S RUN WAS ASKED, as a wake's triage reads it
+	// beside the wake (ADR-0168): the turn's ask as its record keeps it, a
+	// harness-side record whose writer the row does not keep, so the rule for
+	// a kept session (ExecutorSession), read at the least trust.
+	"internal/agent/prompts/triage.go:BuildWakeTriage": {vendor, []string{
+		"internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences",
+	}},
 	// The cards an assistant conversation's earlier messages showed, as its
 	// summary call reads them: the record keeps no writer, so the least trust.
 	"internal/assistant/summary.go:summaryRequest": {vendor, []string{

@@ -2,6 +2,7 @@ package executordomain
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ import (
 // its cap and of `<` (six bytes JSON-escaped), and the declaration is held
 // within four times it, or the gate reserve it sizes is room no append uses.
 //
-// Mutation: raise CompletedWorkMaxBytes to 64 KiB and the worst end no longer
-// fits; halve MaxRecordBytes and neither does it.
+// Mutation: raise CompletedWorkMaxBytes to 64 KiB, or MaxServed to 32, and the
+// worst end no longer fits; halve MaxRecordBytes and neither does it.
 func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	t.Parallel()
 	worst := func(n int) string { return strings.Repeat("<", n) }
@@ -43,6 +44,10 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	if !ending.Within() {
 		t.Fatal("the premise: an ending fitted to its caps is outside them")
 	}
+	served := make([]string, MaxServed)
+	for i := range served {
+		served[i] = worst(ConversationKeyMaxBytes-1) + strconv.Itoa(i)
+	}
 	absorbs := make([]string, MaxAbsorbs)
 	for i := range absorbs {
 		absorbs[i] = statelog.NewOpID(monday, "")
@@ -53,10 +58,10 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		scope   ScopeSet
 		payload any
 	}{
-		"an end": {ConversationSubject(handle, conversation, turn), OpEnd, ScopeSet{Subject: true},
+		"an end": {ConversationSubject(handle, conversation, turn), OpEnd, seatScope(handle),
 			End{V: 1, Handle: handle, Turn: turn, ConversationKey: conversation,
 				WorkKey: worst(WorkKeyMaxBytes), AskExcerpt: worst(AskExcerptMaxBytes),
-				Ending: ending, SeenRemoval: 1 << 62}},
+				Ending: ending, Served: served, SeenRemoval: 1 << 62}},
 		"a capture": {ConversationSubject(handle, conversation, turn), OpCapture, seatScope(handle),
 			Capture{V: 1, Handle: handle, Turn: turn, ConversationKey: conversation,
 				WorkKey: worst(WorkKeyMaxBytes), Harness: worst(executorkeep.HarnessMaxBytes),
@@ -74,7 +79,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 				BaseTurn: absorbs[0], BaseObject: objstore.KeyAt(monday).String(),
 				BaseHash: strings.Repeat("f", 64), SeenRemoval: 1 << 62}},
 		"a delete": {ConversationSubject(handle, conversation, turn), OpDelete,
-			ScopeSet{Subject: true}, Delete{V: 1, Handle: handle, Turn: turn,
+			seatScope(handle), Delete{V: 1, Handle: handle, Turn: turn,
 				ConversationKey: conversation, Cutoff: monday}},
 		"a seat's removal": {SeatSubject(handle), OpSeatDelete, ScopeSet{Subject: true},
 			SeatDelete{V: 1, Handle: handle}},

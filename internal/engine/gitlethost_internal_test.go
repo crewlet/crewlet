@@ -16,8 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
+	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -156,6 +160,101 @@ func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 			t.Errorf("a node without the gitlet role advertises %d bytes of background budget, want no key", got)
 		}
 	})
+}
+
+// THE EXECUTOR'S POOLS A NODE KEEPS BESIDE GITLET FOLLOW ITS ROLES: one
+// running seats hosts their boxes, collecting at its turns (node.max_concurrent)
+// and reading them for its peers at boxReadsHeld; one serving ingress answers
+// people's transcript reads, with seats or without.
+//
+// Mutations, each red: hosting boxes whatever the roles, or on ingress rather
+// than seats; reading for people on seats rather than ingress; the default
+// turns whatever node.max_concurrent says.
+func TestTheExecutorsPoolsANodeKeepsFollowItsRoles(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		roles         []string
+		maxConcurrent int
+		want          executor.NodeWork
+	}{
+		{[]string{"seats", "gitlet"}, 0,
+			executor.NodeWork{Boxes: true, Turns: node.DefaultMaxConcurrent, PeerReads: boxReadsHeld}},
+		{[]string{"data", "ingress", "gitlet"}, 0, executor.NodeWork{PersonReads: true}},
+		{[]string{"data", "seats", "ingress", "gitlet"}, 7,
+			executor.NodeWork{Boxes: true, Turns: 7, PeerReads: boxReadsHeld, PersonReads: true}},
+		{[]string{"gitlet"}, 7, executor.NodeWork{}},
+	} {
+		boot := &config.Bootstrap{}
+		boot.Node.Roles, boot.Node.MaxConcurrent = tc.roles, tc.maxConcurrent
+		if got := gitWork(boot.Profile("node-a"), boot); got != tc.want {
+			t.Errorf("roles %v, node.max_concurrent %d: the node runs %+v of the executor's pools, want %+v",
+				tc.roles, tc.maxConcurrent, got, tc.want)
+		}
+	}
+}
+
+// A NODE KEEPS THE EXECUTOR'S POOLS IT RUNS BEFORE GITLET'S SHARES: a node
+// running seats gives its background work what one without them gives on the
+// same memory left once each has kept its own pools, and less than one without
+// seats of its memory. The transfer lane is pinned, so no budget moves with it.
+//
+// Mutation: pass no reserve, and the budget is the whole memory's.
+func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
+	t.Parallel()
+	const memory = int64(16) << 30
+	withoutSeats := []string{"data", "gitlet", "ingress", "workers"}
+	sized := func(roles []string, memory int64) (budget, pools int64) {
+		e := bootSizedCodeNode(t, roles, memory)
+		n := e.native.Load()
+		if n == nil || n.gitCache == nil {
+			t.Fatalf("the premise: a node with roles %v, for a company hosting code, built no git cache", roles)
+		}
+		boot := testBootstrap(t)
+		boot.Node.Roles = roles
+		return n.gitCache.BackgroundBudget(), gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory)
+	}
+	seats, seatsPools := sized(nil, memory)
+	alone, alonePools := sized(withoutSeats, memory)
+	// A node without seats of the memory a node running seats sizes Gitlet
+	// by once its own pools are kept: the same budget, had both kept theirs.
+	left, _ := sized(withoutSeats, memory-seatsPools+alonePools)
+	if seats != left || alone <= seats || alonePools == 0 || seatsPools <= alonePools {
+		t.Errorf("a %d-byte node running seats gives its background work %d, keeping %d; want %d, what a "+
+			"node without seats keeping %d gives on the same memory left, and less than its %d",
+			memory, seats, seatsPools, left, alonePools, alone)
+	}
+}
+
+// A GITLET NODE KEEPS ITS STORE'S PAGE CACHE BEFORE GITLET'S SHARES, beside
+// the executor's pools: what every connection of both its files caches, as
+// opened (the floor, in a test binary), is never left to its background work.
+//
+// Mutation: keep the executor's pools alone, and the budget is the page
+// cache's larger.
+func TestAGitletNodeKeepsItsStoresPageCacheBeforeGitlet(t *testing.T) {
+	t.Parallel()
+	const memory = int64(4)<<30 - 64<<20
+	e := bootSizedCodeNode(t, nil, memory)
+	n := e.native.Load()
+	if n == nil || n.gitCache == nil {
+		t.Fatal("the premise: a node with every role, for a company hosting code, built a git cache")
+	}
+	boot := testBootstrap(t)
+	cached := int64(storeOptions(&boot, nil, 0).NodeConnections(heldLogs(&boot))) *
+		int64(e.backends.Store.Caps().PageCacheKiB) << 10
+	kept := gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory) + cached
+	// Under a core's memory left, the serving share is its fraction of what
+	// is left on any machine (gitlet/cache's perBackedCore).
+	left := memory - kept
+	if cached == 0 || left <= 0 || left > gitproc.CoreMemory {
+		t.Fatalf("the premise: a page cache (%d) and at most a core's memory left (%d)", cached, left)
+	}
+	want := max(0, left-TestGitTransfers*gitproc.TransferMemory-
+		left/(gitproc.CoreMemory>>20)*(cache.ServingMemoryPerCore>>20))
+	if got := n.gitCache.BackgroundBudget(); got != want {
+		t.Errorf("a %d-byte Gitlet node whose store caches %d gives its background work %d, want %d",
+			memory, cached, got, want)
+	}
 }
 
 // bootSizedCodeNode boots a node with roles (nil: every role) for

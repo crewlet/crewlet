@@ -782,3 +782,54 @@ func TestAnEndKeepsItsWordsRedactedBeforeTheyAreCut(t *testing.T) {
 		t.Errorf("the row keeps the failure as %q, want no head of the token", f[max(len(f)-40, 0):])
 	}
 }
+
+// AN END SERVING OTHER CONVERSATIONS IS DECIDED ON ITS OWN AND SCOPED TO ITS
+// SEAT: its record is arbitrated on the turn's conversation, declares the whole
+// seat (its apply writes the served conversations' rows, so a node deferring it
+// defers theirs), and lands those rows; an end naming its own conversation as
+// served is refused before anything is published.
+//
+// Mutation: keep the end's scope to its subject, or drop the writer's check,
+// and a case goes red.
+func TestAnEndServingOtherConversationsIsScopedToItsSeat(t *testing.T) {
+	t.Parallel()
+	log := openExecutorLog(t)
+	n := newWriteNode(t, log, "n1")
+	turn := newTurnID()
+	if _, err := n.writer.End(t.Context(), engineCall(), executordomain.NewEnd{Handle: "ana", Turn: turn,
+		ConversationKey: "chat:a", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
+		Served: []string{"chat:a"}}); !errors.Is(err, executordomain.ErrInvalid) {
+		t.Errorf("an end naming its own conversation as served answered %v, want ErrInvalid", err)
+	}
+	if _, err := n.writer.End(t.Context(), engineCall(), executordomain.NewEnd{Handle: "ana", Turn: turn,
+		ConversationKey: "chat:a", Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
+		Served: []string{"ticket:42"}}); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	last, err := log.End(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, _, _, err := log.At(t.Context(), last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := n.verifier.Open(payload)
+	env, err := executordomain.DecodeEnvelope(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Subject != executordomain.ConversationSubject("ana", "chat:a", turn) ||
+		len(env.Scope.Terms) != 1 || env.Scope.Terms[0] != (executordomain.ScopeTerm{
+		Kind: executordomain.TermSeat, Seat: "ana"}) {
+		t.Errorf("the end is on %s with scope %+v, want the turn's conversation and its seat",
+			env.Subject, env.Scope)
+	}
+	var served int
+	if err := n.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM executor_session_serves
+			WHERE agent_handle = 'ana' AND turn_id = ? AND conversation_key = 'ticket:42'`, turn).Scan(&served)
+	}); err != nil || served != 1 {
+		t.Errorf("the end landed %d served rows (%v), want the ticket's", served, err)
+	}
+}
