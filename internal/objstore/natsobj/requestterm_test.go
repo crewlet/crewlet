@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
@@ -111,7 +112,7 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	b := openWith(t, client(t, across.LeafBroker), acrossLink())
 	arrived := watchReadArrival(t, client(t, across.MemberBroker).Conn())
 	window := b.Window().Size() / natsobj.PieceTake(b, natsobj.MessageBytes)
-	account := full.leafAccount(t)
+	account := dataLink
 	taken := across.Link.Count(account, linktest.ToBroker).Read
 	full.arm()
 
@@ -181,11 +182,8 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 // leafLink watches what a leaf sends across its link, and once armed holds
 // it back with an upload's bytes on it ([watchLeafLink]).
 type leafLink struct {
-	link *linktest.Link
-	// account is the one the leaf's link binds, once it has carried anything
-	// to the member.
-	account chan string
-	armed   atomic.Bool
+	link  *linktest.Link
+	armed atomic.Bool
 	// heldAt is closed once the link holds what the leaf sends.
 	heldAt chan struct{}
 	// open lets the link carry again once closed ([leafLink.release]).
@@ -206,17 +204,14 @@ const heldAfter = natsobj.MessageBytes / 4
 // ([linktest.Link.Watch]).
 func watchLeafLink(t *testing.T, link *linktest.Link) *leafLink {
 	t.Helper()
-	w := &leafLink{link: link, account: make(chan string, 1), heldAt: make(chan struct{}),
-		open: make(chan struct{})}
+	w := &leafLink{link: link, heldAt: make(chan struct{}), open: make(chan struct{})}
 	t.Cleanup(w.release)
-	var named, held sync.Once
+	var held sync.Once
 	start := int64(-1)
 	link.Watch(func(c linktest.Crossing) {
-		// A CONNECTION THAT BINDS NO ACCOUNT is a client's, never the leaf's.
-		if c.Way != linktest.ToBroker || c.Account == "" {
+		if c.Way != linktest.ToBroker || c.Account != dataLink {
 			return
 		}
-		named.Do(func() { w.account <- c.Account })
 		if !w.armed.Load() {
 			return
 		}
@@ -234,18 +229,9 @@ func watchLeafLink(t *testing.T, link *linktest.Link) *leafLink {
 	return w
 }
 
-// leafAccount is the account the leaf's link binds, from the first bytes the
-// link carried of it.
-func (w *leafLink) leafAccount(t *testing.T) string {
-	t.Helper()
-	select {
-	case a := <-w.account:
-		return a
-	case <-t.Context().Done():
-		t.Fatal("the leaf's link carried nothing to the member")
-		return ""
-	}
-}
+// dataLink is the account the leaf's DATA LINK binds, the one its uploads
+// cross; the lease link beside it binds its own.
+const dataLink = server.DEFAULT_GLOBAL_ACCOUNT
 
 // arm makes the link hold what the leaf sends once [heldAfter] of it has
 // crossed.

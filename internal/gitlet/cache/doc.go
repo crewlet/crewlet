@@ -187,7 +187,7 @@
 // ([Cache.BackgroundBudget]). A pool that cannot read the memory refuses to start:
 // a guessed budget is the OOM it exists to prevent. A copy without a bitmap
 // is slower, never wrong. The budget and the git lanes are sized by what the
-// executor's pools the node runs leave (gitproc.Pool.Reserved).
+// engine's memory lines leave (gitproc.Pool.Reserved).
 //
 // # The directory
 //

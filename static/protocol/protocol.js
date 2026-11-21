@@ -4191,6 +4191,7 @@ var ACTIONS = {
 		args: [
 			"turn_id",
 			"launch_id",
+			"fold_in",
 			"choice",
 			"answer"
 		],

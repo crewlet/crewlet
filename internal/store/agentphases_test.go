@@ -41,7 +41,7 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 		}
 	}
 
-	got, _, err := log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
+	got, _, err := log.AgentPhases(t.Context(), "a-lead", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 
 	// And the company-wide read agrees, which is the point: the two answers
 	// disagreeing about where history stops is what an operator sees.
-	company, _, err := log.Phases(t.Context(), "a-lead", 0, nil, time.Now())
+	company, _, err := log.Phases(t.Context(), "a-lead", 0, 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
@@ -90,24 +90,24 @@ func TestASeatsPhasesAreItsOwnWhenItsNameIsShared(t *testing.T) {
 		}
 	}
 
-	seat, more, err := log.AgentPhases(t.Context(), "a-ada", nil, time.Now())
+	seat, more, err := log.AgentPhases(t.Context(), "a-ada", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
 	if len(seat) != 1 || seat[0].ID != "phase-a-ada" || more {
 		t.Errorf("a-ada's phases = %v (more=%v), want only its own", idsOf(seat), more)
 	}
-	company, more, err := log.Phases(t.Context(), "a-bob", 0, nil, time.Now())
+	company, more, err := log.Phases(t.Context(), "a-bob", 0, 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
 	if len(company) != 1 || company[0].ID != "phase-a-bob" || more {
 		t.Errorf("a-bob's phases = %v (more=%v), want only its own", idsOf(company), more)
 	}
-	if all, _, err := log.Phases(t.Context(), "", 0, nil, time.Now()); err != nil || len(all) != 2 {
+	if all, _, err := log.Phases(t.Context(), "", 0, 0, nil, time.Now()); err != nil || len(all) != 2 {
 		t.Errorf("the company's phases = %d (err %v), want both", len(all), err)
 	}
-	if none, more, err := log.AgentPhases(t.Context(), "", nil, time.Now()); err != nil || len(none) != 0 || more {
+	if none, more, err := log.AgentPhases(t.Context(), "", 0, nil, time.Now()); err != nil || len(none) != 0 || more {
 		t.Errorf("no id = %v (more=%v), %v; want nothing rather than every row that carries none",
 			idsOf(none), more, err)
 	}
@@ -142,7 +142,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		add(i)
 	}
 
-	seat, more, err := log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
+	seat, more, err := log.AgentPhases(t.Context(), "a-lead", 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 		t.Errorf("a seat with exactly a page of phases: %d rows, more=%v; want %d and false",
 			len(seat), more, store.AgentPhaseLimit)
 	}
-	company, more, err := log.Phases(t.Context(), "", store.AgentPhaseLimit, nil, time.Now())
+	company, more, err := log.Phases(t.Context(), "", store.AgentPhaseLimit, 0, nil, time.Now())
 	if err != nil {
 		t.Fatalf("Phases: %v", err)
 	}
@@ -169,12 +169,12 @@ func TestAPageOfExactlyTheHistorySaysItIsTheLast(t *testing.T) {
 
 	// ONE MORE, and every read says so — and still answers only its page.
 	add(store.AgentPhaseLimit)
-	seat, more, err = log.AgentPhases(t.Context(), "a-lead", nil, time.Now())
+	seat, more, err = log.AgentPhases(t.Context(), "a-lead", 0, nil, time.Now())
 	if err != nil || len(seat) != store.AgentPhaseLimit || !more {
 		t.Errorf("a seat with a page and one: %d rows, more=%v, err %v; want %d and true",
 			len(seat), more, err, store.AgentPhaseLimit)
 	}
-	company, more, err = log.Phases(t.Context(), "", store.AgentPhaseLimit, nil, time.Now())
+	company, more, err = log.Phases(t.Context(), "", store.AgentPhaseLimit, 0, nil, time.Now())
 	if err != nil || len(company) != store.AgentPhaseLimit || !more {
 		t.Errorf("a company page short of one: %d rows, more=%v, err %v; want %d and true",
 			len(company), more, err, store.AgentPhaseLimit)

@@ -961,6 +961,29 @@ Docker and Podman set neither, so the engine there loses only the process the ke
 and the engine compete on size alone: macOS gives an unprivileged
 process no such priority to set.
 
+### The engine's memory limit
+
+The engine sets the Go runtime's memory limit (`GOMEMLIMIT`) as its runtime
+starts, to nine tenths of what its process may hold: the node's memory (the
+least of the machine's and every cgroup limit) less what the node holds
+outside the runtime. That is the store's [page cache](#the-page-cache) and, on
+a node serving Gitlet, 224 MiB for each admitted git transfer, the background
+budget its maintenance may hold and its read lane's git processes. Near the
+limit the collector works harder rather than let the heap grow, so the
+executor's pools are kept at half again their live size, not twice it, and a
+Gitlet node keeps the same lines from its background work
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)). The tenth it
+leaves is for what no line counts: the harness runs of a `direct` box, which
+the limit guards none of ([When the host runs out of memory](#when-the-host-runs-out-of-memory)),
+and native fragmentation. `engine_memory_limit` logs the limit, the memory and
+where it was read, what git holds and everything held outside the runtime.
+
+Set `GOMEMLIMIT` yourself, `off` included, and the engine keeps it, logging
+`engine_memory_limit_explicit` with the figure it would have set. A node whose
+memory cannot be read sets none (`engine_memory_limit_unset`, a warning). A
+container resized in place keeps the limit it started with until a restart, as
+the git lanes do.
+
 ### Probes
 
 Every node with an `api.port` answers `/health` and `/ready` on it, whatever
@@ -1773,12 +1796,12 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
-Every figure above is of the memory the executor's pools and the store's
-[page cache](#the-page-cache) leave: a Gitlet node keeps them first and sizes
+Every figure above is of the memory the executor's pools, the store's
+[page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
-([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 116 MiB for the
-transcript reads its API answers and 1 980 MiB where it runs seats too, and a
-sixteenth of its memory for the page cache, so give it that much more. They are the executor's in-process pools alone: a node
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
+transcript reads its API answers and 1 650 MiB where it runs seats too, a
+sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
 transfer takes it past its memory: it still boots and serves, logging

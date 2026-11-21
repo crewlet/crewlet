@@ -949,6 +949,25 @@ func worstRow(t *testing.T) PendingRun {
 		return &types.WorkingFor{Kind: types.WorkingForKind(plain(32)), Seat: plain(iam.MaxLogin),
 			Login: plain(iam.MaxLogin), Apps: slices.Clone(iam.Apps)}
 	}
+	// THE JOB'S FOLD-INS, as many as it asks ([MaxJobFoldIns]), each answered,
+	// every name at its widest and its words filling [MaxFoldInBytes]: the
+	// store refuses one past it.
+	foldInJob := uuid.NewString()
+	foldIns := make([]FoldIn, MaxJobFoldIns)
+	for i := range foldIns {
+		f := FoldIn{ID: uuid.NewString(), Launch: foldInJob, Wake: plain(MaxWakeIDBytes), Asker: plain(64),
+			AskerKind: iam.ActorOperator, Conversation: plain(256), Cut: math.MaxInt,
+			Label: provenance.Label{Source: provenance.SourceChatThread, Trust: provenance.TrustExternal,
+				Authors: []provenance.Author{{Kind: iam.ActorOperator, Seat: plain(64)}}},
+			PutTo: handles(MaxFoldInPutTo), AskedAt: worstAt, Answer: FoldInRefuse, AnsweredBy: plain(64),
+			AnsweredByKind: iam.ActorOperator, AnsweredAt: worstAt}
+		size, err := foldInBytes(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Words = plain(MaxFoldInBytes - size)
+		foldIns[i] = f
+	}
 	run := PendingRun{
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
@@ -1002,6 +1021,7 @@ func worstRow(t *testing.T) PendingRun {
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
 		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
 			Reads: math.MaxInt, Tellings: tellings},
+		FoldIns:   foldIns,
 		CreatedAt: worstAt, UpdatedAt: worstAt,
 	}
 	return run

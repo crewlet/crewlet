@@ -590,13 +590,15 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 // ---- decisions -----------------------------------------------------------
 
 // DecisionItem is one thing waiting on a person's decision: a structured ask
-// on a work item, or an executor parked on a question put to them.
+// on a work item, an executor parked on a question put to them, or a fold-in
+// asking whether another writer's request joins a running executor's work.
 type DecisionItem struct {
 	Kind string    `json:"kind"`
 	At   time.Time `json:"at"`
 
-	Ask *worklet.AskRow `json:"ask,omitempty"`
-	Run map[string]any  `json:"run,omitempty"`
+	Ask    *worklet.AskRow `json:"ask,omitempty"`
+	Run    map[string]any  `json:"run,omitempty"`
+	FoldIn *FoldInItem     `json:"fold_in,omitempty"`
 
 	// PutToYou, MayAnswer and NeedsYou are where it stands for the CALLER:
 	// put to them, theirs to answer, and waiting on them ([runanswer.Waiting]).
@@ -667,10 +669,10 @@ func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) 
 	return &AccessChanged{Lines: append([]string{}, pending.Lines...)}
 }
 
-// decisions answers what is waiting on one person — the open asks put to
-// them and the executors parked on a question to them — newest first, at
-// most [worklet.MaxDecisions], with the full count and the oldest one's
-// instant beside the page; `more` says something lies past the `limit` page.
+// decisions answers what is waiting on one person — the asks, the parked
+// executors' questions and the running executors' fold-ins ([FoldInItem]) put
+// to them — newest first, at most [worklet.MaxDecisions], with the full count
+// and the oldest one's instant; `more` says something lies past the page.
 //
 // On the caller's own record only, it also lists runs they may answer where
 // the question went elsewhere ([runanswer.May]). `total` IS WHAT WAITS ON THE
@@ -750,6 +752,25 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		reach := s.runReach(ctx)
 		for _, run := range runs {
+			// A FOLD-IN OF A RUNNING JOB, put to this person or theirs to
+			// answer on their own record, as a run's question is.
+			for _, f := range run.OpenFoldIns() {
+				put, may, err := s.foldInFor(ctx, run, f, handle)
+				if err != nil {
+					return nil, err
+				}
+				if !put && (!own || !may) {
+					continue
+				}
+				items = append(items, DecisionItem{Kind: "fold_in", At: f.AskedAt, FoldIn: foldInItemOf(run, f),
+					PutToYou: put, MayAnswer: may, NeedsYou: put})
+				if !put {
+					answerable++
+					continue
+				}
+				total++
+				older(f.AskedAt)
+			}
 			r := reach(run)
 			waiting, err := s.waiting(ctx, run, r.Record)
 			if err != nil {
