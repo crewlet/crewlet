@@ -373,6 +373,7 @@ export const PHASE_MODEL_FIELDS = [
   "llm_subagent",
   "llm_auxiliary",
   "llm_judge",
+  "llm_triage",
 ] as const;
 
 // ---------------------------------------------------------------------------

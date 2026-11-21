@@ -107,6 +107,16 @@ func resolveReserve(o Options, memory int64) (int64, error) {
 // the lanes (Options.Reserve), fixed for the pool's life as the lanes are.
 func (p *Pool) Reserved() int64 { return p.reserved }
 
+// ReservedAt is what Options.Reserve keeps of a node of memory bytes: what the
+// node would keep beside Gitlet given that memory, as a short node is told to
+// have (internal/gitlet/cache's code_cache_memory_short). Never negative.
+func (p *Pool) ReservedAt(memory int64) int64 {
+	if p.reserve == nil {
+		return 0
+	}
+	return max(0, p.reserve(memory))
+}
+
 // Memory is the node's memory as New read it — or as Options.Memory gave
 // it — and what the pool's lanes were sized by.
 func (p *Pool) Memory() nodememory.Memory { return p.memory }

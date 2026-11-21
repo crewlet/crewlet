@@ -289,6 +289,7 @@ type noteSealBody struct {
 	ByKind     string    `json:"by_kind"`
 	OperatorID string    `json:"operator_id"`
 	At         time.Time `json:"at"`
+	Owes       string    `json:"owes"`
 }
 
 // seatSealBody is the body a record's seat anchor covers.
@@ -306,7 +307,7 @@ func (s *runSteers) seal(turnID string, note steer.Note) (_ sandbox.RunNote, err
 	}
 	body, err := json.Marshal(noteSealBody{
 		TurnID: turnID, ID: note.ID, Text: note.Text, By: note.By, ByKind: string(note.ByKind),
-		OperatorID: note.OperatorID, At: note.At.UTC(),
+		OperatorID: note.OperatorID, At: note.At.UTC(), Owes: note.Owes,
 	})
 	if err != nil {
 		return sandbox.RunNote{}, fmt.Errorf("engine: sealing a note to turn %s: %w", turnID, err)
@@ -345,7 +346,8 @@ func (s *runSteers) open(turnID string, n sandbox.RunNote) (steer.Note, bool) {
 		return steer.Note{}, false
 	}
 	return steer.Note{ID: sealed.ID, Text: sealed.Text, By: sealed.By,
-		ByKind: iam.ActorKind(sealed.ByKind), OperatorID: sealed.OperatorID, At: sealed.At}, true
+		ByKind: iam.ActorKind(sealed.ByKind), OperatorID: sealed.OperatorID, At: sealed.At,
+		Owes: sealed.Owes}, true
 }
 
 func (s *runSteers) unverified(turnID, noteID, why string) {

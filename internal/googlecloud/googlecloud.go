@@ -4,13 +4,10 @@
 //
 // # No key anywhere
 //
-// Google blocks service account key creation by default and advises against
-// keys. So the engine holds an ES256 key of its own, whose public half the
-// owner uploads to a Workload Identity Federation provider. The engine signs a
-// ten-minute token for that one provider, exchanges it at Google's Security
-// Token Service, and impersonates the provisioner for an hour ([Client]). An
-// agent's own token is minted the same way, by impersonating its account with
-// the provisioner's token ([Client.SeatToken]), and lives only in memory.
+// The engine reaches the provisioner, and mints each agent's token by
+// impersonating its account, through the company's Google identity
+// ([googleauth.Connection]), with no service account key. An agent's token
+// carries cloud-platform and lives only in memory.
 //
 // # The provisioner is contained twice
 //
@@ -70,10 +67,6 @@ var CredentialKeys = []string{"Authorization"}
 // FederationKeySecret is the sealed name the engine's federation key is kept
 // under.
 const FederationKeySecret = "GOOGLE_CLOUD_FEDERATION_KEY"
-
-// ScopeCloudPlatform is the OAuth scope every token is minted with. What a
-// token reaches is the account's IAM roles, never its scope.
-const ScopeCloudPlatform = "https://www.googleapis.com/auth/cloud-platform"
 
 // The console pages where a person settles what only Google can.
 const (

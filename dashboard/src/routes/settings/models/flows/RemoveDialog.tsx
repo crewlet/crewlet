@@ -306,6 +306,7 @@ const JOB_DETAIL: Record<SeatJob, string> = {
   subagent: "delegations",
   auxiliary: "memory and summaries",
   judge: "onboarding checks",
+  triage: "sorting messages to a busy seat",
 };
 
 /**

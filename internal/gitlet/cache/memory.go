@@ -55,28 +55,48 @@ func perBackedCore(cores int, memory, share int64) int64 {
 }
 
 // memoryReserve is what a node of memory bytes keeps from its background work:
-// engine, the engine's pools beside Gitlet (gitproc.Pool.Reserved), first;
-// gitproc.TransferMemory for each of transfers; and ServingMemoryPerCore (the
-// store, the broker, the engine and the read lane) for each core what engine
+// engine, what the engine keeps beside Gitlet (gitproc.Pool.Reserved: the
+// executor's pools and the store's page cache), first; gitproc.TransferMemory
+// for each of transfers; and ServingMemoryPerCore for each core what engine
 // leaves backs.
 func memoryReserve(transfers, cores int, memory, engine int64) int64 {
 	return engine + int64(transfers)*gitproc.TransferMemory +
 		perBackedCore(cores, max(0, memory-engine), ServingMemoryPerCore)
 }
 
-// memoryNeeded is the least memory at and past which a node keeping engine
-// bytes beside Gitlet, with transfers transfers on cores read slots, holds
-// memoryReserve within it: what code_cache_memory_short tells it to have. The
-// serving share keeps ServingMemoryPerCore of each CoreMemory past engine, so
-// memory added is partly kept again at the next boot; this is where the two
-// meet, a step of perBackedCore's at a time, or the share's cap where that
-// comes first. At the default lanes only a node of one transfer is short, and
-// it needs no second at this memory, so the next boot keeps the same.
-func memoryNeeded(transfers, cores int, engine int64) int64 {
+// memoryNeeded is the least memory at and past which a node keeping
+// engine(memory) beside Gitlet, with transfers transfers on cores read slots,
+// holds memoryReserve within it: what code_cache_memory_short tells it to have.
+// The serving share is of what engine leaves, and keeps ServingMemoryPerCore of
+// each CoreMemory of it, so the node holds from the least room left past engine
+// at which it does beside nothing (neededBeside); engine grows more slowly than
+// the memory (the store's page cache is a share of it), so that room only grows
+// with the memory, and the memory that leaves it is found by halving.
+func memoryNeeded(transfers, cores int, engine func(memory int64) int64) int64 {
+	room := neededBeside(transfers, cores)
+	lo, hi := int64(0), max(room, 1)
+	for hi-engine(hi) < room {
+		lo, hi = hi, 2*hi
+	}
+	for hi-lo > 1 {
+		if mid := lo + (hi-lo)/2; mid-engine(mid) >= room {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi
+}
+
+// neededBeside is memoryNeeded beside nothing: a step of perBackedCore's at a
+// time, or the share's cap where that comes first. At the default lanes only a
+// node of one transfer is short, and it needs no second at this memory, so the
+// next boot keeps the same.
+func neededBeside(transfers, cores int) int64 {
 	fixed := int64(transfers) * gitproc.TransferMemory
 	step, share := gitproc.CoreMemory>>20, ServingMemoryPerCore>>20
 	steps := max(1, (fixed+step-share-1)/(step-share))
-	return engine + min(fixed+int64(cores)*ServingMemoryPerCore, fixed+(steps-1)*share)
+	return min(fixed+int64(cores)*ServingMemoryPerCore, fixed+(steps-1)*share)
 }
 
 // maintenanceBudget is what a node of mem gives its background work after
@@ -103,7 +123,8 @@ func (c *Cache) initMemory(pool *gitproc.Pool) {
 }
 
 // warnShort is Open's: a node whose memory is short of what it keeps
-// (memoryReserve: the executor's pools, its transfers and its serving share)
+// (memoryReserve: the engine's pools and page cache, its transfers and its
+// serving share)
 // says so once, at boot, with the shortfall and the memory that holds it
 // (memoryNeeded). It is not refused: a small or development node runs seats
 // beside Gitlet on 2 GiB, and serves while it is not at every worst case at
@@ -114,7 +135,7 @@ func (c *Cache) warnShort(pool *gitproc.Pool) {
 		c.log.Warn("code_cache_memory_short", "memory", c.memory.Bytes, "memory_from", c.memory.From,
 			"pools", pool.Reserved(), "transfer_slots", transfers, "memory_reserved", c.memReserve,
 			"shortfall", short,
-			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.Reserved()))
+			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.ReservedAt))
 	}
 }
 

@@ -363,7 +363,8 @@ type Options struct {
 
 	// Reserve is what the node keeps of its memory, given the memory read,
 	// for holders beside Gitlet before the lanes are sized: the executor's
-	// pools the node runs (internal/sandbox/executor's NodeWork.MemoryPools).
+	// pools the node runs (internal/sandbox/executor's NodeWork.MemoryPools)
+	// and the store's page cache (internal/store's PageCacheShare).
 	// nil keeps nothing; a negative answer is refused. The
 	// TRANSFER lane's default and the cache's budget are sized by what it
 	// leaves ([Pool.Reserved]).
@@ -419,8 +420,10 @@ type Pool struct {
 	// the node.
 	memory      nodememory.Memory
 	fixedMemory bool
-	// reserved is what Options.Reserve kept of memory ([Pool.Reserved]).
+	// reserved is what Options.Reserve kept of memory ([Pool.Reserved]), and
+	// reserve the function itself ([Pool.ReservedAt]).
 	reserved int64
+	reserve  func(memory int64) int64
 
 	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
 	// KillGrace, TransferStall (Remote.config derives a remote run's TCP
@@ -621,6 +624,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		memory:      memory,
 		fixedMemory: o.Memory > 0,
 		reserved:    reserved,
+		reserve:     o.Reserve,
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
 		// THE TRANSFER LANE GRANTS BY SHARE (share.go): a held slot is

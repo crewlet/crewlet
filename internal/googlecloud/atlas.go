@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -54,7 +55,7 @@ const accountKeyPrefix = string(atlas.VendorGoogleCloud) + "/"
 func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
 	base := in.HTTP
 	if base == nil {
-		base = httpx.Client(ClientTimeout)
+		base = httpx.Client(googleauth.ClientTimeout)
 	}
 	counted, calls := collect.Counted(base)
 	client, err := ClientFor(in.Config, in.Env, counted)
@@ -88,7 +89,7 @@ type atlasRead struct {
 // opposed to failing to answer it: a role it lacks there, or the 404 Google
 // answers for what a caller cannot see. Never a 401 and never a rate limit.
 func refused(err error) bool {
-	status := Status(err)
+	status := googleauth.Status(err)
 	return status == http.StatusForbidden || status == http.StatusNotFound
 }
 
@@ -99,7 +100,7 @@ func (r *atlasRead) read(ctx context.Context) error {
 	// the provisioner, so a later refusal is a role's and never a dead key's.
 	found, err := r.client.SearchProjects(ctx)
 	if err != nil {
-		return fmt.Errorf("googlecloud: list the projects the provisioner can read: %w", reject(err))
+		return fmt.Errorf("googlecloud: list the projects the provisioner can read: %w", googleauth.Reject(err))
 	}
 	// A PROJECT ON ITS WAY OUT IS NOT LISTED, so it leaves as any that is gone.
 	projects := slices.DeleteFunc(found, func(p Project) bool { return p.State != "ACTIVE" })

@@ -36,7 +36,7 @@ type ProviderKeys = org.ProviderKeys
 //	llm: {default: fast, review: big} # a chain per phase
 //
 // Phases differ in kind of work (reviewing wants a strong model, the extension
-// judge a cheap one), and five flat fields leave one stale. It decodes to ONE
+// judge a cheap one), and six flat fields leave one stale. It decodes to ONE
 // type, not an `any`, so no consumer type-switches. A phase unset here falls
 // back to Default; a flat llm_<phase> field on the seat wins over both.
 type PhaseLLM struct {
@@ -45,6 +45,7 @@ type PhaseLLM struct {
 	Subagent  ProviderKeys `yaml:"subagent,omitempty" json:"subagent,omitzero"`
 	Auxiliary ProviderKeys `yaml:"auxiliary,omitempty" json:"auxiliary,omitzero"`
 	Judge     ProviderKeys `yaml:"judge,omitempty" json:"judge,omitzero"`
+	Triage    ProviderKeys `yaml:"triage,omitempty" json:"triage,omitzero"`
 }
 
 // phaseLLMFields decodes the mapping form without re-entering PhaseLLM's
@@ -144,7 +145,7 @@ func (p PhaseLLM) MarshalJSON() ([]byte, error) {
 // phases lists every chain in the order a per-phase mapping declares them,
 // so IsZero, the fallback resolution and the schema all read one list.
 func (p *PhaseLLM) phases() []ProviderKeys {
-	return []ProviderKeys{p.Default, p.Review, p.Subagent, p.Auxiliary, p.Judge}
+	return []ProviderKeys{p.Default, p.Review, p.Subagent, p.Auxiliary, p.Judge, p.Triage}
 }
 
 // IsZero reports that nothing was configured, which is what lets both
