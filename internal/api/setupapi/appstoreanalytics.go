@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/growth"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
@@ -43,7 +43,10 @@ func (s *Service) appStoreAnalytics(w http.ResponseWriter, r *http.Request) {
 			"detail": "this node does not reach App Store Connect; ask through a node that serves the dashboard"})
 		return
 	}
-	p, _ := iam.From(r.Context())
+	p, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	if p.Seat == "" {
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden, map[string]string{
 			"detail": "a person holding a human seat turns App Store analytics on, so the access log can say who"})
