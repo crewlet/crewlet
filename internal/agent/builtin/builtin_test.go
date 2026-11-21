@@ -1174,7 +1174,7 @@ func fullDeps(t *testing.T) builtin.Deps {
 		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
 		// AND THE GROWTH TOOLS, one fake product's, at no seat's level.
 		Growth: builtin.GrowthDeps{Products: []builtin.GrowthProduct{&fakeAds{levels: map[string]growth.Level{}}},
-			Requesters: codeRequesters(), Chart: chartLeads},
+			Requesters: codeRequesters(), Chart: chartLeads, Audit: &growthAudit{}},
 		// AND THE ATLAS, over the settings acme runs, and an agent's two
 		// records in it, over its log and a day's count.
 		Atlas:       builtin.AtlasDeps{Settings: runsAcme},
