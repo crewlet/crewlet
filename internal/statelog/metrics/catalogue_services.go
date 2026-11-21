@@ -174,6 +174,22 @@ func serviceInstruments() []Instrument {
 				"`seat_wake_triaged`, `seat_wake_foldin_*` and `seat_wake_aside` " +
 				"lines name the reason.",
 		},
+		{
+			Name: SeatRunCalls, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool", "outcome"},
+			Shows: "What became of each call an executor's run made to the tools " +
+				"for the runs in flight around it (ADR-0176), by `tool` (the " +
+				"run tool called, or `wait_answered` for the engine's answer " +
+				"to a wait): `listed`, `sent`, `waited`, " +
+				"`resumed` when a wait's run left its seat and the wait was " +
+				"answered, `failed` when a store or the publish failed, or " +
+				"`refused_` and the reason (`self`, `unknown_run`, `requester`, " +
+				"`not_working`, `harness`, `bound`, `cycle`, `caller_done`, " +
+				"`invalid`). " +
+				"`refused_requester` climbing is runs of one seat working for " +
+				"different people on the same work; `refused_bound` runs talking " +
+				"past what a handoff needs. The `seat_run_*` lines name the runs.",
+		},
 
 		// ---- the object store's S3 requests ---------------------------
 		{

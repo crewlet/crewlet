@@ -2421,6 +2421,29 @@ ended its turn.
 
 ---
 
+## A seat's runs see each other
+
+A seat runs up to its cap of runs at once (`sandbox.max_concurrent_runs`, two by default, [above](#how-a-coding-task-runs)), and two of them can take the same work item, push the same branch or answer one person twice. A run launched while its seat holds other runs is told of them and given three tools on its [bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box), beside `ask_and_wait` ([ADR-0176](../../adr/0176-a-seats-runs-see-and-message-each-other.md)). A launch that finds no other run is told nothing and offered none of them.
+
+- **Its brief** carries **Other runs in flight around this one**, one line per run, and one line on when to use the tools: a run on the same work item, branch or conversation; an unrelated run is unrelated.
+- **`list_runs`** answers the same lines again, from one listing of the seat's runs and no model call.
+- **`message_run`** files a message on another run's record, read at its next step.
+- **`wait_for_run`** parks the run until another leaves its seat's slots.
+
+**What a run is shown follows whom each run works for.** Every line names the run's turn, its stage (`launching`, `running`, `parked_on_question`, `parked_on_held_call`, `waiting_for_run`, `answered`) and its work item. Only a run working for the same requester also shows its conversation's kind and whether it is the caller's, the branch it named, when it started and its task's title, fenced as what its turn was asked; another requester's run reads "a run for another requester", since its task's words carry their data. Two runs share a requester when their ceilings name one principal ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)), a run's own work as its seat's; a stranger is nobody's requester.
+
+**A message is information, never a request.** It is filed as a [wake item](#notes-to-a-running-run) of its own, sealed in a key domain of its own and naming its sending run, so it is served, confirmed and told again to a continued session as a wake is, and kept as the turn's once read. The receiving run reads it under a wake's heading naming the sending run and whom it works for, the words inside the sending executor's fence, told that its own task and requester are unchanged. It is refused, naming why and never cut:
+
+| Refused | Why |
+|---|---|
+| Between runs of different requesters | A run's words carry its requester's data, and no label decides whom data is for; the refusal says to tell the requester instead |
+| To the caller's own run | A message goes to another run |
+| To a run not launching or running, or whose harness reads no note | Nothing would read it |
+| Past 2 messages a launch sends, or 2 it takes from other runs | One message says what a run is doing and one answers it; a third is a conversation for the requester. Two of a job's four wake items, so its requester's own follow-ups keep room to join |
+| Past 1,000 characters | A wake's bound, which a hook's answer holds beside a person's widest note |
+
+**A wait parks the run as a question does**, on a run of its seat holding a slot, with the run's reason and the branch it pushed. It is put to nobody: the node holding the seat watches the waits on its seats and answers one once its run ends, fails or parks, as an answer by turn carrying how that run went (ended and its outcome, parked and on what, or gone with nothing on record), what it pushed, and, for a run of the same requester, the first 2 KiB of what its reviewer said landed. A run leaving on that node is seen at once; a watch also reads its seat's waits every minute. The waiting run's requester is told once, on the conversation's line, that its work waits for the seat's other run. While it waits its conversation stays busy and it holds no slot, unlike a question's park: no reply there answers the wait, and mail there waits aside behind it, its writer told why once, rather than starting a second turn on the same work. The mail is handed back when the run resumes, where a follow-up from its requester joins it, or when it ends. A wait outliving its run's pause TTL is a [parked question's](#mid-run-clarification-ask_and_wait): its box is reaped and it waits in `reseed`. A wait that would close a cycle (the run waited for waits, through at most eight runs, on the caller) is refused; none could hang, since each waiting run has itself left the seat's slots, but each would park only to be told the other parked.
+
 ## Durability, completion, and observability
 
 **Pending runs survive restarts, and seat handoffs.** Every detached run is a record in the fleet's [coordination store](coordination.md#what-the-fleet-shares), not the node's own database, so a run outlives its turn, process and sometimes its *node*, and the next seat owner's recovery pass finds it.
