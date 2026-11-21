@@ -23,7 +23,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/nats-server/v2 v2.15.3
-	github.com/nats-io/nats.go v1.55.0
+	github.com/nats-io/nats.go v1.56.0
 	github.com/nats-io/nkeys v0.4.17
 	github.com/nats-io/nuid v1.0.1
 	github.com/openai/openai-go/v3 v3.99.0
