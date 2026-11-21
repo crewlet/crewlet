@@ -416,7 +416,7 @@ so each of these would run with the credential unused:
 
 | Written | Refused because | Instead |
 |---|---|---|
-| `auth.mode: api-key` on a harness whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `env` under its provider's own variable ([below](#6-a-provider-key-in-env-opencode-hermes-pi)). `kimi-code`: put the key in the credential directory's `config.toml` — `crewlet llm login`, or a [credential bundle](#4-move-a-login-onto-another-host). A build of the harness that does read a key variable: name it with `overrides.api_key_env` |
+| `auth.mode: api-key` on a harness whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `env` under its provider's own variable ([below](#6-a-provider-key-in-env-opencode-hermes-pi)). `kimi-code`: put the key in the credential directory's `config.toml` — `crewlet llm login`, or a [credential bundle](#4-move-a-login-onto-another-host). The harness also reads a key from its environment, but only as part of a model of its own (`KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY`, measured on 2.3.1 and 2.7.2), which the profile does not use. A build of the harness that reads a key variable on its own: name it with `overrides.api_key_env` |
 | `auth.api_key` under `subscription`, `inherit-env` or `env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
 | `auth.token` on a harness whose profile names no `token_env` (every built-in profile but `claude-code`) | the harness mints no headless token | remove it |
 | `auth.token` under `api-key`, `inherit-env` or `env` | `api-key` and `env` remove the token variable, and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
@@ -2446,10 +2446,13 @@ integration credentials, such as doctl's
 executor entry signs in by (an `opencode` entry on DigitalOcean's models with
 `DIGITALOCEAN_ACCESS_TOKEN` in its `env`) is
 [refused](code-sandbox.md#credentials-and-the-run-environment), since the harness
-would make its model calls with the agent's tool credential. A harness that does
-not read its key from the environment (`kimi-code` reads its metered key only from
-`config.toml` in the credential directory) does not declare `env_sign_in`, and a
-key in its `env` is not counted.
+would make its model calls with the agent's tool credential. A harness whose
+profile signs it in another way (`kimi-code`'s, through `config.toml` in the
+credential directory) does not declare `env_sign_in`, and a key in its `env` is
+not counted. Kimi Code does read a metered key from its environment, as a model
+of its own: `KIMI_MODEL_NAME` and `KIMI_MODEL_API_KEY`, with
+`KIMI_MODEL_PROVIDER_TYPE` and `KIMI_MODEL_BASE_URL` where the provider is not
+Moonshot's (measured on 2.3.1 and 2.7.2).
 
 ### 7. A cloud provider or gateway (`auth.mode: env`)
 

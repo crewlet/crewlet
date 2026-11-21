@@ -3721,11 +3721,13 @@ kimi-code:
   # NO capture_token_args: this harness mints no headless token. KIMI_API_KEY is
   # the METERED Moonshot platform key and it is not read from the shell at
   # all — the vendor is explicit that `export KIMI_API_KEY=…` gives no
-  # provider its key, because credentials are read only from config.toml. So
-  # there is no api_key_env either: the variable exists and setting it would
-  # do nothing, and naming a variable the harness ignores is worse than naming
-  # none. A metered account is configured by writing the key into the
-  # credential home's config.toml, which then travels to every seat.
+  # provider its key. The harness reads a key from its environment only as part
+  # of a model of its own: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` (and
+  # `KIMI_MODEL_PROVIDER_TYPE`, `KIMI_MODEL_BASE_URL`) add a provider that
+  # becomes its default (measured on 2.3.1 and 2.7.2). This profile signs in
+  # through config.toml instead, so there is no api_key_env: the key alone
+  # names no model. A metered account is configured by writing the key into
+  # the credential home's config.toml, which then travels to every seat.
   #
   # THE SENTINELS ARE THIS HARNESS'S OWN CLASSIFICATION, not the vendor's prose,
   # and that is what a measurement bought. A real 429 exits 1 with
