@@ -20,7 +20,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	cfg := EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess}
 	process := func() *memory.Backend {
 		t.Helper()
-		counter, err := OpenEpochs(t.Context(), jsOf(nc), cfg)
+		counter, err := OpenEpochs(t.Context(), jsOf(nc), jsOf(nc), cfg)
 		if err != nil {
 			t.Fatalf("OpenEpochs: %v", err)
 		}
@@ -58,7 +58,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 
 	// AND A FLEET CARRIES ON FROM IT: the KV lease store mints from the same
 	// bucket, so the single node's tokens stay below the fleet's.
-	store, err := Open(t.Context(), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: cfg.BucketPrefix, Reach: InProcess})
+	store, err := Open(t.Context(), jsOf(nc), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: cfg.BucketPrefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
-		counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
+		counter, err := OpenEpochs(t.Context(), jsOf(nc), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
 		if err != nil {
 			t.Fatalf("OpenEpochs: %v", err)
 		}
@@ -88,7 +88,7 @@ func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 func TestAFloorRaisesTheCounterAndNeverLowersIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
+	counter, err := OpenEpochs(t.Context(), jsOf(nc), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
 	if err != nil {
 		t.Fatalf("OpenEpochs: %v", err)
 	}

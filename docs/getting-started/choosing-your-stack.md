@@ -48,7 +48,7 @@ Two slots change once a deployment outgrows one node:
 | **Stream** | `embedded` (default) — and a fleet is the *same* embedded server with `stream.cluster.name/port/peers` naming its peers and `stream.replicas: 3` · or `nats` + `stream.url` to dial a NATS server or cluster somebody else runs |
 | **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
 
-Coordination takes no address: its KV (leases, ledgers, token counter) lives on the stream's **own** broker. On the embedded broker it holds a second connection beside the queue's, and both are watched: either closing for good stops the node, so it cannot keep renewing leases while its inbox link is gone.
+Coordination takes no address: its KV (leases, ledgers, token counter) lives on the stream's **own** broker. On the embedded broker it holds a second connection beside the queue's, and the node's holds ride a lease connection of their own on every broker. Each is watched: any closing for good stops the node, so it cannot keep renewing leases while its inbox link is gone.
 
 The **store** stays one file per node, so everything shared lives in coordination. See [Running a Fleet](../guides/fleet.md) and [Deployment](../guides/deployment.md) for sizing, and [Deployment § The fleet's broker admits only its own nodes](../guides/deployment.md#the-fleets-broker-admits-only-its-own-nodes) for broker authentication: every route, leaf link and operator connection to an embedded fleet's broker presents a key derived from `secrets.keys`.
 
