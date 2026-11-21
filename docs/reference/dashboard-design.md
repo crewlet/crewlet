@@ -3647,10 +3647,13 @@ draws tiles with wider cards instead), clear of each level's edge; a zoom
 within a tenth of the largest; every lane's title showing its first letters
 and its figures (ahead of the zoom where every fit draws marks); then the card
 width that says the most names whole, and the arrangement nearest `MAP_ROWS`.
-The same entries on the same box arrange alike. A new arrangement is a new
-canvas, measured and fitted afresh, with the open groups kept; it follows the
-box when it changes by more than 3%, and is held while an entry is selected,
-so a sheet opening beside the page never moves the entries. **Every lane is drawn**: an
+The same entries on the same box arrange alike. A new arrangement is drawn
+on the same canvas and fitted (`fitKey` carries it), and the kit fits it
+again once its cards are measured at the new width (`Canvas`'s `refitKey`);
+a new canvas would drop the screen a fullscreen map holds. It follows the
+box, or the screen while the map is fullscreen, when that changes by more
+than 3%, and is held while an entry is selected, so a sheet opening beside
+the page never moves the entries. **Every lane is drawn**: an
 empty one says what in this build fills it (the Cloudflare integration's zones,
 the SSH servers, the integrations' accounts, Gitlet and the repositories the
 code hosts name, the models and tool servers) or, for a lane only people fill,
