@@ -44,6 +44,9 @@ beforeAll(async () => {
   });
   region = host.querySelector<HTMLElement>(".crewlet-sandboxed-frame")!;
   await eventually(() => expect(region.dataset["state"]).toBe("ready"));
+  // REPORTED TOO: the frame draws its state at commit and reports it from an
+  // effect after, which would otherwise land in the first test's states.
+  await eventually(() => expect(states.at(-1)).toBe("ready"));
   frame = region.querySelector("iframe")!;
   frame.style.cssText = "display:block;width:1200px;height:800px;border:0";
   await eventually(() => expect(inPage().querySelector("#before img")).not.toBeNull());

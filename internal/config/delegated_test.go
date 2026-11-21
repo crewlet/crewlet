@@ -46,6 +46,12 @@ func TestADelegateIsAnAgentThatCannotRequestWhatItDecides(t *testing.T) {
 			"delegated_decisions.rules[0].delegates[0]", "unknown_value"},
 		{"other is never delegated", "    - {kinds: [other], delegates: [security-a], escalate_to: [ops-lead]}\n",
 			"delegated_decisions.rules[0].kinds[0]", "unknown_value"},
+		{"ad spend is never delegated", "    - {kinds: [ad_spend], delegates: [security-a], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].kinds[0]", "conflict"},
+		{"a public post is never delegated", "    - {kinds: [public_post], delegates: [security-a], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].kinds[0]", "conflict"},
+		{"account admin is never delegated", "    - {kinds: [account_admin], delegates: [security-a], escalate_to: [ops-lead]}\n",
+			"delegated_decisions.rules[0].kinds[0]", "conflict"},
 		{"a kind in two rules", good + "    - {kinds: [ssh_operate], delegates: [security-b], escalate_to: [ops-lead]}\n",
 			"delegated_decisions.rules[1].kinds[0]", "conflict"},
 		{"three delegates", "    - {kinds: [ssh_operate], delegates: [security-a, security-b, security-c], " +
