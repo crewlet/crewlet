@@ -385,7 +385,7 @@
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
 // waiter, a later one, or one behind a take's piece (which holds the slot its
-// whole scrub, 251 s at the bound) ends with [errLargeWait] and reads as no
+// whole scrub, 261 s at the bound) ends with [errLargeWait] and reads as no
 // reading (count unread), the safe side, as a read past MainThreadReadWait
 // is, the wait spent inside it. The longest piece the archive's bound admits,
 // a 46 MiB OpenCode image (a 64.3 MB data URI), held it 8.7 s (4.8 from the
@@ -869,7 +869,7 @@
 //	one string to the bound:   15.1 s a scrub, held 16.7 MiB (256 MiB from 28 MiB)
 //	a million short lines:     33.9 s a scrub, held 1.5 MiB (160 MiB from 19 MiB)
 //	tiny definitions:          29.8 to 30.8 s a scrub, held 17.4 MiB (256 MiB from 0.5 MiB)
-//	a string of `pwd=x `:      237.7 s a scrub
+//	a string of `pwd=x `:      256 s a scrub
 //	a file of `pwd=x` lines:   234.8 s a scrub
 //	`pwd=` lines, torn:        177.4 s a scrub
 //
