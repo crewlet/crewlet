@@ -84,10 +84,10 @@ func TestAVersionMovesOnlyWithItsField(t *testing.T) {
 	versions := func() livestate.CallVersions {
 		t.Helper()
 		o := s.AgentOverlay("Lead")
-		if o == nil || o.LiveCall == nil {
+		if o == nil || soleCall(t, o.LiveCalls) == nil {
 			t.Fatal("no live call")
 		}
-		return o.LiveCall.Versions
+		return soleCall(t, o.LiveCalls).Versions
 	}
 	s.Apply(round("2026-10-06T09:00:01Z", 0, map[string]any{"round_narration": narrated(1), "response": "one"}))
 	first := versions()
@@ -123,11 +123,11 @@ func TestANewCallsVersionsArePastEveryOneHandedOut(t *testing.T) {
 	s := livestate.New()
 	s.Apply(round("2026-10-06T09:00:01Z", 0, map[string]any{"round_narration": narrated(3)}))
 	s.Apply(round("2026-10-06T09:00:02Z", 1, map[string]any{"round_narration": narrated(4)}))
-	was := s.AgentOverlay("Lead").LiveCall.Versions
+	was := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 	review := round("2026-10-06T09:00:03Z", 0, map[string]any{"round_narration": narrated(1)})
 	review.Payload["phase"] = "review"
 	s.Apply(review)
-	now := s.AgentOverlay("Lead").LiveCall.Versions
+	now := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 	newest := 0
 	for _, v := range byName(was) {
 		newest = max(newest, v)
@@ -165,13 +165,13 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 					"tool_executions": []any{map[string]any{"name": "read_file", "round": float64(i + 1)}},
 				})))
 			}
-			earlier := s.AgentOverlay("Lead").LiveCall.Versions
+			earlier := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "review", "iteration": float64(0)}
 			s.Apply(&livestate.Envelope{
 				ID: "completed", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
 				Category: "task", Payload: maps.Clone(key),
 			})
-			if o := s.AgentOverlay("Lead"); o != nil && o.LiveCall != nil {
+			if o := s.AgentOverlay("Lead"); o != nil && soleCall(t, o.LiveCalls) != nil {
 				t.Fatal("the review's completion did not clear the call; this case needs it cleared")
 			}
 			if restarted {
@@ -187,7 +187,7 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 			s.Apply(round("2026-10-06T09:05:00Z", 0, with(review, map[string]any{
 				"round_narration": narrated(1), "response": "new",
 			})))
-			again := s.AgentOverlay("Lead").LiveCall
+			again := soleCall(t, s.AgentOverlay("Lead").LiveCalls)
 			if again == nil || again.Key() != (livestate.CallKey{TurnID: "t1", Phase: "review", Iteration: 0}) {
 				t.Fatalf("the next attempt's call is %+v; want it under the earlier attempt's key", again)
 			}
@@ -210,7 +210,7 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(round("2026-10-06T09:00:01Z", 0, map[string]any{"round_narration": narrated(1)}))
-	before := s.AgentOverlay("Lead").LiveCall.Versions
+	before := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 	s.Apply(&livestate.Envelope{
 		ID: "c1", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:05Z", Category: "task",
 		Payload: map[string]any{
@@ -220,7 +220,7 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 			"invocations":     []any{map[string]any{"outcome": "failed"}},
 		},
 	})
-	call := s.AgentOverlay("Lead").LiveCall
+	call := soleCall(t, s.AgentOverlay("Lead").LiveCalls)
 	if call == nil || !call.Failed {
 		t.Fatalf("the failed call was not frozen: %+v", call)
 	}
@@ -241,17 +241,17 @@ func TestARunEndingMovesTheRunsAlone(t *testing.T) {
 	frame := map[string]any{"round_narration": narrated(1), "response": "one",
 		"rounds": []any{map[string]any{"round": float64(1)}}}
 	s.Apply(round("2026-10-06T09:00:01Z", 0, frame))
-	before := s.AgentOverlay("Lead").LiveCall.Versions
+	before := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 	ended := maps.Clone(frame)
 	ended["invocations"] = []any{map[string]any{"first_round": float64(1), "last_round": float64(1),
 		"outcome": "stopped"}}
 	s.Apply(round("2026-10-06T09:00:02Z", 0, ended))
-	after := s.AgentOverlay("Lead").LiveCall.Versions
+	after := soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions
 	if got := moved(t, before, after); !reflect.DeepEqual(got, only("invocations")) {
 		t.Errorf("a run ending moved %v; want the runs alone", got)
 	}
 	s.Apply(round("2026-10-06T09:00:03Z", 0, ended))
-	if got := moved(t, after, s.AgentOverlay("Lead").LiveCall.Versions); !reflect.DeepEqual(got, only()) {
+	if got := moved(t, after, soleCall(t, s.AgentOverlay("Lead").LiveCalls).Versions); !reflect.DeepEqual(got, only()) {
 		t.Errorf("a frame repeating the runs moved %v; want nothing", got)
 	}
 }
@@ -291,8 +291,8 @@ func TestTheCallSequenceMovesWithEveryChangeToTheCall(t *testing.T) {
 		if o == nil {
 			t.Fatalf("%s: no live entry", name)
 		}
-		if (o.LiveCall != nil) != held {
-			t.Fatalf("%s: live call = %+v; want held %v", name, o.LiveCall, held)
+		if (soleCall(t, o.LiveCalls) != nil) != held {
+			t.Fatalf("%s: live call = %+v; want held %v", name, soleCall(t, o.LiveCalls), held)
 		}
 		if o.LiveCallSeq <= last {
 			t.Errorf("%s: the call sequence is %d; want it past %d", name, o.LiveCallSeq, last)
@@ -343,7 +343,7 @@ func TestACallLeavesOutExactlyTheDetailItsTabsHold(t *testing.T) {
 		"tool_executions": []any{map[string]any{"name": "read_file"}},
 		"rounds":          []any{map[string]any{"round": float64(1)}},
 	}))
-	call := s.AgentOverlay("Lead").LiveCall
+	call := soleCall(t, s.AgentOverlay("Lead").LiveCalls)
 	decode := func(v any) map[string]any {
 		t.Helper()
 		raw, err := json.Marshal(v)

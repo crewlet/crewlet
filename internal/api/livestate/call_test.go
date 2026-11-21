@@ -14,7 +14,7 @@ func planCall() map[string]any {
 
 func liveCallOf(t *testing.T, s *livestate.LiveState, role string) *livestate.LiveCall {
 	t.Helper()
-	return overlayOf(t, s, role).LiveCall
+	return soleCall(t, overlayOf(t, s, role).LiveCalls)
 }
 
 func TestAPhaseStartSeedsAPlaceholderCall(t *testing.T) {
@@ -579,7 +579,7 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 		streamOnly, at("2026-06-14T12:00:04+00:00")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.Activity == livestate.ActivityWorking && got.LiveCall == nil {
+	if got.Activity == livestate.ActivityWorking && soleCall(t, got.LiveCalls) == nil {
 		t.Error("a discarded straggler left the seat working with no call to show for it")
 	}
 	if got.Activity != livestate.ActivityIdle {
@@ -904,12 +904,12 @@ func TestTheRosterCarriesTheStatusAndNotTheCall(t *testing.T) {
 		streamOnly))
 
 	roster := s.MergeRoster([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})[0]
-	for _, key := range []string{"live_call", "live_call_seq"} {
+	for _, key := range []string{"live_calls", "live_call_seq"} {
 		if _, present := roster[key]; present {
 			t.Errorf("the roster row carries %s", key)
 		}
 	}
-	for _, key := range []string{"activity", "stopped_reason", "current_phase", "turn",
+	for _, key := range []string{"activity", "stopped_reason", "current_phase", "turns",
 		"last_turn", "last_error", "budget", "paused", "current_iteration"} {
 		if _, present := roster[key]; !present {
 			t.Errorf("the roster row lost %s with the call", key)
@@ -920,7 +920,8 @@ func TestTheRosterCarriesTheStatusAndNotTheCall(t *testing.T) {
 	}
 
 	merged := s.MergeAgents([]map[string]any{{"agent_id": "Lead"}})[0]
-	if call, _ := merged["live_call"].(*livestate.LiveCall); call == nil || call.Response != "a long answer" {
-		t.Errorf("the snapshot's row lost the call: %v", merged["live_call"])
+	if calls, _ := merged["live_calls"].([]*livestate.LiveCall); len(calls) != 1 ||
+		calls[0].Response != "a long answer" {
+		t.Errorf("the snapshot's row lost the call: %v", merged["live_calls"])
 	}
 }

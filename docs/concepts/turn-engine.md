@@ -1125,7 +1125,7 @@ the time the turn worked, not the time its executor took between segments. A
 segment is measured to the instant its work ended (the instant its task's turn
 row takes its wall time from), so the card rewrite published before the
 completion is not counted. The live projection reads the same four stages onto
-each seat's `turn`, from `context` to `parked`, so a parked seat says so rather
+each of a seat's `turns`, from `context` to `parked`, so a parked seat says so rather
 than idle (see [Agent States](agent-runtime.md#agent-states)).
 
 ### Finding everything on one item

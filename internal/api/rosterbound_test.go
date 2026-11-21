@@ -55,7 +55,7 @@ func TestTheRosterReadCarriesNoCallInFlight(t *testing.T) {
 	if row == nil {
 		t.Fatalf("the roster %v has no row for the working seat", roster)
 	}
-	for _, key := range []string{"live_call", "live_call_seq"} {
+	for _, key := range []string{"live_calls", "live_call_seq"} {
 		if _, present := row[key]; present {
 			t.Errorf("the roster row carries %s: a read of every seat grows with each "+
 				"one's call in flight", key)
@@ -71,7 +71,7 @@ func TestTheRosterReadCarriesNoCallInFlight(t *testing.T) {
 
 	snapshot := rows(t, a.Stream().Snapshot(everyRead)["agents"])
 	for _, r := range snapshot {
-		if r["handle"] == "cto" && r["live_call"] == nil {
+		if calls, _ := r["live_calls"].([]any); r["handle"] == "cto" && len(calls) == 0 {
 			t.Error("the handshake snapshot lost the call a live view opens from")
 		}
 	}

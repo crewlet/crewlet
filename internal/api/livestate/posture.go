@@ -59,9 +59,16 @@ func (s *LiveState) postureOf(agentID string) (worklet.SeatPosture, bool) {
 	agent := s.agents[agentID]
 	var out worklet.SeatPosture
 	if turnWorks(agent) {
-		if item := worklistItem(agent.turn.WorkItem); item != "" {
-			out.On = append(out.On, worklet.PostureItem{Item: item,
-				Cause: worklet.FlowCauseTurn, Since: instant(agent.turn.StartedAt)})
+		turns := workingTurns(agent)
+		slices.SortFunc(turns, func(a, b *LiveTurn) int {
+			return cmp.Or(newStamp(a.StartedAt).chronological(newStamp(b.StartedAt)),
+				cmp.Compare(a.TurnID, b.TurnID))
+		})
+		for _, turn := range turns {
+			if item := worklistItem(turn.WorkItem); item != "" {
+				out.On = append(out.On, worklet.PostureItem{Item: item,
+					Cause: worklet.FlowCauseTurn, Since: instant(turn.StartedAt)})
+			}
 		}
 	}
 	// THE OLDEST RUN WAITING ON A PERSON is the one the seat is parked on:
