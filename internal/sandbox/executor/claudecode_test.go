@@ -387,7 +387,7 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 	for _, version := range []string{"2.1.263", "2.1.310"} {
 		t.Run(version, func(t *testing.T) {
 			t.Parallel()
-			stopped := claude().Parse(fixture(t, version, "result-hook-stopped.json"))
+			stopped := claude().Parse([]byte(fixture(t, version, "result-hook-stopped.json")))
 			if stopped.Success {
 				t.Fatal("a run a hook stopped read as a success")
 			}
@@ -396,14 +396,14 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 					t.Errorf("the failure does not say %q: %s", want, stopped.Error)
 				}
 			}
-			completed := claude().Parse(fixture(t, version, "result-completed.json"))
+			completed := claude().Parse([]byte(fixture(t, version, "result-completed.json")))
 			if !completed.Success || completed.Text != "final after stop note" {
 				t.Errorf("a completed run = success %v, text %q, error %q; want the answer after "+
 					"its finish's note", completed.Success, completed.Text, completed.Error)
 			}
 		})
 	}
-	if absent := claude().Parse(`{"type":"result","subtype":"success","is_error":false,"result":"done"}`); !absent.Success {
+	if absent := claude().Parse([]byte(`{"type":"result","subtype":"success","is_error":false,"result":"done"}`)); !absent.Success {
 		t.Errorf("a result with no terminal reason read as failed: %+v", absent)
 	}
 	// The transcript says it too, from the stream's own last line.
@@ -1095,7 +1095,7 @@ func TestAContextExhaustedRunIsToldByTheHarnesssField(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := claude().Parse(c.line); got.ContextExhausted != c.want {
+			if got := claude().Parse([]byte(c.line)); got.ContextExhausted != c.want {
 				t.Errorf("ContextExhausted = %v, want %v, on %s", got.ContextExhausted, c.want, c.line)
 			}
 		})
@@ -1204,7 +1204,7 @@ func TestARequestItsProviderRefusedIsToldByItsStatus(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := claude().Parse(c.line)
+			got := claude().Parse([]byte(c.line))
 			if got.RequestRefused != c.want {
 				t.Errorf("RequestRefused = %v, want %v, on %s", got.RequestRefused, c.want, c.line)
 			}

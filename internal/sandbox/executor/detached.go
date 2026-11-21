@@ -142,8 +142,8 @@ type Harness interface {
 
 	// Parse maps this agent's RESULT, read whole, onto a result: the file
 	// [Output.Result] names, or — for a harness whose result is its stream —
-	// the stream's whole text, decoded.
-	Parse(result string) sandbox.Result
+	// the stream's whole text, decoded from the bytes as read.
+	Parse(result []byte) sandbox.Result
 
 	// WriteConfig renders the agent's config file into the box and returns
 	// the path the harness is pointed at, or "" when there is nothing to write.
@@ -589,8 +589,8 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err = r.ClearArtifacts(ctx, box); err != nil {
 		return sandbox.RunHandle{}, err
 	}
-	if base != "" {
-		if err = box.WriteFile(ctx, paths.BaseResult(), []byte(base)); err != nil {
+	if len(base) > 0 {
+		if err = box.WriteFile(ctx, paths.BaseResult(), base); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: keeping the session's spend so far: %w", err)
 		}
 	}
@@ -731,47 +731,48 @@ func (r *Runner) refuseCarried(req sandbox.RunRequest) error {
 // release that states each run's own spend ([claudeCarryFloor]). A job before
 // that stopped before its result was charged nothing, so the base it kept is
 // carried forward and the next result is charged its calls too.
-func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
+func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) ([]byte, error) {
 	if _, totals := r.harness.(sessionTotals); !totals || req.Resume == "" {
-		return "", nil
+		return nil, nil
 	}
 	out := r.harness.Output(paths)
 	if out.Result == "" {
-		return "", nil
+		return nil, nil
 	}
-	raw, refusal, err := readWhole(ctx, box, out.Result, "the result the job before it left")
+	raw, refusal, err := readWholeBytes(ctx, box, out.Result, "the result the job before it left")
 	if err != nil {
-		return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
+		return nil, fmt.Errorf("executor: reading what the continued session had spent: %w", err)
 	}
 	if refusal == "" && r.statesTotalsOf(raw, req.Resume) {
 		return raw, nil
 	}
-	if refusal == "" && strings.TrimSpace(raw) == "" && req.Carried != nil {
-		return "", nil
+	blank := len(bytes.TrimSpace(raw)) == 0
+	if refusal == "" && blank && req.Carried != nil {
+		return nil, nil
 	}
 	if req.Carried == nil {
-		kept, keptRefusal, err := readWhole(ctx, box, paths.BaseResult(), "the base the job before it kept")
+		kept, keptRefusal, err := readWholeBytes(ctx, box, paths.BaseResult(), "the base the job before it kept")
 		if err != nil {
-			return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
+			return nil, fmt.Errorf("executor: reading what the continued session had spent: %w", err)
 		}
 		if keptRefusal == "" && r.statesTotalsOf(kept, req.Resume) {
 			return kept, nil
 		}
 	}
-	if refusal == "" && strings.TrimSpace(raw) != "" {
+	if refusal == "" && !blank {
 		refusal = "it is no result of the session this run continues"
 	}
 	log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
 		"detail", "this run continues a session, and the result the job before it left "+
 			"could not be read, so the run is charged the spend its harness states, which counts "+
 			"the session's earlier jobs again", "refusal", refusal)
-	return "", nil
+	return nil, nil
 }
 
 // statesTotalsOf reports whether raw is a harness result naming session, so
 // what it states is that session's totals.
-func (r *Runner) statesTotalsOf(raw, session string) bool {
-	if strings.TrimSpace(raw) == "" {
+func (r *Runner) statesTotalsOf(raw []byte, session string) bool {
+	if len(bytes.TrimSpace(raw)) == 0 {
 		return false
 	}
 	got := r.harness.Parse(raw).SessionID
@@ -796,11 +797,11 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	if !ok || !rec.continued {
 		return result, nil
 	}
-	raw, refusal, err := readWhole(ctx, box, paths.BaseResult(), "what the continued session had spent")
+	raw, refusal, err := readWholeBytes(ctx, box, paths.BaseResult(), "what the continued session had spent")
 	if err != nil {
 		return sandbox.Result{}, err
 	}
-	if refusal != "" || strings.TrimSpace(raw) == "" {
+	if refusal != "" || len(bytes.TrimSpace(raw)) == 0 {
 		// NO BASE: a run that started a session of its own, or one whose
 		// base could not be kept ([Runner.baseResult] said so).
 		return result, nil
@@ -949,9 +950,9 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 // not a success, its tokens, refs and transcript still collected and charged.
 // A read that fails is an error. Everything is redacted whole before anything
 // is bounded, since a secret cut in two survives as fragments; report and
-// failure leave whole, and the transcript whole up to [transcriptHoldBytes],
-// past it as the record keeps it ([transcriptLines]): the coordinator bounds
-// what is sent, in one place ([sandbox.MaxRunTextBytes]).
+// failure leave whole, and the transcript whole up to what the record keeps
+// ([transcriptHoldBytes]), past it as the record keeps it, its redaction
+// streamed ([transcriptLines]): the coordinator bounds what is sent, in one place.
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
@@ -959,49 +960,57 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	var (
 		result  sandbox.Result
-		last    streamLast
 		spent   *runSpend
 		request contextRead
 		window  int64
 		limits  string
 	)
 	if out.Events {
-		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout)
+		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout, false)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
 		if refusal != "" {
 			refused = append(refused, refusal)
 		}
-		result, last, spent, request = streamed.result, streamed.last, streamed.spent, streamed.request
+		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits = streamed.window, streamed.limits
 	}
+	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
+	// reading holds after is the record's halves, so the file is parsed beside
+	// nothing; the line is read again only where it stands for the file.
 	if out.Result != "" {
-		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
-		if err == nil && out.Events && out.Result != out.Stdout && last.said() &&
-			(refusal != "" || strings.TrimSpace(raw) == "") {
-			// The result file holds the stream's last line, copied by the
-			// wrapper after the harness exits. Where the file is empty (the
-			// process group died) or refused, that line is read in its place,
-			// so a streamed session is not "no output" and its spend is
-			// charged; a refused file is still reported. Only where the stream
-			// said something: a harness that exited at once leaves both empty.
-			why := "was empty"
-			if refusal != "" {
-				refused = append(refused, refusal)
-				why = "was refused"
-			}
-			raw, refusal = last.resultLine(out.Stdout)
-			log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
-				"detail", "the result file "+why+", so the event stream's last line, which the "+
-					"wrapper copies into it, was read in its place")
-		}
-		switch {
-		case err != nil:
+		raw, refusal, err := readWholeBytes(ctx, box, out.Result, "the result its harness printed")
+		if err != nil {
 			return sandbox.Result{}, err
-		case refusal != "":
+		}
+		if out.lastLineStandsIn(refusal, raw) {
+			again, _, err := r.decodeStream(ctx, box, out.Stdout, true)
+			if err != nil {
+				return sandbox.Result{}, err
+			}
+			if again.last.said() {
+				// The result file holds the stream's last line, copied by the
+				// wrapper after the harness exits. Where the file is empty (the
+				// process group died) or refused, that line is read in its
+				// place, so a streamed session is not "no output" and its spend
+				// is charged; a refused file is still reported. Only where the
+				// stream said something: a harness that exited at once leaves
+				// both empty.
+				why := "was empty"
+				if refusal != "" {
+					refused = append(refused, refusal)
+					why = "was refused"
+				}
+				raw, refusal = again.last.resultLine(out.Stdout)
+				log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
+					"detail", "the result file "+why+", so the event stream's last line, which the "+
+						"wrapper copies into it, was read in its place")
+			}
+		}
+		if refusal != "" {
 			refused = append(refused, refusal)
-		default:
+		} else {
 			parsed := r.harness.Parse(raw)
 			if out.Events {
 				parsed.Transcript = result.Transcript
@@ -1184,9 +1193,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		sentences = append(sentences, endedSentence(result.JobEnd, code))
 	}
 	sentences = append(append(sentences, refused...), said...)
-	result.Error = failureDetail(sentences, errStream, unread, r.failureBound)
+	var once secretsOnce
+	result.Error = failureDetail(sentences, errStream, unread, r.failureBound, once.of)
 
-	result.Text = redact.Secrets(result.Text)
+	result.Text = once.of(result.Text)
 	result.Error = redact.Secrets(result.Error)
 	// The refs too: a ref is whatever word the report put on its line,
 	// and a word from inside the box can be a credential.
@@ -1298,15 +1308,15 @@ func parseJobScript(recorded string) (int, bool) {
 // with its value opening the next (across the `:\n`) is one match neither
 // holds, so the whole is redacted and measured and any excess comes off the
 // stream's share, whose room also holds the mark [sandbox.KeepEnd] puts on a
-// line too long to keep whole.
-func failureDetail(sentences []string, errStream string, unread int64, bound int) string {
+// line too long to keep whole. secrets redacts the sentences joined ([secretsOnce]).
+func failureDetail(sentences []string, errStream string, unread int64, bound int, secrets func(string) string) string {
 	var parts []string
 	for _, s := range sentences {
 		if s = strings.TrimSpace(s); s != "" {
 			parts = append(parts, s)
 		}
 	}
-	head := redact.Secrets(strings.Join(parts, ":\n"))
+	head := secrets(strings.Join(parts, ":\n"))
 	if errStream == "" {
 		return head
 	}
@@ -1341,6 +1351,24 @@ func failureDetail(sentences []string, errStream string, unread int64, bound int
 	}
 }
 
+// secretsOnce is [redact.Secrets] of each text once a collection: a failed
+// result's text is both its report and its harness's error, one string
+// ([ClaudeCode.Parse]), and redacted for each it was copied twice.
+type secretsOnce struct{ in, out []string }
+
+// of is text redacted, as it was the first time where it was redacted before.
+// A string compares to itself in constant time, so a text seen costs nothing.
+func (s *secretsOnce) of(text string) string {
+	for i, seen := range s.in {
+		if seen == text {
+			return s.out[i]
+		}
+	}
+	redacted := redact.Secrets(text)
+	s.in, s.out = append(s.in, text), append(s.out, redacted)
+	return redacted
+}
+
 // unreadNote is the line standing where the start of the error stream was
 // left out of a failure: none says nothing of it was shown at all.
 func unreadNote(unread int64, none bool) string {
@@ -1366,9 +1394,10 @@ func continuedNote(size int64, blank bool) string {
 }
 
 // decodeStream reads one event stream through a fresh decoder, and keeps its
-// last line — or answers a refusal where the box would not open the stream
-// because it is not a regular file ([notRegularPiece]).
-func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (decodedStream, string, error) {
+// last line where keepLast asks, which [Runner.Collect] reads again for where
+// the line stands for the result file — or answers a refusal where the box
+// would not open the stream because it is not a regular file ([notRegularPiece]).
+func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string, keepLast bool) (decodedStream, string, error) {
 	stream, err := box.OpenFile(ctx, path)
 	if refusal := notRegularPiece(err, path, "the event stream"); refusal != "" {
 		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
@@ -1378,23 +1407,28 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 		return decodedStream{}, "", fmt.Errorf("executor: opening the event stream: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
-	dec := &keepingLast{Decoder: r.harness.Events()}
+	events := r.harness.Events()
+	kept := &keepingLast{Decoder: events}
+	dec := events
+	if keepLast {
+		dec = kept
+	}
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: dec.Result(), last: dec.last}
-	if spender, ok := dec.Decoder.(runSpender); ok {
+	out := decodedStream{result: events.Result(), last: kept.last}
+	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
 		}
 	}
-	if reader, ok := dec.Decoder.(contextReader); ok {
+	if reader, ok := events.(contextReader); ok {
 		out.request = reader.request()
 	}
-	if reporter, ok := dec.Decoder.(windowReporter); ok {
+	if reporter, ok := events.(windowReporter); ok {
 		out.window = reporter.reportedWindow()
 	}
-	if reporter, ok := dec.Decoder.(limitReporter); ok {
+	if reporter, ok := events.(limitReporter); ok {
 		out.limits = reporter.limitReport()
 	}
 	return out, "", nil
@@ -1428,16 +1462,24 @@ type streamLast struct {
 // too long to read.
 func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
 
+// lastLineStandsIn reports whether the stream's last line is read in place of
+// the result file ([Runner.Collect]): the file, read as raw or refused, is
+// empty or refused, and is a file of its own beside a stream the wrapper copied
+// the line from.
+func (o Output) lastLineStandsIn(refusal string, raw []byte) bool {
+	return o.Events && o.Result != "" && o.Result != o.Stdout && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
+}
+
 // resultLine is the stream's last line read in place of the result file: the
 // line, or a refusal where it was past what one line of a stream may hold — as
 // the copy itself would have been past what a result file is read to.
-func (l streamLast) resultLine(stream string) (string, string) {
+func (l streamLast) resultLine(stream string) ([]byte, string) {
 	if l.skipped > 0 {
-		return "", fmt.Sprintf("the result its harness printed (the last line of %s, read in place of "+
+		return nil, fmt.Sprintf("the result its harness printed (the last line of %s, read in place of "+
 			"the result file) is %s, past the %s one line of a run's output may hold, "+
 			"so it was not read", stream, humanSize(l.skipped), humanSize(int64(l.bound)))
 	}
-	return string(l.line), ""
+	return l.line, ""
 }
 
 // keepingLast is a decoder that also keeps the stream's last non-blank line,
@@ -1466,18 +1508,25 @@ func (k *keepingLast) Skipped(n int64, bound int) {
 // REFUSAL — a sentence saying what it was — rather than an error, so the piece
 // degrades and the collection does not.
 func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (string, string, error) {
+	raw, refusal, err := readWholeBytes(ctx, box, path, what)
+	return string(raw), refusal, err
+}
+
+// readWholeBytes is [readWhole] as the box read it, for a reader that decodes
+// the bytes ([Harness.Parse]) rather than holding them as text beside a copy.
+func readWholeBytes(ctx context.Context, box sandbox.Sandbox, path, what string) ([]byte, string, error) {
 	raw, err := box.ReadFile(ctx, path)
 	if refusal := notRegularPiece(err, path, what); refusal != "" {
-		return "", refusal, nil
+		return nil, refusal, nil
 	}
 	var tooLarge *sandbox.FileTooLargeError
 	switch {
 	case errors.As(err, &tooLarge):
-		return "", refusedPiece(ctx, box, path, what, tooLarge.Limit), nil
+		return nil, refusedPiece(ctx, box, path, what, tooLarge.Limit), nil
 	case err != nil:
-		return "", "", err
+		return nil, "", err
 	}
-	return string(raw), "", nil
+	return raw, "", nil
 }
 
 // notRegularPiece describes a piece whose path the box refused because it is

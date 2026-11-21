@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -1158,7 +1160,8 @@ var claudeResumeSwitches = []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAU
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 
-// Parse maps the harness's result, the stream's last line, onto a result.
+// Parse maps the harness's result, the stream's last line, onto a result,
+// decoded from the bytes as read ([wireAlias]), never a copy of them.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result
 // carrying an account of it, never an error, so a crashed harness surfaces as
@@ -1168,14 +1171,14 @@ func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 // holds the stream's LAST LINE, whatever it was: a run that died part-way leaves
 // an assistant message or tool result there, which has no subtype and no
 // is_error and, read as a result, was a run that SUCCEEDED and said nothing.
-func (ClaudeCode) Parse(stdout string) sandbox.Result {
-	text := strings.TrimSpace(stdout)
-	if text == "" {
+func (ClaudeCode) Parse(result []byte) sandbox.Result {
+	text := bytes.TrimSpace(result)
+	if len(text) == 0 {
 		return sandbox.Result{Error: "the harness produced no output"}
 	}
 	msg, ok := decodeClaudeResult(text)
 	if !ok {
-		if last := lastLine(text); strings.HasPrefix(last, "{") {
+		if last := lastLine(text); len(last) > 0 && last[0] == '{' {
 			// A LINE THAT STARTS AN OBJECT AND IS NOT ONE is a message the
 			// process stopped writing part-way, not an account of anything:
 			// its fragment — of a file it read, as like as not — is no use to
@@ -1184,17 +1187,9 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 				"that is not a whole JSON object (%s), so it never reported how its run ended",
 				humanSize(int64(len(last))))}
 		}
-		// THE OUTPUT IS THE FAILURE'S DETAIL, WHOLE. Unparseable output is
-		// the case where the text IS the account — there is no structured
-		// field to fall back to — and the useful part of it (the actual
-		// error, after the banner and the warnings) is at the END, which a
-		// head cut discarded and a tail cut kept only by luck of size. It
-		// is carried as the Error rather than as a report, because it is
-		// not one: the coordinator condenses a failure past the record's
-		// bound keeping its cause, where a report keeps its findings.
-		return sandbox.Result{
-			Error: "the harness's output could not be parsed:\n" + text,
-		}
+		// Carried as the Error rather than as a report, because it is not
+		// one: the coordinator condenses a failure keeping its cause.
+		return sandbox.Result{Error: unparsedFailure(text)}
 	}
 	if msg.Type != "result" {
 		what := "an object with no type"
@@ -1205,12 +1200,15 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 			"the last thing it printed was " + what + ", not its result"}
 	}
 
+	// TRIMMED, as a report is, and so the very string a failure's why is
+	// ([claudeResult.why]), which a collection redacts once for both.
+	said := strings.TrimSpace(msg.Result)
 	res := sandbox.Result{
-		Text:          msg.Result,
+		Text:          said,
 		Success:       msg.succeeded(),
 		SessionID:     msg.SessionID,
 		CostUSD:       msg.TotalCostUSD,
-		DeliveredRefs: deliveredRefs(msg.Result),
+		DeliveredRefs: deliveredRefs(said),
 		// The run's own model turns, as its loop counted them: the
 		// provider calls the run made, which the engine never saw.
 		Turns: msg.NumTurns,
@@ -1233,10 +1231,40 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
-		// in `result` says this release ([sandbox.Result.Event]).
-		res.Event = text
+		// in `result` says this release ([sandbox.Result.Event]). Only one
+		// the record carries: a longer one is dropped where the box is read
+		// ([sandbox.MaxRunEventBytes]), and copied here it would hold the line again.
+		if len(text) <= sandbox.MaxRunEventBytes {
+			res.Event = string(text)
+		}
 	}
 	return res
+}
+
+// unparsedShownBytes is the most of an unparseable output a failure quotes:
+// half of what a runner's failure may be ([sandbox.MaxFailureBytes]), the
+// error stream's end, which says the cause as the output's end does, given the
+// rest ([failureDetail]).
+const unparsedShownBytes = sandbox.MaxFailureBytes / 2
+
+// unparsedFailure is the failure of output that is no result: the output whole
+// within [unparsedShownBytes], since the useful part (the error after the banner
+// and the warnings) is at its END; past it, that end as [streamEnd] shows the
+// error stream's, redacted before it is cut, and the output's size. Never more:
+// a failure's head is never cut ([failureDetail]), so a whole output past the
+// bound would ride the failure at up to [sandbox.MaxFileBytes].
+func unparsedFailure(text []byte) string {
+	const opening = "the harness's output could not be parsed"
+	if len(text) <= unparsedShownBytes {
+		return opening + ":\n" + string(text)
+	}
+	size := humanSize(int64(len(text)))
+	window := string(text[len(text)-unparsedShownBytes-redact.LookBack:])
+	if shown, _ := settledEnd(window, redact.LookBack, unparsedShownBytes); shown != "" {
+		return opening + " (" + size + "; its end shown):\n" + shown
+	}
+	return fmt.Sprintf("%s: it is %s, and its last %s are one line begun before them, so none of it is shown",
+		opening, size, humanSize(unparsedShownBytes))
 }
 
 // claudeMaxTurns is the result subtype of a run that reached its --max-turns.
@@ -1292,7 +1320,7 @@ type claudeResult struct {
 }
 
 // claudeResultWire is the result message as its one decode leaves it
-// ([wireDecode]): each key a [claudeResult] holds, by its exact name and raw,
+// ([wireAlias]): each key a [claudeResult] holds, by its exact name and raw,
 // read into the result by [claudeResultWire.result].
 type claudeResultWire struct {
 	Type            json.RawMessage `json:"type"`
@@ -1656,24 +1684,24 @@ func (r claudeResult) errorsSaid() string {
 
 // decodeClaudeResult reads the result message: the one line the result file
 // holds, which the wrapper copied from the end of the stream.
-func decodeClaudeResult(text string) (claudeResult, bool) {
-	if !strings.HasPrefix(text, "{") {
+func decodeClaudeResult(text []byte) (claudeResult, bool) {
+	if len(text) == 0 || text[0] != '{' {
 		return claudeResult{}, false
 	}
 	// A WHOLE OBJECT IS A RESULT'S ACCOUNT, whatever its keys hold: its decode
 	// fails only where the line is no whole JSON object, and a key of another
 	// kind than its field's is read loosely ([claudeResultWire.result]).
 	var w claudeResultWire
-	if wireDecode([]byte(text), &w) != nil {
+	if wireAlias(text, &w) != nil {
 		return claudeResult{}, false
 	}
 	return w.result(), true
 }
 
 // lastLine is the text's last line, trimmed.
-func lastLine(text string) string {
-	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+func lastLine(text []byte) []byte {
+	if i := bytes.LastIndexByte(text, '\n'); i >= 0 {
 		text = text[i+1:]
 	}
-	return strings.TrimSpace(text)
+	return bytes.TrimSpace(text)
 }
