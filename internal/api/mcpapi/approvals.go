@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -160,6 +161,13 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		return
 	}
 	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+		return
+	}
+	if held.Lapsed(s.now()) && req.Answer != sandbox.HeldDeny {
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeStaleVersion,
+			httpjson.Detail{"detail": "the call to " + held.Tool + " lapsed unanswered at " +
+				held.LapsesAt.UTC().Format(time.RFC3339) + ", so it takes deny alone. Nothing was sent; the " +
+				"agent asks again with figures read now."})
 		return
 	}
 	if req.Answer == sandbox.HeldOnce && readWhole(held) && !s.readAll(w, run, req.ArgumentsSHA256) {

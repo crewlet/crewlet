@@ -246,3 +246,28 @@ func TestANoteRidesTheAnswerToTheAgent(t *testing.T) {
 		t.Errorf("a note past its bound answered %d and delivered %d", code, len(desk.delivered))
 	}
 }
+
+// A GROWTH ACT PAST ITS LAPSE TAKES DENY ALONE (ADR-0171): an administrator's
+// Allow once arriving before the engine's own sweep is refused, sending
+// nothing, and a deny is still delivered.
+//
+// Mutation: drop the lapse check at the route, and the late allow is
+// delivered.
+func TestALapsedGrowthActTakesDenyAlone(t *testing.T) {
+	t.Parallel()
+	run := waitingRun()
+	heldAt := time.Now().UTC().Add(-sandbox.HeldLapse - time.Minute)
+	run.HeldCall.HeldAt, run.HeldCall.LapsesAt = heldAt, heldAt.Add(sandbox.HeldLapse)
+	run.HeldCall.Fixed, run.HeldCall.Approvers, run.HeldCall.Act = true, sandbox.HeldApproversAdmin, "ad_spend"
+	desk := &fakeApprovals{run: run}
+	svc := approvalSurface(t, desk, &fakeToolDocuments{}, &recordedAudit{})
+	code, body := answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID,
+		`{"answer": "once", "arguments_sha256": "`+strings.Repeat("0", 64)+`"}`)
+	if code != http.StatusConflict || len(desk.delivered) != 0 || !strings.Contains(body["detail"].(string), "lapsed") {
+		t.Fatalf("a late allow answered %d %v and delivered %d", code, body, len(desk.delivered))
+	}
+	if code, _ := answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID, `{"answer": "deny"}`); code !=
+		http.StatusAccepted || len(desk.delivered) != 1 {
+		t.Errorf("a late deny answered %d and delivered %d", code, len(desk.delivered))
+	}
+}
