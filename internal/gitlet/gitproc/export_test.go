@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/nodememory"
 )
 
 // RemoteEnv is what a case resolves a remote against in place of the
@@ -64,7 +65,7 @@ func OnDrain(p *Pool, fn func(stream string)) { p.draining = fn }
 
 // ResolveMemory is what New sizes the lanes by under o, reading the node's
 // memory with read.
-func ResolveMemory(o Options, read func() (Memory, error)) (Memory, error) {
+func ResolveMemory(o Options, read func() (nodememory.Memory, error)) (nodememory.Memory, error) {
 	return resolveMemory(o, read)
 }
 

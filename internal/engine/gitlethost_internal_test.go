@@ -16,8 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/nodebudget"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -158,11 +161,76 @@ func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 	})
 }
 
+// THE EXECUTOR'S POOLS A NODE KEEPS BESIDE GITLET FOLLOW ITS ROLES: one
+// running seats hosts their boxes, collecting at its turns (node.max_concurrent)
+// and reading them for its peers at boxReadsHeld; one serving ingress answers
+// people's transcript reads, with seats or without.
+//
+// Mutations, each red: hosting boxes whatever the roles, or on ingress rather
+// than seats; reading for people on seats rather than ingress; the default
+// turns whatever node.max_concurrent says.
+func TestTheExecutorsPoolsANodeKeepsFollowItsRoles(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		roles         []string
+		maxConcurrent int
+		want          executor.NodeWork
+	}{
+		{[]string{"seats", "gitlet"}, 0,
+			executor.NodeWork{Boxes: true, Turns: node.DefaultMaxConcurrent, PeerReads: boxReadsHeld}},
+		{[]string{"data", "ingress", "gitlet"}, 0, executor.NodeWork{PersonReads: true}},
+		{[]string{"data", "seats", "ingress", "gitlet"}, 7,
+			executor.NodeWork{Boxes: true, Turns: 7, PeerReads: boxReadsHeld, PersonReads: true}},
+		{[]string{"gitlet"}, 7, executor.NodeWork{}},
+	} {
+		boot := &config.Bootstrap{}
+		boot.Node.Roles, boot.Node.MaxConcurrent = tc.roles, tc.maxConcurrent
+		if got := gitWork(boot.Profile("node-a"), boot); got != tc.want {
+			t.Errorf("roles %v, node.max_concurrent %d: the node runs %+v of the executor's pools, want %+v",
+				tc.roles, tc.maxConcurrent, got, tc.want)
+		}
+	}
+}
+
+// A NODE KEEPS THE EXECUTOR'S POOLS IT RUNS BEFORE GITLET'S SHARES: a node
+// running seats gives its background work what one without them gives on the
+// same memory left once each has kept its own pools, and less than one without
+// seats of its memory. The transfer lane is pinned, so no budget moves with it.
+//
+// Mutation: pass no reserve, and the budget is the whole memory's.
+func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
+	t.Parallel()
+	const memory = int64(16) << 30
+	withoutSeats := []string{"data", "gitlet", "ingress", "workers"}
+	sized := func(roles []string, memory int64) (budget, pools int64) {
+		e := bootSizedCodeNode(t, roles, memory)
+		n := e.native.Load()
+		if n == nil || n.gitCache == nil {
+			t.Fatalf("the premise: a node with roles %v, for a company hosting code, built no git cache", roles)
+		}
+		boot := testBootstrap(t)
+		boot.Node.Roles = roles
+		work := gitWork(boot.Profile("node-a"), &boot)
+		return n.gitCache.BackgroundBudget(), nodebudget.Node{Work: work}.Of(memory, 0).Runtime
+	}
+	seats, seatsPools := sized(nil, memory)
+	alone, alonePools := sized(withoutSeats, memory)
+	// A node without seats of the memory a node running seats sizes Gitlet
+	// by once its own pools are kept: the same budget, had both kept theirs.
+	left, _ := sized(withoutSeats, memory-seatsPools+alonePools)
+	if seats != left || alone <= seats || alonePools == 0 || seatsPools <= alonePools {
+		t.Errorf("a %d-byte node running seats gives its background work %d, keeping %d; want %d, what a "+
+			"node without seats keeping %d gives on the same memory left, and less than its %d",
+			memory, seats, seatsPools, left, alonePools, alone)
+	}
+}
+
 // bootSizedCodeNode boots a node with roles (nil: every role) for
 // [gitletHostAlone], its git pool sized as a node of memory bytes rather than as
-// the machine running the case, and its transfer lane pinned ([PinGitLanes]);
+// the machine running the case, and its transfer lane pinned ([PinGitLanes]),
+// each of with applied to its options;
 // it stops with t.
-func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
+func bootSizedCodeNode(t *testing.T, roles []string, memory int64, with ...func(*Options)) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
 	dir := brokertest.TempDir(t)
@@ -174,8 +242,12 @@ func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
 	SeedStore(t, &b)
 	company := parseCompany(t, gitletHostAlone)
 	RequireNodeGit(t, &b, company)
-	e, err := New(t.Context(), WithGitMemory(Options{Bootstrap: &b, Company: company,
-		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory))
+	opts := WithGitMemory(Options{Bootstrap: &b, Company: company,
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory)
+	for _, w := range with {
+		w(&opts)
+	}
+	e, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

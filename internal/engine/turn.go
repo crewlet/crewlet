@@ -1427,7 +1427,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
-	joined := d.joinedOf(ctx, handle, evs, worked)
+	marked := d.markedOf(ctx, handle, evs, worked)
 	out := make([]*events.Event, 0, len(evs))
 	var skipped map[uuid.UUID]skipCause
 	skip := func(id uuid.UUID, cause skipCause) {
@@ -1444,8 +1444,12 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		chat, edit, isChat := chatKeyOf(ev)
 		switch {
-		case joined[joinedKey(ev.ID.String())]:
+		case marked[joinedKey(ev.ID.String())]:
 			skip(ev.ID, skipJoined)
+		case marked[steeredKey(ev.ID.String())]:
+			skip(ev.ID, skipSteered)
+		case marked[absorbedKey(ev.ID.String())]:
+			skip(ev.ID, skipTriaged)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
 		case isChat && edit && worked[chat]:
@@ -1473,15 +1477,17 @@ func deliveryKeys(ev *events.Event) []string {
 	return keys
 }
 
-// joinedOf is which of evs a running turn's run read as a wake ([joinedKey]),
-// by that mark: asked only of those whose own key is worked, so a dispatch no
-// turn worked any trigger of reads the ledger no more than it did.
-func (d *Dispatcher) joinedOf(ctx context.Context, handle string, evs []*events.Event,
+// markedOf is which of evs a running turn took while its run held the seat, by
+// the mark it recorded: read as a wake ([joinedKey]), filed as its lead's steer
+// note ([steeredKey]) or absorbed by its triage ([absorbedKey]). Asked only of
+// those whose own key is worked, so a dispatch no turn worked any trigger of
+// reads the ledger no more than it did.
+func (d *Dispatcher) markedOf(ctx context.Context, handle string, evs []*events.Event,
 	worked map[string]bool) map[string]bool {
 	var keys []string
 	for _, ev := range evs {
-		if d.ledgered(ev.Type) && worked[workkey.Derive([]string{ev.ID.String()})] {
-			keys = append(keys, joinedKey(ev.ID.String()))
+		if id := ev.ID.String(); d.ledgered(ev.Type) && worked[workkey.Derive([]string{id})] {
+			keys = append(keys, joinedKey(id), steeredKey(id), absorbedKey(id))
 		}
 	}
 	if len(keys) == 0 || d.Completions == nil {
@@ -1781,7 +1787,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			kept[ev.ID] = true
 		}
 	}
-	joinedBy := d.joinedBy(ctx, handle, all, skipped)
+	markedBy := d.markedBy(ctx, handle, all, skipped)
 	for _, ev := range all {
 		if ev == nil || kept[ev.ID] {
 			continue
@@ -1799,7 +1805,11 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
 		case skipJoined:
-			reason, disposition = joinedReason(joinedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
+			reason, disposition = joinedReason(markedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
+		case skipSteered:
+			reason, disposition = steeredReason(markedBy[steeredKey(ev.ID.String())]), types.DispositionJoined
+		case skipTriaged:
+			reason, disposition = triagedReason(markedBy[absorbedKey(ev.ID.String())]), types.DispositionAbsorbed
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
@@ -1811,15 +1821,24 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 	}
 }
 
-// joinedBy is the turn each of all's joined skips joined, by its join mark
-// ([joinedKey]): one ledger read for them all, none where nothing joined.
-func (d *Dispatcher) joinedBy(ctx context.Context, handle string, all []*events.Event,
+// markedBy is the running turn each of all's skips by a mark went to, by that
+// mark ([Dispatcher.markedOf]): one ledger read for them all, none where no
+// running turn took any.
+func (d *Dispatcher) markedBy(ctx context.Context, handle string, all []*events.Event,
 	skipped map[uuid.UUID]skipCause) map[string]string {
 
 	var keys []string
 	for _, ev := range all {
-		if ev != nil && skipped[ev.ID] == skipJoined {
-			keys = append(keys, joinedKey(ev.ID.String()))
+		if ev == nil {
+			continue
+		}
+		switch id := ev.ID.String(); skipped[ev.ID] {
+		case skipJoined:
+			keys = append(keys, joinedKey(id))
+		case skipSteered:
+			keys = append(keys, steeredKey(id))
+		case skipTriaged:
+			keys = append(keys, absorbedKey(id))
 		}
 	}
 	if len(keys) == 0 || d.Completions == nil {

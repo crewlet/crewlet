@@ -1908,6 +1908,10 @@ const PHASE_WORDS: Readonly<Record<PhaseModelField, { label: string; runs: strin
     label: "Round-cap judge",
     runs: "Decides whether a phase that ran out of tool rounds is still making progress.",
   },
+  llm_triage: {
+    label: "Wake triage",
+    runs: "Sorts a message to this seat from someone else while its run works. A fast model keeps it cheap.",
+  },
 };
 
 function ModelSection({

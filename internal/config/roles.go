@@ -127,6 +127,7 @@ type Role struct {
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
 	LLMJudge     ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero" desc:"Cheap model for the round-cap extension judge."`
+	LLMTriage    ProviderKeys `yaml:"llm_triage,omitempty" json:"llm_triage,omitzero" desc:"Cheap model that triages a wake from somebody other than the requester while the seat's run works."`
 
 	// LearningEnabled overrides the system-wide learning setting for this
 	// seat alone. Unset inherits it; false skips reflection for this
@@ -821,6 +822,7 @@ func (r *Role) Seat() *org.Role {
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
 		LLMAuxiliary:         pick(r.LLMAuxiliary, r.LLM.Auxiliary),
 		LLMJudge:             pick(r.LLMJudge, r.LLM.Judge),
+		LLMTriage:            pick(r.LLMTriage, r.LLM.Triage),
 		LearningEnabled:      r.LearningEnabled,
 		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),

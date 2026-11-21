@@ -255,6 +255,12 @@ type Note struct {
 	// At is when the box took it, in UTC.
 	At time.Time
 
+	// Owes is the delivery obligation (turn.Reply's wire value) of the chat
+	// messages a lead's steer note was filed from by the engine (ADR-0168),
+	// which the turn is held to answering; "" for every note a person sent
+	// through Crewlet, which asks the turn for no answer of its own.
+	Owes string
+
 	// SentBefore says the source handed the note over after a note filed
 	// later that its reader already holds, so its reader is told it was sent
 	// before that one (prompts.SteerMessageSentBefore), never that it is the
@@ -465,6 +471,11 @@ type Wake struct {
 	// characters past those its message holds, which its conversation keeps.
 	Text string `untrusted:"fence"`
 	Cut  int
+
+	// Informs says its writer is not whom the turn works for: the engine's
+	// triage found it information about the work (ADR-0168), which the run
+	// may read and answer, never a request it acts on (ADR-0109).
+	Informs bool
 }
 
 // Joined is the agent_turn_joined record of what became of w, handed to job:

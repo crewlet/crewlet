@@ -16,7 +16,7 @@
 
 ## Why the obvious alternatives are wrong
 
-**Another writer's related message joining too.** A run is held to one requester's apps (ADR-0109), and a partition to one writer for that reason; handing it another writer's words would read them under the first's ceiling. Which of those may join is a decision of its own, outside this record.
+**Another writer's related message joining on this rule.** A run is held to one requester's apps (ADR-0109), and a partition to one writer for that reason; handing it another writer's words as its requester's would read them under the first's ceiling. Which of those may join, and as what, is ADR-0168's.
 
 **Watching the seat's waiting channel, or deciding at the producer.** The waiting channel carries only a person's priority-lane wakes, without writer or words; the producers are six, on other nodes, and none sees mail already waiting when the run starts. The inbox is the one place every wake is, so the queue's backlog read became contract (`EventQueue.Backlog`), lane first, at most a limit, consuming and spending nothing, possibly with mail already acked, which the ledger check covers.
 
@@ -24,4 +24,8 @@
 
 ## Left to later pieces of the series
 
-Another writer's related wake (a gate that decides it), objects the run created or wrote as a third match, and a model's judgement of relevance are crewlet/crewlet#1758's later pieces; each needs this router and none changes its rule for the requester's own wakes.
+Objects the run created or wrote as a third match is crewlet/crewlet#1758's later piece; it needs this router and does not change its rule for the requester's own wakes.
+
+## Amendment: the other wakes about the run's work are triaged
+
+Another writer's wake about the run's work, or a lead's, is no longer left alone: [ADR-0168](0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md) triages what this rule leaves and gates the choice. This rule still decides first and its joins are unchanged.

@@ -394,8 +394,8 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
 // TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
-// [TranscriptReadHeldBytes] live, so two hold 58 MiB (116 MiB at the default
-// GOGC the engine runs at, which sets no GOMEMLIMIT), each one core's work for
+// [TranscriptReadHeldBytes] live, so two hold 58 MiB (87 MiB with the heap's
+// room under the engine's memory limit, [MemoryPools]), each one core's work for
 // up to [PersonTranscriptReadWorst] (a seat's for words 58 s); one slot would
 // queue every reader behind the longest archive, and more would take more of a
 // node's cores than a page is worth. A seat's read takes the seats' one slot

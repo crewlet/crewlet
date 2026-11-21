@@ -385,6 +385,7 @@ roles:
       subagent: claude-haiku
       auxiliary: claude-haiku  # memory / knowledge / summary passes
       judge: claude-haiku      # the onboarding pass's round-cap extension judge
+      triage: claude-haiku     # a busy seat's wake triage
 ```
 
 Or the shorthand string form (everything runs on one model):
@@ -395,7 +396,9 @@ roles:
     llm: claude-sonnet
 ```
 
-Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the mapping key, so a seat can take a shared mapping and override one phase.
+Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`, `llm_triage`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the mapping key, so a seat can take a shared mapping and override one phase.
+
+`triage` is the one-call pass that decides a wake reaching a seat while its run works, from somebody other than the run's requester ([ADR-0168](../../adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)): it only names what the wake is, and the engine decides what follows.
 
 ---
 
@@ -742,9 +745,15 @@ sequenceDiagram
 A message the turn's own requester sends about its work while the run works
 reaches it the same way without anybody steering: the seat's router hands it
 over from the held inbox as a wake, rendered as that writer's message rather
-than a note, and a wake from anybody else waits for a turn of its own
+than a note
+([ADR-0167](../../adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)).
+**A lead's chat message steers like `steer_turn`**: a message to the busy seat
+from a person who leads it, which the seat's triage finds redirects the work,
+is filed as that person's note, under a note's seal and bounds, several in one
+read as one note; anybody else's information about the work joins as a wake,
+and a request waits for a turn of its own
 ([Code Sandbox](code-sandbox.md#notes-to-a-running-run),
-[ADR-0167](../../adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)).
+[ADR-0168](../../adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)).
 
 ### Rules
 

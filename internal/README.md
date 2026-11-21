@@ -127,6 +127,8 @@
 | `flock` | The one exclusive cross-process file lock (`store`, `queue/jetstream`, `hostbox`, `gitlet/cache`), plus a pin: a lock on a file description a child inherits, held while any process holds it. |
 | `sockcount` | What a TCP socket's kernel holds unacknowledged and has had acknowledged, read from the connection's own descriptor (Linux and darwin). |
 | `procgroup` | Signals a child process tree as one process group, tells whether a recorded group is still the same one, and sums a group's CPU |
+| `nodememory` | The memory this node's processes may hold, the least of the machine's and every cgroup limit above the process: the one reader for every bound that is a share of it. |
+| `nodebudget` | The lines of a node's memory budget beside Gitlet's lanes (the Go runtime's share, the page cache, the read lane), which Gitlet's reserve and the Go memory limit both read. |
 | `gitlet/gitproc` | The one wrapper that starts git: every git process the engine runs, with its built environment and configuration, lane slot, process-tree end and classified failure, plus the git version floors (ADR-0087). |
 | `gitlet/cache` | Each Gitlet node's disposable bare repositories, one a repository it serves, derived by convergence from the code log's rows and the object store, from which real git upload-pack answers clones and fetches. |
 | `gitlet/compact` | The maintainer's three loops over a repository's packs: compaction bounds their count, publication writes its bitmap layers, expunge drops what no ref reaches. |
@@ -194,6 +196,7 @@
 | `backup` | A restorable copy of a node's store, streams and objects, taken from inside the engine because it alone reaches all three; the manifest, written last, is the claim. |
 | `maintenance` | The retention sweep for short-horizon tables, state-log operation ledgers, coordination removal markers, removed seats' chat read state and mailbox retirement; a fleet singleton, never a replicated row |
 | `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `googlecloud`, `atlassian`, `aws`, `ssh` | The vendor integrations: each vendor's client, inbound parsing, prompt, seat access and atlas read. |
+| `googleauth` | Every way the engine gets a Google token: the company's Google identity by federation, impersonation by scope, the token caches and the one call path to Google. |
 | `origin` | records where a failure left the engine's own code: a deferred stamp names the function a failure passed through. |
 | `issuereport` | Opt-in anonymous reports of the engine's own defects, built from typed fields only and filed by a relay as GitHub issues. |
 | `panics` | The one way a contained panic is read: every `recover()` that keeps a defect from ending the process calls `Recovered`, which names the panicking function and its kind and tells the observers. |

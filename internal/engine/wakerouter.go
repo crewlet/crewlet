@@ -24,7 +24,9 @@ import (
 // it ([queue.EventQueue.Backlog]) and hands the run, as a wake item, every
 // wake from the run's own requester about the run's work ([routeOf]). A wake
 // the run reads is claimed and its delivery dropped after the run; one it never
-// reads runs as a turn of its own. The package doc's "A busy seat's wake router".
+// reads runs as a turn of its own. Another wake about the run's work, or from
+// a lead of the seat, is triaged and gated (waketriage.go, ADR-0168). The
+// package doc's "A busy seat's wake router".
 
 // routeBackstop is how long a router waits for a nudge before it reads the
 // held inbox again. The nudge rides a best-effort stream subscription, so a
@@ -49,12 +51,16 @@ const (
 	// routeRefused: the run's record took no more ([sandbox.ErrWakeClosed],
 	// [sandbox.ErrWakesSpent], [sandbox.ErrWakeTooLarge]).
 	routeRefused routeOutcome = "refused"
-	// routeLeftQueued: the rule matched nothing ([routeOf]).
+	// routeLeftQueued: the rule matched nothing ([routeOf]), or the gate
+	// left it for a turn of its own ([gateOf]).
 	routeLeftQueued routeOutcome = "left_queued"
+	// routeAbsorbed: the triage found it noise owing nothing, recorded worked
+	// by the running turn ([Engine.absorbWake]).
+	routeAbsorbed routeOutcome = "absorbed"
 )
 
 // routeOutcomes is the closed set.
-var routeOutcomes = []routeOutcome{routeJoined, routeRefused, routeLeftQueued}
+var routeOutcomes = []routeOutcome{routeJoined, routeRefused, routeLeftQueued, routeAbsorbed}
 
 // Valid reports whether o is one of [routeOutcomes].
 func (o routeOutcome) Valid() bool { return slices.Contains(routeOutcomes, o) }
@@ -69,10 +75,18 @@ const (
 	ruleWorkItem routeRule = "work_item"
 	// ruleNone: it matched neither, or is not a wake a run takes.
 	ruleNone routeRule = "none"
+	// The triage's verdict on a wake the fixed rule left ([triageVerdict.rule]),
+	// or none where it decided nothing.
+	ruleTriageInput   routeRule = "triage_input"
+	ruleTriageSteer   routeRule = "triage_steer"
+	ruleTriageRequest routeRule = "triage_request"
+	ruleTriageNoise   routeRule = "triage_noise"
+	ruleTriageFailed  routeRule = "triage_failed"
 )
 
 // routeRules is the closed set.
-var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleNone}
+var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleNone, ruleTriageInput, ruleTriageSteer,
+	ruleTriageRequest, ruleTriageNoise, ruleTriageFailed}
 
 // Valid reports whether r is one of [routeRules].
 func (r routeRule) Valid() bool { return slices.Contains(routeRules, r) }
@@ -138,8 +152,7 @@ func routeOf(run sandbox.PendingRun, ev *events.Event, o wakeOrigin, worked bool
 		return ruleNone, stayWriter
 	case run.ConversationKey != "" && o.conversation == run.ConversationKey:
 		return ruleConversation, ""
-	case run.WorkItem != nil && run.WorkItem.ID != "" && o.item != nil &&
-		o.item.Backend == run.WorkItem.Backend && o.item.ID == run.WorkItem.ID:
+	case sameItem(run.WorkItem, o.item):
 		return ruleWorkItem, ""
 	}
 	return ruleNone, stayOtherWork
@@ -330,11 +343,11 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 			_ = unsub(stop)
 		}()
 	}
-	decided := map[string]map[string]bool{}
+	memo := newRouteMemo()
 	backstop := time.NewTimer(routeBackstop)
 	defer backstop.Stop()
 	for {
-		e.routeSeat(ctx, handle, subject, group, decided)
+		e.routeSeat(ctx, handle, subject, group, memo)
 		select {
 		case <-ctx.Done():
 			return
@@ -346,11 +359,13 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 }
 
 // routeSeat is one read of handle's held inbox (subject, group): every wake
-// [routeOf] gives the run holding the seat is filed for its job, each decided
-// once per job (decided records which, by job and wake id). NOTHING WHILE A
-// DISPATCH OF THE SEAT RUNS here: the turn that launched the run may not have
-// recorded its own triggers worked yet ([Dispatcher.Idle] nudges after).
-func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, decided map[string]map[string]bool) {
+// [routeOf] gives the run holding the seat is filed for its job, and every
+// [candidate] it leaves is triaged and gated, each decided once per job (memo
+// keeps which, by job and wake id), a lead's steers filed once all are weighed.
+// NOTHING WHILE A DISPATCH OF THE SEAT RUNS here: the turn that launched the
+// run may not have recorded its own triggers worked yet ([Dispatcher.Idle]
+// nudges after).
+func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, memo *routeMemo) {
 	if e.dispatch != nil && e.dispatch.Running(handle) {
 		return
 	}
@@ -362,11 +377,7 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, d
 	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
 		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
 	})
-	for job := range decided {
-		if !slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool { return run.LaunchID == job }) {
-			delete(decided, job)
-		}
-	}
+	memo.prune(runs)
 	if len(runs) == 0 {
 		return
 	}
@@ -377,13 +388,15 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, d
 	}
 	mail = slices.DeleteFunc(mail, func(ev *events.Event) bool {
 		return ev == nil || !slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool {
-			return !decided[run.LaunchID][ev.ID.String()]
+			return !memo.done(run.LaunchID, ev.ID.String())
 		})
 	})
 	worked := e.workedOf(ctx, handle, mail)
+	read := &routeRead{}
 	for _, ev := range mail {
-		e.routeWake(ctx, handle, runs, ev, worked, decided)
+		e.routeWake(ctx, handle, runs, ev, worked, memo, read)
 	}
+	e.fileSteers(ctx, handle, read, memo)
 }
 
 // workedOf is which of mail's keys the completion ledger records worked, in
@@ -404,26 +417,27 @@ func (e *Engine) workedOf(ctx context.Context, handle string, mail []*events.Eve
 }
 
 // routeWake decides ev for the first of runs whose rule it matches, filing it
-// there, and records the decision for every run it was weighed for.
+// there, or triages it for the first it is a [candidate] of
+// ([Engine.triageRun]), and records the decision for every run it was weighed
+// for in memo; read is the read's own state.
 func (e *Engine) routeWake(ctx context.Context, handle string, runs []sandbox.PendingRun, ev *events.Event,
-	worked map[string]bool, decided map[string]map[string]bool) {
+	worked map[string]bool, memo *routeMemo, read *routeRead) {
 
 	id := ev.ID.String()
-	mark := func(job string) {
-		if decided[job] == nil {
-			decided[job] = map[string]bool{}
-		}
-		decided[job][id] = true
-	}
+	mark := func(job string) { memo.mark(job, id) }
 	o := e.originOf(handle, ev)
 	isWorked := slices.ContainsFunc(deliveryKeys(ev), func(key string) bool { return worked[key] })
 	why := ""
 	for _, run := range runs {
-		if decided[run.LaunchID][id] {
+		if memo.done(run.LaunchID, id) {
 			continue
 		}
 		rule, stay := routeOf(run, ev, o, isWorked)
 		if rule == ruleNone {
+			if rel := e.relationsOf(ctx, handle, run, o); candidate(stay, rel) {
+				e.triageRun(ctx, handle, run, ev, o, rel, memo, read)
+				return
+			}
 			mark(run.LaunchID)
 			why = stay
 			continue
@@ -470,10 +484,14 @@ func (e *Engine) noteRouted(ctx context.Context, handle string, run sandbox.Pend
 	case routeJoined:
 		log.InfoContext(ctx, "seat_wake_joined", "seat", handle, "turn_id", run.TurnID, "job", run.LaunchID,
 			"wake_id", wakeID, "rule", string(rule))
+	case routeAbsorbed:
+		log.InfoContext(ctx, "seat_wake_absorbed", "seat", handle, "turn_id", run.TurnID, "job", run.LaunchID,
+			"wake_id", wakeID, "detail", "it asks nothing and adds nothing the running work needs; its delivery "+
+				"is skipped as absorbed by the running turn")
 	case routeRefused:
 		log.InfoContext(ctx, "seat_wake_left_queued", "seat", handle, "turn_id", run.TurnID,
 			"job", run.LaunchID, "wake_id", wakeID, "rule", string(rule), "reason", why, "error", err.Error(),
-			"detail", "the run's record takes no more wakes for this job; the wake runs as a turn of its own")
+			"detail", "the run's record took no more for this job; the wake runs as a turn of its own")
 	default:
 		log.DebugContext(ctx, "seat_wake_left_queued", "seat", handle, "wake_id", wakeID, "reason", why)
 	}

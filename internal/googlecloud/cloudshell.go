@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -52,9 +53,9 @@ func CloudShellBlock(company, provisioner, key string, atlas bool) (string, erro
 	}
 	provider := `--project="$IDENTITY" --location=global --workload-identity-pool=` + PoolID
 	oidc := ` \
-    --issuer-uri="` + Issuer(company) + `" \
+    --issuer-uri="` + googleauth.Issuer(company) + `" \
     --attribute-mapping="google.subject=assertion.sub" \
-    --attribute-condition="assertion.sub == '` + Subject(company) + `'" \
+    --attribute-condition="assertion.sub == '` + googleauth.Subject(company) + `'" \
     --jwk-json-path="$JWKS" --format=none`
 	lines := []string{
 		"(",
@@ -115,12 +116,12 @@ func CloudShellBlock(company, provisioner, key string, atlas bool) (string, erro
 		`  [ -n "$NUMBER" ] || fail "read the identity project's number"`,
 		`grant gcloud iam service-accounts add-iam-policy-binding "$PROV" --project="$IDENTITY" \`,
 		`  --role=roles/iam.workloadIdentityUser --format=none \`,
-		`  --member="` + Principal(ProviderName("${NUMBER}"), company) + `" ||`,
+		`  --member="` + googleauth.Principal(ProviderName("${NUMBER}"), company) + `" ||`,
 		`  fail "let Crewlet act as the provisioner"`,
 		"",
 	}
 	if atlas {
-		lines = append(lines, atlasLines(Principal(ProviderName("${NUMBER}"), company))...)
+		lines = append(lines, atlasLines(googleauth.Principal(ProviderName("${NUMBER}"), company))...)
 	}
 	lines = append(lines,
 		`gcloud iam workload-identity-pools providers describe `+ProviderID+` `+provider+` \`,

@@ -50,7 +50,14 @@ export const MODELS_ORG = withDerived({
 export const MODELS_SEATS: Seat[] = indexOrg(MODELS_ORG).seats.filter((s) => s.kind !== "human");
 
 /** Every seat job, in the engine's order. */
-export const EVERY_JOB: ModelJob[] = ["executor", "review", "subagent", "auxiliary", "judge"];
+export const EVERY_JOB: ModelJob[] = [
+  "executor",
+  "review",
+  "subagent",
+  "auxiliary",
+  "judge",
+  "triage",
+];
 
 /** `seat` runs `jobs` on the model: position 0, written by the seat. */
 export function runs(seat: string, ...jobs: ModelJob[]): ModelUse[] {

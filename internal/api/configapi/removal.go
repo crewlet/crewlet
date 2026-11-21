@@ -99,6 +99,7 @@ var jobWords = map[config.ProviderJob]string{
 	config.JobSubagent:  "delegated tasks",
 	config.JobAuxiliary: "memory and summaries",
 	config.JobJudge:     "onboarding checks",
+	config.JobTriage:    "sorting messages to a busy seat",
 	config.JobAssistant: "Ask Crewlet's chat",
 	config.JobAdvisor:   "the Advisor's findings",
 }
@@ -115,6 +116,7 @@ var phaseJobs = []struct {
 	{phase.Subagent, config.JobSubagent},
 	{phase.Auxiliary, config.JobAuxiliary},
 	{phase.Judge, config.JobJudge},
+	{phase.Triage, config.JobTriage},
 }
 
 // addressOf is where a reference is answered.
@@ -383,6 +385,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 			role.LLMAuxiliary = edit(role.LLMAuxiliary)
 		case last == "llm_judge":
 			role.LLMJudge = edit(role.LLMJudge)
+		case last == "llm_triage":
+			role.LLMTriage = edit(role.LLMTriage)
 		case ref.Job == config.JobReview:
 			role.LLM.Review = edit(role.LLM.Review)
 		case ref.Job == config.JobSubagent:
@@ -391,6 +395,8 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 			role.LLM.Auxiliary = edit(role.LLM.Auxiliary)
 		case ref.Job == config.JobJudge:
 			role.LLM.Judge = edit(role.LLM.Judge)
+		case ref.Job == config.JobTriage:
+			role.LLM.Triage = edit(role.LLM.Triage)
 		}
 		return
 	}

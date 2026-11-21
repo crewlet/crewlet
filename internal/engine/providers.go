@@ -351,13 +351,19 @@
 // reads the held inbox through the queue's backlog read, which consumes and
 // spends nothing, and files to the run, as a wake item for its job, each wake
 // from the run's own requester in its conversation or about its work item
-// ([routeOf]); another writer's never (ADR-0109). One router per busy seat
+// ([routeOf]); another writer's never on that rule (ADR-0109). One router per busy seat
 // ([Engine.seatRunsMoved]), nudged by a stream subscription on the inbox and
 // its lane and by the seat's dispatch going idle, with a backstop read
 // ([routeBackstop]); each wake decided once per job. A claimed wake's delivery
 // is skipped `joined`, naming its turn, its seen-through mark moved at the
 // claim and its owed answer the resumed turn's ([runSteers.turnReply]); an
 // unread one runs on its own (ADR-0167).
+//
+// A wake that rule leaves about the run's work, or a lead's ([candidate]), is
+// described once per job by one call on the role's `triage` chain
+// ([runTriage]) and the engine gates the description ([gateOf]): input joins
+// as information, a lead's steer as their note ([Engine.fileSteer]), noise
+// owing nothing is absorbed, the rest waits (ADR-0168).
 package engine
 
 import (

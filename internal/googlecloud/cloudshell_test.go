@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -113,9 +114,9 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 	for _, want := range []string{
 		"IDENTITY=" + identity,
 		"PROV=" + provisioner,
-		`--issuer-uri="` + googlecloud.Issuer(testCompany) + `"`,
+		`--issuer-uri="` + googleauth.Issuer(testCompany) + `"`,
 		`--attribute-mapping="google.subject=assertion.sub"`,
-		`--attribute-condition="assertion.sub == '` + googlecloud.Subject(testCompany) + `'"`,
+		`--attribute-condition="assertion.sub == '` + googleauth.Subject(testCompany) + `'"`,
 	} {
 		if strings.Count(text, want) == 0 {
 			t.Errorf("the block does not say %s", want)
@@ -128,9 +129,9 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 			member, _, _ = strings.Cut(rest, `"`)
 		}
 	}
-	if got := strings.ReplaceAll(member, "${NUMBER}", number); got != googlecloud.Principal(testProvider, testCompany) {
+	if got := strings.ReplaceAll(member, "${NUMBER}", number); got != googleauth.Principal(testProvider, testCompany) {
 		t.Errorf("the provisioner trusts %q, want the client's principal %q", got,
-			googlecloud.Principal(testProvider, testCompany))
+			googleauth.Principal(testProvider, testCompany))
 	}
 	if _, err := googlecloud.CloudShellBlock(testCompany, "ops@acme.example", pemText, false); err == nil {
 		t.Error("a block was drawn for a provisioner that is no service account")

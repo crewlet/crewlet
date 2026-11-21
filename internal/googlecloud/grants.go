@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -107,7 +108,7 @@ func grantProblems(ctx context.Context, c *Client, reads *roleReads, setup *proj
 	for _, name := range roles {
 		role, found, err := reads.role(ctx, c, name)
 		switch {
-		case isStage(err):
+		case googleauth.IsStage(err):
 			return err
 		case err != nil:
 			setup.Problems = append(setup.Problems, problem{unreadable("the grants list's "+name, err),

@@ -3,12 +3,12 @@ package googlecloud
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -114,7 +114,7 @@ func discover(ctx context.Context, c *Client) (discovery, error) {
 func setupOf(ctx context.Context, c *Client, reads *roleReads, p Project) (*projectSetup, error) {
 	out := &projectSetup{ID: p.ProjectID, Name: p.DisplayName, Parent: p.Parent}
 	pol, err := c.ProjectPolicy(ctx, p.ProjectID)
-	if isStage(err) {
+	if googleauth.IsStage(err) {
 		return nil, err
 	}
 	if err != nil {
@@ -133,7 +133,7 @@ func setupOf(ctx context.Context, c *Client, reads *roleReads, p Project) (*proj
 		return nil, err
 	}
 	switch role, found, err := c.Role(ctx, CustomRole(p.ProjectID)); {
-	case isStage(err):
+	case googleauth.IsStage(err):
 		return nil, err
 	case err != nil:
 		out.Problems = append(out.Problems, problem{unreadable("crewletOperator", err),
@@ -155,13 +155,6 @@ const prepareProject = "Run the Prepare a project block on it"
 // problems.
 func unreadable(what string, err error) string {
 	return what + " cannot be read (" + err.Error() + ")"
-}
-
-// isStage reports a failure to reach Google as the provisioner at all, which
-// is every project's alike.
-func isStage(err error) bool {
-	_, ok := errors.AsType[*stageError](err)
-	return ok
 }
 
 // problems is why the provisioner's grants on project keep it from agents:

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 )
 
@@ -25,7 +26,7 @@ func TestAReadWaitsOutGooglesRateLimitAndAWriteDoesNot(t *testing.T) {
 	f := newFakeGoogle(t, &key.PublicKey, clock)
 	services := "GET /v1/projects/" + projectWeb + "/services"
 	f.limited = map[string]int{services: 2}
-	client, err := googlecloud.NewClient(googlecloud.ClientOptions{Company: testCompany, Provisioner: provisioner,
+	client, err := googlecloud.NewClient(googleauth.Options{Company: testCompany, Provisioner: provisioner,
 		Provider: testProvider, FederationKey: pemText, HTTP: f.server(t)})
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +46,7 @@ func TestAReadWaitsOutGooglesRateLimitAndAWriteDoesNot(t *testing.T) {
 	create := "POST /v1/projects/" + identity + "/serviceAccounts"
 	f.edit(func(f *fakeGoogle) { f.limited[create] = 1 })
 	waits = nil
-	if _, err = client.CreateServiceAccount(t.Context(), "crewlet-sre", "SRE", "an agent"); googlecloud.Status(err) != http.StatusTooManyRequests {
+	if _, err = client.CreateServiceAccount(t.Context(), "crewlet-sre", "SRE", "an agent"); googleauth.Status(err) != http.StatusTooManyRequests {
 		t.Fatalf("a limited create answered %v", err)
 	}
 	if len(waits) != 0 {

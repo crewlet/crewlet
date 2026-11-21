@@ -23,11 +23,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -172,6 +174,20 @@ func (e *Engine) hostsGit(built builtWith) bool {
 	return built.runsCode() && e.profile.Roles.Has(placement.RoleGitlet)
 }
 
+// gitWork is what a node of profile runs of the executor's pools, which it
+// keeps beside Gitlet before its git lanes and background budget are sized
+// ([executor.NodeWork], whose package doc says why they are declared there):
+// a node running seats hosts their boxes, collecting at its turns
+// (node.max_concurrent) and reading them for its peers at [boxReadsHeld]; one
+// serving ingress answers people's transcript reads.
+func gitWork(profile placement.NodeProfile, boot *config.Bootstrap) executor.NodeWork {
+	w := executor.NodeWork{PersonReads: profile.RunsIngress()}
+	if profile.RunsSeats() {
+		w.Boxes, w.Turns, w.PeerReads = true, node.TurnsAtOnce(boot.Node.MaxConcurrent), boxReadsHeld
+	}
+	return w
+}
+
 // gitHook is the argv the cache's proc-receive hook execs: [Options.GitHook]
 // where it is given, and otherwise THIS binary as host.HookCommand names it —
 // `crewlet gitlet hook proc-receive` — with its symbolic links resolved, since
@@ -228,10 +244,14 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 	defer layout.Release()
 
 	// 2. GIT, the node's own: the pool resolves its lanes once (code_git_ready),
-	// sized by the node's memory ([Options.gitMemory] in this package's tests).
+	// sized by the node's memory ([Options.gitMemory] in this package's tests)
+	// less what this node keeps beside Gitlet: its memory lines
+	// ([Engine.budgetNode]), which its runtime's memory limit reads too.
+	budget := e.budgetNode(boot)
 	pool, err := gitproc.New(ctx, gitproc.Options{
-		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers,
-		Memory: e.gitMemory, Home: layout.Home, Metrics: e.metrics,
+		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers, Memory: e.gitMemory,
+		Reserve: func(memory int64, reads int) int64 { return budget.Of(memory, reads).Kept() },
+		Home:    layout.Home, Metrics: e.metrics,
 	})
 	if err != nil {
 		return gitletHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+
@@ -440,8 +460,15 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		h.Stop(context.WithoutCancel(ctx))
 		return gitletHostParts{}, fmt.Errorf("engine: serve code searches on %s: %w", topics.CodeSearch, err)
 	}
+	// WHAT THE NODE HOLDS OUTSIDE THIS PROCESS, which the runtime's memory
+	// limit leaves it ([Engine.limitMemory]): each admitted transfer, the
+	// background budget the cache opened with, and the lines it kept.
+	memory := gitletMemory{memory: pool.Memory(),
+		git:   int64(pool.Slots(gitproc.ClassTransfer))*gitproc.TransferMemory + c.BackgroundBudget(),
+		lines: budget.Of(pool.Memory().Bytes, pool.Slots(gitproc.ClassRead))}
 	return gitletHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
+		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch,
+		memory: memory}, nil
 }
 
 // codeNudges is this node's code log as the home's change work watches it
@@ -534,6 +561,7 @@ type gitletHostParts struct {
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
 	withdrawSearch queue.Unsubscribe
+	memory         gitletMemory
 }
 
 // codeReading fills the reading's code half at now: the queued checks' backlog,

@@ -1831,10 +1831,14 @@ var table = []rule{
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
-			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
+			"keeps is fixed when it boots: first the Go runtime's share for the " +
+			"executor's pools it runs (97 MiB of transcript reads, 1 650 MiB on " +
+			"a node running seats), the store's page cache (a sixteenth of its " +
+			"memory) and its read lane (128 MiB a core), then of " +
+			"the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
 			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
-			"to the memory, no more than one for every 512 MiB, and leaves the " +
+			"to that memory, no more than one for every 512 MiB, and leaves the " +
 			"background work 256 MiB for each backed core; a figure set by hand " +
 			"is kept as written, and leaves it nothing once its transfers' " +
 			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
@@ -1845,7 +1849,11 @@ var table = []rule{
 			"boot. A restart alone keeps the same lanes over the same memory, " +
 			"and clears it only where gitlet.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
-			"to what it has. See docs/concepts/gitlet.md.",
+			"to what it has. A node whose boot logged `code_cache_memory_short` " +
+			"keeps more than its memory, so its budget is zero: give it the " +
+			"`memory_needed` that line names, 4 GiB or more in all where it runs " +
+			"seats beside Gitlet at the default node.max_concurrent. See " +
+			"docs/concepts/gitlet.md.",
 	},
 	{
 		// The threshold is the push decide's (ADR-0015): the most live packs a
