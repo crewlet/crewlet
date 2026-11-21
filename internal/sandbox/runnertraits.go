@@ -43,13 +43,13 @@ func ThreadTraitsOf(runner Runner) ThreadTraits {
 type FirstRequest string
 
 const (
-	// FirstRequestNone: nothing this build models compacts it; the session
+	// FirstRequestNone means nothing this build models compacts it; the session
 	// is held whatever its brief.
 	FirstRequestNone FirstRequest = ""
-	// FirstRequestWindow: the harness compacts by the run's window
+	// FirstRequestWindow means the harness compacts by the run's window
 	// ([ExecutorWindow.SendsWhole]), judged before the launch.
 	FirstRequestWindow FirstRequest = "window"
-	// FirstRequestBox: the harness compacts at a point only the box the
+	// FirstRequestBox means the harness compacts at a point only the box the
 	// launch gets can say ([BoxPoint.SendsWhole]).
 	FirstRequestBox FirstRequest = "box"
 )
@@ -65,12 +65,12 @@ func (f FirstRequest) Valid() bool { return slices.Contains(FirstRequests, f) }
 type CallKeying string
 
 const (
-	// CallKeyingNone: the harness's calls carry no key a reading asks by.
+	// CallKeyingNone means the harness's calls carry no key a reading asks by.
 	CallKeyingNone CallKeying = ""
-	// CallKeyingByCallID: the call's own id ([BridgeCall.CallID]), valid
+	// CallKeyingByCallID keys by the call's own id ([BridgeCall.CallID]), valid
 	// where [ValidCallID] says so.
 	CallKeyingByCallID CallKeying = "call-id"
-	// CallKeyingByLogPlace: the call's place in its round's log, beside an
+	// CallKeyingByLogPlace keys by the call's place in its round's log, beside an
 	// admission place, asked with its arguments' key; never for a call a
 	// person's approval held.
 	CallKeyingByLogPlace CallKeying = "log-place"

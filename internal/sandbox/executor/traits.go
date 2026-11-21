@@ -53,10 +53,10 @@ func (r *Runner) NotesOffWhy() string {
 type SignIn string
 
 const (
-	// SignInFirstParty: the entry hands the harness first-party credentials
+	// SignInFirstParty means the entry hands the harness first-party credentials
 	// alone (a login, a key, or the host's own environment).
 	SignInFirstParty SignIn = "first-party"
-	// SignInOwnEnv: the entry signs the harness in by its own env.
+	// SignInOwnEnv means the entry signs the harness in by its own env.
 	SignInOwnEnv SignIn = "own-env"
 )
 
