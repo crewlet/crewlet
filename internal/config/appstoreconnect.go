@@ -226,6 +226,9 @@ func (c *Company) AppStoreConnectSeat(handle string) *RoleAppStoreConnect {
 	return nil
 }
 
+// GrowthKind is the seat block's integration kind, the company block's.
+func (*RoleAppStoreConnect) GrowthKind() string { return (*AppStoreConnect)(nil).GrowthKind() }
+
 // GrowthSeatLevel is the seat's level while its block is on, "" while off.
 func (r *RoleAppStoreConnect) GrowthSeatLevel() string {
 	if r == nil || r.Enabled == nil || !*r.Enabled {
