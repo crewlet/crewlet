@@ -349,8 +349,8 @@ var refusedServers = []refusedServer{
 func refusedFor(l catalogue.Launch) (refusedServer, bool) {
 	for _, r := range refusedServers {
 		if l.Transport == catalogue.TransportStdio {
-			for _, word := range append([]string{path.Base(l.Command)}, l.Args...) {
-				if slices.ContainsFunc(r.commands, func(c string) bool { return strings.Contains(word, c) }) {
+			for _, word := range append([]string{l.Command}, l.Args...) {
+				if slices.Contains(r.commands, packageName(word)) {
 					return r, true
 				}
 			}
@@ -365,6 +365,18 @@ func refusedFor(l catalogue.Launch) (refusedServer, bool) {
 		}
 	}
 	return refusedServer{}, false
+}
+
+// packageName is the package a launch word names, as its runner reads it:
+// the path's last element, without a scope, a version pin, extras or a .git
+// suffix, so `@vendor/analytics-mcp@1.2`, `analytics-mcp==0.3` and a git
+// address of it all name analytics-mcp, and `my-analytics-mcp` does not.
+func packageName(word string) string {
+	name := strings.TrimSuffix(path.Base(strings.TrimSpace(word)), ".git")
+	if i := strings.IndexAny(name, "@=<>~![ "); i > 0 {
+		name = name[:i]
+	}
+	return name
 }
 
 func urlPath(raw string) string {

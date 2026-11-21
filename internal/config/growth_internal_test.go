@@ -119,11 +119,12 @@ func TestAGrowthCredentialIsNamedAtItsOwnFieldAlone(t *testing.T) {
 }
 
 // A vendor's own MCP server is refused while its product is on, matched on
-// its command or its address, and left alone while the product is off or the
-// address is only alike.
+// its package name under any pin or its address, and left alone while the
+// product is off or the name or address is only alike.
 //
-// Mutation: match a host by substring, or refuse while the product is off,
-// and a look-alike host is refused or a stored document stops validating.
+// Mutation: match a host or a package by substring, or refuse while the
+// product is off, and a look-alike is refused or a stored document stops
+// validating.
 func TestAVendorsOwnServerIsRefusedBesideItsProduct(t *testing.T) {
 	t.Parallel()
 	servers := []MCPServer{
@@ -132,13 +133,16 @@ func TestAVendorsOwnServerIsRefusedBesideItsProduct(t *testing.T) {
 		{Transport: TransportHTTP, URL: "https://mcp.facebook.com.example.net/ads"},
 		{Transport: TransportHTTP, URL: "https://mcp.facebook.com/other"},
 		{Command: "npx", Args: []string{"-y", "@vendor/analytics-mcp"}},
+		{Command: "pipx", Args: []string{"run", "google-ads-mcp==0.3.1"}},
+		{Command: "uvx", Args: []string{"--from", "git+https://github.com/example/google-ads-mcp.git", "run"}},
+		{Command: "npx", Args: []string{"-y", "my-google-ads-mcp-proxy"}},
 	}
 	on := map[string]bool{"google_ads": true, "meta_ads": true}
 	var p problems
 	checkRefused(&p, servers, func(kind string) bool { return on[kind] })
 	got := strings.Join(problemPaths(p.err()), " ")
-	if got != "mcp_servers[0] mcp_servers[1]" {
-		t.Errorf("refused %q, want the Google Ads and Meta servers alone", got)
+	if got != "mcp_servers[0] mcp_servers[1] mcp_servers[5] mcp_servers[6]" {
+		t.Errorf("refused %q, want the Google Ads servers by any pin and the Meta server alone", got)
 	}
 }
 
