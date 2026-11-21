@@ -326,6 +326,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
       ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway", "SSH"],
     ],
     ["Mobile apps", ["Expo"]],
+    ["Marketing and growth", ["Google Analytics"]],
   ]);
 });
 
