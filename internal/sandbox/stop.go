@@ -243,8 +243,9 @@ func (c *Coordinator) sayStopUnread(ctx context.Context, run PendingRun, unread 
 // readStopped reads what a stopped run's job did off its box, the job ended
 // first ([Coordinator.readBox]), reporting whether there was anything to read
 // or why not yet; [stopUnread] says why nothing was read. Nothing to read for a
-// job never started, a gone box, or a failed local read. Not yet for a silent
-// host ([ErrBoxHostSilent]) until the box timeout of silence by this node's
+// job never started, a gone box, or a failed local read. Not yet for a read
+// here that never started ([errReadUnstarted]), nor for a silent host
+// ([ErrBoxHostSilent]) until the box timeout of silence by this node's
 // clock ([Coordinator.hostSilence]) or a stop that timeout plus twice
 // [objstore.AssumedClockSkew] old; nor for a store's silence on the row's read
 // or its served notes' verdict ([ErrStoreSilent]), bounded where the host's
@@ -266,6 +267,10 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 	switch {
 	case err == nil:
 		return stoppedResult(c.fitText(ctx, run, result)), true, stopUnread{}, nil
+	case errors.Is(err, errReadUnstarted):
+		// NOT ASKED, so nothing of the box is known: the stop is kept for its retry.
+		return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			run.TurnID, err)
 	case unsettled && (!rowRead || c.hosts(run)):
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", true,

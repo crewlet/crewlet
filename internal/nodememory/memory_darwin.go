@@ -1,0 +1,18 @@
+package nodememory
+
+import (
+	"fmt"
+	"math"
+
+	"golang.org/x/sys/unix"
+)
+
+// Read reads the machine's memory from sysctl hw.memsize. Darwin
+// has no cgroups; a container on a Mac runs Linux and reads its limit there.
+func Read() (Memory, error) {
+	n, err := unix.SysctlUint64("hw.memsize")
+	if err != nil {
+		return Memory{}, fmt.Errorf("reading sysctl hw.memsize: %w", err)
+	}
+	return Memory{Bytes: int64(min(n, math.MaxInt64)), From: "sysctl hw.memsize"}, nil
+}

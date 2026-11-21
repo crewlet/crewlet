@@ -19,7 +19,7 @@ package phase
 type Phase string
 
 // The phases. Execute and Review are the turn's own two passes; Subagent,
-// Auxiliary and Judge are the scopes a seat's work spills into, each with its
+// Auxiliary, Judge and Triage are the scopes a seat's work spills into, each with its
 // own provider chain so an operator can point cheap work at a cheap model.
 //
 // `execute` names the phase although it now decides as well as acts:
@@ -42,6 +42,11 @@ const (
 	// persisting conventions consumed the whole round budget and could
 	// starve the executor's own submission entirely.
 	Onboarding Phase = "onboarding"
+	// Triage decides one wake to a busy seat from somebody other than its
+	// running run's requester (ADR-0168): a one-tool structured decision on
+	// the engine host. Its own chain because it runs on every such wake and
+	// decides only a label, so an operator points it at a cheap model.
+	Triage Phase = "triage"
 )
 
 func (p Phase) String() string { return string(p) }

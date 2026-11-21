@@ -98,7 +98,7 @@ Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox
 doing the seat's work and code work alike; this build has a harness runner for
 `claude-code` and `opencode` only. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
-`llm_judge`) — its own loop on this host, shell and editor denied, the seat's tools
+`llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
 its only working tools. A seat whose `llm` chain holds no `claude-code` or
 `opencode` entry is refused on the write ([Where the harness runs](#where-the-harness-runs)).
 
@@ -555,7 +555,7 @@ check it against the version `crewlet llm doctor` reports.
 
 ## Per-phase models
 
-Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary` and `llm_judge` each name an entry, including list-form fallback chains. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
+Phase selection resolves by `providers.llm` **key**: `llm`, `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage` each name an entry, including list-form fallback chains. The seat's code work is its executor's run, so it runs on `llm`. See [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
 
 The model goes on the harness's `--model`, so one entry is one model; per-phase models mean one entry per model:
 
@@ -581,6 +581,7 @@ roles:
     llm_review: sonnet              # the reviewer, on a cheaper model
     llm_auxiliary: haiku            # see the latency note below
     llm_judge: haiku
+    llm_triage: haiku               # a busy seat's wake triage
 ```
 
 **Entries on the same `state_dir` share one login** (one `crewlet llm login`), one set of per-seat homes and one generation, so a call on one entry never wipes a live call on another. The default `state_dir` is per provider key so unrelated entries do not collide; entries that should share must say so.
@@ -603,18 +604,19 @@ does for another harness's bundle, until it is replaced: sign the new harness in
 
 ### Auxiliary work and latency
 
-`llm_auxiliary` serves the calls around a turn: the turn-start prefetch (the knowledge query, the relevance filter, a recalled turn's rewrite), condensing a tool result too large for the conversation, and every reflection and learning pass. `llm_judge` serves the onboarding pass's round-cap [extension judge](turn-engine.md#round-cap-extension-judge), the one pass the engine extends; the executor is its harness's own run, capped by its `max_turns`. Each call is one harness process, so each pays a launch, and each has a **fixed deadline** no entry setting widens:
+`llm_auxiliary` serves the calls around a turn: the turn-start prefetch (the knowledge query, the relevance filter, a recalled turn's rewrite), condensing a tool result too large for the conversation, and every reflection and learning pass. `llm_judge` serves the onboarding pass's round-cap [extension judge](turn-engine.md#round-cap-extension-judge), the one pass the engine extends; the executor is its harness's own run, capped by its `max_turns`. `llm_triage` serves the [triage](turn-engine.md#per-phase-llm-models) of a wake that reaches a seat while its run works, from somebody other than the run's requester. Each call is one harness process, so each pays a launch, and each has a **fixed deadline** no entry setting widens:
 
 | Calls | Deadline |
 |---|---|
 | The turn-start prefetch — the knowledge query and the relevance filter, each call; a recalled turn's rewrite, the whole render | 30 s |
 | The extension judge | 30 s |
+| A busy seat's wake triage (`llm_triage`, [ADR-0168](../../adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)), the whole decision | 90 s |
 | Condensing a tool result or a payload, each piece | 60 s |
 | Each reflection and learning pass — the persist decider, the counterparty profiler, skill synthesis, refinement and promotion, episode compaction | 60 s |
 
-The entry's `timeout_seconds` caps the process; these cap the *call*; whichever ends first ends it. They are fixed because the prefetch is latency a person waits through, the judge runs on a phase already out of rounds, and a hung learning pass holds up the company's reflection. A call cut off degrades rather than fails: the prefetch goes without what it would have added (a summary falls back to the raw recalled turns), the judge falls through to the rescue it was there to avoid, the learning pass persists nothing. A slow auxiliary model quietly does less.
+The entry's `timeout_seconds` caps the process; these cap the *call*; whichever ends first ends it. They are fixed because the prefetch is latency a person waits through, the judge runs on a phase already out of rounds, the triage holds the seat's router until it answers, and a hung learning pass holds up the company's reflection. A call cut off degrades rather than fails: the prefetch goes without what it would have added (a summary falls back to the raw recalled turns), the judge falls through to the rescue it was there to avoid, the triage leaves the wake for a turn of its own, the learning pass persists nothing. A slow auxiliary model quietly does less.
 
-**Point `llm_auxiliary` and `llm_judge` at a fast, cheap model** (`haiku` on Claude Code, a small open model on OpenCode), not the seat's own: a frontier model thinking at length behind a Node launch is the shape most likely to be cut off at thirty seconds.
+**Point `llm_auxiliary`, `llm_judge` and `llm_triage` at a fast, cheap model** (`haiku` on Claude Code, a small open model on OpenCode), not the seat's own: a frontier model thinking at length behind a Node launch is the shape most likely to be cut off at thirty seconds.
 
 ---
 
@@ -2974,12 +2976,12 @@ work a person tells apart, and each choice writes every field it covers:
 |---|---|
 | Coding | the seat's `llm` |
 | Reviewing and delegations | `llm_review` and `llm_subagent` |
-| Routines and evaluations | `llm_auxiliary` and `llm_judge` |
-| Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
+| Routines and evaluations | `llm_auxiliary`, `llm_judge` and `llm_triage` |
+| Everything | the seat's `llm`, clearing the five satellites, so every job resolves to it |
 | Ask Crewlet | the head of `assistant.llm`, company-wide, with no seats, keeping its fallbacks; the model must deny web tools |
 
-Each pair is paired by what it wants: reviewing and delegated work a strong model; routines and the
-onboarding judge, under a fixed deadline, a fast one. A seat's field is written as one model, never
+Each group is grouped by what it wants: reviewing and delegated work a strong model; routines, the
+onboarding judge and the wake triage, each a bounded call under a fixed deadline, a fast one. A seat's field is written as one model, never
 a chain: a fallback it named is dropped, and the review names each one dropped. Ask Crewlet is the
 exception, because its chain is the only failover for everyone's questions: choosing its model
 replaces the first and keeps every fallback behind it, in order; its row and the review say which
@@ -3296,8 +3298,8 @@ skips all three and says so on each line.
   process. It is not a remote service, and the container image ships no harness; see
   [Installation](../getting-started/installation.md#a-harness).
 - **Latency.** Every harness run is a process launch before its first model call; a phase pays it
-  once per run, a side call once per call. Point `llm_auxiliary` and `llm_judge` at a fast, cheap
-  model; their deadlines are fixed ([Auxiliary work and latency](#auxiliary-work-and-latency)).
+  once per run, a side call once per call. Point `llm_auxiliary`, `llm_judge` and `llm_triage` at a
+  fast, cheap model; their deadlines are fixed ([Auxiliary work and latency](#auxiliary-work-and-latency)).
 - **A seat's tools are separated from another user's, not from another seat's.** The session
   directory admits the engine's own user and every seat's harness runs as that user, so what keeps
   one seat's model off another's tools is its harness's tool confinement (no shell). A profile whose

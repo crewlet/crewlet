@@ -143,6 +143,13 @@ type End struct {
 
 	Ending executorkeep.Ending `json:"ending"`
 
+	// Served is every OTHER conversation the turn served, by key: each whose
+	// wake its run read (ADR-0167), at most [MaxServed], none twice, never the
+	// turn's own. Each then reads the turn's row as a turn of its own that
+	// read it as this end applied (package doc, "A turn serves every
+	// conversation its run read"). Record version 5 ([servedVersion]).
+	Served []string `json:"served,omitempty"`
+
 	// SeenRemoval is [Capture.SeenRemoval] for the end, except that the end
 	// still applies to a row the removal did not take (one a capture of the
 	// seat's next tenure wrote since).

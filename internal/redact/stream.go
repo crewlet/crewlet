@@ -1113,12 +1113,12 @@ func (s *ruleStage) scan(text []byte, lo, at, limit int, eof bool) int {
 	done, from := at, at
 	for {
 		ev, found := s.decide(text, from, prior)
-		if pending >= 0 || s.mode == finds && found && !eof && ev.key[1] == len(text) {
+		if pending >= 0 || s.mode == finds && found && !eof && awsSpacesOpen(text, ev.key[1]) {
 			// An AWS secret's key whose separator's spaces run to the
 			// window's end: whether its pattern matches there, and where
 			// it ends, is read where they end.
 			p := pending
-			if found && ev.key[1] == len(text) && (p < 0 || ev.key[0] < p) {
+			if found && awsSpacesOpen(text, ev.key[1]) && (p < 0 || ev.key[0] < p) {
 				p = ev.key[0]
 			}
 			if !found || p <= ev.key[0] {
@@ -1200,7 +1200,7 @@ func (s *ruleStage) trusted(text []byte, ev event) bool {
 	case s.mode == finds:
 		// Its pattern's match ends at what is no space, read in the
 		// window ([ruleStage.pendingSeparator]).
-		return ev.key[1] < len(text)
+		return !awsSpacesOpen(text, ev.key[1])
 	case s.r.value != nil && ev.v[1] <= ev.v[0]:
 		// A key that names nothing: its value was looked for as far as
 		// [MaxReach] past the key, and the first byte of one read as far
@@ -1553,7 +1553,7 @@ func (s *ruleStage) pendingSeparator(text []byte, at int) int {
 // stands between, the pattern matches only once an operator follows them, and
 // the stage claims nothing until it reads where they end.
 func (s *ruleStage) openSeparator(text []byte, lo, p, limit int) int {
-	space := p + len(bytes.TrimRight(text[p:], " \t"))
+	space := awsSpacesBack(text, p)
 	head := string(text[p:space])
 	s.run = openRun{on: true, separator: true, start: lo + p, head: head}
 	if loc := s.r.pattern.FindStringIndex(head + " "); loc != nil && loc[0] == 0 && loc[1] == len(head)+1 {
@@ -1566,11 +1566,13 @@ func (s *ruleStage) openSeparator(text []byte, lo, p, limit int) int {
 // carrySeparator reads on an AWS secret's separator's spaces, and claims the
 // key and its separator once the pattern's match there is decided.
 func (s *ruleStage) carrySeparator(text []byte, lo, at, limit int, eof bool) int {
-	i := at
-	for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
-		i++
+	// A run resumed where a window ended reads an escaped break the end
+	// parted from its backslashes, which are all a run holds before an `n`.
+	for at > 0 && text[at-1] == '\\' {
+		at--
 	}
-	if i == len(text) && !eof {
+	i := awsSpaces(text, at)
+	if awsSpacesOpen(text, i) && !eof {
 		return max(i, limit)
 	}
 	if s.run.after {
@@ -1578,7 +1580,8 @@ func (s *ruleStage) carrySeparator(text []byte, lo, at, limit int, eof bool) int
 		return i
 	}
 	// The pattern decides by where the spaces end alone, not how many
-	// there are: a separator's spaces are `[ \t]*` or `[ \t]+`.
+	// there are: a separator's spaces are none or more of [awsSpace], or
+	// one or more.
 	tail := text[i:min(len(text), i+8)]
 	if len(tail) < 8 && !eof {
 		return i
@@ -1591,14 +1594,72 @@ func (s *ruleStage) carrySeparator(text []byte, lo, at, limit int, eof bool) int
 		s.run = openRun{}
 		return i
 	}
-	end := i + loc[1] - len(head)
-	if loc[1] == len(head)+len(tail) && (text[end-1] == ' ' || text[end-1] == '\t') {
+	// The spaces after its operator end where the window's read of them
+	// does, which the tail's may not.
+	end := awsSpaces(text, i+loc[1]-len(head))
+	if awsSpacesOpen(text, end) && !eof {
 		// The spaces after its operator run on too.
 		s.run.after = true
 		return s.carrySeparator(text, lo, end, limit, eof)
 	}
 	s.claimSeparator(lo + end)
 	return end
+}
+
+// awsSpaces is where the spaces of an AWS secret's separator that begin at i
+// end ([awsSpace]).
+func awsSpaces(text []byte, i int) int {
+	for i < len(text) {
+		switch {
+		case text[i] == ' ' || text[i] == '\t':
+			i++
+		case text[i] == '\\':
+			j := i
+			for j < len(text) && text[j] == '\\' {
+				j++
+			}
+			if j == len(text) || text[j] != 'n' && text[j] != 'r' {
+				return i
+			}
+			i = j + 1
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+// awsSpacesOpen reports whether spaces of an AWS secret's separator that end
+// at i may run on past the window: it ends there, or in backslashes an `n`
+// written next makes an escaped line break of.
+func awsSpacesOpen(text []byte, i int) bool {
+	for i < len(text) && text[i] == '\\' {
+		i++
+	}
+	return i == len(text)
+}
+
+// awsSpacesBack is where the spaces of an AWS secret's separator that run to
+// text's end, a backslash that may open one included, begin, p at most.
+func awsSpacesBack(text []byte, p int) int {
+	i := len(text)
+	for i > p && text[i-1] == '\\' {
+		i--
+	}
+	for i > p {
+		switch {
+		case text[i-1] == ' ' || text[i-1] == '\t':
+			i--
+		case i-2 >= p && text[i-2] == '\\' && (text[i-1] == 'n' || text[i-1] == 'r'):
+			i--
+			for i > p && text[i-1] == '\\' {
+				i--
+			}
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // claimSeparator claims an AWS secret's key and its separator, ending at end in

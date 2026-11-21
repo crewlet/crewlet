@@ -22,6 +22,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -332,7 +333,7 @@ func MaintenanceMemory(c *Cache) int64 { return c.maintMemory }
 func SetNodeMemory(c *Cache, bytes int64) {
 	c.memMu.Lock()
 	defer c.memMu.Unlock()
-	c.memSource = func() (gitproc.Memory, error) { return gitproc.Memory{Bytes: bytes, From: "the case"}, nil }
+	c.memSource = func() (nodememory.Memory, error) { return nodememory.Memory{Bytes: bytes, From: "the case"}, nil }
 }
 
 // NodeMemoryUnreadable makes every later read of the node's memory fail
@@ -340,7 +341,7 @@ func SetNodeMemory(c *Cache, bytes int64) {
 func NodeMemoryUnreadable(c *Cache, err error) {
 	c.memMu.Lock()
 	defer c.memMu.Unlock()
-	c.memSource = func() (gitproc.Memory, error) { return gitproc.Memory{}, err }
+	c.memSource = func() (nodememory.Memory, error) { return nodememory.Memory{}, err }
 }
 
 // SetMaintenanceBudget sets the node's memory to the reserve Open fixed plus
@@ -350,15 +351,23 @@ func SetMaintenanceBudget(c *Cache, n int64) {
 	bytes := n + c.memReserve
 	SetNodeMemory(c, bytes)
 	c.memMu.Lock()
-	c.memory = gitproc.Memory{Bytes: bytes, From: "the case"}
+	c.memory = nodememory.Memory{Bytes: bytes, From: "the case"}
 	c.memMu.Unlock()
 	c.maint.setBudget(n)
 }
 
 // MemoryReserve is what a node of memory bytes, whose git pool admits
-// transfers transfers and has cores read slots, keeps from background work.
-func MemoryReserve(transfers, cores int, memory int64) int64 {
-	return memoryReserve(transfers, cores, memory)
+// transfers transfers and has cores read slots and keeps engine bytes beside
+// Gitlet, keeps from background work.
+func MemoryReserve(transfers, cores int, memory, engine int64) int64 {
+	return memoryReserve(transfers, cores, memory, engine)
+}
+
+// MemoryNeeded is the least memory at and past which a node of transfers
+// transfers and cores read slots keeping engine(memory) beside Gitlet holds
+// what it keeps: what code_cache_memory_short names.
+func MemoryNeeded(transfers, cores int, engine func(memory int64) int64) int64 {
+	return memoryNeeded(transfers, cores, engine)
 }
 
 // MemoryReserved is what c keeps of the node's memory from background work,

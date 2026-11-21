@@ -175,12 +175,18 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 // count leaves the last apply loop waiting for a connection none of the
 // others will ever give back.
 func (d *DB) replicatedOptions(logs int) Options {
-	opts := d.opened
-	opts.Scratch = false
-	opts.MaxOpenConns = max(replicatedReadFloor, d.opened.readers())
-	opts.pins = logs
+	opts := d.opened.replicated(logs)
 	opts.EmbeddingDim = int(d.dim.Load())
 	return opts
+}
+
+// replicated is o as the replicated estate's handle opens it for logs logs:
+// [DB.replicatedOptions]'s pool, which [Options.NodeConnections] counts too.
+func (o Options) replicated(logs int) Options {
+	o.Scratch = false
+	o.MaxOpenConns = max(replicatedReadFloor, o.readers())
+	o.pins = logs
+	return o
 }
 
 // ReplicatedDB answers the OPEN replicated estate, or [ErrNoEstate].

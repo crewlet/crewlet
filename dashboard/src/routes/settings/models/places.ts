@@ -20,6 +20,7 @@ export const JOB_WORDS: Record<ModelJob, string> = {
   executor: "coding",
   review: "reviewing",
   judge: "evaluations",
+  triage: "message sorting",
   subagent: "delegations",
   auxiliary: "routines",
   assistant: "Ask Crewlet's chat",

@@ -282,9 +282,10 @@ roles:
     llm: sonnet                         # the seat's own model — what the executor runs on
     llm_auxiliary: haiku                # cheap/fast model for reflection
     llm_judge: haiku                    # cheap/fast model for the round-cap extension judge
+    llm_triage: haiku                   # cheap/fast model for a busy seat's wake triage
 ```
 
-Each names a `providers.llm` key (see [Providers](#providers)). Both satellite
+Each names a `providers.llm` key (see [Providers](#providers)). The satellite
 calls run under a fixed deadline and pay a harness launch each, which is why they
 want a fast model rather than the seat's own — see
 [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency).
@@ -1506,9 +1507,10 @@ store:
                                     #   one a core
 #   max_transfers: 0                #   clones, fetches and pushes served at
                                     #   once; 0 is four a process slot and no
-                                    #   more than one per 512 MiB of the node's
-                                    #   memory — a transfer holds memory for its
-                                    #   whole life, so size it to memory
+                                    #   more than one per 512 MiB of the memory
+                                    #   the executor's pools leave: a transfer
+                                    #   holds memory for its whole life, so
+                                    #   size it to memory
 #   max_checks: 4                   #   the company's checks this node runs at
                                     #   once in container cells; unset is a
                                     #   quarter of its cores, at least one; 0
@@ -1855,10 +1857,11 @@ units:
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws the seat: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be omitted: the engine picks the absent part from the seat's handle (minted once, never changes), so a renamed seat keeps its look. Every read that serves a seat to the dashboard serves the resolved look. Presentation only: no prompt, route or placement reads it. An id outside those lists, or the block on a human seat, is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
-| `llm` | string or dict | no | Named LLM provider key: **the executor's**, so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key (`llm` is it) and no `sandbox` key (the executor's run is the seat's code work). Only `claude-code` and `opencode` entries can run the executor: a seat whose chain holds neither is refused at its `llm` (a seat naming no `llm`, at the fallback entry's `agent`), naming both remedies. A chain mixing one with another harness validates with an advisory warning: a launch skips the other harness, which still serves the reviewer, workers and side passes |
+| `llm` | string or dict | no | Named LLM provider key: **the executor's**, so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `triage` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key (`llm` is it) and no `sandbox` key (the executor's run is the seat's code work). Only `claude-code` and `opencode` entries can run the executor: a seat whose chain holds neither is refused at its `llm` (a seat naming no `llm`, at the fallback entry's `agent`), naming both remedies. A chain mixing one with another harness validates with an advisory warning: a launch skips the other harness, which still serves the reviewer, workers and side passes |
 | `llm_review` / `llm_subagent` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model for the turn-start prefetch, condensing large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a harness launch under a fixed deadline, so name a fast model; see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
 | `llm_judge` | string | no | Cheap/fast model for the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge) of the onboarding pass; falls back to `llm` |
+| `llm_triage` | string | no | Cheap/fast model for the [triage](../concepts/turn-engine.md#per-phase-llm-models) of a wake that reaches the seat while its run works, from somebody other than the run's requester ([ADR-0168](../../adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)); falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window (`day`, `week`, `month`, each optional), on top of the company's. See [Token budgets](#token-budgets) |
 | `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat. Unset inherits; `false` skips reflection for its turns but still writes its episodes, which are cheap and useful to a person |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |

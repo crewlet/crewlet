@@ -61,16 +61,16 @@ func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 // THE PAGE CACHE IS READ BACK, because asking for it is not getting it.
 func TestThePageCacheIsAppliedOrReported(t *testing.T) {
 	t.Parallel()
-	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{PageCacheKiB: 8 << 10})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// 32 MiB is what the session list asks for. A driver that ignored the
-	// pragma answers with its own default, which is what this catches.
-	if got := db.Caps().PageCacheKiB; got != 32768 {
-		t.Errorf("cache_size reads back as %d KiB, want the 32768 the session "+
+	// 8 MiB is what the handle asks for. A driver that ignored the pragma
+	// answers with its own default, which is what this catches.
+	if got := db.Caps().PageCacheKiB; got != 8192 {
+		t.Errorf("cache_size reads back as %d KiB, want the 8192 the session "+
 			"list sets: a driver that ignores the pragma leaves every "+
 			"connection on its own default and nothing else would say so", got)
 	}

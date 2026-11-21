@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/googleauth"
 )
 
 // What each project runs, searched in Cloud Asset Inventory as the atlas's
@@ -138,11 +139,11 @@ func (r *atlasRead) readAssets(ctx context.Context, projects []Project) error {
 // atlasRefused reports Google refusing to mint the atlas's token: the account
 // does not exist, or the federated principal may not act as it.
 func atlasRefused(err error) bool {
-	st, ok := errors.AsType[*stageError](err)
-	if !ok || st.stage != stageImpersonation {
+	st, ok := errors.AsType[*googleauth.StageError](err)
+	if !ok || st.Stage != googleauth.StageImpersonation {
 		return false
 	}
-	status := Status(st.err)
+	status := googleauth.Status(st.Err)
 	return status == http.StatusForbidden || status == http.StatusNotFound
 }
 
@@ -150,7 +151,7 @@ func atlasRefused(err error) bool {
 // is off in the project the call is billed to, the identity project: every
 // project's search is refused alike, and the fix is the identity block.
 func serviceDisabled(err error) bool {
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	return ok && slices.Contains(api.Reasons, "SERVICE_DISABLED")
 }
 
