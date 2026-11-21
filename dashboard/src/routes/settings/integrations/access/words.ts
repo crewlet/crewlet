@@ -414,6 +414,25 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "app_store_connect tools, built in",
     issued: "never: Crewlet makes every call",
   },
+  apple_ads: {
+    name: "Apple Ads",
+    access: "Level on its ad accounts",
+    turnOn:
+      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools. Nothing is created at Apple, and the agent holds no key.",
+    off: "The agent's next Apple Ads call is refused.",
+    remove: "There is nothing to remove: the agent never held a key.",
+    rotate:
+      "The agent holds no key, so there is nothing to rotate. Replace an API user's key on the integration's page.",
+    scope: {
+      noun: "Ad accounts",
+      singular: "ad account",
+      empty: "No ad account",
+      none: "No ad accounts are reachable yet",
+      noneLink: { label: "Connect an API user", doc: "apple-ads", anchor: "connect-an-api-user" },
+    },
+    tool: "apple_ads tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */
