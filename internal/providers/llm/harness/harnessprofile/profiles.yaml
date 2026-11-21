@@ -3309,7 +3309,7 @@ kimi-code:
   # off real 401 and 429 responses to 0.42.0. What is NOT measured is a spent
   # Kimi subscription, which no profile here can produce on demand. The tool
   # route (mcp, requests) is measured on 2.3.2 — see there.
-  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0, 2.3.1 and 2.3.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  written_for: "Kimi Code CLI 2.3.x to 2.7.x, measured on 0.42.0, 2.3.1 and 2.3.2, and how a run fails on 2.7.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -3721,11 +3721,23 @@ kimi-code:
   # NO capture_token_args: this harness mints no headless token. KIMI_API_KEY is
   # the METERED Moonshot platform key and it is not read from the shell at
   # all — the vendor is explicit that `export KIMI_API_KEY=…` gives no
-  # provider its key, because credentials are read only from config.toml. So
-  # there is no api_key_env either: the variable exists and setting it would
-  # do nothing, and naming a variable the harness ignores is worse than naming
-  # none. A metered account is configured by writing the key into the
-  # credential home's config.toml, which then travels to every seat.
+  # provider its key.
+  #
+  # THE KEY IS READ FROM THE ENVIRONMENT AS PART OF A MODEL OF ITS OWN, measured
+  # on 2.3.1 and 2.7.2: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` add a
+  # provider (`__kimi_env__`) that becomes the harness's default, on Moonshot's
+  # endpoint unless `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` (kimi,
+  # openai or anthropic) name another. A name with no key fails ("provider
+  # __kimi_env__ has no credential configured"), and beside it `--model` naming
+  # any model fails ("Model … is not configured in config.toml"), so under
+  # auth.mode api-key the entry's model goes in KIMI_MODEL_NAME and model_args
+  # is not passed (api_key_model_env), with no config.toml needed. The engine
+  # owns both: set in an entry's env, they would swap its model and provider
+  # and sign it in uncounted, so config refuses them there. The endpoint's two
+  # variables say which account a key reaches (identity_env).
+  api_key_env: KIMI_MODEL_API_KEY
+  api_key_model_env: KIMI_MODEL_NAME
+  identity_env: [KIMI_MODEL_BASE_URL, KIMI_MODEL_PROVIDER_TYPE]
   #
   # THE SENTINELS ARE THIS HARNESS'S OWN CLASSIFICATION, not the vendor's prose,
   # and that is what a measurement bought. A real 429 exits 1 with
@@ -3762,6 +3774,32 @@ kimi-code:
     - sentinel: "provider.auth_error"
     - sentinel: "Invalid Authentication"
     - sentinel: "appears to be invalid or may have expired"
+  # FROM 2.7 A FAILED RUN'S CLASS IS IN ITS RECORD ALONE. Measured on 2.7.2
+  # against a stub answering 429, 401 and 500: every failure exits 1 with stderr
+  # saying only `error: failed to run prompt: Prompt turn ended with reason:
+  # failed` (print mode formats the turn's end without its error); a 401 prints
+  # nothing on stdout; and each retry of a 429 prints a `turn.step.retrying` line
+  # naming `rate_limit` there, also on a run whose next attempt answered. So
+  # neither stream says how a run ended, and the markers above go unmatched. The
+  # session's wire log does, on every run: `turn.ended`, with `reason: failed`
+  # and the harness's own class at `error.code` (`provider.rate_limit`,
+  # `provider.auth_error`, `provider.api_error`), the one 2.3.x prints on
+  # stderr. The limit and the refused sign-in are read there (`in: record`: the
+  # file `requests` names, owned by the call's directory), and the markers above
+  # stay for 2.3.x. A 429 retried to an answer ends `completed`, and one whose
+  # last attempt met a 500 ends `provider.api_error`: neither benches the entry.
+  limit_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "turn.ended"}
+        - {path: ["error", "code"], equals: "provider.rate_limit"}
+      said_path: ["error", "message"]
+  auth_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "turn.ended"}
+        - {path: ["error", "code"], equals: "provider.auth_error"}
+      said_path: ["error", "message"]
 
 hermes:
   binary: hermes

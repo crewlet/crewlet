@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -34,6 +33,9 @@ type toolRun struct {
 	// tailing is a file record's follower, stopped once the harness has exited.
 	stopTail chan struct{}
 	waitTail func()
+	// events are the record's reports of how the run ended, where the profile
+	// reads one there ([harnessprofile.EventsInRecord]); nil otherwise.
+	events *recordEvents
 
 	releaseOnce sync.Once
 	connected   bool
@@ -154,13 +156,16 @@ func (p *Provider) serveTools(
 	in.lineStream = p.profile.RouteOutput() == harnessprofile.OutputJSONL
 	in.readToEnd = in.lineStream
 	if r := p.profile.Requests; r != nil && r.Source == harnessprofile.SourceFile {
-		root := checkout.Work
-		if r.In == harnessprofile.SeedHome {
-			root = checkout.Home
+		line := t.reader.fileLine
+		if p.profile.ReadsRecordEvents() {
+			// The record's own word on how the run ended, for the limit and
+			// sign-in events looked for there ([recordEvents]).
+			t.events = &recordEvents{p: p.profile}
+			line = func(s string) { t.reader.fileLine(s); t.events.line(s) }
 		}
-		pattern := filepath.Join(root, strings.ReplaceAll(r.File, "{session}", session))
 		t.stopTail = make(chan struct{})
-		t.waitTail = tailRecord(pattern, recordOwner(r.Owner, session, checkout.Work), t.reader.fileLine, t.stopTail)
+		t.waitTail = tailRecord(recordPattern(r, checkout, session), recordOwner(r.Owner, session, checkout.Work),
+			line, t.stopTail)
 	}
 	return t, nil
 }
