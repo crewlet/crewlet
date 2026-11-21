@@ -43,18 +43,18 @@ var counterexampleShapes = [][3]string{
 	{"password: ", "", "password: "}, {`"password": "`, "", `"password": "`},
 }
 
-// settlingTexts is every text Settled is read in pieces over: transcripts of
-// every shape; the keys' corpus ([streamCorpus]'s keys, each in every
-// wrapping, a transcript's line between keys), a text of every shape a stage
-// carries, and an armour beside password's keys and runs of 32 KiB, as the
-// hold shapes set them; the counterexamples past a reach and a megabyte, at
+// settlingTexts is every text Settled is read in pieces over: transcripts;
+// the keys' corpus ([streamCorpus]'s keys in every wrapping, a transcript's
+// line between); every shape a stage carries; an armour beside password's
+// keys and 32 KiB runs; the counterexamples past a reach and a megabyte at
 // both parities; chains of keys each decided by the next key's line in every
-// wrapping, and long lines of keys before a key pending at their end; random
-// short shapes of keys, armours, escaped breaks and gutters, three where a
-// password's key follows an END on its line, [keyLineAboveABlock] and
-// [structuredText]s; and a key 64 KiB and a byte, and 128 KiB, into a line
-// under a pipe's, a word's and a quote's gutter and in a string with its
-// breaks escaped.
+// wrapping, and long lines of keys before a key pending; random short shapes,
+// three with a password's key after an END on its line, [keyLineAboveABlock]
+// and [structuredText]s; and a key a reach ([redact.MaxReach]) less a byte, a
+// reach, a reach and a byte, and two into a line under a pipe's, a word's
+// and a quote's gutter and in an escaped string, and a password's key opening
+// a string at its line's start, each also after 3, 7 and 3,010 bytes of
+// settled lines, so a settling reads it from past the start.
 func settlingTexts(r *rand.Rand) []settlingText {
 	var texts []settlingText
 	add := func(name, text string, every bool) { texts = append(texts, settlingText{name, text, every}) }
@@ -126,12 +126,22 @@ func settlingTexts(r *rand.Rand) []settlingText {
 	for i := range 2000 {
 		add(fmt.Sprintf("structured text %d", i), structuredText(r), true)
 	}
-	for _, at := range []int{64<<10 + 1, 128 << 10} {
-		pad := func(prefix string) string { return prefix + strings.Repeat("x", at-len(prefix)-1) + " " }
-		add(fmt.Sprintf("a key %d bytes into a line under a pipe", at), pad("| ")+"password: \n| hunter2secretvalue9\n| ok\n", true)
-		add(fmt.Sprintf("a key %d bytes into a line under a word's gutter", at), pad("   32\t")+"password: \n   33\thunter2secretvalue9\n   34\tok\n", true)
-		add(fmt.Sprintf("a key %d bytes into a line under a quote", at), pad(`"`)+"password: \n\"hunter2secretvalue9\n\"ok\n", true)
-		add(fmt.Sprintf("a key %d bytes into a string with its breaks escaped", at), pad(`{"log": "`)+`password:\n hunter2secretvalue9\n ok"}`+"\n", true)
+	after := func(settled string) string {
+		if settled == "" {
+			return ""
+		}
+		return fmt.Sprintf(", after %d bytes of settled lines", len(settled))
+	}
+	for _, settled := range []string{"", "ok\n", "abcdef\n", strings.Repeat("ok\n", 1000) + "hunter2x9\n"} {
+		for _, at := range []int{64<<10 - 1, 64 << 10, 64<<10 + 1, 128 << 10} {
+			pad := func(gutter string) string { return settled + gutter + strings.Repeat("x", at-len(gutter)-1) + " " }
+			add(fmt.Sprintf("a key %d bytes into a line under a pipe%s", at, after(settled)), pad("| ")+"password: \n| hunter2secretvalue9\n| ok\n", true)
+			add(fmt.Sprintf("a key %d bytes into a line under a word's gutter%s", at, after(settled)), pad("   32\t")+"password: \n   33\thunter2secretvalue9\n   34\tok\n", true)
+			add(fmt.Sprintf("a key %d bytes into a line under a quote%s", at, after(settled)), pad(`"`)+"password: \n\"hunter2secretvalue9\n\"ok\n", true)
+			add(fmt.Sprintf("a key %d bytes into a string with its breaks escaped%s", at, after(settled)), pad(`{"log": "`)+`password:\n hunter2secretvalue9\n ok"}`+"\n", true)
+		}
+		add(fmt.Sprintf("a key opening a string at its line's start%s", after(settled)),
+			settled+`"password:\n`+keyLine+`\n" +`+"\n"+keyLine[:56]+" -----END RSA PRIVATE KEY-----\n+\nok\n", true)
 	}
 	return texts
 }
@@ -242,7 +252,8 @@ func (tx settlingText) sampled(r *rand.Rand, i, n, k int) bool {
 // Mutation: hold no line for a key's block still open, and Settled falls once
 // its END arrives; hold a password's key from the line its value is decided
 // on rather than its own, and a text settles further than its point and the
-// text past it do.
+// text past it do; read a text's start as no line's start, and a key opening
+// a string at its line's start behind settled lines no longer chains.
 func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 42))
