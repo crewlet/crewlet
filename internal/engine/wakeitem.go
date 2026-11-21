@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -489,6 +490,38 @@ func (s *runSteers) carriedWakes(run sandbox.PendingRun) []runner.HeldWake {
 		for _, w := range s.openWakes(run.TurnID, n) {
 			held.Wake = w
 			out = append(out, held)
+		}
+	}
+	return out
+}
+
+// served is every other conversation run's turn served, in the order its wakes
+// were filed ([sandbox.CoordinatorOptions.Served]): the conversation of each
+// wake a step read, not the run's own, at most [executordomain.MaxServed]. Its
+// end names them, and each conversation's next turn continues the session the
+// turn kept, which holds what the wake said. A wake no step read is left to a
+// turn of its own, whose end names it; one this node cannot open is said
+// (steer_wake_key_unknown) and its conversation reads its own head.
+func (s *runSteers) served(ctx context.Context, run sandbox.PendingRun) []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, n := range run.Steer.Notes {
+		if n.WakeEnd() != types.JoinDelivered {
+			continue
+		}
+		for _, w := range s.openWakes(run.TurnID, n) {
+			if w.Conversation == "" || w.Conversation == run.ConversationKey || slices.Contains(out, w.Conversation) {
+				continue
+			}
+			if len(out) == executordomain.MaxServed {
+				log.WarnContext(ctx, "executor_end_served_bounded", "turn_id", run.TurnID, "wake_id", w.ID,
+					"detail", "the turn's run read wakes of more conversations than its end names, so this "+
+						"wake's conversation reads its own head rather than the session the turn kept")
+				continue
+			}
+			out = append(out, w.Conversation)
 		}
 	}
 	return out

@@ -2828,6 +2828,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// the relaunch's write removed it, its delivery left to a turn of its
 		// own. See wakeitem.go.
 		WakesEnded: e.runSteers.wakesEnded,
+		// AND EVERY OTHER CONVERSATION WHOSE WAKE A STEP READ is named by the
+		// turn's end, so its next turn continues the session the turn kept.
+		// See wakeitem.go.
+		Served: e.runSteers.served,
 		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
 		// wake from the run's requester about its work handed to it. See
 		// wakerouter.go.

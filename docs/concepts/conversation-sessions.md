@@ -131,6 +131,9 @@ releases the oldest end first ([`max_bytes_per_seat`](#configuration)), so it ca
 release a head before a stale sibling; the next turn then continues the kept
 session that read the conversation last, and is told the released head's ending
 like every other.
+A turn whose run read a wake of another conversation serves that one too, which
+reads its session as a head placed where the turn ended ([Code
+Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
 
 **A turn's end absorbs what its brief told.** Once a turn that kept a session of
 its own ends, the turns its brief told (the head it was handed, whether or not it

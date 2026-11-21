@@ -505,6 +505,12 @@ type CoordinatorOptions struct {
 	// under an id from the turn and the wake. Nil reports nothing.
 	WakesEnded func(ctx context.Context, run PendingRun, wakes []RunNote)
 
+	// Served is every other conversation run's turn served, each one whose
+	// wake a step of the run read, as its end names them on the executor log
+	// ([TurnEnd.Served]): the engine's to say, since only it opens a wake's
+	// seal. Nil names none.
+	Served func(ctx context.Context, run PendingRun) []string
+
 	// Busy is told a seat's runs holding it went from none to some on this
 	// node or back, or that this node let the seat go: the engine's router of
 	// the seat's held inbox follows it, reading [Coordinator.SeatRuns]. Not an
@@ -726,6 +732,8 @@ type Coordinator struct {
 	steersEnded     func(ctx context.Context, run PendingRun) error
 	steersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
 	wakesEnded      func(ctx context.Context, run PendingRun, wakes []RunNote)
+	// served is [CoordinatorOptions.Served].
+	served func(ctx context.Context, run PendingRun) []string
 	// busy is [CoordinatorOptions.Busy].
 	busy func(handle string)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
@@ -1011,6 +1019,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		steersEnded:        opts.SteersEnded,
 		steersConfirmed:    opts.SteersConfirmed,
 		wakesEnded:         opts.WakesEnded,
+		served:             opts.Served,
 		busy:               opts.Busy,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
