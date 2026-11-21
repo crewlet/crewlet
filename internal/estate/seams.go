@@ -109,7 +109,8 @@ func (w Work) strip(ctx context.Context, o op[viewsArgs, viewsPage], q worklet.V
 			incomplete = page.Listing.Incomplete
 		}
 		if after = page.Next; after == "" {
-			out.Views = append(implicit, worklet.PinnedFirst(saved)...)
+			implicit = append(implicit, worklet.PinnedFirst(saved)...)
+			out.Views = implicit
 			out.Complete, out.Incomplete = complete, incomplete
 			return out, nil
 		}
@@ -267,13 +268,14 @@ func (w Work) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 // EveryView answers every saved view, whoever owns it.
 func (w Work) EveryView(ctx context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error) {
 	var out worklet.ViewListing
+	var views []worklet.ViewRow
 	complete, incomplete := true, (*worklet.Incomplete)(nil)
 	for after := ""; ; {
 		page, err := call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone), After: after})
 		if err != nil {
 			return worklet.ViewListing{}, err
 		}
-		views := append(out.Views, page.Listing.Views...)
+		views = append(views, page.Listing.Views...)
 		out, out.Views = page.Listing, views
 		if complete = complete && page.Listing.Complete; page.Listing.Incomplete != nil {
 			incomplete = page.Listing.Incomplete
