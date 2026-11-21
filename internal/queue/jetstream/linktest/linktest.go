@@ -52,9 +52,11 @@
 // default — and acts on one account's links alone: [Link.Drop] closes them
 // and lets them redial, [Link.Cut] closes them and refuses them until
 // [Link.Mend], and [Link.Blackhole] stops reading them either way without
-// closing them, until [Link.Mend]. A connection that binds no account — a
-// client's CONNECT names none, and a TLS or websocket link shows the relay
-// none — is never one of them. Every link the package builds does this, and
+// closing them, until [Link.Mend]. A client's connection binds by the name it
+// gives ([Client]), so a case acts on one of a node's connections to an
+// external server alone. A connection that binds none — a client that gives
+// no name, and a TLS or websocket link, which shows the relay nothing — is
+// never one of them. Every link the package builds does this, and
 // for a leaf that dials again only behind a member that advertises the link
 // ([Link]'s "The link is the only way").
 //
@@ -1644,14 +1646,24 @@ func wholeChunks(z []byte) int {
 	return n
 }
 
-// remoteAccount is the account a CONNECT line names, the empty name for one
-// that names none.
+// remoteAccount is the account a CONNECT line names — a leaf's remote account,
+// or a named client's [Client] — and the empty name for one that names none.
 func remoteAccount(line []byte) string {
 	var connect struct {
 		RemoteAccount string `json:"remote_account"`
+		Name          string `json:"name"`
 	}
 	if json.Unmarshal(bytes.TrimSpace(line[len("CONNECT "):]), &connect) != nil {
 		return ""
 	}
+	if connect.RemoteAccount == "" && connect.Name != "" {
+		return Client(connect.Name)
+	}
 	return connect.RemoteAccount
 }
+
+// Client is the name a client's connection binds on a link, for the per-account
+// controls ([Link.Drop], [Link.Cut], [Link.Blackhole]) and counts: the name it
+// gives the server in its CONNECT (nats.Name), apart from every account name,
+// none of which holds a space.
+func Client(name string) string { return "client " + name }
