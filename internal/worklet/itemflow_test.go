@@ -247,7 +247,7 @@ func TestAnItemInProgressSaysWhyItIsNotMoving(t *testing.T) {
 			want: &worklet.Flow{State: worklet.FlowWaiting, Cause: worklet.FlowCauseQuestion},
 		},
 		"the assignee's run parked on it is waiting": {
-			posture: live(map[string]worklet.SeatPosture{"ada": {Parked: "it", ParkedSince: passed}}),
+			posture: live(map[string]worklet.SeatPosture{"ada": {Parked: []worklet.PostureItem{{Item: "it", Cause: worklet.FlowCauseParked, Since: passed}}, Full: true}}),
 			want:    &worklet.Flow{State: worklet.FlowWaiting, Cause: worklet.FlowCauseParked, Since: &passed},
 			live:    true,
 		},
@@ -285,7 +285,7 @@ func TestAnItemInProgressSaysWhyItIsNotMoving(t *testing.T) {
 			live: true,
 		},
 		"the assignee's run parked on another item holds this one": {
-			posture: live(map[string]worklet.SeatPosture{"ada": {Parked: "other", ParkedSince: passed}}),
+			posture: live(map[string]worklet.SeatPosture{"ada": {Parked: []worklet.PostureItem{{Item: "other", Cause: worklet.FlowCauseParked, Since: passed}}, Full: true}}),
 			want:    &worklet.Flow{State: worklet.FlowHeld, Cause: worklet.FlowCauseParkedElsewhere, Since: &passed},
 			live:    true,
 		},

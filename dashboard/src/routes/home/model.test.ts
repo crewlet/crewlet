@@ -313,7 +313,7 @@ describe("the figures", () => {
   // an item to hand).
   test("a stopped seat is the reader's decision only where they can act on it", () => {
     const onItem = {
-      row: { role: "SWE", turn: { work_item: { id: "t-1", key: "ENG-1" } } } as never,
+      row: { role: "SWE", turns: [{ work_item: { id: "t-1", key: "ENG-1" } }] } as never,
     };
     const between = { row: { role: "DevRel" } as never };
     const configurer = { configWrite: true, acts: [] };

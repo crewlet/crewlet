@@ -97,6 +97,7 @@ import type {
   WorkInboxNotice,
   WorkWithdrawn,
 } from "~/protocol/index.ts";
+import { callOf, turnOf, turnsOf } from "~/lib/seatturn.ts";
 
 export type InboxRow =
   | {
@@ -578,7 +579,7 @@ export function rowItem(row: InboxRow): ItemRef | null {
         }
         case "seat": {
           const r = row.subject.seat.row;
-          const ref = r.turn?.work_item ?? r.live_call?.work_item;
+          const ref = turnOf(r)?.work_item ?? callOf(r)?.work_item;
           return ref ? turnItem(ref) : null;
         }
       }
@@ -622,7 +623,7 @@ export function rowKey(row: InboxRow): string {
           return row.subject.run.work_item?.key ?? "";
         case "seat": {
           const r = row.subject.seat.row;
-          return r.turn?.work_item?.key ?? r.live_call?.work_item?.key ?? "";
+          return turnOf(r)?.work_item?.key ?? callOf(r)?.work_item?.key ?? "";
         }
       }
       break;
@@ -1444,15 +1445,16 @@ export function followThrough(
   const f = answered.followed_up;
   if (f) return { state: "acted", at: f.at };
   if (!seat) return null;
-  const on = seat.turn?.work_item;
-  if (
-    seat.activity === "working" &&
-    on &&
-    (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
-  ) {
-    return seat.turn?.started_at
-      ? { state: "acting", at: seat.turn.started_at }
-      : { state: "acting" };
+  // ANY OF ITS TURNS ON THE ASKED ITEM: a seat may run several at once.
+  const acting = turnsOf(seat).find((t) => {
+    const on = t.work_item;
+    return (
+      !!on &&
+      (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
+    );
+  });
+  if (seat.activity === "working" && acting) {
+    return acting.started_at ? { state: "acting", at: acting.started_at } : { state: "acting" };
   }
   if (seat.paused) return { state: "held", reason: "paused" };
   if (seat.activity === "stopped") return { state: "held", reason: "stopped" };

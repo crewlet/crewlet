@@ -7,15 +7,15 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// The seat's inbox is held while a run holds the seat, or an answer is owed: a
-// pause hold under one reason ([SeatHold]) for as long as the seat has a run in
-// [Holding] or owes a resume or an ending's finish, lifted the moment it has
-// neither, at the transition itself. Held, the mail waits on the broker in
+// The seat's inbox is held while its runs hold every slot of its cap, or an
+// answer is owed: a pause hold under one reason ([SeatHold]) for as long as the
+// seat has its cap of runs in [Holding] or owes a resume or an ending's finish,
+// lifted the moment it has neither, at the transition itself. Held, the mail waits on the broker in
 // order at no cost, read by the engine's router of the seat without being
 // consumed (ADR-0167); a delivery that reaches a held seat anyway is deferred. A
-// seat busy coding starts no other turn, a person's answer to another run
+// seat at its cap starts no other run, a person's answer to another run
 // included; an answer by turn travels on the control topic and its resume waits
-// ([SeatCoding]). This node's alone; each hold names its inbox attachment
+// ([SeatFull], [ConversationBusy]). This node's alone; each hold names its inbox attachment
 // ([queue.Attachment]). See the package doc, "The seat's inbox hold".
 
 // SeatHold takes and lifts the hold on a seat's inbox (see the package doc,
@@ -31,11 +31,12 @@ type SeatHold interface {
 	Release(ctx context.Context, handle string, inbox queue.Attachment) error
 }
 
-// wantsHoldLocked reports whether a seat's inbox must be held: a run holds the
-// seat, or the seat owes one of its runs an answer's resume. The caller holds
-// c.mu.
+// wantsHoldLocked reports whether a seat's inbox must be held: its runs hold
+// every slot of its cap (one, by default), a delivery waits on a conversation
+// one of them works ([Coordinator.HoldForConversation]), or the seat owes one
+// of its runs an answer's resume. The caller holds c.mu.
 func (c *Coordinator) wantsHoldLocked(handle string) bool {
-	return c.runs[handle].holding > 0 || len(c.owed[handle]) > 0
+	return c.runs[handle].holding >= c.capOf(handle) || len(c.waiting[handle]) > 0 || len(c.owed[handle]) > 0
 }
 
 // HoldSeat brings a seat's inbox hold into line with what the seat needs, for

@@ -17,9 +17,9 @@ import (
 //
 // Read off the struct's own JSON tags, so a field added later is held to this
 // without anybody remembering to list it. The roster half writes everything
-// but the call in flight, which has its own question.
+// but the calls in flight, which have their own question.
 func TestEveryOverlayFieldIsWrittenOntoTheRow(t *testing.T) {
-	callOnly := map[string]bool{"live_call": true, "live_call_seq": true}
+	callOnly := map[string]bool{"live_calls": true, "live_call_seq": true}
 	whole := map[string]any{}
 	mergeOverlay(whole, Overlay{})
 	roster := map[string]any{}

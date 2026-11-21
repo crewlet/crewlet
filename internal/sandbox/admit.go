@@ -21,9 +21,10 @@ import (
 // A refusal is a [*TurnRefused] when it names what would lift it
 // ([Coordinator.waitOwed]), so callers key on the condition. It is told the
 // [ResumeRoute] because the first model call is on a different chain on each
-// (reviewer's, relaunch's). Admitted, it returns the turn's context (a drain
-// may end it) and the release.
-type TurnGate func(ctx context.Context, handle string, route ResumeRoute) (context.Context, func(), error)
+// (reviewer's, relaunch's), and the conversation the turn works in, "" for a
+// completion, whose run already holds the conversation's one turn (ADR-0169).
+// Admitted, it returns the turn's context (a drain may end it) and the release.
+type TurnGate func(ctx context.Context, handle, conversation string, route ResumeRoute) (context.Context, func(), error)
 
 // ResumeRoute is which of the two roads a resume takes into its turn, as its
 // [TurnGate] is told it.
@@ -77,16 +78,17 @@ type admitted struct {
 	release func()
 }
 
-// admitTurn asks the gate to admit a turn on handle's seat, by route.
+// admitTurn asks the gate to admit a turn of conversation on handle's seat, by
+// route.
 //
 // A coordinator built without a gate admits every turn under the caller's
 // context: one with no node beneath it, which a test's is, has no admission to
 // pass. The engine always passes its node's ([CoordinatorOptions.Gate]).
-func (c *Coordinator) admitTurn(ctx context.Context, handle string, route ResumeRoute) (admitted, error) {
+func (c *Coordinator) admitTurn(ctx context.Context, handle, conversation string, route ResumeRoute) (admitted, error) {
 	if c.gate == nil {
 		return admitted{ctx: ctx, release: func() {}}, nil
 	}
-	turnCtx, release, err := c.gate(ctx, handle, route)
+	turnCtx, release, err := c.gate(ctx, handle, conversation, route)
 	if err != nil {
 		return admitted{}, err
 	}

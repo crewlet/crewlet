@@ -119,6 +119,15 @@ type Dispatcher struct {
 	// any seat.
 	HoldSandbox func(ctx context.Context, handle string)
 
+	// ConversationBusy reports whether one of the seat's runs works the
+	// delivery's conversation, asked only below the seat's cap
+	// ([inbox.Conditions.ConversationBusy]), and HoldConversation asks the
+	// coordinator to hold the inbox while it does (ADR-0169). An error is read
+	// as busy: a store that cannot say must not start a second turn of it.
+	// Nil asks nothing.
+	ConversationBusy func(ctx context.Context, handle, conversation string) (bool, error)
+	HoldConversation func(ctx context.Context, handle, conversation string)
+
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, or leaves less room than the delivery's launch needs, and
 	// reports the deferral reason naming the window — see budgetpark.go.
@@ -507,7 +516,18 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	if len(evs) == 0 {
 		return queue.Ack()
 	}
-	screening := inbox.Screen(d.conditions(handle), evs)
+	conditions := d.conditions(handle)
+	conversation := conversationIdentityOf(evs)
+	if !conditions.SeatHeldBySandbox && d.ConversationBusy != nil {
+		busy, err := d.ConversationBusy(ctx, handle, conversation)
+		if err != nil {
+			log.WarnContext(ctx, "seat_conversation_busy_unread", "seat", handle, "error", err.Error(),
+				"detail", "the delivery is deferred rather than run beside a run that may work its conversation")
+			busy = true
+		}
+		conditions.ConversationBusy = busy
+	}
+	screening := inbox.Screen(conditions, evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
 	}
@@ -545,7 +565,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		// the inbox the delivery was just fetched from, and with nothing
 		// stopping the consumer the copy came straight back, for the
 		// length of the run. See sandbox.SeatHold.
-		if d.HoldSandbox != nil {
+		switch {
+		case !conditions.SeatHeldBySandbox && conditions.ConversationBusy:
+			if d.HoldConversation != nil {
+				d.HoldConversation(ctx, handle, conversation)
+			}
+		case d.HoldSandbox != nil:
 			d.HoldSandbox(ctx, handle)
 		}
 		return screening.Result()

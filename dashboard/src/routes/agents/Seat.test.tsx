@@ -486,58 +486,62 @@ const WORKING: Partial<AgentRow> = {
   activity: "working",
   stopped_reason: null,
   paused: null,
-  turn: {
-    turn_id: "t-7",
-    work_item: { backend: "native", id: "i-412", key: "ENG-412", project: "ENG" },
-    started_at: "2026-09-21T09:45:50Z",
-    stage: "phase",
-  },
-  live_call: {
-    versions: ZERO_VERSIONS,
-    turn_id: "t-7",
-    phase: "execute",
-    iteration: 1,
-    model: "anthropic-main",
-    in_progress: true,
-    round_num: 6,
-    rounds_used: 7,
-    max_rounds: 25,
-    started_at: "2026-09-21T09:46:00Z",
-    updated_at: "2026-09-21T09:51:31Z",
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 2_500,
-    tool_executions: [
-      {
-        name: "knowledge.search",
-        round: 1,
-        arguments: { q: "PXE retry backoff" },
-        result: "",
-        success: true,
-        started_at: "2026-09-21T09:48:02Z",
-        duration_ms: 300,
-      },
-      {
-        name: "sandbox.run",
-        round: 5,
-        arguments: { cmd: "go test ./provisioner/..." },
-        result: "exit status 1",
-        success: false,
-        error: "exit status 1",
-        started_at: "2026-09-21T09:49:30Z",
-        duration_ms: 85_000,
-      },
-    ],
-    running_calls: [
-      {
-        id: "call-7",
-        round: 7,
-        name: "sandbox.run",
-        arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
-        started_at: "2026-09-21T09:51:31Z",
-      },
-    ],
-  } as AgentRow["live_call"],
+  turns: [
+    {
+      turn_id: "t-7",
+      work_item: { backend: "native", id: "i-412", key: "ENG-412", project: "ENG" },
+      started_at: "2026-09-21T09:45:50Z",
+      stage: "phase",
+    },
+  ],
+  live_calls: [
+    {
+      versions: ZERO_VERSIONS,
+      turn_id: "t-7",
+      phase: "execute",
+      iteration: 1,
+      model: "anthropic-main",
+      in_progress: true,
+      round_num: 6,
+      rounds_used: 7,
+      max_rounds: 25,
+      started_at: "2026-09-21T09:46:00Z",
+      updated_at: "2026-09-21T09:51:31Z",
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 2_500,
+      tool_executions: [
+        {
+          name: "knowledge.search",
+          round: 1,
+          arguments: { q: "PXE retry backoff" },
+          result: "",
+          success: true,
+          started_at: "2026-09-21T09:48:02Z",
+          duration_ms: 300,
+        },
+        {
+          name: "sandbox.run",
+          round: 5,
+          arguments: { cmd: "go test ./provisioner/..." },
+          result: "exit status 1",
+          success: false,
+          error: "exit status 1",
+          started_at: "2026-09-21T09:49:30Z",
+          duration_ms: 85_000,
+        },
+      ],
+      running_calls: [
+        {
+          id: "call-7",
+          round: 7,
+          name: "sandbox.run",
+          arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
+          started_at: "2026-09-21T09:51:31Z",
+        },
+      ],
+    } as NonNullable<AgentRow["live_calls"]>[number],
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -1241,7 +1245,7 @@ test("a working seat's page bar watches its turn, and an idle one's offers nothi
   cleanup();
   mount("#/company/org/seats/swe", {
     shell: true,
-    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+    agents: [{ ...WORKING, activity: "idle", turns: [], live_calls: [] }],
   });
   await settle();
   const idle = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
@@ -1264,7 +1268,7 @@ test("the Activity tab carries a running mark, in words too, only while the seat
 
   cleanup();
   mount("#/company/org/seats/swe", {
-    agents: [{ ...WORKING, activity: "needs", live_call: null }],
+    agents: [{ ...WORKING, activity: "needs", live_calls: [] }],
   });
   await settle();
   const quiet = screen.getByRole("tab", { name: /^Activity/ });
@@ -1533,8 +1537,8 @@ test("the memory card counts what the seat holds, never the page it was sent", a
 test("a turn on a task whose key another claimed names and opens that task, not the claimant", async () => {
   const onDuplicate = structuredClone(WORKING);
   const ref = { backend: "native", id: "t-dup", key: "ENG-412", project: "ENG" };
-  onDuplicate.turn!.work_item = ref;
-  onDuplicate.live_call!.work_item = ref;
+  onDuplicate.turns![0]!.work_item = ref;
+  onDuplicate.live_calls![0]!.work_item = ref;
   mount("#/company/org/seats/swe", {
     agents: [onDuplicate],
     answers: {
@@ -2139,7 +2143,7 @@ test("the turns tab leads with the running turn and titles the transcripts", asy
 // on that, a sibling's finished turn landed among this seat's transcripts.
 test("the turns tab takes a streamed phase by the seat's id, not a sibling's by its role", async () => {
   const { store } = mount("#/company/org/seats/swe?tab=turns", {
-    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+    agents: [{ ...WORKING, activity: "idle", turns: [], live_calls: [] }],
   });
   await settle();
   const streamed = (id: string, turn: string, agentId: string) => ({
@@ -2219,7 +2223,7 @@ test("a running turn's card stays put, its phases open, across a phase boundary"
   ).toEqual([true]);
   act(() => {
     store.applyEvent(completed("execute", "2026-09-21T09:52:00Z") as never);
-    store.applyAgents([{ ...WORKING, live_call: null }] as never);
+    store.applyAgents([{ ...WORKING, live_calls: [] }] as never);
   });
   const between = turnCardIn("Running now");
   expect(between.card, "the same card, in Running now, not remounted").toBe(before.card);
@@ -2231,13 +2235,15 @@ test("a running turn's card stays put, its phases open, across a phase boundary"
     store.applyAgents([
       {
         ...WORKING,
-        live_call: {
-          ...WORKING.live_call!,
-          phase: "review",
-          tool_executions: [],
-          running_calls: null,
-          started_at: "2026-09-21T09:52:05Z",
-        },
+        live_calls: [
+          {
+            ...WORKING.live_calls![0]!,
+            phase: "review",
+            tool_executions: [],
+            running_calls: null,
+            started_at: "2026-09-21T09:52:05Z",
+          },
+        ],
       },
     ] as never),
   );
@@ -2259,13 +2265,13 @@ test("a turn that ends keeps the phases its reader watched open in the transcrip
     store.applyAgents([
       {
         ...WORKING,
-        live_call: { ...WORKING.live_call!, phase: "review", tool_executions: [] },
+        live_calls: [{ ...WORKING.live_calls![0]!, phase: "review", tool_executions: [] }],
       },
     ] as never);
   });
   act(() => {
     store.applyEvent(completed("review", "2026-09-21T09:53:00Z") as never);
-    store.applyAgents([{ ...WORKING, activity: "idle", turn: null, live_call: null }] as never);
+    store.applyAgents([{ ...WORKING, activity: "idle", turns: [], live_calls: [] }] as never);
   });
   expect(screen.queryByRole("heading", { name: "Running now" })).toBeNull();
   const ended = turnCardIn("Transcripts · newest first");

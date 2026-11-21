@@ -62,8 +62,8 @@ var overlayFamily = map[string]class{
 	"activity": status, "stopped_reason": status, "current_phase": status,
 	"current_iteration": status, "live_call_seq": status, "last_error": status,
 	"budget": status, "last_turn": status, "paused": status, "provider_limit": status,
-	"waiting":   status,
-	"live_call": delegated, "turn": delegated,
+	"waiting":    status,
+	"live_calls": delegated, "turns": delegated,
 }
 
 // turnFields classifies a [LiveTurn]. The basis is the RULE that charged the
@@ -246,8 +246,8 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 		{reflect.TypeFor[ExecutorEntry](), "the executor"},
 	}
 	delegatedTo := map[string][]reflect.Type{
-		"live_call": {reflect.TypeFor[*LiveCall](), reflect.TypeFor[any]()},
-		"turn":      {reflect.TypeFor[*LiveTurn]()},
+		"live_calls": {reflect.TypeFor[[]*LiveCall](), reflect.TypeFor[[]any]()},
+		"turns":      {reflect.TypeFor[[]LiveTurn]()},
 	}
 	reached := map[string]map[string]bool{}
 	reachedNested := map[reflect.Type]map[string]bool{}
@@ -457,15 +457,15 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 		{"a lean call carrying its rounds and runs", call.Without(held)},
 		{"a lean call holding everything", call.Without(call.Versions)},
 	} {
-		row := map[string]any{"agent_id": "agent-1", "live_call": tc.call,
-			"turn": &LiveTurn{TurnID: "turn-1", WorkItem: call.WorkItem}}
+		row := map[string]any{"agent_id": "agent-1", "live_calls": []any{tc.call},
+			"turns": []LiveTurn{{TurnID: "turn-1", WorkItem: call.WorkItem}}}
 		status := wire(t, MaskRow(row, Reach{}))
-		masked, _ := status["live_call"].(map[string]any)
+		masked, _ := soleEntry(status["live_calls"]).(map[string]any)
 		noBody(t, tc.name, masked)
 		if _, ok := masked["work_item"]; ok {
 			t.Errorf("%s: a reader without Worklet was sent the call's work item", tc.name)
 		}
-		turn, _ := status["turn"].(map[string]any)
+		turn, _ := soleEntry(status["turns"]).(map[string]any)
 		if _, ok := turn["work_item"]; ok || turn == nil {
 			t.Errorf("%s: a reader without Worklet was sent the turn %v, want "+
 				"it without its work item", tc.name, turn)
@@ -474,9 +474,9 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 			t.Errorf("%s: MaskCall alone lost the call: %v", tc.name, got)
 		}
 		whole := wire(t, MaskRow(row, Reach{Body: true, Tracker: true}))
-		if !reflect.DeepEqual(whole["live_call"], wire(t, tc.call)) {
+		if got := soleEntry(whole["live_calls"]); !reflect.DeepEqual(got, wire(t, tc.call)) {
 			t.Errorf("%s: a reader of the trail was not sent the call as the push "+
-				"carried it:\n got %v\nwant %v", tc.name, whole["live_call"], wire(t, tc.call))
+				"carried it:\n got %v\nwant %v", tc.name, got, wire(t, tc.call))
 		}
 	}
 	for _, detail := range []string{"rounds", "invocations"} {
@@ -487,12 +487,22 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 			t.Errorf("a lean call that carried its %s lost them masked", detail)
 		}
 	}
-	for name, none := range map[string]any{"nil": nil, "a typed nil": (*LiveCall)(nil)} {
-		row := MaskRow(map[string]any{"agent_id": "agent-1", "live_call": none}, Reach{})
-		if raw, _ := json.Marshal(row["live_call"]); string(raw) != "null" {
-			t.Errorf("%s call was masked to %s, want null", name, raw)
+	for name, none := range map[string]any{"nil": []any{nil}, "a typed nil": []*LiveCall{nil},
+		"no list": nil} {
+		row := MaskRow(map[string]any{"agent_id": "agent-1", "live_calls": none}, Reach{})
+		if raw, _ := json.Marshal(row["live_calls"]); string(raw) != "[]" {
+			t.Errorf("%s call was masked to %s, want []", name, raw)
 		}
 	}
+}
+
+// soleEntry is the one entry of a list a row was sent, nil unless it is
+// exactly one.
+func soleEntry(v any) any {
+	if list, _ := v.([]any); len(list) == 1 {
+		return list[0]
+	}
+	return nil
 }
 
 // A MASK NEVER WRITES THROUGH TO THE PROJECTION.
@@ -517,10 +527,10 @@ func TestAMaskNeverWritesThroughToTheProjection(t *testing.T) {
 	call := fullCall()
 	held := call.Versions
 	held.Response--
-	row := map[string]any{"agent_id": "agent-1", "live_call": call.Without(held),
-		"turn": &LiveTurn{TurnID: "turn-1", WorkItem: call.WorkItem}}
-	overlay := &Overlay{LiveCall: fullCall(), Turn: &LiveTurn{TurnID: "turn-1",
-		WorkItem: call.WorkItem}}
+	row := map[string]any{"agent_id": "agent-1", "live_calls": []any{call.Without(held)},
+		"turns": []LiveTurn{{TurnID: "turn-1", WorkItem: call.WorkItem}}}
+	overlay := &Overlay{LiveCalls: []*LiveCall{fullCall()}, Turns: []LiveTurn{{TurnID: "turn-1",
+		WorkItem: call.WorkItem}}}
 	before := []string{encode(call), encode(row), encode(overlay)}
 	_ = MaskCall(call, Reach{})
 	_ = MaskRow(row, Reach{})
@@ -535,26 +545,28 @@ func TestAMaskNeverWritesThroughToTheProjection(t *testing.T) {
 	}
 }
 
-// AN OVERLAY VIEW STATES ITS LIVE CALL AND ITS TURN ALWAYS.
+// AN OVERLAY VIEW STATES ITS LIVE CALLS AND ITS TURNS ALWAYS.
 //
 // A client merges an overlay onto the row it holds, so an omitted key reads as
-// "unchanged": a seat between calls masked to a view without `live_call` would
-// keep the call it had on screen. Masked, a nil call and a nil turn are still
-// sent as null.
+// "unchanged": a seat between calls masked to a view without `live_calls` would
+// keep the calls it had on screen. Masked, no call and no turn are still sent,
+// as empty lists, for every reach.
 //
-// Mutation: give the view's shadows omitempty, and this fails.
-func TestAnOverlayViewStatesLiveCallAndTurnAlways(t *testing.T) {
+// Mutation: give the view's shadows omitempty, or let either list go out as
+// null, and this fails.
+func TestAnOverlayViewStatesLiveCallsAndTurnsAlways(t *testing.T) {
 	t.Parallel()
-	got := wire(t, (&Overlay{}).For(Reach{}))
-	for _, key := range []string{"live_call", "turn"} {
-		v, ok := got[key]
-		if !ok || v != nil {
-			t.Errorf("a masked overlay with no %s sent %v (present %v), want null",
-				key, v, ok)
+	for _, reach := range []Reach{{}, {Body: true, Tracker: true, Config: true}} {
+		got := wire(t, (&Overlay{}).For(reach))
+		for _, key := range []string{"live_calls", "turns"} {
+			v, ok := got[key].([]any)
+			if !ok || len(v) != 0 {
+				t.Errorf("a masked overlay (%+v) with no %s sent %v, want []", reach, key, got[key])
+			}
 		}
 	}
-	masked := wire(t, (&Overlay{LiveCall: fullCall()}).For(Reach{}))
-	call, _ := masked["live_call"].(map[string]any)
+	masked := wire(t, (&Overlay{LiveCalls: []*LiveCall{fullCall()}}).For(Reach{}))
+	call, _ := soleEntry(masked["live_calls"]).(map[string]any)
 	noBody(t, "a masked overlay's call", call)
 }
 

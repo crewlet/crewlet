@@ -275,7 +275,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, delivery []*even
 func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
-		r, starved, err = m.starved(ctx, floor.tokens())
+		r, starved, err = m.starved(ctx, floor.needs())
 	}
 	return r, refusing, starved, err
 }
@@ -306,7 +306,7 @@ func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, refu
 		return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End,
 			Window: launchRefusedIn(refused, r)}, true
 	}
-	r, starved, err := m.starved(ctx, floor.tokens())
+	r, starved, err := m.starved(ctx, floor.needs())
 	if err != nil || !starved {
 		return sandbox.Refusal{}, false
 	}
@@ -345,6 +345,10 @@ func starvedReason(r refusal, floor launchFloor) string {
 	case floor.brief > 0:
 		need = fmt.Sprintf("the %d an executor launch needs (its brief about %d beside "+
 			"turn_engine.executor_min_budget_tokens, %d)", floor.tokens(), floor.brief, floor.static)
+	}
+	if floor.beside > 0 {
+		need = fmt.Sprintf("%s and the %d the seat's other running runs are counted to spend",
+			need, floor.beside)
 	}
 	return fmt.Sprintf("budget: %s window %s leaves %d tokens, below %s; resets %s",
 		r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), need, rfc3339(r.Window.End))

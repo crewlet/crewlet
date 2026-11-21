@@ -155,10 +155,13 @@ func TestARunIsListedUnderNoSecretItsTurnsAskCarried(t *testing.T) {
 	swe := o.AgentSeatByHandle("swe")
 	swe.LLM = seat.LLM
 	c.Org = o
-	e := launchReadyEngine(t, c)
 	reg := partyRegistry(o, nil)
-	e.notify.registry = reg
 	for _, p := range planted(t) {
+		// EACH SHAPE IS A TURN OF ITS OWN on an engine of its own: every one is
+		// asked in one conversation, which a seat's run holding it refuses a
+		// second run of (ADR-0169).
+		e := launchReadyEngine(t, c)
+		e.notify.registry = reg
 		body := "the staging login is " + p.text + "\nuse it for the release"
 		wake := deliveredTo(t, o, reg, "swe", chatMessageSaying(t, "ada", body))
 		tel, err := e.describeTurn(t.Context(), c, Request{

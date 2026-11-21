@@ -73,8 +73,8 @@ func (e *Engine) heardWaiting(ctx context.Context, subject string, payload []byt
 }
 
 // seatBusy reports whether a message reaching the seat now waits for what it
-// is already doing: a delivery dispatched on this node, or an executor holding
-// it. A paused or parked seat is stopped, not busy; the Live page says so.
+// is already doing: a delivery dispatched on this node, or executors holding
+// every slot of its cap. A paused or parked seat is stopped, not busy; the Live page says so.
 func (e *Engine) seatBusy(handle string) bool {
 	d := e.dispatch
 	if d == nil {

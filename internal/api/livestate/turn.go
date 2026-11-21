@@ -1,34 +1,63 @@
 package livestate
 
-import "github.com/crewlet/crewlet/internal/events/types"
+import (
+	"cmp"
+	"slices"
 
-// The turn a seat is on, and the last one it ended.
+	"github.com/crewlet/crewlet/internal/events/types"
+)
+
+// The turns a seat is on, and the last one it ended.
 //
 // A LIVE CALL IS NOT A TURN: it is cleared when its phase completes, so a seat
 // between phases or waiting on a detached executor would show nothing, and a
 // parked turn's suspension publishes a completion that read as the turn's end.
-// The turn is held on its own, from `agent_turn_started` to the event that ends
-// it, and the stage says where in it the seat is.
+// A turn is held on its own, from `agent_turn_started` to the event that ends
+// it, and its stage says where in it the seat is.
+
+// SEVERAL AT ONCE: a seat runs up to its sandbox.max_concurrent_runs turns, at
+// most one per conversation, so a turn is held by its id beside the others and
+// no event of one turn is read against another's. An event of a turn the seat
+// does not hold opens it, however old, unless its end was seen.
 //
 // ORDERING. Start, phases and completion travel on different subjects and can
 // overtake one another. Two guards, as for the in-flight call: a stage moves
-// only on an event not older than the one that set it, and an ENDED turn is
-// remembered by id so a straggler cannot put it back on the seat.
+// only on an event not older than the one that set THAT turn's stage, and an
+// ENDED turn is remembered by id so a straggler cannot put it back on the seat.
+
+// heldTurn is a turn the seat is on and `at`, the instant of the event that
+// last moved it: the turn's own reorder guard.
+type heldTurn struct {
+	turn *LiveTurn
+	at   stamp
+}
+
+// turnList is the seat's turns for a reader, oldest first by start, `[]` for
+// none: copies, so the list handed out cannot change under it.
+func (a *agentLive) turnList() []LiveTurn {
+	out := make([]LiveTurn, 0, len(a.turns))
+	for _, held := range a.turns {
+		out = append(out, *held.turn.clone())
+	}
+	slices.SortFunc(out, func(x, y LiveTurn) int {
+		return cmp.Or(newStamp(x.StartedAt).chronological(newStamp(y.StartedAt)),
+			cmp.Compare(x.TurnID, y.TurnID))
+	})
+	return out
+}
 
 // touchTurn records that a step of turn `turnID` happened on this seat, at
 // `stage`.
 //
-// It creates the turn when the seat is on none — the start may have been
-// missed or overtaken — and replaces a turn the seat was on only with a NEWER
-// one: an event of an older turn arriving late is not the seat moving back to
-// it.
+// It opens the turn when the seat does not hold it — the start may have been
+// missed or overtaken — beside any other turn the seat is on.
 func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage) {
 	s.markTurn(agent, env, payload, stage, true)
 }
 
 // noteTurn records an event that names turn `turnID` without being one of its
 // own steps — see [phaseStage] — and so MOVES NO STAGE: it opens the turn at
-// `stage` on a seat that holds none, as [LiveState.touchTurn] does, and leaves
+// `stage` on a seat that does not hold it, as [LiveState.touchTurn] does, and leaves
 // the stage of a turn the seat holds, and the instant that stage was set,
 // where the turn's own steps put them. What it still states is what every
 // event of the turn states: the node that published it, the item the turn is
@@ -77,34 +106,27 @@ func (s *LiveState) markTurn(agent *agentLive, env Envelope, payload map[string]
 	if ended, ok := s.endedTurns.get(turnID); ok && (at.empty() || !at.after(ended)) {
 		return
 	}
-	cur := agent.turn
-	if cur != nil && cur.TurnID != turnID {
-		if !at.empty() && !agent.turnAt.empty() && at.before(agent.turnAt) {
-			return
+	held := agent.turns[turnID]
+	if held == nil {
+		// OPENED HOWEVER OLD THE EVENT: the seat's other turns say nothing
+		// about this one, which may be a second turn running beside them.
+		held = &heldTurn{turn: &LiveTurn{TurnID: turnID, StartedAt: env.Timestamp, Stage: stage}, at: at}
+		if agent.turns == nil {
+			agent.turns = map[string]*heldTurn{}
 		}
-		cur = nil
+		agent.turns[turnID] = held
 	}
-	if cur == nil {
-		// AN EVENT OLDER THAN THE SEAT'S LAST TURN MOVE opens nothing: a
-		// seat runs one turn at a time, so it belongs to a turn already
-		// over — one whose end this projection never saw.
-		if agent.turn == nil && !at.empty() && !agent.turnAt.empty() && at.before(agent.turnAt) {
-			return
-		}
-		cur = &LiveTurn{TurnID: turnID, StartedAt: env.Timestamp, Stage: stage}
-		agent.turn = cur
-		agent.turnAt = at
-	}
+	cur := held.turn
 	// A STAGE FROM AN OLDER EVENT DOES NOT MOVE IT. The start is published
 	// before the prefetch and the phase after it, but they are two subjects:
 	// a start that lands after its phase began would otherwise put a working
 	// seat back to gathering context. A RESUMED segment's start is newer
 	// than the suspension that parked it, so it moves the turn on.
-	if at.empty() || agent.turnAt.empty() || !at.before(agent.turnAt) {
+	if at.empty() || held.at.empty() || !at.before(held.at) {
 		if moves {
 			cur.Stage = stage
 			if !at.empty() {
-				agent.turnAt = at
+				held.at = at
 			}
 		}
 		if node := str(payload, "node"); node != "" {
@@ -131,7 +153,7 @@ func (s *LiveState) markTurn(agent *agentLive, env Envelope, payload map[string]
 }
 
 // endTurnRecord ends turn `turnID` on this seat: it records the seat's last
-// turn and, when the seat is still on that turn, takes it off.
+// turn and, when the seat holds that turn, takes it off.
 //
 // `failed` is whether the ending event itself was a failure; any earlier
 // failure of the same turn is already on the held turn. `stopped` is whether a
@@ -143,10 +165,9 @@ func (s *LiveState) endTurnRecord(agent *agentLive, env Envelope, turnID string,
 	}
 	at := newStamp(env.Timestamp)
 	s.endedTurns.put(turnID, at)
-	if agent.turn != nil && agent.turn.TurnID == turnID {
-		failed = failed || agent.turn.failed
-		agent.turn = nil
-		agent.turnAt = at
+	if held := agent.turns[turnID]; held != nil {
+		failed = failed || held.turn.failed
+		delete(agent.turns, turnID)
 	}
 	outcome := OutcomeCompleted
 	switch {
@@ -207,7 +228,7 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 	// reorder guard, so a start older than the seat's newest state — a
 	// failure hold that came after it — moves nothing.
 	at := newStamp(env.Timestamp)
-	if agent.turn != nil && agent.turn.TurnID == turnID && agent.turn.Stage == StageContext &&
+	if held := agent.turns[turnID]; held != nil && held.turn.Stage == StageContext &&
 		(at.empty() || agent.stateTS.empty() || !at.before(agent.stateTS)) {
 		agent.working()
 		if !at.empty() {
@@ -235,12 +256,12 @@ func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
 	if agent == nil {
 		return false
 	}
-	switch held := agent.turn; {
-	case held != nil && held.TurnID == turnID && held.Stage == StageParked:
+	switch held := agent.turns[turnID]; {
+	case held != nil && held.turn.Stage == StageParked:
 		s.endTurnRecord(agent, env, turnID, true, false)
 		return true
-	case held != nil && held.TurnID == turnID:
-		held.failed = true
+	case held != nil:
+		held.turn.failed = true
 	}
 	return false
 }
@@ -248,13 +269,11 @@ func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
 // sameTurnOverlay reports whether two overlays agree on everything a turn event
 // can move.
 func sameTurnOverlay(a, b Overlay) bool {
-	return turnEqual(a.Turn, b.Turn) && lastEqual(a.LastTurn, b.LastTurn)
+	return slices.EqualFunc(a.Turns, b.Turns, turnEqual) && lastEqual(a.LastTurn, b.LastTurn)
 }
 
-func turnEqual(a, b *LiveTurn) bool {
+func turnEqual(a, b LiveTurn) bool {
 	switch {
-	case a == nil || b == nil:
-		return a == b
 	case (a.WorkItem == nil) != (b.WorkItem == nil):
 		return false
 	case a.WorkItem != nil && *a.WorkItem != *b.WorkItem:

@@ -128,10 +128,15 @@ type Conditions struct {
 	// turn can run until a revision adds one.
 	TurnEngineReady bool
 
-	// SeatHeldBySandbox is whether a detached executor HOLDS the seat, so
-	// it starts no new turn. An executor can work for hours, far past any
-	// ack window.
+	// SeatHeldBySandbox is whether detached executors hold EVERY SLOT of the
+	// seat's cap (sandbox.max_concurrent_runs, one by default), so it starts
+	// no new turn. An executor can work for hours, far past any ack window.
 	SeatHeldBySandbox bool
+
+	// ConversationBusy is whether, below that cap, one of the seat's runs
+	// works the delivery's conversation, which runs no second turn at once
+	// (ADR-0169). Read per delivery, since it depends on the partition.
+	ConversationBusy bool
 
 	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped
 	// to ask a person something and is waiting for the reply.
@@ -278,6 +283,14 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 		return Screening{
 			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
 			Cause: queue.DeferExecutorHolds, Reason: "the seat's executor holds it from its box",
+		}
+	case c.ConversationBusy:
+		// Hold and defer, as at the cap, but for this conversation alone: the
+		// coordinator holds the inbox while the run working it holds the seat,
+		// and the delivery waits at the head (sandbox.Coordinator.HoldForConversation).
+		return Screening{
+			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
+			Cause: queue.DeferExecutorHolds, Reason: "another of the seat's executor runs works this conversation",
 		}
 	case !c.AdmitsTriggers:
 		// After the sandbox case, deliberately: a seat mid-sandbox is already
