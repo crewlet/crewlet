@@ -1,11 +1,11 @@
 // Package redact is THE secret-redaction pass for free text leaving the
 // engine.
 //
-// Anything the engine ships to a place a person or a model reads — a tool
-// result, a harness transcript, a setup-step failure, an event-store
-// payload — can carry a credential it never meant to: a cloned repo URL with
-// its token, a harness echoing its key on failure, a command whose ${VAR} was
-// resolved before it ran.
+// Anything the engine ships to a place a person or a model reads (a tool
+// result, a harness transcript, a setup-step failure, an event-store payload)
+// can carry a credential it never meant to: a cloned repo URL with its token,
+// a harness echoing its key on failure, a command whose ${VAR} was resolved
+// before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
 // up redacting a token shape its neighbour already knows about. It imports
