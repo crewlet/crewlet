@@ -23,14 +23,15 @@ import (
 //
 // `crewlet run` as a supervisor sees it: a real process pointed at an operator's
 // NATS server that then refuses it (credentials rotated), so the client closes
-// the connection for good. It is the node's only one; on an external broker the
-// coordination store rides it too. The process used to stay up with nothing to
-// do. It must stop by a signal's shutdown (drain, then teardown) and EXIT
-// NON-ZERO through main, naming the cause and the setting to change. In a CHILD,
-// as the drain probe: main exits the process. Mutation: wait on the signal
-// context alone in runEngine and it never exits; return nil after the shutdown
-// and the status is the probe's own; skip the shutdown, the order row is red;
-// make Engine.AcksLost answer nothing, the engine_draining row is.
+// the connection for good, and the lease connection with it. On an external
+// broker the coordination store reads over the queue's own. The process used
+// to stay up with nothing to do. It must stop by a signal's shutdown (drain,
+// then teardown) and EXIT NON-ZERO through main, naming the cause and the
+// setting to change. In a CHILD, as the drain probe: main exits the process.
+// Mutation: wait on the signal context alone in runEngine and it never exits;
+// return nil after the shutdown and the status is the probe's own; skip the
+// shutdown, the order row is red. Which drain line is said is
+// TestTheDrainLineSaysWhatTheLostConnectionDecides's.
 func TestANodeWhoseBrokerConnectionIsClosedForGoodExitsNamingIt(t *testing.T) {
 	// Not parallel, for the drain probe's reason: a whole node in a second
 	// process.
@@ -236,4 +237,34 @@ func runLostBrokerProbe() {
 	os.Args = append([]string{"crewlet", "run"}, args...)
 	main()
 	os.Exit(lostBrokerProbeExit)
+}
+
+// THE DRAIN LINE SAYS WHAT THE LOST CONNECTION DECIDES: with the queue's own
+// closed for good the running turns are cancelled; with another's loss
+// reported while the queue's own is down, the line says both outcomes, since
+// the queue's own decides and has not yet; otherwise they finish first.
+//
+// Mutant: the down-too branch dropped — the second row promises they finish.
+// Mutant: the closed-for-good branch dropped — the first row does.
+func TestTheDrainLineSaysWhatTheLostConnectionDecides(t *testing.T) {
+	t.Parallel()
+	const finish, probes, press = "the turns already running finish", "/ready answers 503", "an interrupt"
+	for _, c := range []struct {
+		name      string
+		c         drainCase
+		want, not string
+	}{
+		{"the queue's own closed for good", drainCase{acksLost: true},
+			"closed for good, so nothing the turns still running conclude", finish},
+		{"another lost, the queue's own down", drainCase{ownDown: true},
+			"down too: if it is closed for good", "until they have"},
+		{"a signal, or another lost with the queue's own up", drainCase{},
+			finish + " before this node stops; until they have, " + probes, "cancelled"},
+	} {
+		line := drainLine(0, c.c, finish, probes, press)
+		detail := fmt.Sprint(line[slices.Index(line, any("detail"))+1])
+		if !strings.Contains(detail, c.want) || strings.Contains(detail, c.not) {
+			t.Errorf("%s: the drain says %q, want %q and not %q", c.name, detail, c.want, c.not)
+		}
+	}
 }

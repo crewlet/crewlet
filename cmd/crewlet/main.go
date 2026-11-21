@@ -1312,34 +1312,15 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if fatal != nil {
 		press = "an interrupt"
 	}
-	draining := []any{"in_flight", e.Backends().Queue.InFlightCount(),
-		"detail", finish + " before this node stops; until they have, " + probes,
-		"hint", press + " exits at once, leaving those turns to be " +
-			"redelivered once their ack window elapses"}
+	acksLost := false
 	select {
 	case <-e.AcksLost():
-		detail := "this node's own broker connection is closed for good, so " +
-			"nothing the turns still running conclude can be acknowledged and " +
-			"whichever node takes each seat runs it again: they are cancelled " +
-			"rather than waited for, and the drain ends at once"
-		if surface != nil && surface.app != nil {
-			detail += "; the git requests it is serving still finish before " +
-				"this node stops"
-		}
-		draining = []any{"in_flight", e.Backends().Queue.InFlightCount(),
-			"detail", detail}
+		acksLost = true
 	default:
-		// ANOTHER CONNECTION WENT FIRST while the queue's own is down too, as
-		// both to one server go when it refuses the node's credentials: the
-		// queue's own decides, and it has not yet ([engine.Engine.OwnLinkDown]).
-		if fatal != nil && e.OwnLinkDown() {
-			draining = []any{"in_flight", e.Backends().Queue.InFlightCount(),
-				"detail", "this node's own broker connection is down too: if it is closed " +
-					"for good, the turns still running are cancelled rather than waited for " +
-					"and the drain ends at once, and if it comes back " + finish +
-					" before this node stops"}
-		}
 	}
+	draining := drainLine(e.Backends().Queue.InFlightCount(), drainCase{acksLost: acksLost,
+		ownDown: !acksLost && fatal != nil && e.OwnLinkDown(), serving: surface != nil && surface.app != nil},
+		finish, probes, press)
 	log.InfoContext(ctx, "engine_draining", draining...)
 
 	// Detached from the signal context, already cancelled: the drain is bounded
@@ -1357,6 +1338,44 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return fmt.Errorf("the node stopped itself: %w", fatal)
 	}
 	return nil
+}
+
+// drainCase is what the engine_draining line depends on: whether a fatal lost
+// the queue's own connection ([engine.Engine.AcksLost]), whether that one is
+// down while another's loss is handled ([engine.Engine.OwnLinkDown]), and
+// whether the node serves git requests a drain still waits for.
+type drainCase struct {
+	acksLost, ownDown, serving bool
+}
+
+// drainLine is the engine_draining line's fields: what the drain waits for and
+// how to stop waiting. With the queue's own connection gone no turn is waited
+// for. ANOTHER CONNECTION GONE FIRST while the queue's own is down too, as both
+// to one server go when it refuses the node's credentials, leaves the queue's
+// own to decide, which it has not yet.
+func drainLine(inFlight int, c drainCase, finish, probes, press string) []any {
+	switch {
+	case c.acksLost:
+		detail := "this node's own broker connection is closed for good, so " +
+			"nothing the turns still running conclude can be acknowledged and " +
+			"whichever node takes each seat runs it again: they are cancelled " +
+			"rather than waited for, and the drain ends at once"
+		if c.serving {
+			detail += "; the git requests it is serving still finish before " +
+				"this node stops"
+		}
+		return []any{"in_flight", inFlight, "detail", detail}
+	case c.ownDown:
+		return []any{"in_flight", inFlight,
+			"detail", "this node's own broker connection is down too: if it is closed " +
+				"for good, the turns still running are cancelled rather than waited for " +
+				"and the drain ends at once, and if it comes back " + finish +
+				" before this node stops"}
+	}
+	return []any{"in_flight", inFlight,
+		"detail", finish + " before this node stops; until they have, " + probes,
+		"hint", press + " exits at once, leaving those turns to be " +
+			"redelivered once their ack window elapses"}
 }
 
 // shutdown is the one order a node comes down in, whatever stopped it:
