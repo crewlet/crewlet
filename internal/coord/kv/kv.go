@@ -311,6 +311,19 @@
 // [jsinflight.Decide] until the leader decides them, and one still undecided
 // at its deadline is UNKNOWN rather than a race somebody else won (settle.go).
 //
+// # Two clients: what a hold rides and what a reader rides
+//
+// [Open] takes two clients (ADR-0174). The HOLD client carries what takes,
+// keeps or gives up a hold: a claim's reads, writes and epochs, a renewal, a
+// release. The READ client carries every read of the fleet's leases: Get, the
+// listings, the watches, the placement hints and the gate's view, so a
+// node's lease link carries what it holds and nothing that grows with the
+// fleet, and a slow read makes a view stale, never a lease lost. Both are
+// leader reads and leader-decided writes, so a write acknowledged on one is
+// read on the other. [Config.Carrier] refuses a claim or a renewal, as
+// unknown and before anything is sent, while the node's data path is
+// unproven (ADR-0173); a release and a read never are.
+//
 // # A write across a link waits as long as its bytes take to cross
 //
 // A node without the `data` role reaches these buckets across its leaf link,
@@ -423,6 +436,13 @@ type Config struct {
 	// process, or across a link — which decides how long a write's bytes
 	// are given to cross ([Reach]). Required.
 	Reach Reach
+
+	// Carrier, where set, says whether this node's holds may be taken or
+	// kept now: [Store.TryAcquire] and [Store.Renew] ask it before sending
+	// anything and answer its error as [coord.ErrUnavailable]; a release
+	// and every read are never refused (package doc, "Two clients"). Nil
+	// gates nothing.
+	Carrier func() error
 }
 
 func (c *Config) normalize() error {
@@ -452,9 +472,13 @@ func (c *Config) buckets() EpochsConfig {
 		Reach: c.Reach}
 }
 
-// lane is one lease bucket and the rule its records expire by.
+// lane is one lease bucket and the rule its records expire by, over both
+// clients (package doc, "Two clients").
 type lane struct {
+	// kv is the bucket over the HOLD client, settled: every write.
 	kv jetstream.KeyValue
+	// list is the bucket over the READ client: every listing and watch.
+	list jetstream.KeyValue
 
 	// stream names the bucket's backing stream, resolved at Open. storeNow reads
 	// the clock through js.Stream, a fresh handle per call, because
@@ -463,9 +487,12 @@ type lane struct {
 	// a record is stamped by ITS stream's leader and two streams may have two.
 	stream string
 
-	// read answers a record as the stream LEADER holds it, for every single-key
-	// read of this bucket (package doc, "Every single-key read is the leader's").
+	// read answers a record as the stream LEADER holds it, over the hold
+	// client, for a hold's single-key reads (package doc, "Every single-key
+	// read is the leader's"); look is the same over the read client, for
+	// [Store.Get] and its kin.
 	read *leaderReader
+	look *leaderReader
 
 	// maxTTL is the longest TTL a claim on this bucket may ask for.
 	maxTTL time.Duration
@@ -478,7 +505,13 @@ type lane struct {
 
 // Store is the JetStream KV coord.Backend.
 type Store struct {
-	js jetstream.JetStream
+	// js is the HOLD client and view the READ client (package doc, "Two
+	// clients").
+	js   jetstream.JetStream
+	view jetstream.JetStream
+
+	// carrier is [Config.Carrier]; nil gates nothing.
+	carrier func() error
 
 	// leases holds seat and presence leases, and nothing else.
 	leases *lane
@@ -514,20 +547,19 @@ var _ coord.Backend = (*Store)(nil)
 // Epochs is the counter this store mints its tokens from.
 func (s *Store) Epochs() *Epochs { return s.counter }
 
-// Open creates or adopts the three buckets and returns the backend: idempotent
-// and safe concurrently from every node, since an existing bucket is ADOPTED,
-// never rewritten. Every create goes through [openBucket], as on the rest of
-// the boot path; the boot's sequence ceiling spans this and [OpenFleet], so
+// Open creates or adopts the three buckets over js and returns the backend,
+// its holds over hold (package doc, "Two clients"; one client twice is one
+// connection): idempotent and safe concurrently from every node, since an
+// existing bucket is ADOPTED, never rewritten. Every create goes through
+// [openBucket]; the boot's sequence ceiling spans this and [OpenFleet], so
 // internal/engine's attachCoordination applies it once over both.
-//
-// # What adopting costs, and why the TTL is read back rather than asserted
 //
 // The leases bucket's TTL IS the arbiter ([Store.validateTTL]), so its live
 // value is carried and a difference logged, never resolved: a late node must
 // neither redefine every lease's life nor believe a number not in force. The
 // duty bucket's age is the exception ([openDuties]).
-func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, error) {
-	if js == nil {
+func Open(ctx context.Context, hold, js jetstream.JetStream, cfg Config) (*Store, error) {
+	if hold == nil || js == nil {
 		return nil, errNoJetStream
 	}
 	if err := cfg.normalize(); err != nil {
@@ -551,7 +583,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		return nil, err
 	}
 
-	counter, err := openEpochs(ctx, js, cfg.buckets())
+	counter, err := openEpochs(ctx, hold, js, cfg.buckets())
 	if err != nil {
 		return nil, err
 	}
@@ -569,31 +601,43 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 				"the bucket while the fleet is down so the next boot re-creates it")
 	}
 
-	var readers [2]*leaderReader
+	var lanes [2]struct {
+		kv         jetstream.KeyValue
+		read, look *leaderReader
+	}
 	for i, bucket := range []jetstream.KeyValue{leases, duties} {
-		if readers[i], err = newLeaderReader(js, bucket); err != nil {
+		if lanes[i].look, err = newLeaderReader(js, bucket); err != nil {
 			return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
+		}
+		if lanes[i].kv, lanes[i].read, err = bindHold(ctx, hold, bucket, cfg.Reach); err != nil {
+			return nil, err
 		}
 	}
 
 	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "duties", duties.Bucket(),
 		"epochs", counter.kv.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
 	s := &Store{
-		js: js,
+		js:      hold,
+		view:    js,
+		carrier: cfg.Carrier,
 		// The ceiling is the age IN FORCE, never this node's TTL: validateTTL
 		// refuses against it and held() treats a claim AT it as reaped by the
 		// bucket, so any other number accepts deadlines the bucket won't honour.
 		leases: &lane{
-			kv:         settled(js, leases, cfg.Reach),
-			read:       readers[0],
+			kv:         lanes[0].kv,
+			list:       leases,
+			read:       lanes[0].read,
+			look:       lanes[0].look,
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
 			reapsAtMax: true,
 		},
 		// The duty bucket's ceiling is the CONTRACT's; openDuties made its age cover it.
 		duties: &lane{
-			kv:         settled(js, duties, cfg.Reach),
-			read:       readers[1],
+			kv:         lanes[1].kv,
+			list:       duties,
+			read:       lanes[1].read,
+			look:       lanes[1].look,
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
@@ -603,6 +647,28 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 	}
 	s.gate = newGateView(s)
 	return s, nil
+}
+
+// bindHold looks bucket, provisioned over the read client, up over hold and
+// answers its settled handle and leader read there: one lookup per bucket at
+// boot, which also proves hold reaches the fleet's JetStream. Re-asked while
+// the bucket is not yet visible where hold reaches ([jsprovision.Settle]).
+func bindHold(ctx context.Context, hold jetstream.JetStream, bucket jetstream.KeyValue,
+	reach Reach) (jetstream.KeyValue, *leaderReader, error) {
+
+	name := bucket.Bucket()
+	kv, err := jsprovision.Settle(ctx, func(ctx context.Context) (jetstream.KeyValue, error) {
+		return hold.KeyValue(ctx, name)
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("coord/kv: look %s up over the hold client: %w", name, err)
+	}
+	kv = settled(hold, kv, reach)
+	read, err := newLeaderReader(hold, kv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("coord/kv: address %s's leader: %w", name, err)
+	}
+	return kv, read, nil
 }
 
 // openDuties creates or adopts the duty bucket through [openBucket], like
@@ -717,11 +783,12 @@ func readBucket(ctx context.Context, js jetstream.JetStream, bucket jetstream.Ke
 // acquires with this. Every other lease's ceiling is coord.MaxDutyTTL.
 func (s *Store) TTL() time.Duration { return s.ttl }
 
-// each walks a whole bucket through [eachEntry], the one implementation.
+// each walks a whole bucket, over the read client, through [eachEntry], the
+// one implementation.
 func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, s.js, kv, visit)
+	return eachEntry(ctx, s.view, kv, visit)
 }
 
 // create writes a key that must not hold a live value through [createKey];
@@ -735,7 +802,7 @@ func (s *Store) create(ctx context.Context, kv jetstream.KeyValue, key string, v
 func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, s.js, kv, coord.DocumentFilter(string(class)), what, visit)
+	return eachEntryUnder(ctx, s.view, kv, coord.DocumentFilter(string(class)), what, visit)
 }
 
 // checkClass refuses a class that cannot address a key: its filter would match
@@ -822,6 +889,9 @@ func (s *Store) tryAcquire(ctx context.Context, resource string, opts coord.Acqu
 
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, opts.Owner, opts.TTL); err != nil {
+		return claimed{}, err
+	}
+	if err := s.carried(); err != nil {
 		return claimed{}, err
 	}
 	// A Meta past what a lease carries is refused before anything is sent, as
@@ -1214,9 +1284,9 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 	return false, contended("giveBack", resource)
 }
 
-// Renew extends a lease the caller still holds at this epoch. Never gated:
-// refusing during a mixed-version window would drop a seat mid-turn and
-// prevent nothing. Where this store wrote the record last ([knownRecords]),
+// Renew extends a lease the caller still holds at this epoch. Never held to
+// the protocol gate: refusing during a mixed-version window would drop a seat
+// mid-turn and prevent nothing; the carrier still refuses it ([Config.Carrier]). Where this store wrote the record last ([knownRecords]),
 // one write at its revision decides; otherwise, or once that write loses its
 // comparison, it reads the record and decides.
 func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {
@@ -1236,6 +1306,9 @@ type writtenRecord struct {
 func (s *Store) renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (*writtenRecord, error) {
 	l := s.laneFor(resource)
 	if err := s.validateTTL(l, resource, owner, ttl); err != nil {
+		return nil, err
+	}
+	if err := s.carried(); err != nil {
 		return nil, err
 	}
 	key := encodeResource(resource)
@@ -1388,11 +1461,11 @@ func (s *Store) Get(ctx context.Context, resource string) (*coord.Lease, error) 
 	if err := coord.CheckResource(resource); err != nil {
 		return nil, err
 	}
-	e, err := s.readOne(ctx, s.laneFor(resource), resource)
+	e, err := s.lookOne(ctx, s.laneFor(resource), resource)
 	if err != nil || e == nil {
 		return nil, err
 	}
-	live, err := s.tenure(ctx, *e, s.newClock())
+	live, err := s.tenure(ctx, *e, s.viewClock())
 	if err != nil || !live {
 		return nil, err
 	}
@@ -1425,7 +1498,7 @@ func (s *Store) Now(ctx context.Context, class coord.Class) (time.Time, error) {
 	if err := checkClass(class); err != nil {
 		return time.Time{}, err
 	}
-	return s.storeNow(ctx, s.laneOf(class))
+	return s.storeNow(ctx, s.view, s.laneOf(class))
 }
 
 // listLive reads the live leases keep accepts across lanes, which hold
@@ -1433,7 +1506,7 @@ func (s *Store) Now(ctx context.Context, class coord.Class) (time.Time, error) {
 // caller's: a class listing narrows at the broker, an owner listing cannot.
 func (s *Store) listLive(ctx context.Context, lanes []*lane,
 	scan func(context.Context, *lane) ([]entry, error), keep func(entry) bool) ([]coord.Lease, error) {
-	clk := s.newClock()
+	clk := s.viewClock()
 	var out []coord.Lease
 	for _, l := range lanes {
 		all, err := scan(ctx, l)
@@ -1513,10 +1586,21 @@ func (s *Store) readForClaim(ctx context.Context, l *lane, resource string) (sna
 }
 
 // readOne reads a single lease record from a bucket, as the stream LEADER holds
-// it. A missing key is (nil, nil); a read the leader did not answer is
-// unknown, never missing.
+// it, over the hold client: a hold's own read. A missing key is (nil, nil); a
+// read the leader did not answer is unknown, never missing.
 func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, error) {
-	kve, err := l.read.live(ctx, encodeResource(resource))
+	return readWith(ctx, l.read, l, resource)
+}
+
+// lookOne is [Store.readOne] over the read client, for a reader holding
+// nothing ([Store.Get]).
+func (s *Store) lookOne(ctx context.Context, l *lane, resource string) (*entry, error) {
+	return readWith(ctx, l.look, l, resource)
+}
+
+// readWith is [Store.readOne] through r, one of l's leader reads.
+func readWith(ctx context.Context, r *leaderReader, l *lane, resource string) (*entry, error) {
+	kve, err := r.live(ctx, encodeResource(resource))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil
 	}
@@ -1538,7 +1622,7 @@ func (s *Store) readOne(ctx context.Context, l *lane, resource string) (*entry, 
 // ([eachEntry]).
 func (s *Store) scan(ctx context.Context, l *lane) ([]entry, error) {
 	return s.collect(ctx, l, func(visit func(jetstream.KeyValueEntry) error) error {
-		return s.each(ctx, l.kv, visit)
+		return s.each(ctx, l.list, visit)
 	})
 }
 
@@ -1549,7 +1633,7 @@ func (s *Store) scanIn(ctx context.Context, l *lane, class coord.Class) ([]entry
 		return nil, err
 	}
 	return s.collect(ctx, l, func(visit func(jetstream.KeyValueEntry) error) error {
-		return s.eachUnder(ctx, l.kv, class, "the live "+string(class)+" leases", visit)
+		return s.eachUnder(ctx, l.list, class, "the live "+string(class)+" leases", visit)
 	})
 }
 
@@ -1588,7 +1672,7 @@ func (s *Store) scanResourcesIn(ctx context.Context, class coord.Class) ([]resou
 		return nil, err
 	}
 	byResource := map[string]resourceValue{}
-	err := s.eachUnder(ctx, s.counter.kv, class, "the "+string(class)+" placement hints",
+	err := s.eachUnder(ctx, s.counter.list, class, "the "+string(class)+" placement hints",
 		func(kve jetstream.KeyValueEntry) error {
 			resource, ok := decodeResource(kve.Key())
 			if !ok {
@@ -1679,16 +1763,20 @@ func (s *Store) tenure(ctx context.Context, e entry, clk *clock) (bool, error) {
 // the CAS decides what happens.
 type clock struct {
 	s  *Store
+	js jetstream.JetStream
 	at map[*lane]time.Time
 }
 
-func (s *Store) newClock() *clock { return &clock{s: s} }
+// newClock is a hold's clock, read over the hold client; viewClock a
+// reader's, over the read client.
+func (s *Store) newClock() *clock  { return &clock{s: s, js: s.js} }
+func (s *Store) viewClock() *clock { return &clock{s: s, js: s.view} }
 
 func (c *clock) now(ctx context.Context, l *lane) (time.Time, error) {
 	if at, ok := c.at[l]; ok {
 		return at, nil
 	}
-	at, err := c.s.storeNow(ctx, l)
+	at, err := c.s.storeNow(ctx, c.js, l)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -1699,10 +1787,10 @@ func (c *clock) now(ctx context.Context, l *lane) (time.Time, error) {
 	return at, nil
 }
 
-func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
+func (s *Store) storeNow(ctx context.Context, js jetstream.JetStream, l *lane) (time.Time, error) {
 	// The leader's stream info carries the server's timestamp ([leaderInfo]);
 	// lane.stream says why not KeyValue.Status.
-	info, err := leaderInfo(ctx, s.js, l.stream)
+	info, err := leaderInfo(ctx, js, l.stream)
 	if err != nil {
 		return time.Time{}, unavailable("read the store clock", err)
 	}
@@ -1714,6 +1802,18 @@ func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
 }
 
 // --- errors ---------------------------------------------------------------
+
+// carried is [Config.Carrier]'s answer as a hold's: nil where no carrier is
+// set or it answers nil, and otherwise unknown, before anything is sent.
+func (s *Store) carried() error {
+	if s.carrier == nil {
+		return nil
+	}
+	if err := s.carrier(); err != nil {
+		return fmt.Errorf("%w: %w", coord.ErrUnavailable, err)
+	}
+	return nil
+}
 
 // validate checks the identity every call carries. The resource goes through
 // [coord.CheckResource], not an emptiness test: an empty SEGMENT builds a key

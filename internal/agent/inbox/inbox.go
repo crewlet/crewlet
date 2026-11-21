@@ -86,9 +86,10 @@ const (
 	// when they resume it.
 	HoldSeatPaused Hold = "seat_paused"
 
-	// HoldSandbox is taken while one of the seat's detached executors
-	// holds it, or a reply recorded as a parked run's answer is still owed
-	// the resume it drives — and lifted when neither is true. The sandbox
+	// HoldSandbox is taken while the seat's detached executors hold every
+	// slot of its cap, its inbox holds as many deliveries aside as it keeps,
+	// or a reply recorded as a parked run's answer is still owed the resume
+	// it drives — and lifted when none is true. The sandbox
 	// coordinator takes and lifts it, at its own transitions (see
 	// sandbox.SeatHold); the screening asks for it only for a delivery that
 	// raced it ([ActionHoldAndDefer]).
@@ -129,14 +130,11 @@ type Conditions struct {
 	TurnEngineReady bool
 
 	// SeatHeldBySandbox is whether detached executors hold EVERY SLOT of the
-	// seat's cap (sandbox.max_concurrent_runs, one by default), so it starts
+	// seat's cap (sandbox.max_concurrent_runs, two by default), so it starts
 	// no new turn. An executor can work for hours, far past any ack window.
+	// Below the cap a delivery waiting on one of them waits aside, which the
+	// dispatcher decides past the screening (internal/engine, ADR-0169).
 	SeatHeldBySandbox bool
-
-	// ConversationBusy is whether, below that cap, one of the seat's runs
-	// works the delivery's conversation, which runs no second turn at once
-	// (ADR-0169). Read per delivery, since it depends on the partition.
-	ConversationBusy bool
 
 	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped
 	// to ask a person something and is waiting for the reply.
@@ -283,14 +281,6 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 		return Screening{
 			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
 			Cause: queue.DeferExecutorHolds, Reason: "the seat's executor holds it from its box",
-		}
-	case c.ConversationBusy:
-		// Hold and defer, as at the cap, but for this conversation alone: the
-		// coordinator holds the inbox while the run working it holds the seat,
-		// and the delivery waits at the head (sandbox.Coordinator.HoldForConversation).
-		return Screening{
-			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
-			Cause: queue.DeferExecutorHolds, Reason: "another of the seat's executor runs works this conversation",
 		}
 	case !c.AdmitsTriggers:
 		// After the sandbox case, deliberately: a seat mid-sandbox is already

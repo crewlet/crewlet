@@ -489,7 +489,7 @@ then the run itself (for a standup, five to ten harness rounds, ten minutes at
 the slow end) and the reviewer. A slow ritual that is not stuck takes about a
 quarter of an hour; half an hour is twice that, so a reviewer's send-back still
 fits and a turn reaching the cap is stuck rather than slow. A longer cap is not
-free: a seat at its run cap (`sandbox.max_concurrent_runs`, one by default)
+free: a seat at its run cap (`sandbox.max_concurrent_runs`, two by default)
 takes no other work, so messages to a seat whose ritual is wedged wait until the
 cap ends it. Give a schedule whose runs routinely
 need longer (each one that does logs `sandbox_run_past_deadline`) a

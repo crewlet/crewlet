@@ -591,14 +591,16 @@ and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
 
 **Both halves live on one broker**, so reaching the leases is reaching the mail:
 the coordination KV is JetStream KV on the stream's own NATS servers. A node
-holds one connection to an external cluster (the coordination store rides the
-queue's) and two to the embedded one, where the coordination store, the
-seat-memory replay and the backup's stream copies share a second connection so
-none sits on the read loop every mailbox consumes through. Two connections fail
-independently, and a node with live leases but a dead inbox connection would be
-alive to peers and deaf to its work, so both are watched and the client closing
-either for good stops the node. "Reachable" can disagree with itself for no
-longer than a reconnect.
+holds two connections to an external cluster (the coordination store rides the
+queue's, its holds a lease connection) and three to the embedded one, where the
+coordination store, the seat-memory replay and the backup's stream copies share
+a second connection so none sits on the read loop every mailbox consumes
+through, and its holds ride a third. Connections fail independently, and a node
+with live leases but a dead inbox connection would be alive to peers and deaf
+to its work, so each is watched and the client closing one for good stops the
+node, and a node holds leases only while its data path answers
+([Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)).
+"Reachable" can disagree with itself for no longer than a reconnect.
 
 **The state logs share one byte budget on that broker.** Each state log's stream
 reserves its whole byte ceiling at creation, so the logs are sized together:

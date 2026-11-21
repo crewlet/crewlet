@@ -303,6 +303,15 @@ const MaxRunEventBytes = 16 << 10
 // whatever the text.
 var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
 
+// BoxReadHeldBytes is the weight a box read's answer holds: the most one
+// collection holds at once on the box's host ([Runner.Collect]: the result file
+// parsed, the event stream a line at a time, the report, and their redactions),
+// each piece near [MaxFileBytes]. internal/sandbox/executor's
+// BenchmarkACollectionAtItsBounds measures it: 136 MiB at worst (a Claude Code
+// result whose text, the stream's final message and the report are each near
+// 32 MiB), 4.3 times the file bound, rounded up to the next whole one.
+const BoxReadHeldBytes = 5 * MaxFileBytes
+
 // CarriedResult is result with its report and failure each held to budget by
 // whole lines, the note saying so counted inside it (a report keeping its
 // start, a failure both its ends, [keepLines]), for a reply between nodes

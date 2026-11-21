@@ -118,7 +118,7 @@ func TestAStreamInfoAMemberDropsIsAskedAgain(t *testing.T) {
 		t.Cleanup(s.Close)
 		held := jsapitest.DropFirst(t, ns, jsapitest.StreamInfo(s.leases.stream), 1)
 
-		if at, err := s.storeNow(context.Background(), s.leases); err != nil || at.IsZero() {
+		if at, err := s.storeNow(context.Background(), s.js, s.leases); err != nil || at.IsZero() {
 			t.Fatalf("the store clock behind a dropped read = (%v, %v): it was "+
 				"not asked again", at, err)
 		}

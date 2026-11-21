@@ -309,7 +309,7 @@ first that does not in `reason`:
 |---|---|
 | `starting` | Not started yet: the listener is bound and answers the boot's answers. |
 | `draining` | Stopping: turns finish and it claims nothing new. |
-| `broker_unlinked` | Its leaf link to every member is down (on an external cluster, the connection is reconnecting); `detail` says which. Its seats can neither receive nor publish. |
+| `broker_unlinked` | Its data path or its lease link does not reach the fleet's broker: a leaf link down (on an external cluster, a connection reconnecting), or the fleet's JetStream not answering across it (below); `detail` names which. Its seats can neither receive nor publish, or it holds nothing. |
 | `unconfigured` | No company revision has reached it yet. |
 | `shed` or `stuck` | Its [config posture](../concepts/control-plane.md#operator-surface): it cannot apply the revision its peers run. |
 | `no_presence` | It does not hold its presence lease, so peers do not count it and nothing routes to it. |
@@ -433,13 +433,14 @@ It is a full engine process with roles subtracted. Before choosing a host:
   - **One window.** Its pulls share the link's window with the object store's
     uploads, downloads and listings, both ways: what the link carries in four
     seconds at the floor, one 128 KiB piece of a file either way. So a request
-    sent behind them, a lease renewal included, is answered inside its
-    five-second term at any rate the engine allows
+    sent behind them is answered inside its five-second term at any rate the
+    engine allows
     ([one window per link](../concepts/object-store.md#the-fleets-own-bucket--nats-the-default)).
     An event delivered to one of the node's seats crosses whole, outside the
     window: a request whose reply crosses behind one waits for it (as with
     what the node sends whole, next item). A hydration's next row waiting
-    there is waited for while the link moves; a lease renewal is not. The
+    there is waited for while the link moves; a lease renewal never waits
+    there, since it rides a link of its own (next item). The
     node's placement pass waits for hydration (see
     [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   - **A restart loses** what the changelog had not acknowledged, since the
@@ -463,8 +464,7 @@ It is a full engine process with roles subtracted. Before choosing a host:
   seconds. A first-in-first-out queue adds whatever else it holds to that
   wait: another flow's bulk (a harness's own upload or download) keeps it full
   until it drains (a 256 KiB buffer is 7.5 seconds at the floor, a cellular
-  modem's megabytes of buffer minutes;
-  [#1035](https://github.com/crewlet/crewlet/issues/1035)). So:
+  modem's megabytes of buffer minutes). So:
   - The queue at each direction's bottleneck is fair (`fq_codel` or CAKE),
     which sends a sparse flow's packets ahead of a bulk flow's. The host's own
     queue discipline counts only where the host is the bottleneck: a host
@@ -482,11 +482,39 @@ It is a full engine process with roles subtracted. Before choosing a host:
 
   Whatever the queues do, no hold, hydration or transfer is refused while the
   link is moving. Neither discipline reorders one flow's bytes, and a
-  satellite's broker traffic is one flow, its leaf link, so what it sends
-  whole (an event or dead letter of up to 8 MiB, a fleet record of up to
-  6 MiB) holds every request after it on that link, a lease renewal included,
-  for the whole crossing: about four minutes at the floor for 8 MiB
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)).
+  satellite's data link is one flow, so what it sends whole (an event or dead
+  letter of up to 8 MiB, a fleet record of up to 6 MiB) holds every request
+  after it on that link for the whole crossing: about four minutes at the
+  floor for 8 MiB. Its leases ride the other link, which a fair queue carries
+  beside it.
+- **Two leaf links on the one leaf port, both reaching the fleet.** A
+  satellite joins the members twice, with the same key: its **data link**,
+  which its mailboxes, publishes, transfers and reads ride, and its **lease
+  link**, which only its holds ride (claims, renewals, releases, presence),
+  each landing on whichever member answers
+  ([ADR-0174](../../adr/0174-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+  It takes or keeps a hold only while a probe of the fleet's JetStream over its
+  data link answers (a request every five seconds, about 164 bytes a second):
+  refused at once while the data link is down, five seconds after a probe goes
+  unanswered on a quiet link, thirty after the fleet answers "not available",
+  and at the link's own ping tolerance (four minutes on the shipped pings) when
+  the link moves but nothing answers. A satellite whose data link dies silently
+  frees its seats within 55 seconds at the shipped 45-second lease, and
+  one on a member cut off from its peers within 80
+  ([ADR-0173](../../adr/0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md)).
+  Its lease link is probed the same way and moved to the next member five
+  seconds after the one it is on stops answering, judged afresh where it lands
+  and never by what the satellite's own server answers while the link is down;
+  while no member answers, its leases lapse on their TTL.
+- **Its share of the fleet's presence reads.** Every node reads every node's
+  presence a few times a heartbeat over its data link: under two fifths of a
+  floor-rate link in a fleet of up to 16 nodes at the floor lease, or 32 at the
+  shipped lease. A larger fleet needs a faster link for its satellites.
+- **No slow link for a `[data, seats]` member.** A member's renewals are
+  proposals across its cluster routes beside every replicated append, which no
+  connection of its own takes off them, and a member reached at the floor
+  cannot hold its raft quorum. The slow-link shape is the stateless `[seats]`
+  satellite.
 - **A leaf link that reaches the members' own sockets.** A message on the link
   can be megabytes and take minutes to cross at the slowest pace the engine
   allows. The node tells a link carrying one from an idle link by reading its

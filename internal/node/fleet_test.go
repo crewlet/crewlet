@@ -100,7 +100,7 @@ func substrates() []substrate {
 				// server with no peers, provisioned exactly as the engine
 				// provisions a single node (clusteredStream is false there).
 				// The cluster substrate below is the one that says Clustered.
-				backend, err := coordkv.Open(t.Context(), admin.JetStream(),
+				backend, err := coordkv.Open(t.Context(), admin.JetStream(), admin.JetStream(),
 					coordkv.Config{TTL: fleetTTL, Reach: coordkv.InProcess})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)
@@ -139,7 +139,7 @@ func substrates() []substrate {
 				// CLUSTERED, because the broker under this substrate is:
 				// without it the buckets are provisioned on the SOLO budget
 				// against a three-member metadata group.
-				backend, err := coordkv.Open(t.Context(), admin.JetStream(), coordkv.Config{
+				backend, err := coordkv.Open(t.Context(), admin.JetStream(), admin.JetStream(), coordkv.Config{
 					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true, Reach: coordkv.InProcess,
 				})
 				if err != nil {

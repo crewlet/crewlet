@@ -10,10 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// delivery pairs a decoded event with the message it must be acked through.
+// delivery pairs a decoded event with the message it must be acked through,
+// its stream sequence (zero where its metadata will not parse), and whether a
+// Readmit handed it back ([queue.OutcomeAside]).
 type delivery struct {
-	msg jetstream.Msg
-	ev  *events.Event
+	msg        jetstream.Msg
+	ev         *events.Event
+	seq        uint64
+	readmitted bool
 }
 
 func eventOf(d delivery) *events.Event { return d.ev }
@@ -67,7 +71,7 @@ func (q *Queue) SubscribeBatch(
 				return
 			}
 			if a.blocked() {
-				a.handBackUndispatched(ctx, batch, a.blockedBy())
+				a.setBack(ctx, batch, a.blockedBy())
 				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key, opts)
@@ -100,9 +104,14 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	// backlog nobody waits for, and is dispatched ahead of it
 	// ([queue.OrderForDispatch]). The cap is read ahead of the first message
 	// because the lane is asked before anything is known to wait; the window
-	// is still read once a message is in hand.
+	// is still read once a message is in hand. Then what a Readmit handed
+	// back ([queue.OutcomeAside]), fetched before anything the topic holds.
 	if err := a.fetchLane(opts.EffectiveMaxBatch(), collect); err != nil {
 		a.logLaneFetchErr(ctx, err)
+	}
+	for _, d := range a.takeReadmitted(opts.EffectiveMaxBatch() - len(batch)) {
+		batch = append(batch, d)
+		a.windowed.Store(int64(len(batch)))
 	}
 	if len(batch) == 0 {
 		//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
@@ -183,7 +192,11 @@ func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {
 	if !ok {
 		return delivery{}, false
 	}
-	return delivery{msg: msg, ev: ev}, true
+	d := delivery{msg: msg, ev: ev}
+	if md, err := msg.Metadata(); err == nil {
+		d.seq = md.Sequence.Stream
+	}
+	return d, true
 }
 
 // dispatchBatch partitions a drain and runs one handler per partition, asking
@@ -216,7 +229,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// dead-letters with a copy or is dropped by MaxDeliver in silence.
 		// That is the contract's rule ([queue.DeliveriesLeft]).
 		if a.blocked() {
-			a.handBackUndispatched(ctx, part.Items, a.blockedBy())
+			a.setBack(ctx, part.Items, a.blockedBy())
 			continue
 		}
 
@@ -232,8 +245,8 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// nearest its budget dead-letters first, while a handler deciding
 		// about ONE event asks what that message has left
 		// ([queue.DeliveriesLeft], [queue.DeliveriesLeftFor]).
-		res := runBatchHandler(a.withProgress(a.withHeadroom(ctx, part.Items...), part.Items...),
-			a.log, evs, h)
+		a.beginDispatch()
+		res := runBatchHandler(a.withDelivery(ctx, part.Items...), a.log, evs, h)
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
 		// IN FLIGHT UNTIL THE OUTCOME IS SETTLED, a dead letter's keep
@@ -281,6 +294,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 		for _, d := range items {
 			a.pass(ctx, d.msg, d.ev, res.Reason)
 		}
+	case queue.OutcomeAside:
+		a.setAside(ctx, items, res.Key)
 	}
 }
 

@@ -10,10 +10,12 @@ One slot changes when a deployment outgrows one node: the stream, which
 becomes either a cluster of the members the nodes already embed or a NATS
 cluster somebody else runs. This page is mostly about that path. The
 coordination KV lives on the stream's own broker, so reaching the leases is
-reaching the mail. On an embedded broker it holds a second connection beside the
-queue's, and both are watched: either one closing for good stops the node, so a
-node never holds live leases over a working link while its inbox link is gone,
-for longer than a reconnect. The store never becomes shared: it stays one file
+reaching the mail. A node's holds ride a connection of their own, and on an
+embedded broker the coordination store holds another beside the queue's; every
+one is watched, and any closing for good stops the node, so a node never holds
+live leases over a working link while its inbox link is gone, for longer than a
+reconnect. It takes or keeps a hold only while its data path answers
+([Seat Ownership](../concepts/seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)). The store never becomes shared: it stays one file
 per node, which is why everything shared between nodes lives in the KV. See
 [Running a Fleet](fleet.md) and [Scaling Out](../concepts/scaling.md).
 
@@ -658,7 +660,7 @@ engine: stream: ensure stream CREWLET_DLQ: nats: API error: code=500 err_code=10
 
 Raise the limit to `15m` or more, or remove it, on every server `stream.url` reaches. A server that sets none carries the window as it is.
 
-**A large write across a slow link is given its time by the client too.** The NATS client writes a message whole, in one socket write, and gives the connection up when that write misses its write deadline. The client's default of a minute cut a write of more than about 2 MiB across a link at the engine's floor (a mebibyte in thirty seconds) and broke every other request riding the connection, the node's leases among them. So the engine sets the deadline to the largest write the client makes (a message at 8 MiB behind as much as the client buffers, the 8 MiB it holds while reconnecting included) at that floor: about eight minutes. The cost: a connection that dies in the middle of a large write is given up only when the deadline passes, and nothing else moves on it meanwhile. A small write's own socket write never runs into it. But a caller's own deadline is not checked while its request waits for the connection (which a large write holds for its whole socket write) nor while its own write is in the socket, so a caller, a small write or a lease renewal among them, is held behind every large write ahead of it, each for up to about eight minutes, and then for its own. Bounding that wait needs the write windowed, which [crewlet/crewlet#1035](https://github.com/crewlet/crewlet/issues/1035) tracks.
+**A large write across a slow link is given its time by the client too.** The NATS client writes a message whole, in one socket write, and gives the connection up when that write misses its write deadline. The client's default of a minute cut a write of more than about 2 MiB across a link at the engine's floor (a mebibyte in thirty seconds) and broke every other request riding the connection. So the engine sets the deadline to the largest write the client makes (a message at 8 MiB behind as much as the client buffers, the 8 MiB it holds while reconnecting included) at that floor: about eight minutes. The cost: a connection that dies in the middle of a large write is given up only when the deadline passes, and nothing else moves on it meanwhile. A small write's own socket write never runs into it. But a caller's own deadline is not checked while its request waits for the connection (which a large write holds for its whole socket write) nor while its own write is in the socket, so a caller on the queue's connection is held behind every large write ahead of it, each for up to about eight minutes, and then for its own. A node's leases are not: they ride a second dial, named `crewlet-leases`, that pings every 1.7 seconds and gives a dead socket up within five ([Coordination](../concepts/coordination.md#backends)). So the server sees two client connections per node, three while it serves a snapshot to a peer: count them against a per-user or per-account connection cap.
 
 **And the server's writes to a node: `write_timeout: retry`, on every server.** nats-server writes everything pending for a connection in one batch under its `write_deadline`, 10 s unless set. A node's connection to `stream.url` is a client connection, which takes the `write_timeout` policy `close` unless the server's configuration sets one. Under `close`, a batch that misses the deadline makes the server mark the connection a slow consumer and close it, however much of the batch had crossed. Routes, leaf connections and gateways default to `retry`, so only a client's connection is cut that way.
 
