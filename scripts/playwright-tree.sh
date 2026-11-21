@@ -128,8 +128,10 @@ if [ -n "$missing" ]; then
 	echo "playwright-tree.sh: installing the Playwright tree needs:$missing — a current node with the npm it bundles (CONTRIBUTING.md, Development setup)" >&2
 	exit 2
 fi
+# npm's answer is three numbers, then a prerelease's tag if any (12.0.0-pre.1), a version of its major as boxhelpertest
+# reads one: ci.yml's `latest` installs whichever Node is newest, a prerelease and the npm it bundles included.
 said=$(npm --version 2>/dev/null) || said=""
-major=$(printf '%s\n' "$said" | sed -n 's/^\([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*$/\1/p')
+major=$(printf '%s\n' "$said" | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?' | sed 's/\..*//')
 if [ -z "$major" ] || [ "$major" -lt "$min_npm" ]; then
 	echo "playwright-tree.sh: the npm on PATH answered --version with \"$said\", and installing the tree takes npm $min_npm or newer, the npm the oldest Node the box helper supports bundles: install a current node with its own npm (a distribution's separate npm package may be older)" >&2
 	exit 2

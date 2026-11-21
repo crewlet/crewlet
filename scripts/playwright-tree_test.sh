@@ -419,25 +419,28 @@ refused nonpm "the recipe refuses to install without npm, naming it" "needs: npm
 	env PATH="$(bare "$TMPROOT/nonpm/bin" $sha_tools node)" "$s"
 
 # THE NPM FLOOR, the recipe's min_npm, the npm the oldest Node the box helper supports bundles: an older npm is refused
-# naming the fix, and so is an npm whose answer names no version; the floor's first release installs. Read off the
-# recipe, so a raise moves the two lines boxhelper's TestTheTreeRecipeRefusesTheNPMTheHelperRefuses holds together and
-# nothing here. Mutations: drop the floor check -> the older npm's stand-in is asked to install (1, red); compare the
-# major with -le -> the floor's first release is refused (red).
-for answer in "$((min_npm - 1)).2.0" "v$((min_npm + 1)).20.0"; do
+# naming the fix, a prerelease of an older major too, and so is an npm whose answer names no version; the floor's first
+# release installs, and so does a prerelease of a newer major, as boxhelpertest reads one. Read off the recipe, so a
+# raise moves the two lines boxhelper's TestTheTreeRecipeRefusesTheNPMTheHelperRefuses holds together and nothing here.
+# Mutations: drop the floor check -> the older npm's stand-in is asked to install (1, red); compare the major with -le
+# -> the floor's first release is refused (red); read no prerelease's tag -> the newer prerelease is refused (red).
+for answer in "$((min_npm - 1)).2.0" "$((min_npm - 1)).0.0-pre.1" "v$((min_npm + 1)).20.0"; do
 	s="$(scripts "npm-$answer")"
 	standin_npm "$TMPROOT/npm-$answer/bin" "$answer"
 	refused "npm-$answer" "the recipe refuses an npm answering $answer, naming the npm it takes" \
 		"answered --version with \"$answer\", and installing the tree takes npm $min_npm or newer" \
 		env PATH="$TMPROOT/npm-$answer/bin:$PATH" "$s"
 done
-s="$(scripts npm-floor)"
-mkdir -p "$TMPROOT/npm-floor/bin"
-printf '#!/bin/sh\n[ "$1" = --version ] && echo %s.0.0 && exit 0\nexec "%s" "$@"\n' "$min_npm" "$TMPROOT/tools/npm" \
-	>"$TMPROOT/npm-floor/bin/npm"
-chmod +x "$TMPROOT/npm-floor/bin/npm"
-install npm-floor PATH="$TMPROOT/npm-floor/bin:$PATH"
-expect "the recipe installs with npm $min_npm.0.0, the floor's first release" 0 \
-	"$TMPROOT/npm-floor/cache/$(named npm-floor)"
+for answer in "$min_npm.0.0" "$((min_npm + 2)).0.0-pre.1"; do
+	s="$(scripts "npm-$answer")"
+	mkdir -p "$TMPROOT/npm-$answer/bin"
+	printf '#!/bin/sh\n[ "$1" = --version ] && echo %s && exit 0\nexec "%s" "$@"\n' "$answer" "$TMPROOT/tools/npm" \
+		>"$TMPROOT/npm-$answer/bin/npm"
+	chmod +x "$TMPROOT/npm-$answer/bin/npm"
+	install "npm-$answer" PATH="$TMPROOT/npm-$answer/bin:$PATH"
+	expect "the recipe installs with npm $answer, of major $min_npm or newer" 0 \
+		"$TMPROOT/npm-$answer/cache/$(named "npm-$answer")"
+done
 
 # --- an installed tree is the lock's, exactly, and published whole -----------------------------------------------
 
