@@ -175,6 +175,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Delegated: emptyVerdicts{},
 		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
 		DelegatedGitHub: ruleGitHub{},
+		// WHAT AGENTS CHANGED ON THE GROWTH ACCOUNTS, off the same empty log.
+		Growth: emptyGrowth{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
@@ -532,6 +534,7 @@ var readOutsideTheDashboard = map[string]string{
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	"advisor_capacity":  "the Advisor's deep run and an admin's script: GET /advisor/capacity (docs/guides/advisor.md)",
+	"growth_changes":    "an admin's script: GET /growth/changes, as docs/reference/api-endpoints.md prints it (ADR-0171)",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
@@ -784,6 +787,12 @@ func (emptyVerdicts) Verdicts(context.Context, accessdomain.VerdictQuery, statel
 
 func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
 	return "", "", nil, nil
+}
+
+type emptyGrowth struct{}
+
+func (emptyGrowth) Changes(context.Context, accessdomain.GrowthQuery, statelog.Freshness) (accessdomain.GrowthPage, error) {
+	return accessdomain.GrowthPage{Complete: true}, nil
 }
 
 // noResearch reads no page, for the sweep that only needs the seat filled.

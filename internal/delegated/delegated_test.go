@@ -170,3 +170,29 @@ func TestASubjectIsWhatARequestDecidesNeverItsWording(t *testing.T) {
 		}
 	}
 }
+
+// The growth acts and other are decided by a person alone: none is delegable,
+// each is a known act, and every known act outside them is delegable, so an
+// act added to Kinds is never delegable by omission from a list.
+//
+// Mutation: read Delegable as "every act but other", and an ad spend raise is
+// put to an agent delegate.
+func TestTheGrowthActsAreNeverDelegated(t *testing.T) {
+	t.Parallel()
+	for _, k := range delegated.NeverDelegated() {
+		if !k.Valid() || k.Delegable() {
+			t.Errorf("%s: valid %v, delegable %v; want a known act no rule may delegate", k, k.Valid(), k.Delegable())
+		}
+		if slices.Contains(delegated.DelegableKinds(), k) {
+			t.Errorf("%s is listed among the delegable acts", k)
+		}
+	}
+	for _, k := range []delegated.Kind{delegated.KindAdSpend, delegated.KindPublicPost, delegated.KindAccountAdmin} {
+		if !slices.Contains(delegated.NeverDelegated(), k) {
+			t.Errorf("%s is not among the acts a person alone decides", k)
+		}
+	}
+	if delegated.Kind("unknown").Delegable() {
+		t.Error("an unknown act is delegable")
+	}
+}

@@ -9,15 +9,19 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -26,7 +30,7 @@ import (
 )
 
 // `POST /mcp-approvals/{id}` answers a call parked on an agent run's row
-// (ADR-0077): `{"answer": "once"|"always"|"deny"}`, optional `_summary`.
+// (ADR-0077): `{"answer": "once"|"always"|"deny"}`, optional `_summary` and `note`.
 // WHO MAY ANSWER is decided twice: the route admits on `tools.approve` on the
 // caller's own record (no agent seats, no assistant); the handler then reads
 // the held call and decides `tools.approve` on the run's seat, known only then.
@@ -60,14 +64,22 @@ type approvalRequest struct {
 	// configuration write takes it; a summary naming the tool is written
 	// where none is sent.
 	Summary string `json:"_summary"`
+	// Note is what the person says to the agent with the answer, which the
+	// resumed run reads as their words beside the verdict.
+	Note string `json:"note"`
 }
 
 // approvalShape is the body, as a refusal names it.
-const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<hex>"}`
+const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<hex>", "note": "<text>"}`
 
-// maxApprovalBody bounds the body: an answer and a revision summary, which
-// configuration writes hold to a line.
-const maxApprovalBody = 8 << 10
+// maxApprovalNoteRunes bounds a note: a paragraph telling the agent why, or
+// what to ask instead, as a person's steering note is bounded.
+const maxApprovalNoteRunes = steer.MaxNoteRunes
+
+// maxApprovalBody bounds the body: a note at its bound written wholly as
+// escaped surrogate pairs (12 bytes a character, 24,000 bytes), beside an
+// answer, a digest and a revision summary of a line.
+const maxApprovalBody = 32 << 10
 
 // ApprovalAnswer is what the route answers: the call it answered, the answer
 // and what the delivery says of it, and for `always` the configuration's own
@@ -122,6 +134,11 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		return
 	}
 	rec.Answer = req.Answer
+	if utf8.RuneCountInString(req.Note) > maxApprovalNoteRunes || !utf8.ValidString(req.Note) {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": fmt.Sprintf("note is UTF-8 text of at most %d characters", maxApprovalNoteRunes)})
+		return
+	}
 	run, found, err := s.approvals.Held(ctx, id)
 	switch {
 	case err != nil:
@@ -148,6 +165,13 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
 		return
 	}
+	if held.Lapsed(s.now()) && req.Answer != sandbox.HeldDeny {
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeStaleVersion,
+			httpjson.Detail{"detail": "the call to " + held.Tool + " lapsed unanswered at " +
+				held.LapsesAt.UTC().Format(time.RFC3339) + ", so it takes deny alone. Nothing was sent; the " +
+				"agent asks again with figures read now."})
+		return
+	}
 	if req.Answer == sandbox.HeldOnce && readWhole(held) && !s.readAll(w, run, req.ArgumentsSHA256) {
 		return
 	}
@@ -171,7 +195,7 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 	by := auth.AttributionOf(ctx)
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
-		Choice: req.Answer, AnsweredBy: by.Name, AnsweredByKind: string(by.Kind),
+		Choice: req.Answer, Answer: strings.TrimSpace(req.Note), AnsweredBy: by.Name, AnsweredByKind: string(by.Kind),
 		OperatorID: by.OperatorID,
 		// THE QUESTION AND THE CALL THIS ANSWERS, off the row just read as
 		// waiting on it: the seat records it only while the run still
@@ -258,9 +282,10 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 }
 
 // readWhole reports whether a held call is made only once its approver read
-// all of it: an SSH operate command, whose stdin can run as root.
+// all of it: an SSH operate command, whose stdin can run as root, and a
+// growth act, whose texts are published and whose amounts are spent as sent.
 func readWhole(held sandbox.HeldCall) bool {
-	return held.Fixed && held.Approvers == sandbox.HeldApproversSSH
+	return held.Fixed && (held.Approvers == sandbox.HeldApproversSSH || held.Approvers == sandbox.HeldApproversAdmin)
 }
 
 // openHeld is the arguments run's held call would send and their digest,
@@ -319,6 +344,14 @@ type HeldAnswer struct {
 	Context         string         `json:"context"`
 	Arguments       map[string]any `json:"arguments"`
 	ArgumentsSHA256 string         `json:"arguments_sha256"`
+	// Card is a growth act's decision card as its target reads now, null for
+	// every other call or one whose target could not be read (ADR-0171).
+	Card *growth.Card `json:"card"`
+}
+
+// GrowthCards reads a held growth act's decision card from its product.
+type GrowthCards interface {
+	Card(ctx context.Context, run sandbox.PendingRun, args map[string]any) (*growth.Card, error)
 }
 
 // serveHeld answers the held call its path names, whole, to whoever may answer
@@ -351,7 +384,17 @@ func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	held := *run.HeldCall
-	httpjson.Write(w, http.StatusOK, HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
+	answer := HeldAnswer{ID: id, Server: held.Server, Tool: held.Tool,
 		Seat: run.AgentHandle, TurnID: run.TurnID, LaunchID: run.LaunchID, Question: run.Question,
-		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest})
+		Context: run.QuestionContext, Arguments: args, ArgumentsSHA256: digest}
+	if held.Approvers == sandbox.HeldApproversAdmin && s.cards != nil {
+		// A CARD THAT CANNOT BE READ leaves the question, its context and
+		// the whole arguments, which are what the answer is given on.
+		card, err := s.cards.Card(r.Context(), run, args)
+		if err != nil {
+			log.WarnContext(r.Context(), "growth_card_unread", "approval", id, "error", err.Error())
+		}
+		answer.Card = card
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }

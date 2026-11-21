@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -398,6 +399,10 @@ type Engine struct {
 	// runner rows and infra summary, beside its presence (nodestatusrecord.go).
 	statusRecords statusRecords
 
+	// growthSignals is what this node's growth products met at their vendors,
+	// published on its status record ([Engine.GrowthSignals]).
+	growthSignals atomic.Pointer[growth.Signals]
+
 	// reviews is this node's watched copy of the definitions the fleet's MCP
 	// tools' levels were decided on ([mcpReviews]).
 	reviews mcpReviews
@@ -473,7 +478,10 @@ type Engine struct {
 	// sshRunner runs the SSH tools' commands, holding each turn's read
 	// certificate in memory until it ends ([Engine.sshRun]).
 	sshRunnerOnce sync.Once
-	sshRunner     *sshint.Runner
+	// growthOnce makes the growth products once ([Engine.growthProducts]).
+	growthOnce sync.Once
+	growth     []builtin.GrowthProduct
+	sshRunner  *sshint.Runner
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment here. ONE VALUE on the engine, mutated in place:

@@ -104,9 +104,10 @@ const (
 	SourceChangeDescription Source = "change_description"
 	SourceChangeReview      Source = "change_review"
 	SourceChangeComment     Source = "change_comment"
-	// SourceAPIAnswer is an API answer the Dashboard Assistant read as the
-	// person it acts for: a route's own JSON, carrying whatever text its
-	// records hold, which colleagues and vendors wrote.
+	// SourceAPIAnswer is an API's answer: a route's own JSON the Dashboard
+	// Assistant read as the person it acts for, or a growth vendor's answer
+	// an agent's tool read (ADR-0170), carrying whatever text its records
+	// hold, which colleagues, customers and vendors wrote.
 	SourceAPIAnswer Source = "api_answer"
 	// SourcePageContext is what the person's open screen told the assistant
 	// about itself: its title, filters and selection, whose labels are names
@@ -871,6 +872,12 @@ type Label struct {
 // contributor's branch carries commits authored anywhere.
 func Repository(src Source) Label {
 	return Label{Source: src, Trust: TrustExternal}
+}
+
+// VendorAnswer is the label of a growth vendor's answer: EXTERNAL, naming
+// nobody, since a customer's review or a stranger's search query is in it.
+func VendorAnswer() Label {
+	return Label{Source: SourceAPIAnswer, Trust: TrustExternal}
 }
 
 // ServerOutput is the label of what a command printed on one of the company's

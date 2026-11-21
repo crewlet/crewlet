@@ -16,7 +16,8 @@ import (
 //
 //	ac                          the whole domain: a gate, an expiry, or an unreadable scope
 //	ac/s/<handle>               one seat and every record of it
-//	ac/s/<handle>/<k>/<id>      one record of the seat (k: t told, c certificate, m command, v verdict)
+//	ac/s/<handle>/<k>/<id>      one record of the seat (k: t told, c certificate, m command, v verdict,
+//	                            g growth)
 
 const (
 	pathDomain = "ac"
@@ -34,6 +35,8 @@ func objectLetter(k ObjectKind) string {
 		return "m"
 	case KindVerdict:
 		return "v"
+	case KindGrowth:
+		return "g"
 	}
 	return ""
 }
