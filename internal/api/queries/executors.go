@@ -512,7 +512,7 @@ func (s Sources) heldArguments(run sandbox.PendingRun) map[string]any {
 	if run.HeldCall == nil || s.HeldCalls == nil {
 		return nil
 	}
-	args, err := s.HeldCalls.OpenArguments(run.TurnID, *run.HeldCall)
+	args, err := s.HeldCalls.OpenRawArguments(run.TurnID, *run.HeldCall)
 	if err != nil {
 		log.Warn("held_call_arguments_unopened", "turn_id", run.TurnID, "held_call", run.HeldCall.ID,
 			"error", err.Error())

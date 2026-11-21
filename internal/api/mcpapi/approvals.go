@@ -269,7 +269,7 @@ func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[s
 	var args map[string]any
 	err := errNoSeal
 	if s.heldCalls != nil {
-		args, err = s.heldCalls.OpenArguments(run.TurnID, *run.HeldCall)
+		args, err = s.heldCalls.OpenRawArguments(run.TurnID, *run.HeldCall)
 	}
 	digest := ""
 	if err == nil {
