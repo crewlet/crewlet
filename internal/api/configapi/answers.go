@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -90,6 +91,7 @@ type fleetRevision struct {
 // [coord.ErrUnavailable], 503: "no company" and "could not ask" send a write
 // to opposite outcomes, and guessing the first replaces a running company.
 func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
+	var missing *coord.Activation
 	for {
 		target, pointed, err := s.plane.Target(ctx)
 		if err != nil {
@@ -122,9 +124,15 @@ func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
 				fleet: true}, true, nil
 		}
 		// THE POINTER MOVED ON between the two reads and the sweep took the
-		// body it named: read it again. A body goes only once no pointer
-		// names it and it is hours old ([coord.BodyRetention]), so each
-		// round is another write landing, and this ends when they stop.
+		// body it named: read it again. Each round that finds it moved is
+		// another write landing, so this ends when they stop. A pointer found
+		// UNMOVED naming a body the store lacks is no race to wait out (the
+		// sweep keeps the body a pointer names) and is the fault it is.
+		if missing != nil && missing.Epoch == target.Epoch && missing.RevisionID == target.RevisionID {
+			return fleetRevision{}, false, fmt.Errorf("configapi: the fleet's activation names "+
+				"revision %s and the store holds no body for it", target.RevisionID)
+		}
+		missing = &target
 	}
 }
 
