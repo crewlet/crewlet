@@ -473,7 +473,7 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 	}{
 		"a capped read": {part: whole, last: "a0500", total: 600 + 10},
 		"cut to fit the transport": {
-			part: whole.keep(200).(turnPart), last: "a0200", total: 600 + 10,
+			part: whole.keep(200 + TurnClosingEvents).(turnPart), last: "a0200", total: 600 + 10,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

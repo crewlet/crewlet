@@ -200,10 +200,11 @@ func (p turnPart) unsent() (last *store.EventRecord, held bool) {
 	return lastOf(p.Head), true
 }
 
-// rows counts the HEAD only: the closing rows are the turn's ending — where
-// its outcome, its wall clock and its summary are — and are the last thing a
-// cut gives up.
-func (p turnPart) rows() int { return len(p.Head) }
+// rows counts the head and the closing rows: a cut gives up the head's last
+// rows first, and the closing rows (the turn's ending, where its outcome, its
+// wall clock and its summary are) last, oldest first, so a turn whose ending
+// alone passes the transport is still answered.
+func (p turnPart) rows() int { return len(p.Head) + len(p.Closing) }
 
 func (p turnPart) keep(n int) any {
 	out := p
@@ -216,9 +217,9 @@ func (p turnPart) keep(n int) any {
 		out.Closing = out.Head[cut:]
 		out.Head = out.Head[:cut]
 	}
-	if n < len(out.Head) {
-		out.Head = out.Head[:n]
-	}
+	closing := min(n, len(out.Closing))
+	out.Closing = out.Closing[len(out.Closing)-closing:]
+	out.Head = out.Head[:min(n-closing, len(out.Head))]
 	return out
 }
 
@@ -253,31 +254,32 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string, at time.Tim
 
 // readTurnPart is [turnPartOf] inside its snapshot.
 func readTurnPart(ctx context.Context, log store.EventSnapshot, id string, at time.Time) (turnPart, error) {
-	head, err := log.Turn(ctx, id, at)
+	head, cut, err := log.Turn(ctx, id, AnswerBytes, at)
 	if err != nil {
 		return turnPart{}, err
 	}
 	part := turnPart{Head: head, Total: len(head), Traces: []store.TurnTrace{}, Nodes: []string{}}
-	// THE READ STOPPED AT THE CAP, not at the end of the turn: the read is
-	// oldest first, so what a long turn loses is its ENDING. So a cut view
-	// gets its ending back and reports the gap in the MIDDLE.
+	// THE READ STOPPED AT THE CAP OR AT [AnswerBytes], not at the end of the
+	// turn: the read is oldest first, so what a long turn loses is its
+	// ENDING. So a cut view gets its ending back, within half the bound and
+	// the head cut to the rest, and reports the gap in the MIDDLE.
 	//
 	// ASKED, NOT INFERRED — a turn of exactly the cap holds every row it
 	// has — and only on a read that filled. Both follow-ups DEGRADE: the
 	// rows are in hand, and failing them over a count turns the largest
 	// turns into `query_failed`.
-	if len(head) >= store.MaxTurnEvents {
+	if cut || len(head) >= store.MaxTurnEvents {
 		total, countErr := log.TurnEventCount(ctx, id, at)
 		switch {
 		case countErr != nil:
 			logger.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", countErr)
 		case total > len(head):
 			part.Total = total
-			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents, at)
+			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents, AnswerBytes/2, at)
 			if closingErr != nil {
 				logger.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", closingErr)
 			} else {
-				part.Closing = closing
+				part.Closing, part.Head = closing, headWithin(head, AnswerBytes-rowsBytes(closing))
 			}
 		}
 	}
@@ -307,6 +309,27 @@ func readTurnPart(ctx context.Context, log store.EventSnapshot, id string, at ti
 		part.Unsettled = named
 	}
 	return part, nil
+}
+
+// headWithin is a turn's opening rows cut to what budget bytes hold
+// ([store.RecordBytes]), the first row always kept.
+func headWithin(head []store.EventRecord, budget int) []store.EventRecord {
+	held := 0
+	for i, r := range head {
+		if held += store.RecordBytes(r); i > 0 && held > budget {
+			return head[:i]
+		}
+	}
+	return head
+}
+
+// rowsBytes is what rows hold ([store.RecordBytes]).
+func rowsBytes(rows []store.EventRecord) int {
+	n := 0
+	for _, r := range rows {
+		n += store.RecordBytes(r)
+	}
+	return n
 }
 
 // turnsPart is one node's page of turn partials — or, on the second scatter,

@@ -1034,19 +1034,23 @@ func (s EventSnapshot) Trace(ctx context.Context, traceID string, at time.Time) 
 // Ordered like a trace, forwards. A DIFFERENT set from the trace: one trace can
 // span several turns, and a turn resumed on another node several traces.
 //
-// A caller that gets exactly MaxTurnEvents rows should say the view is
-// truncated and read [EventLog.TurnClosing] beside it: a forwards cut loses the
-// turn's ENDING. The cap is the trace's.
-//
-// Every read of one turn's view takes the SAME `at`, or a row crossing the
-// floor between two reads makes the count come back short of its rows.
-func (l *EventLog) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
-	return l.live().Turn(ctx, turnID, at)
+// It stops at MaxTurnEvents rows (the trace's cap), or before the row that
+// would take it past maxBytes ([RecordBytes]; cut says so). A caller that gets
+// either says the view is truncated and reads [EventLog.TurnClosing] beside
+// it: a forwards cut loses the turn's ENDING. Every read of one turn's view
+// takes the SAME `at`, or a row crossing the floor between two reads makes the
+// count come back short of its rows.
+func (l *EventLog) Turn(ctx context.Context, turnID string, maxBytes int, at time.Time) (rows []EventRecord, cut bool,
+	err error,
+) {
+	return l.live().Turn(ctx, turnID, maxBytes, at)
 }
 
 // Turn is [EventLog.Turn] read at this snapshot.
-func (s EventSnapshot) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
-	return s.scanPayloads(ctx,
+func (s EventSnapshot) Turn(ctx context.Context, turnID string, maxBytes int, at time.Time) (rows []EventRecord,
+	cut bool, err error,
+) {
+	return s.scanPayloadsWithin(ctx, maxBytes,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
@@ -1232,13 +1236,18 @@ func (s EventSnapshot) countEvents(ctx context.Context, column, id string, at ti
 // NOT folded into Turn: a method silently returning a head and a tail would
 // make every caller's row count stop meaning what it says. The view asks both
 // and merges. The rows may OVERLAP the head on a turn that only just reached
-// the cap, so a caller merges on the event id rather than concatenating.
-func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
-	return l.live().TurnClosing(ctx, turnID, limit, at)
+// the cap, so a caller merges on the event id rather than concatenating. Like
+// Turn it stops at maxBytes, the newest row always kept.
+func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit, maxBytes int, at time.Time) ([]EventRecord,
+	error,
+) {
+	return l.live().TurnClosing(ctx, turnID, limit, maxBytes, at)
 }
 
 // TurnClosing is [EventLog.TurnClosing] read at this snapshot.
-func (s EventSnapshot) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
+func (s EventSnapshot) TurnClosing(ctx context.Context, turnID string, limit, maxBytes int, at time.Time) ([]EventRecord,
+	error,
+) {
 	if limit <= 0 {
 		// ALLOCATED, like every other list read here — asking for no rows is
 		// still a read that succeeded, and the contract on [EventLog] does
@@ -1246,7 +1255,7 @@ func (s EventSnapshot) TurnClosing(ctx context.Context, turnID string, limit int
 		// a computed limit; today's one caller passes a constant.
 		return []EventRecord{}, nil
 	}
-	out, err := s.scanPayloads(ctx,
+	out, _, err := s.scanPayloadsWithin(ctx, maxBytes,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time DESC, event_id DESC LIMIT ?",
@@ -1374,7 +1383,8 @@ func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]E
 }
 
 func (s EventSnapshot) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return s.scan(ctx, false, query, args...)
+	rows, _, err := s.scan(ctx, false, 0, query, args...)
+	return rows, err
 }
 
 // scanPayloads is scanRows for a query whose SELECT ends in `payload`.
@@ -1388,13 +1398,27 @@ func (l *EventLog) scanPayloads(ctx context.Context, query string, args ...any) 
 }
 
 func (s EventSnapshot) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return s.scan(ctx, true, query, args...)
+	rows, _, err := s.scan(ctx, true, 0, query, args...)
+	return rows, err
 }
 
-func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
+// scanPayloadsWithin is scanPayloads stopped before the row that would take
+// what it holds past maxBytes ([RecordBytes]), the first row always kept; cut
+// reports that it stopped there, so rows lie past those it returns.
+func (s EventSnapshot) scanPayloadsWithin(ctx context.Context, maxBytes int, query string,
+	args ...any,
+) (rows []EventRecord, cut bool, err error) {
+	return s.scan(ctx, true, maxBytes, query, args...)
+}
+
+// scan reads query's rows; maxBytes, when positive, stops it as
+// [EventSnapshot.scanPayloadsWithin] says.
+func (s EventSnapshot) scan(ctx context.Context, withPayload bool, maxBytes int, query string,
+	args ...any,
+) ([]EventRecord, bool, error) {
 	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: query events: %w", err)
+		return nil, false, fmt.Errorf("store: query events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -1408,6 +1432,7 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 	// reaching six other reads. There is nothing a caller can do with the
 	// distinction here that `len` does not already do.
 	out := []EventRecord{}
+	held := 0
 	for rows.Next() {
 		var rec EventRecord
 		var micros int64
@@ -1419,19 +1444,40 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 			dest = append(dest, &payload)
 		}
 		if err := rows.Scan(dest...); err != nil {
-			return nil, fmt.Errorf("store: scan event: %w", err)
+			return nil, false, fmt.Errorf("store: scan event: %w", err)
 		}
 		finishRecord(&rec, micros, tagJSON)
 		rec.Refs = refsOf(refs)
 		if withPayload {
 			rec.Payload = json.RawMessage(payload)
 		}
+		size := RecordBytes(rec)
+		if maxBytes > 0 && len(out) > 0 && held+size > maxBytes {
+			return out, true, nil
+		}
+		held += size
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate events: %w", err)
+		return nil, false, fmt.Errorf("store: iterate events: %w", err)
 	}
-	return out, nil
+	return out, false, nil
+}
+
+// RecordBytes is the text a record holds: its payload and every string it
+// carries, refs and tags included. What a byte-bounded read of the log
+// ([EventLog.Turn], [EventLog.Phases]) counts against its bound.
+func RecordBytes(rec EventRecord) int {
+	n := len(rec.Payload) + len(rec.ID) + len(rec.Type) + len(rec.Source) + len(rec.Category) +
+		len(rec.Summary) + len(rec.Actor) + len(rec.TraceID) + len(rec.SpanID) + len(rec.ParentSpanID) +
+		len(rec.WorkKey) + len(rec.AgentID) + len(rec.Node)
+	for _, r := range rec.Refs {
+		n += len(r.Kind) + len(r.ID) + len(r.Text)
+	}
+	for k, v := range rec.Tags {
+		n += len(k) + len(v)
+	}
+	return n
 }
 
 // finishRecord fills in the fields derived from the raw columns.
@@ -1690,14 +1736,16 @@ const phaseListOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // share. The durable records ([phaseRecordTypes]) only; agent_turn_progress is
 // stream-only, so history is exactly the calls that finished.
 //
-// more reports that the seat holds phases past this page — see [pastPage].
-func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
+// more reports phases past this page ([pastPage]; maxBytes: [EventLog.phaseList]).
+func (l *EventLog) AgentPhases(ctx context.Context, agentID string, maxBytes int, before *Cursor, at time.Time) (
+	rows []EventRecord, more bool, err error,
+) {
 	// An EMPTY id names no seat, and bound as one it would match every row
 	// that carries none — every non-agent event in the window.
 	if agentID == "" {
 		return nil, false, nil
 	}
-	return l.phaseList(ctx, agentID, AgentPhaseLimit, before, at)
+	return l.phaseList(ctx, agentID, AgentPhaseLimit, maxBytes, before, at)
 }
 
 // Phases returns the COMPANY's durable per-phase records, newest first,
@@ -1710,12 +1758,15 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Curs
 // ([org.DeriveAgentID]), the promoted `agent_id` column [ListQuery.AgentID]
 // reads; empty means the company. Not a role name: seats may share one, and a
 // rename changes it while the history keeps the old one. more reports that
-// records exist past this page — see [pastPage].
-func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
+// records exist past this page — see [pastPage]. A page stops at maxBytes
+// too, as [EventLog.phaseList] says.
+func (l *EventLog) Phases(ctx context.Context, agentID string, limit, maxBytes int, before *Cursor, at time.Time) (
+	rows []EventRecord, more bool, err error,
+) {
 	if limit <= 0 || limit > MaxPhasePage {
 		limit = MaxPhasePage
 	}
-	return l.phaseList(ctx, agentID, limit, before, at)
+	return l.phaseList(ctx, agentID, limit, maxBytes, before, at)
 }
 
 // phaseList is a page of `limit` phase records ([phaseRecordTypes]), newest
@@ -1727,15 +1778,19 @@ func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before
 // page, so a page costs a page and a row of each type however long the history
 // is. As one `event_type IN (…)` the planner would sort every row of both
 // types, payloads and all. One snapshot makes the page and its past-the-page
-// row one reading of the log.
-func (l *EventLog) phaseList(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) ([]EventRecord, bool, error) {
+// row one reading of the log. Each statement and the page stop at maxBytes
+// ([RecordBytes]), the first row always kept; [phasesWithin] says how.
+func (l *EventLog) phaseList(ctx context.Context, agentID string, limit, maxBytes int, before *Cursor,
+	at time.Time,
+) ([]EventRecord, bool, error) {
 	floor := EncodeTime(askedAt(at).Add(-EventHistory))
 	var rows []EventRecord
+	var cutAt []EventRecord
 	err := l.Snapshot(ctx, func(s EventSnapshot) error {
 		// AFRESH ON EVERY ATTEMPT: a snapshot that met a conflict runs
 		// this again, and a page kept from the attempt it abandoned would
 		// be counted twice.
-		rows = rows[:0]
+		rows, cutAt = rows[:0], cutAt[:0]
 		for _, kind := range phaseRecordTypes {
 			query := phaseListSQL
 			args := []any{kind, floor}
@@ -1749,9 +1804,12 @@ func (l *EventLog) phaseList(ctx context.Context, agentID string, limit int, bef
 			}
 			query += phaseListOrderSQL
 			args = append(args, limit+1)
-			page, err := s.scanPayloads(ctx, query, args...)
+			page, cut, err := s.scanPayloadsWithin(ctx, maxBytes, query, args...)
 			if err != nil {
 				return err
+			}
+			if cut {
+				cutAt = append(cutAt, page[len(page)-1])
 			}
 			rows = append(rows, page...)
 		}
@@ -1763,11 +1821,39 @@ func (l *EventLog) phaseList(ctx context.Context, agentID string, limit int, bef
 	// THE ORDER EACH STATEMENT READ IN, across all of them: the instant as
 	// the column holds it, then the id, both descending — the primary key's
 	// own order, which the cursor a later page resumes from is cut in.
-	slices.SortFunc(rows, func(a, b EventRecord) int {
-		return cmp.Or(cmp.Compare(EncodeTime(b.Time), EncodeTime(a.Time)), cmp.Compare(b.ID, a.ID))
-	})
+	slices.SortFunc(rows, func(a, b EventRecord) int { return newerFirst(a, b) })
+	rows, cut := phasesWithin(rows, cutAt, maxBytes)
 	rows, more := pastPage(rows, limit)
-	return rows, more, nil
+	return rows, more || cut, nil
+}
+
+// newerFirst orders phase records as a page lists them: the instant as the
+// column holds it, then the id, both descending.
+func newerFirst(a, b EventRecord) int {
+	return cmp.Or(cmp.Compare(EncodeTime(b.Time), EncodeTime(a.Time)), cmp.Compare(b.ID, a.ID))
+}
+
+// phasesWithin cuts a phase page, merged newest first, to what its byte bound
+// holds, and reports whether it cut. A statement that stopped at the bound
+// (its last row in cutAt) leaves unread rows older than that row, which may
+// be newer than another statement's rows, so the page ends at the newest such
+// row: past it the page could skip a record. Then what the page holds is held
+// to maxBytes itself, the first row always kept, since the statements' rows
+// together may pass it.
+func phasesWithin(rows, cutAt []EventRecord, maxBytes int) ([]EventRecord, bool) {
+	cut := false
+	for _, last := range cutAt {
+		if i := slices.IndexFunc(rows, func(r EventRecord) bool { return newerFirst(last, r) < 0 }); i >= 0 {
+			rows, cut = rows[:i], true
+		}
+	}
+	held := 0
+	for i, r := range rows {
+		if held += RecordBytes(r); maxBytes > 0 && i > 0 && held > maxBytes {
+			return rows[:i], true
+		}
+	}
+	return rows, cut || len(cutAt) > 0
 }
 
 // pastPage cuts a read that asked for ONE ROW MORE than its page back to the
