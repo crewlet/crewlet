@@ -104,9 +104,9 @@
 // # A node's leases ride a link of their own
 //
 // A renewal queued behind a large write crosses only after it, and at the floor
-// one message at the transport's ceiling outlasts every lease. So holds get a
-// watched connection nothing else rides (Queue.DialLeases): on a leaf a
-// second leaf link in LeaseAccount, past the tunnel and ISOLATED, so it is told
+// one message at the transport's ceiling outlasts every lease.
+// Queue.DialLeases offers holds a watched connection nothing else rides: on a
+// leaf a second leaf link in LeaseAccount, past the tunnel and ISOLATED, so it is told
 // no other leaf's interest; on an external broker a second dial that gives a
 // dead socket up within a heartbeat of the shortest lease; on a member one in
 // process. Each link is read by its account, never by a count.
