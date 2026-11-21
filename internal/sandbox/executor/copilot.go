@@ -32,9 +32,12 @@ const CopilotName = "copilot"
 type Copilot struct{}
 
 var (
-	_ Harness = Copilot{}
-	_ carrier = Copilot{}
-	_ saver   = Copilot{}
+	_ Harness           = Copilot{}
+	_ carrier           = Copilot{}
+	_ saver             = Copilot{}
+	_ inboxDelivery     = Copilot{}
+	_ artifactHolder    = Copilot{}
+	_ notesOffExplainer = Copilot{}
 )
 
 // NewCopilot returns the runner.
@@ -476,18 +479,8 @@ type copilotSettings struct {
 // extension where it reads notes or has a turn cap ([Paths.CopilotExtension]);
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
-// What an earlier run wrote there and this one does not is removed first.
+// What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
-	stale := "rm -rf " + shellQuoteAll([]string{paths.CopilotInstructions(), paths.CopilotExtension(),
-		paths.CopilotExtensionFresh()})
-	res, err := box.Exec(ctx, stale, sandbox.ExecOptions{})
-	if err != nil {
-		return "", fmt.Errorf("executor: removing what an earlier Copilot run left in its home: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("executor: removing what an earlier Copilot run left in its home: rm exited %d: %s",
-			res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
-	}
 	if err := writeJSON(ctx, box, paths.CopilotSettings(), copilotSettings{Experimental: true}); err != nil {
 		return "", fmt.Errorf("executor: writing Copilot's settings: %w", err)
 	}
@@ -588,4 +581,21 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 		out["timeout"] = ms
 	}
 	return out
+}
+
+// artifacts is what a Copilot run leaves in its box of its own: its standing
+// instructions and its extension in its home, which a later run with neither
+// must not find, and a fresh session's extension beside the work directory.
+// Its settings are written whole by every run, and its sessions are kept.
+func (Copilot) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh()}, []string{p.CopilotExtension()}
+}
+
+// notesOffWhy is what switches Copilot's reading of notes off: a managed policy
+// that allows only managed hooks (allowManagedHooksOnly), which stops an
+// extension's callbacks (its 1.0.85 changelog), or an extension Copilot failed to
+// load, which its own log names. A release before [copilotFloor] runs nothing.
+func (Copilot) notesOffWhy() string {
+	return "a managed policy that allows only managed hooks (allowManagedHooksOnly), which stops the run's " +
+		"notes extension, or an extension Copilot failed to load, which its own log names"
 }

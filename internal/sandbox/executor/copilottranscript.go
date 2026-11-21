@@ -11,6 +11,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // transcript reads a Copilot archive ([copilotArchiveFormat]): its
@@ -211,4 +213,20 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) (
 		return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
 	}
 	return held, nil
+}
+
+// notesHeld is, of the inbox ids asked ([Copilot.inboxID]), those whose note
+// the box's copy of session shows reached the model ([copilotNotesHeld]): the
+// confirm path of a runner whose extension never confirms (ruling 1 of #1818's
+// design), read off the record by the runner, as a hook runner's receipts are
+// read off its main thread. An error where the record could not be read, which
+// is neither held nor not.
+func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session string,
+	inboxes []string) (map[string]bool, error) {
+	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session)+"/events.jsonl")
+	if err != nil {
+		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
+	}
+	defer func() { _ = events.Close() }()
+	return copilotNotesHeld(ctx, events, inboxes)
 }

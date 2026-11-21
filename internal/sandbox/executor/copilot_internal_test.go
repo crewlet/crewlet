@@ -466,23 +466,56 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	}
 }
 
-// A run with neither notes nor a cap has no extension, and one with no
-// system text no instructions: what an earlier run wrote is removed.
+// A run with neither notes nor a cap is written no extension, and what an
+// earlier run wrote in the home is the clear's to remove: the instructions,
+// the extension and a fresh session's copy.
 //
-// Mutation: drop the removal — the earlier run's files stay.
-func TestCopilotWriteConfigRemovesWhatAnEarlierRunWrote(t *testing.T) {
+// Mutation: drop the extension's directory from the artifacts, or write the
+// extension for every run — the case fails.
+func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
 	if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, paths); err != nil {
 		t.Fatal(err)
 	}
-	execs := box.Commands()
-	if len(execs) == 0 || !strings.HasPrefix(execs[0], "rm -rf ") || !strings.Contains(execs[0], paths.CopilotExtension()) ||
-		!strings.Contains(execs[0], paths.CopilotInstructions()) {
-		t.Fatalf("commands = %v, want the earlier extension and instructions removed", execs)
-	}
 	if ext, _ := box.ReadFile(t.Context(), paths.CopilotExtension()+"/extension.mjs"); ext != nil {
 		t.Error("an extension was written for a run with no notes and no cap")
+	}
+	files, dirs := (Copilot{}).artifacts(paths)
+	if !slices.Equal(files, []string{paths.CopilotInstructions(), paths.CopilotExtensionFresh()}) ||
+		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
+		t.Fatalf("artifacts = %v, %v", files, dirs)
+	}
+}
+
+// A note's inbox id is the job's and the note's alone, the same every time it
+// is asked: a note served again is read back by the id it was sent under.
+//
+// Mutation: hash the note alone — two jobs' ids agree.
+func TestACopilotInboxIDIsTheJobsAndTheNotes(t *testing.T) {
+	c := Copilot{}
+	a := c.inboxID("job-1", "note-1")
+	if a != c.inboxID("job-1", "note-1") || a == c.inboxID("job-2", "note-1") || a == c.inboxID("job-1", "note-2") ||
+		len(a) != 32 {
+		t.Fatalf("inbox ids: %q", a)
+	}
+}
+
+// The runner reads a note's confirmation off the box's own copy of the
+// session, and says it could not where the record is not there to read.
+//
+// Mutation: answer an unreadable record as no note held — the error case fails.
+func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
+	box := sandbox.NewFakeSandbox("b")
+	const session = "55555555-5555-4555-8555-555555555555"
+	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
+	held, err := (Copilot{}).notesHeld(t.Context(), box, session, []string{"msg_inbox1"})
+	if err != nil || !held["msg_inbox1"] {
+		t.Fatalf("held = %v (%v), want the steered note", held, err)
+	}
+	box.ReadErr = func(string) error { return io.ErrUnexpectedEOF }
+	if _, err := (Copilot{}).notesHeld(t.Context(), box, session, []string{"msg_inbox1"}); err == nil {
+		t.Fatal("an unreadable record answered as a reading")
 	}
 }
 

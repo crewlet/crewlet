@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -63,3 +65,24 @@ func copilotExtension(settings copilotExtensionSettings) (string, error) {
 	}
 	return strings.Replace(copilotNotesExtension, copilotExtensionConfig, string(raw), 1), nil
 }
+
+// inboxID is the id a Copilot run's extension sends a note under for a job
+// (its clientTurnId, [CopilotClientTurnID]): 32 hex digits of a hash of the job
+// and the note. UNIQUE TO BOTH, since one session carries every relaunch's
+// notes and the confirm reader keys on the id ([copilotNotesHeld]); STABLE, so
+// a note served again is read by the same id.
+func (Copilot) inboxID(launch, noteID string) string {
+	sum := sha256.Sum256([]byte("crewlet.steer\x00" + launch + "\x00" + noteID))
+	return hex.EncodeToString(sum[:])[:32]
+}
+
+// copilotPollCeiling is the most UTF-16 units one note the extension sends can
+// carry: 100,000, the largest measured whole on 1.0.114 (notes of 4,505, 9,000,
+// 20,000 and 100,000 units, two-unit characters among them, each reached the
+// model's next request as one message identical to the one sent). Copilot cuts
+// no message; past this the only bound is the model's prompt budget, which a
+// 1,000,000-unit note met.
+const copilotPollCeiling = 100_000
+
+// pollCeiling is [copilotPollCeiling].
+func (Copilot) pollCeiling() int { return copilotPollCeiling }
