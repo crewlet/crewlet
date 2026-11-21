@@ -4,7 +4,14 @@ import (
 	"crypto/subtle"
 	"errors"
 	"slices"
+	"time"
 )
+
+// ApplyBound bounds everything a product does under an act's apply lease: the
+// target's read and the vendor write at their minute-long request timeouts.
+// A call still running at the bound is cut, so nothing acts once the lease
+// could lapse; internal/engine's lease lives past it.
+const ApplyBound = 2 * time.Minute
 
 // Call is one call of a growth tool by a seat's turn: ID names a call made at
 // once, which a product records it under ([Record.Call]); a held call names

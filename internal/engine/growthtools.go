@@ -26,9 +26,10 @@ import (
 const growthActClass coord.Class = "growth_act"
 
 const (
-	// growthActLeaseTTL bounds one act's apply: a vendor write answers in
-	// seconds, and a minute lapses an apply its node lost.
-	growthActLeaseTTL = time.Minute
+	// growthActLeaseTTL outlives everything an apply does under the lease,
+	// which growth.ApplyBound cuts, by half a minute for the lease store's
+	// clock and the release's round trip; it lapses an apply its node lost.
+	growthActLeaseTTL = growth.ApplyBound + 30*time.Second
 	// growthActWait is how long an apply waits for another on the same
 	// target before the agent is told to call again.
 	growthActWait = 30 * time.Second
