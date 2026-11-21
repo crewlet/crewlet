@@ -27,8 +27,9 @@ import (
 // to it: a box whose envd is unreachable is still killable, so a network blip
 // cannot leak a running VM.
 
-// The E2B addresses. The domain derives both the API and the per-box
-// hostnames, so a self-hosted cluster is one field, not two that can disagree.
+// The E2B addresses. The domain derives the API's and, unless E2B answers a
+// domain of its own for a box, the per-box hostnames, so a self-hosted cluster
+// is one field, not two that can disagree.
 const (
 	// DefaultE2BDomain is the vendor cloud.
 	DefaultE2BDomain = "e2b.dev"
@@ -42,6 +43,14 @@ const (
 // from a cold template takes seconds, and a tighter bound would abandon boxes
 // about to exist, the one failure with a running cost.
 const E2BClientTimeout = 60 * time.Second
+
+// e2bPrivateFloor is the oldest e2b-dev/infra release a self-hosted cluster
+// may run: the first to carry both e2b-dev/infra#1474, which mints the traffic
+// token for a private box, and e2b-dev/infra#1482, which exempts envd's port
+// from it. A cluster built from e2b-dev/infra's main in the hour between the
+// two, which no release carries, guards envd's port too, so its boxes pass
+// [e2bAPI.createBox]'s check and fail at their first envd call.
+const e2bPrivateFloor = "2025.46"
 
 // e2bAPI is the control plane for one deployment.
 type e2bAPI struct {
@@ -185,24 +194,65 @@ type e2bBox struct {
 	// create or a connect answers a running box without it.
 	State string `json:"state,omitempty"`
 
+	// Domain is where E2B serves the box's ports: answered for a team on a
+	// cluster of its own, empty otherwise. A cluster can move to a new domain
+	// while its boxes run, so it is read from every answer that builds a handle.
+	Domain string `json:"domain,omitempty"`
+
 	// EnvdAccessToken is the credential a secured box's envd requires on
 	// every request (`X-Access-Token`), and every box this backend creates is
 	// secured ([e2bAPI.createBox]). E2B answers it on a create, a connect and
 	// a read alike, so every handle carries it. Never logged or stored: every
 	// call that reaches the box hands it back.
 	//
-	// Source: the Sandbox and SandboxDetail schemas of
-	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+	// Sources: E2B's "Secured access"
+	// (https://docs.e2b.dev/sandbox/secured-access); the Sandbox and
+	// SandboxDetail schemas of
+	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml, and
+	// envd's WithAuthorization in packages/envd/internal/api/auth.go.
 	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
+
+	// TrafficToken is whether the answer carried the box's traffic access
+	// token, which E2B mints only for a box made private ([e2bAPI.createBox]).
+	// Never the token: nothing here sends it, so nothing holds it.
+	TrafficToken answered `json:"trafficAccessToken"`
+}
+
+// answered is whether E2B answered a credential, holding nothing of it.
+type answered bool
+
+// UnmarshalJSON records whether a JSON string longer than its two quotes
+// arrived; JSON null reaches it too. Any other value is no answer rather than
+// an error, which would fail the decode and lose the id of a box just created.
+func (a *answered) UnmarshalJSON(raw []byte) error {
+	*a = len(raw) > 2 && raw[0] == '"'
+	return nil
+}
+
+// e2bNetwork is a create's network settings. AllowPublicTraffic is never
+// omitempty: a false left out is the project's default, public on a project
+// that predates E2B's private default. maskRequestHost is never set: it
+// rewrites the Host header a box's service sees, and nothing the engine runs
+// needs it. Sources: E2B's "Restricting public access"
+// (https://docs.e2b.dev/network/restrict-public-access); in e2b-dev/infra,
+// spec/openapi.yml (SandboxNetworkConfig, Sandbox.trafficAccessToken),
+// packages/api/internal/handlers/sandbox_create.go,
+// packages/api/internal/orchestrator/create_instance.go, and the proxy's
+// ResolveIngress in packages/shared/pkg/proxy/ingress.go.
+type e2bNetwork struct {
+	AllowPublicTraffic bool `json:"allowPublicTraffic"`
 }
 
 // e2bPaused is the [e2bBox.State] of a snapshot.
 const e2bPaused = "paused"
 
-// host is the per-box envd hostname. A box that reports no client id has the
-// short form; the long form would be `49983-abc-.e2b.dev`, which resolves to
-// nothing.
+// host is the per-box envd hostname, on the domain E2B answered for the box,
+// else the deployment's. A box that reports no client id has the short form;
+// the long form would be `49983-abc-.e2b.dev`, which resolves to nothing.
 func (b e2bBox) host(domain string) string {
+	if b.Domain != "" {
+		domain = b.Domain
+	}
 	name := b.SandboxID
 	if b.ClientID != "" {
 		name += "-" + b.ClientID
@@ -210,23 +260,23 @@ func (b e2bBox) host(domain string) string {
 	return fmt.Sprintf("https://%d-%s.%s", e2bEnvdPort, name, domain)
 }
 
-// createBox mints one sandbox. The TTL is its kill timer, refreshed by
-// [E2BSandbox.SetTimeout] every poll tick: it bounds how long a box outlives
-// a stopped engine, never how long a job runs.
-//
-// Always `secure: true`, else envd requires no credential and E2B answers no
-// token. Secured, envd requires the create's token ([e2bBox.EnvdAccessToken])
-// on every request but its health check, as E2B's SDKs do since 2.0; E2B
-// refuses a template whose envd is below 0.2.0, saying to rebuild it.
-//
-// Sources: https://e2b.dev/docs/sandbox/secured-access; in e2b-dev/infra,
-// spec/openapi.yml (NewSandbox), packages/api/internal/handlers/sandbox_create.go
-// and envd's WithAuthorization in packages/envd/internal/api/auth.go.
+// createBox mints one sandbox, private and secured, or none. Public traffic is
+// off, so E2B's proxy passes a request to a port but envd's only with the
+// box's traffic token, which nothing here keeps; an answer carrying none came
+// from an API that ignored the field, so its box is killed and refused as
+// configuration ([e2bAPI.refusePublic]). `secure` is sent for a cluster from
+// before E2B secured every box itself (e2b-dev/infra 315a94e737), and envd
+// requires the token every answer carries ([e2bBox.EnvdAccessToken]); E2B
+// refuses a template whose envd is below 0.2.0. The TTL is the box's kill
+// timer, refreshed by [E2BSandbox.SetTimeout] every poll tick: it bounds how
+// long a box outlives a stopped engine, never how long a job runs. Why: the
+// package doc, "AND AN E2B BOX IS PRIVATE", and [e2bNetwork].
 func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
 		Timeout    int               `json:"timeout,omitempty"`
 		Secure     bool              `json:"secure"`
+		Network    e2bNetwork        `json:"network"`
 		EnvVars    map[string]string `json:"envVars,omitempty"`
 		Metadata   map[string]string `json:"metadata,omitempty"`
 	}
@@ -235,6 +285,7 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 		TemplateID: template,
 		Timeout:    int(timeoutSec),
 		Secure:     true,
+		Network:    e2bNetwork{AllowPublicTraffic: false},
 		EnvVars:    env,
 		// Stamped so a leaked VM in the E2B dashboard is attributable: a
 		// box outlives the process that made it by design.
@@ -260,7 +311,38 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 				"may be running that nothing can reach or reclaim — check the "+
 				"E2B dashboard for an orphan"))
 	}
+	if !out.TrafficToken {
+		return e2bBox{}, a.refusePublic(ctx, out.SandboxID)
+	}
 	return out, nil
+}
+
+// refusePublic kills sandboxID, which E2B created without a traffic token and
+// so public, and refuses its launch as configuration, on E2B's cloud as on a
+// cluster: no wait the engine can see clears it (the package doc, "AND AN E2B
+// BOX IS PRIVATE"). Only a cluster's remedy is a setting, so the words differ.
+//
+// The kill is the create's own rollback, so it runs under a
+// [context.WithoutCancel] of its own, as a backend's rollback inside its call
+// does ([detach]), bounded by the client's [E2BClientTimeout]: the box is
+// killed though its caller gave up as the create answered. A failed kill is
+// told inside the mark, so its own class (a 500's provider_unavailable) never
+// replaces configuration ([WhyOf] reads the outermost).
+func (a *e2bAPI) refusePublic(ctx context.Context, sandboxID string) error {
+	public := fmt.Sprintf("e2b: the API at api.%s created sandbox %s without a traffic "+
+		"access token, so every port of it but envd's is public", a.domain, sandboxID)
+	remedy := "The launch is refused. Run e2b-dev/infra " + e2bPrivateFloor + " or later " +
+		"on that cluster, or leave providers.sandbox.e2b.domain empty for E2B's cloud"
+	if a.domain == DefaultE2BDomain {
+		remedy = "The launch is refused. On E2B's cloud no setting under providers.sandbox.e2b " +
+			"mends this: report it to E2B, and until it is mended run in another cell (run_in)"
+	}
+	if err := a.killBox(context.WithoutCancel(ctx), sandboxID); err != nil {
+		return Because(WhyConfiguration, fmt.Errorf("%s, and killing it failed (%w), so it "+
+			"may still be running: find it in the E2B dashboard by its metadata "+
+			"crewlet: sandbox. %s", public, err, remedy))
+	}
+	return Because(WhyConfiguration, fmt.Errorf("%s: it was killed. %s", public, remedy))
 }
 
 // createRefusesTemplate reports a status a create answers only about the

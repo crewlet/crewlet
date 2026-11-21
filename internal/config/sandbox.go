@@ -185,8 +185,9 @@ type E2BSandbox struct {
 	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
 	//
 	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
-	// address and every box's own hostname are both derived from it, so
-	// there is no second address that can disagree with the first.
+	// address and every box's own hostname are derived from it, a box's unless
+	// E2B answers a domain of its own for it, so no second setting can
+	// disagree with the first.
 	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
 
 	// Template is the box image.

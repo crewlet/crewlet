@@ -46,6 +46,18 @@
 // a lineage nor put on the executor log: a copy grown by its brief would be
 // understated.
 //
+// AND AN E2B BOX IS PRIVATE ([e2bAPI.createBox]): its create turns public
+// traffic off, since a field left out is the project's default, public on a
+// project that predates E2B's private default. E2B's proxy then passes a
+// request to any port but envd's only with the box's traffic token, which the
+// engine never keeps or sends, and envd checks its own access token. E2B
+// mints the traffic token only for a private box, so a create answered without
+// one came from an API that ignored the field: a cluster below
+// [e2bPrivateFloor], or E2B's cloud no longer answering it. The box is public,
+// so it is killed and the launch refused as configuration
+// ([e2bAPI.refusePublic]): no wait clears it, and a class that waits would
+// mint and kill a billed box on every retry.
+//
 // # A launch's harness session is kept, and a turn's end recorded
 //
 // By session.go (ADR-0073). A session is taken wherever its box can still be
