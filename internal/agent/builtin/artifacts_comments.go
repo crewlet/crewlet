@@ -135,7 +135,9 @@ func (d ArtifactDeps) commentAnswer(ctx context.Context, turn *turnctx.Turn, too
 	if err != nil {
 		return publishFailure(ctx, tool, t.c, err), nil
 	}
-	commit(turn, res.Outcome, types.CommittedComment)
+	// THE ARTIFACT, as every wake about a remark on it is stamped (ADR-0167).
+	commit(turn, res.Outcome, types.CommittedComment,
+		types.ConversationWritten(artifactsdomain.ArtifactConversation(t.h.ID.String())))
 	if res.Outcome == statelog.OutcomeUnknown {
 		return artifactUnknown(tool, t.c, res, "Read the thread with "+ListArtifactCommentsTool+
 			": it says whether the change landed."), nil

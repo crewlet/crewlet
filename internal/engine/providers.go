@@ -350,8 +350,10 @@
 // While one of a seat's executor runs holds it, the node holding the seat
 // reads the held inbox through the queue's backlog read, which consumes and
 // spends nothing, and files to the run, as a wake item for its job, each wake
-// from the run's own requester in its conversation or about its work item
-// ([routeOf]); another writer's never on that rule (ADR-0109). One router per busy seat
+// from the run's own requester in its conversation, about its work item or
+// about a record its calls created or wrote, by exact identity ([routeOf],
+// [wroteAbout], off the run's log, [sandbox.BridgeLog.Wrote]); another writer's
+// never on that rule (ADR-0109). One router per busy seat
 // ([Engine.seatRunsMoved]), nudged by a stream subscription on the inbox and
 // its lane and by the seat's dispatch going idle, with a backstop read
 // ([routeBackstop]); each wake decided once per job. A claimed wake's delivery

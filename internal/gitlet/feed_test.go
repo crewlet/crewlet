@@ -529,8 +529,9 @@ func TestAMergedWakeWhoseCloseWasNotMadeSaysWhy(t *testing.T) {
 }
 
 // THE PROMPT IS THE CHANGE'S: a code wake keys its conversation on the
-// change's id, never its name, which a repository's rename moves; it is
-// always a pointer at the change; it asks for an answer exactly under the
+// change's id, never its name, which a repository's rename moves, stamped as
+// the identity a write to the change records (ChangeConversation, ADR-0167); it
+// is always a pointer at the change; it asks for an answer exactly under the
 // reasons that ask something; and it wakes the record's actor only for a
 // check's ending (Reason.WakesActor).
 func TestACodeWakeIsAboutItsChange(t *testing.T) {
@@ -548,6 +549,10 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 	}
 	if p.ConversationIdentity(map[string]string{gitlet.MetaChangeRef: "web!42"}, "") != "" {
 		t.Error("a wake naming no change keys a conversation")
+	}
+	stamped := notify.NewPrompts(p).Conversation(notify.Inbound{Source: gitlet.Source, Metadata: after})
+	if got := gitlet.ChangeConversation("c-1"); got != stamped || got == "" || gitlet.ChangeConversation("") != "" {
+		t.Errorf("a write to the change records %q, and a wake about it is stamped %q", got, stamped)
 	}
 	for _, r := range gitlet.Reasons() {
 		n := notify.Inbound{Source: gitlet.Source, Subject: "web!42: Retry the upload",
