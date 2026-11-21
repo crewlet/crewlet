@@ -554,6 +554,7 @@ type TurnCompleted struct {
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
 	// constituent, possibly from several senders. Empty for internal triggers.
+	// Each body REDACTED, as Ask is.
 	Interactions []InboundInteraction `json:"interactions,omitempty"`
 	// ConversationKey is empty when the trigger has no conversation a later
 	// message could reproduce.

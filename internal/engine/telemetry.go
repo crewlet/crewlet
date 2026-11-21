@@ -605,7 +605,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Acted:           actedOutside(calls, deliverySurface(e.ToolsFor(t.handle))),
 		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
-		Interactions:    t.interactions,
+		Interactions:    recordedInteractions(t.interactions),
 		ConversationKey: t.convKey,
 	}
 	if !res.Suspended && t.measuredWhole() {
@@ -811,6 +811,18 @@ func (t turnTelemetry) unspokenAskLabel() *provenance.Label {
 		return nil
 	}
 	return t.askLabel
+}
+
+// recordedInteractions is the turn's interactions as its record keeps them,
+// each body REDACTED, in a copy: the park keeps the turn's own as they came,
+// and the model read the bodies through the trigger, never through these.
+// Whole, as the record carries them uncut.
+func recordedInteractions(in []types.InboundInteraction) []types.InboundInteraction {
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].Body = redact.Secrets(out[i].Body)
+	}
+	return out
 }
 
 // planSummary is the reviewer's account of the turn, or the artifact,

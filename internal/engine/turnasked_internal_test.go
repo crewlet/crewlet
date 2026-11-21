@@ -95,3 +95,41 @@ func TestATurnsCompletedRecordHoldsNoSecretItsAskCarried(t *testing.T) {
 		}
 	}
 }
+
+// A TURN'S COMPLETED RECORD HOLDS NO SECRET ITS INTERACTIONS CARRIED. Each
+// message that woke the turn is somebody's words: a provider's key, a
+// password or a bearer token in any constituent's body reaches
+// turn_completed's interactions, which the learning workers and the episode
+// store read, as a marker, the words around it kept and the other bodies
+// untouched. The turn's own interactions, which its park keeps, stay as they
+// came. The record cuts no body, so no case straddles a cut.
+//
+// Mutation: publish the interactions unredacted (recordedInteractions), or
+// redact them in place, and the record holds each or the park's copy changes.
+func TestATurnsCompletedRecordHoldsNoSecretItsInteractionsCarried(t *testing.T) {
+	t.Parallel()
+	for _, p := range planted(t) {
+		e, pub, tel := failing(t)
+		said := "the staging login is\n" + p.text + "\nuse it for the release"
+		tel.interactions = []types.InboundInteraction{
+			{Sender: types.CanonicalIdentity{ExternalID: "U0ALICE"}, Body: "can you ship it today?"},
+			{Sender: types.CanonicalIdentity{ExternalID: "U0BOB"}, Body: said},
+		}
+		e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, turn.Result{Decision: phase.Done,
+			Artifact: "done"}, nil, time.Now())
+		got := only[*types.TurnCompleted](t, pub, "turn_completed")
+		if len(got.Interactions) != 2 {
+			t.Fatalf("%s: the record carries %d interactions, want both", p.name, len(got.Interactions))
+		}
+		if got.Interactions[0].Body != "can you ship it today?" || got.Interactions[1].Sender.ExternalID != "U0BOB" {
+			t.Errorf("%s: the record's interactions are %+v, want both as they came but the secret", p.name,
+				got.Interactions)
+		}
+		holdsNone(t, p.name+": the record's body", got.Interactions[1].Body, p)
+		keptAround(t, p.name+": the record's body", got.Interactions[1].Body, "the staging login is\n",
+			"\nuse it for the release")
+		if tel.interactions[1].Body != said {
+			t.Errorf("%s: the turn's own interaction was changed: its park keeps it as it came", p.name)
+		}
+	}
+}
