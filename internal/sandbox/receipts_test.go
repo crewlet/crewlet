@@ -251,12 +251,12 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 
 // EVERY ENDING READ PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
 // stop's and a loss's read each hand the engine the notes the job's session
-// confirmed, never an item of the store's; and a verdict that landed with its
-// answer lost hands the read back, and the read made again, asking nothing,
-// publishes the note once.
+// confirmed and the wake items it took, for the engine to claim, never a late
+// call's item; and a verdict that landed with its answer lost hands the read
+// back, and the read made again, asking nothing, publishes the note once.
 //
-// Mutation: publish at a collection alone, only off the verdict's answer, or
-// items too, and a case goes red.
+// Mutation: publish at a collection alone, only off the verdict's answer, every
+// item, or no wake item, and a case goes red.
 func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
@@ -308,6 +308,23 @@ func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 		}
 		if got := spy.ids(); !slices.Equal(got, []string{"n1"}) {
 			t.Errorf("published %v, want the person's note alone, never the store's item", got)
+		}
+	})
+	t.Run("a wake item read off a serve", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		spy := watchConfirmed(rig.coordinator)
+		run := rig.launch("t1")
+		run.Harness = ClaudeCodeHarness
+		run.Steer.Notes = []RunNote{{ID: "wake", For: run.LaunchID,
+			Wake: &WakeItem{Wakes: []SealedWake{{ID: "w-1"}}}, Read: &NoteRead{Launch: run.LaunchID, Take: "take-wake"},
+			Serves: []HookServed{{Take: "take-wake", Launch: run.LaunchID,
+				Boundary: string(types.SteerBoundaryToolBatch)}}}}
+		if err := rig.coordinator.settleHookReceipts(t.Context(), run, HookReceipts{}, BoxReadCollect); err != nil {
+			t.Fatalf("the publish: %v", err)
+		}
+		if got := spy.ids(); !slices.Equal(got, []string{"wake"}) {
+			t.Errorf("published %v, want the wake item its job's session took, for the engine to claim", got)
 		}
 	})
 	t.Run("a verdict landed with its answer lost", func(t *testing.T) {

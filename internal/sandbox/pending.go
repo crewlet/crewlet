@@ -2563,6 +2563,17 @@ type PendingStore interface {
 	// serving notes".
 	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
 
+	// FileWake files a wake for the job a filing names as a wake item
+	// ([RunNote.Wake]), the store's alone to file, and answers the item holding
+	// it: only while the record names that job, launching or running, its
+	// ending undecided, else [ErrWakeClosed]. It joins the job's newest item
+	// while that waits served to nobody, within [MaxItemWakes] and
+	// [MaxWakeItemBytes], else opens one, past [MaxJobWakes] for the job or
+	// [MaxTurnWakes] for the turn [ErrWakesSpent]; a seal past
+	// [MaxWakeItemBytes] is [ErrWakeTooLarge]. A retry of a wake held answers
+	// its item. No fence. See the package doc, "A wake joins a running run".
+	FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error)
+
 	// TakeNotes records the notes a take names read, where its Read says, and answers
 	// the ones THIS CALL recorded, each with its read. Pinned ([NoteTake]): a failed
 	// pin, a note no longer waiting, an item for a job its Read does not name
@@ -2582,7 +2593,8 @@ type PendingStore interface {
 	// ([RunNote.IsFor]), and a gone or ending record serve nothing, never an error; a
 	// serve naming no job or status is one. The mark precedes the handover, so a note a
 	// harness may have delivered is never one the record is silent on
-	// ([PendingStore.TakeNotes]).
+	// ([PendingStore.TakeNotes]); a wake item a wake joined since the poll read it is
+	// served nothing ([NoteServe.Wakes]).
 	ServeNotes(ctx context.Context, turnID string, serve NoteServe) ([]RunNote, error)
 
 	// SettleTake settles a take whose TakeNotes answered an error, by the identity its
@@ -2604,8 +2616,9 @@ type PendingStore interface {
 	// serves; pinned to the serve's job, statuses and an undecided ending ([HookServe]).
 	// A live serve that answered a cancelled call is lost to the cancel
 	// ([ServeCancelled]), a serve of an unanswered take is removed, then each eligible
-	// note is served, up to [MaxNoteServes] serves. A serve, never a read: the job's
-	// session says whether the hook took it ([PendingStore.SettleHook]). See the
+	// note is served, up to [RunNote.MaxServes] serves, and a wake item a wake joined
+	// since the hook read it not at all ([HookServe.Wakes]). A serve, never a read: the
+	// job's session says whether the hook took it ([PendingStore.SettleHook]). See the
 	// package doc, "Filing and serving notes".
 	ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error)
 
@@ -3138,6 +3151,10 @@ type PriorBox struct {
 	// ([LaunchRecord.CountRelease]): what the box's OpenCode point is paired with where
 	// the copy is continued in place. "" where none was named.
 	Writer string
+	// Wakes are the wake items of the job that used the box that no step read, which
+	// the reset removed ([openNotes]): that job is over, so the launch reports each
+	// ([CoordinatorOptions.WakesEnded]), and its delivery runs as a turn of its own.
+	Wakes []RunNote
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, from its first attach

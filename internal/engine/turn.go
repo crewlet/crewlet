@@ -1421,6 +1421,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
+	joined := d.joinedOf(ctx, handle, evs, worked)
 	out := make([]*events.Event, 0, len(evs))
 	var skipped map[uuid.UUID]skipCause
 	skip := func(id uuid.UUID, cause skipCause) {
@@ -1437,6 +1438,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		chat, edit, isChat := chatKeyOf(ev)
 		switch {
+		case joined[joinedKey(ev.ID.String())]:
+			skip(ev.ID, skipJoined)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
 		case isChat && edit && worked[chat]:
@@ -1450,6 +1453,23 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 	}
 	return out, skipped
+}
+
+// joinedOf is which of evs a running turn's run read as a wake ([joinedKey]),
+// by that mark: asked only of those whose own key is worked, so a dispatch no
+// turn worked any trigger of reads the ledger no more than it did.
+func (d *Dispatcher) joinedOf(ctx context.Context, handle string, evs []*events.Event,
+	worked map[string]bool) map[string]bool {
+	var keys []string
+	for _, ev := range evs {
+		if d.ledgered(ev.Type) && worked[workkey.Derive([]string{ev.ID.String()})] {
+			keys = append(keys, joinedKey(ev.ID.String()))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.Worked(ctx, handle, keys)
 }
 
 // recordWorked writes the completion ledger after a turn.
@@ -1759,6 +1779,9 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
+		case skipJoined:
+			reason = "it joined a running turn as a message about its work, which that turn's run read: the " +
+				"turn's agent_turn_joined record names it"
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",

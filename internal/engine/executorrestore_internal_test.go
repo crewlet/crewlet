@@ -51,21 +51,6 @@ func (k *keptLog) Session(_ context.Context, handle, turn string) (executorkeep.
 	return row.Kept(), nil
 }
 
-func (k *keptLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	body, ok := k.archives[row.Object.Key.String()]
-	if !ok {
-		return executordomain.ErrUnreadable
-	}
-	_, err := dst.Write(body)
-	return err
-}
-
-func (k *keptLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
-	return sealed, nil
-}
-
 func (k *keptLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -1082,10 +1067,9 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 }
 
 // THE RESTORE STREAMS THE OBJECT ITS ROW NAMES, OPENED AGAINST THAT ROW AS IT
-// STREAMS: a reading of what a kept session holds reads exactly the archive
-// the fetch and the spool's open hand a launch, every chunk of it
-// authenticated (the store's own stream, which spools nothing, so the case
-// checks no spool); the same object named by another turn's row does not
+// STREAMS: a restore and a reading of what a kept session holds read exactly
+// the archive the turn kept, every chunk of it authenticated; the same object
+// named by another turn's row does not
 // open, its seal being bound to the turn its row names; and a row naming no
 // object is unreadable, as the store says of one.
 //
@@ -1117,23 +1101,10 @@ func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
 	restore := executorRestore{engine: e}
 	row := executorkeep.TurnRow{Handle: "swe", Turn: turn, Object: sealed.Object}
 
-	var spool bytes.Buffer
-	if err := restore.Fetch(t.Context(), row, &spool); err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	opened, err := restore.OpenSpooled(row, &spool)
-	if err != nil {
-		t.Fatalf("OpenSpooled: %v", err)
-	}
-	spooled, err := io.ReadAll(opened)
-	if err != nil || !bytes.Equal(spooled, archive) {
-		t.Fatalf("the spool opened to %d bytes (%v), want the %d the turn's archive holds", len(spooled), err,
-			len(archive))
-	}
 	streamed, err := streamOf(t, restore, row)
-	if err != nil || !bytes.Equal(streamed, spooled) {
-		t.Fatalf("the restore streamed %d bytes (%v), want the %d the spool opens to", len(streamed), err,
-			len(spooled))
+	if err != nil || !bytes.Equal(streamed, archive) {
+		t.Fatalf("the restore streamed %d bytes (%v), want the %d the turn's archive holds", len(streamed), err,
+			len(archive))
 	}
 	foreign := row
 	foreign.Turn = other

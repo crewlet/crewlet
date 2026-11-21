@@ -63,7 +63,7 @@ func (s *stampsAsked) StampCapture(ctx context.Context, turnID string, stamp Ses
 // node without `data` reaches the coordination store across its leaf link, and
 // every change reads and writes the whole row, up to RowBytes. A flat budget (a
 // carry's five seconds, a stamp's or an owed end's thirty, a reservation
-// sharing the scrub's two minutes) cuts a change while its bytes still cross, as
+// sharing the scrub's seven minutes) cuts a change while its bytes still cross, as
 // does re-asking the read before its reply arrives; at rowCrossingRate each
 // read takes about fifty-one seconds and each write thirty-eight.
 //
@@ -119,7 +119,7 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			// pack and the scrub had spent theirs, so the reservation lands in
 			// the room or nowhere. A check of the room, not a replay of the take
 			// ([Coordinator.takeCapture]): inside the take's budget it would
-			// share the scrub's two minutes, which a change of a row at its
+			// share the scrub's seven minutes, which a change of a row at its
 			// bound outlasts at the slowest pace a link is allowed.
 			name: "a take's reservation of its place", stamps: 1,
 			row: PendingRun{TurnID: "t-reserve", AgentHandle: "swe", Status: StatusRunning,

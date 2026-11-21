@@ -644,6 +644,22 @@ func worstRow(t *testing.T) PendingRun {
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
 			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
+	// AND THE TURN'S WAKE ITEMS, as many as the row holds ([MaxTurnWakes]): each
+	// of [MaxItemWakes] wakes under the widest id, sealed at an even share of
+	// [MaxWakeItemBytes], for a job, under the widest item id ([wakeItemID]),
+	// served as often as a wake is ([MaxWakeServes]) and read, as every one a
+	// relaunch keeps is ([openNotes]).
+	for range MaxTurnWakes {
+		job := uuid.NewString()
+		wakes := make([]SealedWake, MaxItemWakes)
+		for i := range wakes {
+			wakes[i] = SealedWake{ID: plain(MaxWakeIDBytes), Sealed: []byte(plain(MaxWakeItemBytes / MaxItemWakes)),
+				At: worstAt}
+		}
+		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
+			Read: read(), Wake: &WakeItem{Wakes: wakes}})
+	}
 	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
 	// a round and a job at their widest ids, every number at its widest, a
 	// hook's.
@@ -1137,6 +1153,9 @@ var zeroInTheWorstRow = func() map[string]string {
 			"theirs",
 		"Steer.Notes[0].LateCall": "the walk reads the first note, a person's, which hands no job a call " +
 			"(RunNote.LateCall); the worst row's job items each carry theirs at its widest (worstItemCall)",
+		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
+			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
+			"at their bound",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at

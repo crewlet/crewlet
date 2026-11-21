@@ -57,14 +57,19 @@ const (
 	// ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
 	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra] and
 	// its session's and siblings', [RunSteer.Extra] and its notes', their hooks'
-	// serves', the calls those answered, an item's late call and the notes'
-	// tellings), and that this build carries without reading: STATED HERE, so the
-	// next field a build adds is added inside it, and the build that adds it moves
-	// its own figure out of this one rather than out of a share somebody else's
-	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
-	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
-	// room: all of it is still a later build's.
-	ExtraRowBytes = 256 << 10
+	// serves', the calls those answered, an item's late call or wakes and the
+	// notes' tellings), and that this build carries without reading: STATED HERE,
+	// so the next field a build adds is added inside it, and the build that adds
+	// it moves its own figure out of this one, as the turn's wake items took
+	// theirs ([wakeRowBytes]). The turn's read of its conversation
+	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes
+
+	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
+	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
+	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// leave a little over.
+	wakeRowBytes = 100 << 10
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal
 	// and the deliveries it was made of ([RecordedAnswer]) — and, apart, the
@@ -124,7 +129,7 @@ const (
 	// (steer.MaxTurnNotes), each kept on the row once read.
 	MaxNoteSealedBytes = 16 << 10
 
-	// MaxNoteServes bounds the serves of one note, or one job's item, to one
+	// MaxNoteServes bounds the serves of one note, or a late call's item, to one
 	// job's hooks ([RunNote.Serves]), held by [PendingStore.ServeHook]: a first
 	// serve and two after losses. Three is a judgment value no run of losses
 	// has measured. A serve is lost when its harness gives the hook's call up,
@@ -172,6 +177,46 @@ const (
 	// TestTheWholeRowFitsItsBudget holds.
 	MaxCallTellings = 2 * MaxJobItems
 
+	// MaxJobWakes bounds the wake items one job holds ([RunNote.Wake]), apart
+	// from a person's notes and late calls, held by [PendingStore.FileWake].
+	// FOUR, the most beside the notes' and items' serves that one read of a
+	// job's session can ask about: its hook record's masks are sixty-four takes
+	// wide (internal/sandbox/executor's maxAskedTakes, a compile-time check),
+	// and twenty notes and items at [MaxNoteServes] ask sixty. Wakes between
+	// two steps join one item ([MaxItemWakes]), so four items carry a burst.
+	MaxJobWakes = 4
+
+	// MaxTurnWakes bounds the wake items the row holds for the whole turn: a
+	// wake item read is the turn's, kept by every relaunch since its delivery
+	// is worked ([openNotes]). EIGHT, two jobs' worth: past it a wake runs as a
+	// turn of its own, the safe default.
+	MaxTurnWakes = 2 * MaxJobWakes
+
+	// MaxWakeServes bounds the serves of one wake item to one job's hooks: ONE.
+	// A serve its harness lost leaves the wake unread, and an unread wake runs
+	// as a turn of its own once the run is over, so a second serve would buy a
+	// ten-second stall for what is never lost.
+	MaxWakeServes = 1
+
+	// MaxItemWakes bounds the wakes one item carries ([WakeItem.Wakes]): FOUR,
+	// a burst between two steps, which one hook answer can show beside a
+	// person's widest note only as the newest few anyway (internal/engine's
+	// wakeItemMessage names how many it leaves out).
+	MaxItemWakes = 4
+
+	// MaxWakeItemBytes bounds one wake item's seals together, and so each
+	// wake's ([SealedWake.Sealed], raw: the row writes base64, a third more).
+	// EIGHT KIB: a wake's words are at most a thousand characters
+	// (internal/agent/steer's MaxWakeRunes), six bytes each at their most
+	// escaped, sealed with who wrote them, where and the ledger keys of their
+	// delivery. [MaxTurnWakes] items at it fit [wakeRowBytes] of the row.
+	MaxWakeItemBytes = 8 << 10
+
+	// MaxWakeIDBytes bounds a wake's id ([SealedWake.ID]), of the id charset
+	// so it is written as itself: SIXTY-FOUR BYTES, past the delivery's UUID
+	// its filer names it by.
+	MaxWakeIDBytes = 64
+
 	// MaxAudienceHandles bounds the seats a parked question is put to
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
 	// audience is every person in the asking seat's unit, which nothing else
@@ -207,8 +252,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_219_372
-	measuredSpare       = 376_536
+	measuredOtherFields = 2_319_068
+	measuredSpare       = 379_240
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
