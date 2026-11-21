@@ -61,32 +61,30 @@ type Options struct {
 }
 
 // New builds a connection, refusing an input that would fail every call with
-// a misleading refusal. Each error names the field to change.
+// a misleading refusal as a [*ConfigError] naming the field to change.
 func New(opts Options) (*Connection, error) {
 	email := strings.TrimSpace(opts.Provisioner)
 	identity, ok := config.GoogleCloudServiceAccount(email)
 	if !ok {
-		return nil, errors.New("googleauth: integrations.google_cloud.provisioning.provisioner is not a " +
-			"service account's email")
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provisioner is not a service account's email"}
 	}
 	provider := strings.TrimSpace(opts.Provider)
 	if !config.GoogleCloudProvider(provider) {
-		return nil, errors.New("googleauth: integrations.google_cloud.provisioning.provider is not a " +
-			"workload identity provider's full resource name")
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provider is not a workload identity " +
+			"provider's full resource name"}
 	}
 	if org.Slugify(opts.Company) == "" {
-		return nil, errors.New("googleauth: the company's name has no letter or digit to sign its " +
-			"federation token as")
+		return nil, &ConfigError{Sentence: "the company's name has no letter or digit to sign its federation token as"}
 	}
-	key, err := ParseFederationKey(opts.FederationKey)
-	if err != nil {
-		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
+	key, problem := parseFederationKey(opts.FederationKey)
+	if problem != "" {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + problem}
 	}
-	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256JWKS]),
+	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256KeyID]),
 	// so Google matches every signed token to that key.
 	kid, err := setup.ES256KeyID(opts.FederationKey)
 	if err != nil {
-		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + err.Error()}
 	}
 	hc := opts.HTTP
 	if hc == nil {
@@ -106,11 +104,11 @@ func New(opts Options) (*Connection, error) {
 func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection, error) {
 	if c == nil || c.Integrations.GoogleCloud == nil || !c.Integrations.GoogleCloud.Enabled ||
 		c.Integrations.GoogleCloud.Provisioning == nil {
-		return nil, fmt.Errorf("googleauth: %w: integrations.google_cloud is off or has no provisioning block",
-			integration.ErrNotConfigured)
+		return nil, &ConfigError{Sentence: "integrations.google_cloud is off or has no provisioning block",
+			Err: integration.ErrNotConfigured}
 	}
 	if env == nil {
-		return nil, fmt.Errorf("googleauth: %w: nothing resolves the federation key", integration.ErrNotConfigured)
+		return nil, &ConfigError{Sentence: "nothing resolves the federation key", Err: integration.ErrNotConfigured}
 	}
 	prov := c.Integrations.GoogleCloud.Provisioning
 	values := map[string]string{
@@ -120,8 +118,8 @@ func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection,
 	}
 	for _, field := range []string{"provisioner", "provider", "federation_key"} {
 		if values[field] == "" {
-			return nil, fmt.Errorf("googleauth: %w: integrations.google_cloud.provisioning.%s is not set or "+
-				"did not resolve", integration.ErrNotConfigured, field)
+			return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning." + field +
+				" is not set or did not resolve", Err: integration.ErrNotConfigured}
 		}
 	}
 	return New(Options{
@@ -179,16 +177,21 @@ type heldToken struct {
 }
 
 // scopeKey is a scope set as one key: sorted, so the order a caller lists
-// them in never splits one token into two.
+// them in never splits one token into two. One scope, the common case, is its
+// own key.
 func scopeKey(scopes []string) string {
+	if len(scopes) == 1 {
+		return scopes[0]
+	}
 	sorted := slices.Clone(scopes)
 	slices.Sort(sorted)
 	return strings.Join(slices.Compact(sorted), " ")
 }
 
-// held is this connection's cache entry for account's token with scopes.
-func (c *Connection) held(account string, scopes []string) *heldToken {
-	id := c.ID() + "|" + account + "|" + scopeKey(scopes)
+// held is this connection's cache entry for account's token with the scope
+// set whose [scopeKey] is scopes.
+func (c *Connection) held(account, scopes string) *heldToken {
+	id := c.ID() + "|" + account + "|" + scopes
 	federatedTokens.Lock()
 	defer federatedTokens.Unlock()
 	h, ok := federatedTokens.held[id]
@@ -207,10 +210,13 @@ func (c *Connection) held(account string, scopes []string) *heldToken {
 // company's subject impersonates directly (the provisioner, the atlas), so
 // none of them reaches another.
 func (c *Connection) FederatedToken(ctx context.Context, account string, scopes ...string) (string, error) {
-	if len(scopes) == 0 {
+	key := ScopeCloudPlatform
+	if len(scopes) > 0 {
+		key = scopeKey(scopes)
+	} else {
 		scopes = []string{ScopeCloudPlatform}
 	}
-	h := c.held(account, scopes)
+	h := c.held(account, key)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.value != "" && h.expires.Sub(c.clock.Now()) > federatedRenew {
@@ -230,7 +236,7 @@ func (c *Connection) FederatedToken(ctx context.Context, account string, scopes 
 
 // forget drops a cached token of account's Google refused, so the next call
 // mints afresh.
-func (c *Connection) forget(account string, scopes []string, refused string) {
+func (c *Connection) forget(account, scopes, refused string) {
 	h := c.held(account, scopes)
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -327,7 +333,7 @@ func (c *Connection) AuthorizedAs(ctx context.Context, account string, call func
 	if Status(err) != http.StatusUnauthorized {
 		return err
 	}
-	c.forget(account, []string{ScopeCloudPlatform}, bearer)
+	c.forget(account, ScopeCloudPlatform, bearer)
 	if bearer, err = c.FederatedToken(ctx, account); err != nil {
 		return err
 	}

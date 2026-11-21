@@ -2,6 +2,8 @@ package googleauth
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -63,6 +65,11 @@ func (i *SeatIssuer) now() time.Time {
 func (i *SeatIssuer) Token(
 	ctx context.Context, c *Connection, account string, scopes []string, life time.Duration,
 ) (SeatToken, error) {
+	// A CALLER'S OWN MISTAKE IS NO REFUSAL OF GOOGLE'S, so it is answered at
+	// once and never held for a wait.
+	if strings.TrimSpace(account) == "" || len(scopes) == 0 {
+		return SeatToken{}, errors.New("googleauth: a seat token names its account and its scopes")
+	}
 	key := c.ID() + "|" + account + "|" + scopeKey(scopes)
 	now := i.now()
 	i.mu.Lock()

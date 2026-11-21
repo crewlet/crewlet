@@ -79,7 +79,7 @@ func probeCheck(
 		Company: company, Provisioner: email, Provider: provider, FederationKey: key, HTTP: hc,
 	})
 	if err != nil {
-		return setup.Verdict{}, setup.Unusable(strings.TrimPrefix(err.Error(), "googlecloud: ") + ".")
+		return setup.Verdict{}, setup.Unusable(googleauth.Sentence(err) + ".")
 	}
 	if clk != nil {
 		client.setClock(*clk)

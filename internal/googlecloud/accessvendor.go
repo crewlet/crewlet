@@ -167,7 +167,7 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, clk *googleau
 		return nil, err
 	case err != nil:
 		return nil, &seataccess.Refusal{
-			Said: "Google Cloud: " + err.Error(), Actor: seataccess.ByYou, ActionURL: ProvidersURL,
+			Said: "Google Cloud: " + googleauth.Sentence(err), Actor: seataccess.ByYou, ActionURL: ProvidersURL,
 			Remedy: "Correct the value it names on the Google Cloud connection",
 		}
 	}
@@ -177,36 +177,16 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, clk *googleau
 	return &accessSession{client: client, company: in.Config.Name}, nil
 }
 
-// ClientFor is the provisioner's client for company, from its document as env
-// resolves it. An error wrapping [integration.ErrNotConfigured] is a company
-// that does not provision Google Cloud yet: the block absent or off, or its
-// provider or key not set or not resolving. Any other error names the value
-// that is wrong. hc is nil in production.
+// ClientFor is the provisioner's client for company, from its document as
+// env resolves it ([googleauth.For]). An error wrapping
+// [integration.ErrNotConfigured] is a company without the Google identity, or
+// one whose values do not resolve.
 func ClientFor(c *config.Company, env *config.Resolver, hc *http.Client) (*Client, error) {
-	if c == nil || c.Integrations.GoogleCloud == nil || !c.Integrations.GoogleCloud.Enabled ||
-		c.Integrations.GoogleCloud.Provisioning == nil {
-		return nil, fmt.Errorf("googlecloud: %w: integrations.google_cloud is off or has no provisioning block",
-			integration.ErrNotConfigured)
+	auth, err := googleauth.For(c, env, hc)
+	if err != nil {
+		return nil, err
 	}
-	if env == nil {
-		return nil, fmt.Errorf("googlecloud: %w: nothing resolves the federation key", integration.ErrNotConfigured)
-	}
-	prov := c.Integrations.GoogleCloud.Provisioning
-	values := map[string]string{
-		"provisioner":    strings.TrimSpace(env.Value(prov.Provisioner)),
-		"provider":       strings.TrimSpace(env.Value(prov.Provider)),
-		"federation_key": strings.TrimSpace(env.Value(prov.FederationKey)),
-	}
-	for _, field := range []string{"provisioner", "provider", "federation_key"} {
-		if values[field] == "" {
-			return nil, fmt.Errorf("googlecloud: %w: integrations.google_cloud.provisioning.%s is not set or "+
-				"did not resolve", integration.ErrNotConfigured, field)
-		}
-	}
-	return NewClient(googleauth.Options{
-		Company: c.Name, Provisioner: values["provisioner"], Provider: values["provider"],
-		FederationKey: values["federation_key"], HTTP: hc,
-	})
+	return &Client{auth: auth}, nil
 }
 
 // accessSession is one pass's connection to Google as the provisioner.
@@ -298,7 +278,7 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 			return nil, ctx.Err()
 		case err != nil && googleauth.IsStage(err):
 			// THE PROVISIONER IS UNREACHABLE, which is every seat's read alike.
-			return nil, fmt.Errorf("googlecloud: read %s's service account: %w", handle, reject(err))
+			return nil, fmt.Errorf("googlecloud: read %s's service account: %w", handle, googleauth.Reject(err))
 		case err != nil:
 			faults[handle] = err
 			continue
@@ -967,7 +947,7 @@ func (s *accessSession) refused(err error, project string) error {
 	if _, ok := errors.AsType[*Settling](err); ok {
 		return err
 	}
-	if st, ok := errors.AsType[*googleauth.StageError](err); ok && errors.Is(reject(err), integration.ErrCredentialRejected) {
+	if st, ok := errors.AsType[*googleauth.StageError](err); ok && errors.Is(googleauth.Reject(err), integration.ErrCredentialRejected) {
 		return &seataccess.Refusal{
 			Said: "Google Cloud: Crewlet's provisioner was refused at " + string(st.Stage) + ": " + st.Err.Error(),
 			Remedy: "Run the Cloud Shell block on the Google Cloud connection again, so the provider holds the " +

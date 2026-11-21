@@ -169,3 +169,24 @@ func TestAReadWaitsOutARateLimitAndAWriteDoesNot(t *testing.T) {
 		t.Errorf("a limited write answered %v after waits %v, want its 429 at once", err, f.clock.waits())
 	}
 }
+
+// A CALLER'S OWN MISTAKE IS NOT HELD AS GOOGLE'S REFUSAL: a token asked for
+// with no scope is answered at once, Google is asked nothing, and the next
+// proper ask is minted rather than handed a held refusal.
+//
+// Mutation: let the issuer mint before checking its inputs, and the mistake
+// is held for the restart schedule's wait as if Google had refused.
+func TestACallersMistakeIsNeverHeldAsAGoogleRefusal(t *testing.T) {
+	t.Parallel()
+	f, conn := newFake(t)
+	issuer := &googleauth.SeatIssuer{Now: f.clock.now, RetryWait: func(int) time.Duration { return time.Hour }}
+	if _, err := issuer.Token(t.Context(), conn, seatAccount, nil, time.Minute); err == nil {
+		t.Fatal("a token with no scope was issued")
+	}
+	if got := f.mintsFor(seatAccount); len(got) != 0 {
+		t.Fatalf("Google was asked %d times for a token with no scope", len(got))
+	}
+	if _, err := issuer.Token(t.Context(), conn, seatAccount, []string{analytics}, time.Minute); err != nil {
+		t.Errorf("a proper ask after the mistake answered %v, want a token", err)
+	}
+}

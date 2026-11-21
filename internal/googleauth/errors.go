@@ -65,6 +65,28 @@ func Status(err error) int {
 	return 0
 }
 
+// ConfigError is a connection input that would fail every call with a
+// misleading refusal. Sentence names the document's field to change, in words
+// a person reads as they are, with no package's name.
+type ConfigError struct {
+	Sentence string
+	// Err is what the input's fault is an instance of, such as
+	// [integration.ErrNotConfigured] for a block that is off or unresolved.
+	Err error
+}
+
+func (e *ConfigError) Error() string { return "googleauth: " + e.Sentence }
+func (e *ConfigError) Unwrap() error { return e.Err }
+
+// Sentence is what a person reads for err: a [ConfigError]'s own sentence, or
+// the error's text.
+func Sentence(err error) string {
+	if c, ok := errors.AsType[*ConfigError](err); ok {
+		return c.Sentence
+	}
+	return err.Error()
+}
+
 // Stage is one step of reaching Google as an account the federation
 // impersonates, which a failure names so a person knows which half of the
 // setup to look at.

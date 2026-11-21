@@ -102,7 +102,7 @@ func TestASeatTokenRefusalSaysWhatToFix(t *testing.T) {
 	// THE PROVISIONER REFUSED IS THE CONNECTION'S, whatever its status.
 	w := newClientWorld(t)
 	w.f.edit(func(f *fakeGoogle) { f.refuse["POST /v1/token"] = http.StatusForbidden })
-	_, _, err := w.c.SeatToken(t.Context(), "100", time.Hour)
+	_, _, err := w.c.Connection().SeatToken(t.Context(), "100", cloudPlatform, time.Hour)
 	said, passes := googlecloud.TokenRefusal(err)
 	if googlecloud.StillGranting(err) || passes || !strings.Contains(said, "Cloud Shell block") {
 		t.Errorf("the provisioner refused is told %q (passes %v), want the connection's fix", said, passes)

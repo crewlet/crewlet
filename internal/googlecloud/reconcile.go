@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
@@ -60,15 +61,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	c := opts.Client
 	if _, err := c.auth.FederatedToken(ctx, c.Provisioner()); err != nil {
 		return nil, fmt.Errorf("googlecloud: the provisioner in integrations.google_cloud.provisioning %s: %w",
-			integration.Refusal(reject(err)), reject(err))
+			integration.Refusal(googleauth.Reject(err)), googleauth.Reject(err))
 	}
 	gaps, err := levelGaps(ctx, c)
 	if err != nil {
-		return nil, fmt.Errorf("googlecloud: %w", reject(err))
+		return nil, fmt.Errorf("googlecloud: %w", googleauth.Reject(err))
 	}
 	accounts, err := c.ServiceAccounts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("googlecloud: read the accounts of %s: %w", c.IdentityProject(), reject(err))
+		return nil, fmt.Errorf("googlecloud: read the accounts of %s: %w", c.IdentityProject(), googleauth.Reject(err))
 	}
 	res := &Result{gaps: gaps, inUse: opts.InUse, identity: c.IdentityProject()}
 	recorded := map[string]bool{}

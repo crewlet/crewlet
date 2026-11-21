@@ -114,7 +114,7 @@ func TestASeatTokenNeedsTheProvisionersGrantOnTheAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := w.c.SeatToken(t.Context(), sa.UniqueID, time.Hour); googleauth.Status(err) != http.StatusForbidden {
+	if _, _, err := w.c.Connection().SeatToken(t.Context(), sa.UniqueID, cloudPlatform, time.Hour); googleauth.Status(err) != http.StatusForbidden {
 		t.Fatalf("a mint before the grant: %v, want 403", err)
 	}
 	if err := w.c.EditAccountPolicy(t.Context(), sa.Email, func(p *googlecloud.Policy) bool {
@@ -122,12 +122,12 @@ func TestASeatTokenNeedsTheProvisionersGrantOnTheAccount(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	value, expires, err := w.c.SeatToken(t.Context(), sa.UniqueID, time.Hour)
+	value, expires, err := w.c.Connection().SeatToken(t.Context(), sa.UniqueID, cloudPlatform, time.Hour)
 	if err != nil || value == "" || !expires.Equal(w.clock.now().Add(time.Hour)) {
 		t.Fatalf("seat token held %v, expires %s, %v", value != "", expires, err)
 	}
 	for _, life := range []time.Duration{0, time.Hour + time.Second} {
-		if _, _, err := w.c.SeatToken(t.Context(), sa.UniqueID, life); err == nil {
+		if _, _, err := w.c.Connection().SeatToken(t.Context(), sa.UniqueID, cloudPlatform, life); err == nil {
 			t.Errorf("a %s token was minted", life)
 		}
 	}

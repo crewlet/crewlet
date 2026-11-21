@@ -61,7 +61,7 @@ func Barred(level string, permissions []string) []string { return barred(level, 
 func PredefinedRoles() map[string]string { return predefinedRoles() }
 
 // Reject is how the loop reads a failure: the credential's, or a fault.
-func Reject(err error) error { return reject(err) }
+func Reject(err error) error { return googleauth.Reject(err) }
 
 // Seat-facing names a test asserts on.
 func DisplayName(company, handle string) string { return displayName(company, handle) }

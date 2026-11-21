@@ -58,7 +58,7 @@ func TokenRefusal(err error) (string, bool) {
 	api, ok := errors.AsType[*googleauth.APIError](err)
 	switch {
 	case !ok:
-		return err.Error(), false
+		return googleauth.Sentence(err), false
 	case api.Status == http.StatusBadRequest && strings.Contains(strings.ToLower(api.Message), "disabled"):
 		return "Google says the agent's service account is disabled: turn the agent back on from the " +
 			"Google Cloud Agents tab", false

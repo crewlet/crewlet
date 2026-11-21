@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/googleauth"
 )
@@ -34,10 +33,6 @@ const (
 // policyWrites bounds the re-reads of a policy somebody else wrote between
 // this client's read and its write (409): a busy policy settles in one or two.
 const policyWrites = 5
-
-// reject is [googleauth.Reject]: a refused federation or impersonation is the
-// provisioner's credential whatever its status.
-func reject(err error) error { return googleauth.Reject(err) }
 
 // gone reports a read or a delete of something Google no longer has.
 func gone(err error) bool { return googleauth.Status(err) == http.StatusNotFound }
@@ -106,15 +101,6 @@ func (c *Client) IdentityProject() string { return c.auth.IdentityProject() }
 
 // member is a service account as a policy binding names it.
 func member(email string) string { return "serviceAccount:" + email }
-
-// SeatToken mints an agent's cloud-platform token: account is its service
-// account's email or unique ID, impersonated with the provisioner's token for
-// life, at most [googleauth.MaxTokenLifetime]. A refusal is an
-// [*googleauth.APIError] whose status an issuer reads (403 or 404 within
-// minutes of a grant is Google still applying it).
-func (c *Client) SeatToken(ctx context.Context, account string, life time.Duration) (string, time.Time, error) {
-	return c.auth.SeatToken(ctx, account, []string{googleauth.ScopeCloudPlatform}, life)
-}
 
 // call is one request as the provisioner.
 func (c *Client) call(ctx context.Context, method, address string, body, out any) error {

@@ -100,7 +100,7 @@ func (r *atlasRead) read(ctx context.Context) error {
 	// the provisioner, so a later refusal is a role's and never a dead key's.
 	found, err := r.client.SearchProjects(ctx)
 	if err != nil {
-		return fmt.Errorf("googlecloud: list the projects the provisioner can read: %w", reject(err))
+		return fmt.Errorf("googlecloud: list the projects the provisioner can read: %w", googleauth.Reject(err))
 	}
 	// A PROJECT ON ITS WAY OUT IS NOT LISTED, so it leaves as any that is gone.
 	projects := slices.DeleteFunc(found, func(p Project) bool { return p.State != "ACTIVE" })
