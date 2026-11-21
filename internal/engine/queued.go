@@ -87,7 +87,9 @@ func (e *Engine) seatBusy(handle string) bool {
 }
 
 // settleWaiting takes away the queued waits of messages a dispatch has
-// finished with, on every chat backend.
+// finished with, or a running turn took, on every chat backend, and forgets
+// what each was told of why it waited.
 func (e *Engine) settleWaiting(ctx context.Context, handle string, wakes []string) {
+	e.waitsTold.forget(handle, wakes)
 	e.Status().Dequeue(ctx, handle, wakes)
 }

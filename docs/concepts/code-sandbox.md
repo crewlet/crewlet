@@ -1923,7 +1923,7 @@ model only describes it; the engine decides (ADR-0168):
 |---|---|
 | `input` | Files it as a wake from anybody, its line adding that the writer is not whom the turn works for: information to read and, where it asks, answer where it was written, never a request to act on. Claimed at its read, as above. |
 | `steer` | From a person the chart says leads the seat, files it as that lead's [note](turn-engine.md#steering-a-running-turn), several of their messages in one read as one note, oldest first; claimed at the filing (`joined`, naming the turn). While a note of theirs waits unread, their next messages wait to become the next note; past the turn's ten notes they stay. Anybody else's steer is a request. |
-| `request` | Stays for a turn of its own, held to its own writer. |
+| `request` | From a person or an agent seat other than the run's requester, is put once per job to the people who may let it [fold into the running work](#folding-another-writers-request-in): the requester and the seat's leads. Until one approves it waits; approved, it joins as a steer note; refused, unanswered when the job ends, or with nobody to put it to, it stays for a turn of its own, held to its own writer. Anybody else's request (a credential's) stays. |
 | `noise` | Absorbed (recorded worked by the running turn, `turn_trigger_skipped` disposition `absorbed` naming it) only when it owes nothing: no answer owed, not addressed to the seat, no question put to it. One that owes anything stays. |
 
 A triage that decides nothing (no chain, a refusal, ninety seconds, an invalid
@@ -1931,6 +1931,42 @@ answer) leaves the wake queued, logged `seat_wake_triaged` and counted
 `triage_failed`. A job triages at most sixteen wakes and a read four; each call
 is charged to the seat's budget as the turn's `wake_triage` spend. Every other
 wake waits with no call.
+
+### Folding another writer's request in
+
+A request from somebody the run does not work for never runs on the
+requester's apps on its writer's word, nor on the model's: only on the word of
+a person who may decide for that work ([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s
+amendment "another writer's request joins only on approval"). The engine puts
+it, once per job, as a **fold-in** on the run's record: who asked, their words,
+the work it would join and whose apps it would run on, offered as *Add it to
+the running work* or *Run it on its own*. It is put to the run's requester,
+where a person holds that seat, and the people among the seat's leads (nearest
+first, at most eight), never its asker; any lead of the seat and an
+administrator may answer it too, as they may a run's question. It shows in each
+one's decisions on the Inbox and is answered with `answer_executor` naming the
+fold-in, which records the first answer on the run's record at once and tells
+the seat's node to read it. A job asks at most four; past them a request stays.
+
+- **Approved**, the request joins at the run's next step as a [steer
+  note](turn-engine.md#steering-a-running-turn) under the approver's name,
+  saying who asked and who approved, the asker's words in their fence. It is
+  read from the message waiting on the inbox, never from the record's excerpt.
+  It counts against the turn's notes; past the cap it stays. Its delivery is
+  claimed at the filing (`turn_trigger_skipped` `joined`, naming the turn),
+  and the answer it was owed binds the turn, answered where it was written.
+- **Refused**, the request runs as a turn of its own once the running work
+  ends, from the inbox it never left.
+- **Unanswered when its job ends**, the question closes with the job: the next
+  job's opening clears it, a late approval is told the work it would have
+  joined has ended and the request runs as its own turn, and a later job asks
+  afresh.
+
+The router counts each as `foldin_asked`, `foldin_approved`, `foldin_refused`
+or `foldin_expired` on `crewlet.seat.wakes.routed`, and logs
+`seat_wake_foldin_asked`, `_approved`, `_refused` and `_expired` naming the
+wake, the turn and the approver. A person whose message waits is [told why,
+once](event-system.md#a-person-waiting-goes-first-the-priority-lane).
 
 A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
 up to those ten seconds, so it needs a request timeout of at least fifteen —
