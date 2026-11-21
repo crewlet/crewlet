@@ -19,7 +19,7 @@ type propertyRow struct {
 	Name        string `json:"property_name" untrusted:"name"`
 }
 
-// propertiesAnswer is ga4_list_properties' answer.
+// propertiesAnswer is google_analytics_list_properties' answer.
 type propertiesAnswer struct {
 	Properties []propertyRow `json:"properties"`
 	// Unreached are the seat's properties its identity is not added to.
@@ -117,7 +117,7 @@ type googleReport struct {
 	PropertyQuota json.RawMessage `json:"propertyQuota"`
 }
 
-// runReport is ga4_run_report.
+// runReport is google_analytics_run_report.
 func (p *Product) runReport(ctx context.Context, call growth.Call) (reportAnswer, error) {
 	start, end := argString(call.Args, "start_date", "28daysAgo"), argString(call.Args, "end_date", "yesterday")
 	body := map[string]any{
@@ -137,7 +137,7 @@ func (p *Product) runReport(ctx context.Context, call growth.Call) (reportAnswer
 	return p.report(ctx, call, "analyticsdata.properties.runReport", body)
 }
 
-// realtime is ga4_run_realtime_report.
+// realtime is google_analytics_run_realtime_report.
 func (p *Product) realtime(ctx context.Context, call growth.Call) (reportAnswer, error) {
 	body := map[string]any{
 		"dimensions": names(call.Args["dimensions"]), "metrics": names(call.Args["metrics"]),

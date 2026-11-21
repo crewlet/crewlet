@@ -245,11 +245,11 @@ func refused(err error) bool {
 func TestACallOutsideTheSeatsPropertiesReachesNoVendor(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "administer")
-	_, err := w.call(t, "ga4_run_report", map[string]any{"property": "222", "metrics": []any{"sessions"}})
+	_, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "222", "metrics": []any{"sessions"}})
 	if !refused(err) {
 		t.Fatalf("a report on a property out of scope answered %v", err)
 	}
-	_, err = w.call(t, "ga4_read", map[string]any{"operation": "analyticsadmin.accounts.get",
+	_, err = w.call(t, "google_analytics_read", map[string]any{"operation": "analyticsadmin.accounts.get",
 		"path": map[string]any{"accountsId": "77"}})
 	if !refused(err) || !strings.Contains(err.Error(), "222") {
 		t.Fatalf("an account holding a property out of scope answered %v", err)
@@ -266,7 +266,7 @@ func TestACallOutsideTheSeatsPropertiesReachesNoVendor(t *testing.T) {
 func TestAListingIsCutToTheSeatsProperties(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "read")
-	got, err := w.call(t, "ga4_list_properties", map[string]any{})
+	got, err := w.call(t, "google_analytics_list_properties", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestAListingIsCutToTheSeatsProperties(t *testing.T) {
 	if strings.Contains(string(raw), "222") || !strings.Contains(string(raw), "111") {
 		t.Errorf("the listing %s is not cut to property 111", raw)
 	}
-	generic, err := w.call(t, "ga4_read", map[string]any{"operation": "analyticsadmin.accountSummaries.list"})
+	generic, err := w.call(t, "google_analytics_read", map[string]any{"operation": "analyticsadmin.accountSummaries.list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestAListingIsCutToTheSeatsProperties(t *testing.T) {
 func TestAReportFencesThePublicsWordsAndPassesGooglesFlags(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "read")
-	got, err := w.call(t, "ga4_run_report", map[string]any{"property": "111", "metrics": []any{"sessions"},
+	got, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "111", "metrics": []any{"sessions"},
 		"dimensions": []any{"pageTitle"}})
 	if err != nil {
 		t.Fatal(err)
@@ -326,18 +326,18 @@ func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 	rename := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Gross revenue"}}
-	if _, err := w.call(t, "ga4_operate", rename); err != nil {
+	if _, err := w.call(t, "google_analytics_operate", rename); err != nil {
 		t.Fatalf("an operate rename answered %v", err)
 	}
 	lift := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{"restrictedMetricType": []any{}}}
-	if _, err := w.call(t, "ga4_operate", lift); !errors.As(err, new(*aboveTool)) ||
+	if _, err := w.call(t, "google_analytics_operate", lift); !errors.As(err, new(*aboveTool)) ||
 		!strings.Contains(err.Error(), string(growth.ClassAdmin)) {
 		t.Fatalf("lifting a restriction on the operate tool answered %v", err)
 	}
 	writes := w.f.writes
-	call := growth.Call{Handle: "growth-lead", Tool: "ga4_admin", Args: lift}
+	call := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", Args: lift}
 	hold, err := w.p.Prepare(t.Context(), call)
 	if err != nil || len(hold.Binding) != 64 || writes != w.f.writes {
 		t.Fatalf("prepare: %+v, %v (writes %d, then %d)", hold, err, writes, w.f.writes)
@@ -366,7 +366,7 @@ func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 func TestAMeasurementProtocolSecretIsWithheld(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "read")
-	got, err := w.call(t, "ga4_read", map[string]any{
+	got, err := w.call(t, "google_analytics_read", map[string]any{
 		"operation": "analyticsadmin.properties.dataStreams.measurementProtocolSecrets.list",
 		"path":      map[string]any{"propertiesId": "111", "dataStreamsId": "3"}})
 	if err != nil {
@@ -383,7 +383,7 @@ func TestAMeasurementProtocolSecretIsWithheld(t *testing.T) {
 func TestTheReadToolCannotNameAWrite(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "read")
-	_, err := w.call(t, "ga4_read", map[string]any{"operation": "analyticsadmin.properties.keyEvents.create",
+	_, err := w.call(t, "google_analytics_read", map[string]any{"operation": "analyticsadmin.properties.keyEvents.create",
 		"path": map[string]any{"propertiesId": "111"}, "body": map[string]any{"eventName": "x"}})
 	if !refused(err) || w.f.writes != 0 {
 		t.Fatalf("a write named on the read tool answered %v (writes %d)", err, w.f.writes)
@@ -416,20 +416,20 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 		}
 		return r
 	}
-	if _, err := w.call(t, "ga4_run_report", map[string]any{"property": "111", "metrics": []any{"sessions"}}); err != nil {
+	if _, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "111", "metrics": []any{"sessions"}}); err != nil {
 		t.Fatal(err)
 	}
 	if r := one(growth.StepMade); r.Call != "call-1" || r.Turn != "turn-1" || r.Class != growth.ClassRead ||
 		r.Account != "properties/111" || r.Before != "" {
 		t.Errorf("a report is recorded as %+v", r)
 	}
-	if _, err := w.call(t, "ga4_run_realtime_report", map[string]any{"property": "111"}); err == nil {
+	if _, err := w.call(t, "google_analytics_run_realtime_report", map[string]any{"property": "111"}); err == nil {
 		t.Fatal("a throttled report answered no error")
 	}
 	if r := one(growth.StepFailed); r.Failure != growth.FailureRateLimited {
 		t.Errorf("a throttled report failed as %q", r.Failure)
 	}
-	if _, err := w.call(t, "ga4_run_report", map[string]any{"property": "222"}); !refused(err) {
+	if _, err := w.call(t, "google_analytics_run_report", map[string]any{"property": "222"}); !refused(err) {
 		t.Fatalf("a report out of scope answered %v", err)
 	}
 	if steps, _ := w.audit.take(); len(steps) != 0 {
@@ -438,7 +438,7 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	rename := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "displayName"}, "body": map[string]any{"displayName": "Gross revenue"}}
-	if _, err := w.call(t, "ga4_operate", rename); err != nil {
+	if _, err := w.call(t, "google_analytics_operate", rename); err != nil {
 		t.Fatal(err)
 	}
 	r := one(growth.StepMade)
@@ -449,7 +449,7 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	lift := map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 		"path":  map[string]any{"propertiesId": "111", "customMetricsId": "9"},
 		"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{"restrictedMetricType": []any{}}}
-	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "ga4_admin", Args: lift, HeldCall: "held-1"}
+	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "google_analytics_admin", Args: lift, HeldCall: "held-1"}
 	hold, err := w.p.Prepare(t.Context(), call)
 	if err != nil || len(hold.Ask.Before) != 64 || len(hold.Ask.Operation) != 64 || len(hold.Ask.Changes) != 1 ||
 		hold.Ask.Account != "properties/111" || hold.Ask.Target != "properties/111/customMetrics/9" {
@@ -470,7 +470,7 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	}
 	one(growth.StepApplied)
 
-	outside := growth.Call{Handle: "growth-lead", Tool: "ga4_admin", HeldCall: "held-2",
+	outside := growth.Call{Handle: "growth-lead", Tool: "google_analytics_admin", HeldCall: "held-2",
 		Args: map[string]any{"operation": "analyticsadmin.properties.customMetrics.patch",
 			"path":  map[string]any{"propertiesId": "222", "customMetricsId": "9"},
 			"query": map[string]any{"updateMask": "restrictedMetricType"}, "body": map[string]any{}}}
@@ -483,14 +483,14 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 }
 
 // A CURATED WRITE TOOL IS PREPARED AND APPLIED LIKE ANY OTHER: the framework
-// runs only reads, so ga4_mark_key_event builds its request from its typed
+// runs only reads, so google_analytics_mark_key_event builds its request from its typed
 // arguments in Prepare and Apply, comes to operate, and is made once.
 //
 // Mutation: build the curated request only in Run, and the call is refused.
 func TestACuratedWriteToolIsPreparedAndApplied(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, "operate")
-	if _, err := w.call(t, "ga4_mark_key_event", map[string]any{"property": "111", "event_name": "purchase"}); err != nil {
+	if _, err := w.call(t, "google_analytics_mark_key_event", map[string]any{"property": "111", "event_name": "purchase"}); err != nil {
 		t.Fatal(err)
 	}
 	if w.f.writes != 1 || w.f.lastBody["eventName"] != "purchase" || w.f.lastBody["countingMethod"] != "ONCE_PER_EVENT" {

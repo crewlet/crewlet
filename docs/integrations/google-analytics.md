@@ -32,14 +32,14 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 
 | Tool | Class | What it does |
 |---|---|---|
-| `ga4_list_properties` | read | The accounts and properties the agent may reach, and the ones of its list its identity is not added to yet |
-| `ga4_run_report` | read | A report on one property: dimensions and metrics over a date range, with Google's thresholding, sampling and other-row flags, the row count and the property's remaining quota |
-| `ga4_run_realtime_report` | read | The property's last 30 minutes (60 on Analytics 360) |
-| `ga4_mark_key_event` | operate | Marks an event as a key event |
-| `ga4_read` | read | Any method that only reads, by its ID |
-| `ga4_operate` | operate | Any reversible change, by its method's ID |
-| `ga4_spend` | spend | Turning on a BigQuery export, which raises money owed to Google Cloud: asked first |
-| `ga4_admin` | admin | Any account, access, link, key or irreversible change, by its method's ID: asked first |
+| `google_analytics_list_properties` | read | The accounts and properties the agent may reach, and the ones of its list its identity is not added to yet |
+| `google_analytics_run_report` | read | A report on one property: dimensions and metrics over a date range, with Google's thresholding, sampling and other-row flags, the row count and the property's remaining quota |
+| `google_analytics_run_realtime_report` | read | The property's last 30 minutes (60 on Analytics 360) |
+| `google_analytics_mark_key_event` | operate | Marks an event as a key event |
+| `google_analytics_read` | read | Any method that only reads, by its ID |
+| `google_analytics_operate` | operate | Any reversible change, by its method's ID |
+| `google_analytics_spend` | spend | Turning on a BigQuery export, which raises money owed to Google Cloud: asked first |
+| `google_analytics_admin` | admin | Any account, access, link, key or irreversible change, by its method's ID: asked first |
 
 A write whose class depends on what it changes is classed per call from its update mask and its new values: renaming a custom metric is `operate`, and taking off its revenue or cost restriction is `admin`. A call on the wrong tool for what it changes is refused with the tool that may make it.
 
