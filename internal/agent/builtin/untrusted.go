@@ -28,6 +28,8 @@ import (
 type declaredField struct {
 	path fieldPath
 	kind string
+	// value is the field as the answer holds it.
+	value reflect.Value
 }
 
 // declaredDepth bounds the walk: an answer is a tree a few levels deep, and a
@@ -113,7 +115,7 @@ func walkStruct(v reflect.Value, path fieldPath, out *[]declaredField, depth int
 		}
 		if kind, tagged := f.Tag.Lookup(provenance.FieldTag); tagged {
 			if holdsSomething(fv) {
-				*out = append(*out, declaredField{path: path.key(name), kind: kind})
+				*out = append(*out, declaredField{path: path.key(name), kind: kind, value: fv})
 			}
 			continue
 		}
