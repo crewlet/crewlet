@@ -310,8 +310,8 @@ type ListOptions struct {
 	// ExcludeStale drops ageing rows. Off by default: stale is a marker on a
 	// skill that still works and still revives on use, not a hidden state.
 	ExcludeStale bool
-	// Limit bounds the ORDERED listings ([Skills.List], [Skills.ListFor]) so a
-	// page of N pays for N rows, each carrying content and frontmatter.
+	// Limit bounds the ORDERED listings ([Skills.List], [Skills.ListFor],
+	// [Skills.Listing]) so a page of N pays for N rows.
 	//
 	// ZERO MEANS UNBOUNDED, a setting rather than a missing value: every
 	// non-page read (the prefetch's offer, the refiner's live view, the
@@ -467,6 +467,66 @@ func (s *Skills) List(ctx context.Context, handle string, opts ListOptions) ([]S
 		return nil, fmt.Errorf("learning: list skills for %s: %w", handle, err)
 	}
 	return collectSkills(rows)
+}
+
+// ListedSkill is one skill as a listing reads it: what names and describes it,
+// its version and its use, and NOT its body. The content, the frontmatter and
+// the tool run are bounded by nothing a row holds to, and a listing draws none
+// of them; [Skills.Get] reads the skill whole.
+type ListedSkill struct {
+	ID          string
+	Name        string
+	Description string
+	Version     int
+	UpdatedAt   time.Time
+	// UseCount and LoadCount are as [Skill]'s.
+	UseCount  int
+	LoadCount int
+}
+
+// Listing returns a page of a seat's skills without their bodies, in the order
+// and under the filter [Skills.List] reads with opts. It ends at opts.Limit
+// rows, or before the row that would take the text it holds ([textBytes]) past
+// maxBytes, whichever comes first: a description is bounded by nothing either.
+func (s *Skills) Listing(ctx context.Context, handle string, opts ListOptions, maxBytes int) ([]ListedSkill, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("learning: a skill listing needs a byte bound to end at")
+	}
+	bound, args := opts.limit()
+	rows, err := s.db.SQL().QueryContext(ctx,
+		`SELECT id, name, description, version, updated_at, use_count, load_count
+		 FROM synthesized_skills
+		 WHERE agent_handle = ?`+opts.filter()+opts.Order.orderBy()+bound,
+		append([]any{handle}, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("learning: list skills for %s: %w", handle, err)
+	}
+	defer rows.Close()
+	var (
+		out  []ListedSkill
+		held int
+	)
+	for rows.Next() {
+		var (
+			sk      ListedSkill
+			updated int64
+		)
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Version, &updated,
+			&sk.UseCount, &sk.LoadCount); err != nil {
+			return nil, fmt.Errorf("learning: scan a listed skill: %w", err)
+		}
+		sk.UpdatedAt = store.DecodeTime(updated)
+		size := textBytes(sk)
+		if !fitsBytes(len(out), held, size, maxBytes) {
+			break
+		}
+		held += size
+		out = append(out, sk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("learning: list skills for %s: %w", handle, err)
+	}
+	return out, nil
 }
 
 // ListFor returns every skill owned by any of the seats, in

@@ -68,3 +68,23 @@ func TestTheOpeningACutTextKeepsIsReadBackExactly(t *testing.T) {
 		}
 	}
 }
+
+// A CUT ITS CALLER MADE IS SAID AS TEXT SAYS ONE: Cut of any opening keeps it
+// all, followed by nothing but the marker Text writes for that cut, so Opening
+// reads it back exactly, whatever the opening's bytes.
+//
+// Mutation: state the whole as left out, or write another marker, and the
+// opening is not read back.
+func TestACutItsCallerMadeIsReadBackAsItsOpening(t *testing.T) {
+	t.Parallel()
+	for _, opening := range []string{"", "the build passed.\n", "日本語😀", "a\xff\xc3",
+		"ok…\n(3 bytes of 1 KiB not kept on the run's record)"} {
+		for _, more := range []int{1, 7, 1 << 20} {
+			whole := len(opening) + more
+			got, ok := run.Opening(run.Cut(opening, whole), whole)
+			if !ok || got != opening {
+				t.Errorf("Cut(%q, %d) reads back %q (ok %v), want the opening", opening, whole, got, ok)
+			}
+		}
+	}
+}

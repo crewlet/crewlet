@@ -9,6 +9,7 @@ import (
 	"math"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1908,4 +1909,70 @@ func (c skillFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (dri
 		return c.Conn.Begin()
 	}
 	return bt.BeginTx(ctx, opts)
+}
+
+// A SKILL LISTING READS NO BODY AND ENDS AT ITS BYTES. A page of a seat's skills
+// draws names, descriptions and counts, so it reads none of the bodies, which
+// are bounded by nothing; it lists in the order and under the filter a whole
+// read takes; and it ends before the row whose description would take it past
+// its bound, holding at least the first.
+//
+// Mutations, each red: count the body into a row; ignore maxBytes; drop the
+// first-row rule; read in the default order whatever opts asks.
+func TestASkillListingReadsNoBodyAndEndsAtItsBytes(t *testing.T) {
+	t.Parallel()
+	s, _ := skillStore(t)
+	body := strings.Repeat("a body no listing draws. ", 1<<15)
+	for i := range 4 {
+		sk := newSkill("swe", "skill-"+strconv.Itoa(i), base.Add(time.Duration(i)*time.Minute))
+		sk.Description, sk.Content = strings.Repeat("d", 1000), body
+		sk.UseCount = 10 - i
+		sk.UpdatedAt = base.Add(time.Duration(i%2) * time.Hour)
+		mustInsert(t, s, sk)
+	}
+	names := func(skills []learning.ListedSkill) []string {
+		var out []string
+		for _, sk := range skills {
+			out = append(out, sk.Name)
+		}
+		return out
+	}
+	for _, c := range []struct {
+		maxBytes int
+		want     []string
+	}{
+		{2500, []string{"skill-3", "skill-2"}},
+		{1, []string{"skill-3"}},
+		{len(body), []string{"skill-3", "skill-2", "skill-1", "skill-0"}},
+	} {
+		listed, err := s.Listing(t.Context(), "swe", learning.ListOptions{}, c.maxBytes)
+		if err != nil {
+			t.Fatalf("Listing(%d): %v", c.maxBytes, err)
+		}
+		if got := names(listed); !slices.Equal(got, c.want) {
+			t.Errorf("a listing bounded to %d bytes, of skills with %d-byte bodies, held %v; "+
+				"want %v", c.maxBytes, len(body), got, c.want)
+		}
+	}
+	for _, order := range learning.SkillOrders() {
+		opts := learning.ListOptions{Order: order, Limit: 3}
+		whole, err := s.List(t.Context(), "swe", opts)
+		if err != nil {
+			t.Fatalf("List(%s): %v", order, err)
+		}
+		listed, err := s.Listing(t.Context(), "swe", opts, len(body))
+		if err != nil {
+			t.Fatalf("Listing(%s): %v", order, err)
+		}
+		var want []string
+		for _, sk := range whole {
+			want = append(want, sk.Name)
+		}
+		if got := names(listed); !slices.Equal(got, want) {
+			t.Errorf("listed by %s: %v, want the whole read's %v", order, got, want)
+		}
+	}
+	if _, err := s.Listing(t.Context(), "swe", learning.ListOptions{}, 0); err == nil {
+		t.Error("a listing with no byte bound was read, want it refused")
+	}
 }

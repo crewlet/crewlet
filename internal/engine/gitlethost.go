@@ -32,7 +32,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -246,15 +245,13 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 
 	// 2. GIT, the node's own: the pool resolves its lanes once (code_git_ready),
 	// sized by the node's memory ([Options.gitMemory] in this package's tests)
-	// less what this node keeps beside Gitlet: the executor's pools ([gitWork])
-	// and the store's page cache, at that memory as at the store's open.
-	work, conns := gitWork(e.profile, boot), storeOptions(boot, nil, 0).NodeConnections(heldLogs(boot))
+	// less what this node keeps beside Gitlet: its memory lines
+	// ([Engine.budgetNode]), which its runtime's memory limit reads too.
+	budget := e.budgetNode(boot)
 	pool, err := gitproc.New(ctx, gitproc.Options{
 		MaxProcesses: boot.Gitlet.MaxProcesses, MaxTransfers: boot.Gitlet.MaxTransfers, Memory: e.gitMemory,
-		Reserve: func(memory int64) int64 {
-			return work.MemoryPools(memory) + store.PageCacheShare(storeSizedBy(memory), conns)
-		},
-		Home: layout.Home, Metrics: e.metrics,
+		Reserve: func(memory int64, reads int) int64 { return budget.Of(memory, reads).Kept() },
+		Home:    layout.Home, Metrics: e.metrics,
 	})
 	if err != nil {
 		return gitletHostParts{}, fmt.Errorf("engine: this node has the %q role and the "+
@@ -463,8 +460,15 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		h.Stop(context.WithoutCancel(ctx))
 		return gitletHostParts{}, fmt.Errorf("engine: serve code searches on %s: %w", topics.CodeSearch, err)
 	}
+	// WHAT THE NODE HOLDS OUTSIDE THIS PROCESS, which the runtime's memory
+	// limit leaves it ([Engine.limitMemory]): each admitted transfer, the
+	// background budget the cache opened with, and the lines it kept.
+	memory := gitletMemory{memory: pool.Memory(),
+		git:   int64(pool.Slots(gitproc.ClassTransfer))*gitproc.TransferMemory + c.BackgroundBudget(),
+		lines: budget.Of(pool.Memory().Bytes, pool.Slots(gitproc.ClassRead))}
 	return gitletHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
+		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch,
+		memory: memory}, nil
 }
 
 // codeNudges is this node's code log as the home's change work watches it
@@ -557,6 +561,7 @@ type gitletHostParts struct {
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
 	withdrawSearch queue.Unsubscribe
+	memory         gitletMemory
 }
 
 // codeReading fills the reading's code half at now: the queued checks' backlog,

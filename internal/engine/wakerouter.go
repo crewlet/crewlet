@@ -82,11 +82,18 @@ const (
 	ruleTriageRequest routeRule = "triage_request"
 	ruleTriageNoise   routeRule = "triage_noise"
 	ruleTriageFailed  routeRule = "triage_failed"
+	// A request from another writer put to the people who may let it join
+	// (foldin.go): asked, approved, refused, or closed unanswered with its job.
+	ruleFoldInAsked    routeRule = "foldin_asked"
+	ruleFoldInApproved routeRule = "foldin_approved"
+	ruleFoldInRefused  routeRule = "foldin_refused"
+	ruleFoldInExpired  routeRule = "foldin_expired"
 )
 
 // routeRules is the closed set.
 var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleNone, ruleTriageInput, ruleTriageSteer,
-	ruleTriageRequest, ruleTriageNoise, ruleTriageFailed}
+	ruleTriageRequest, ruleTriageNoise, ruleTriageFailed, ruleFoldInAsked, ruleFoldInApproved, ruleFoldInRefused,
+	ruleFoldInExpired}
 
 // Valid reports whether r is one of [routeRules].
 func (r routeRule) Valid() bool { return slices.Contains(routeRules, r) }
@@ -344,6 +351,7 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 		}()
 	}
 	memo := newRouteMemo()
+	defer e.routerEnded(ctx, handle, memo)
 	backstop := time.NewTimer(routeBackstop)
 	defer backstop.Stop()
 	for {
@@ -377,6 +385,7 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, m
 	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
 		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
 	})
+	e.expireFoldIns(ctx, handle, runs, memo)
 	memo.prune(runs)
 	if len(runs) == 0 {
 		return
@@ -471,6 +480,11 @@ func (e *Engine) routeWake(ctx context.Context, handle string, runs []sandbox.Pe
 	}
 	if why != "" {
 		e.noteRouted(ctx, handle, sandbox.PendingRun{}, id, routeLeftQueued, ruleNone, why, nil)
+		// A MESSAGE THAT RUNS AFTER the running work is told so, once; one
+		// worked already runs nothing.
+		if why != stayWorked {
+			e.tellWaiting(ctx, handle, ev, id, o.login == "" && e.seatIsHuman(o.requester), runsAfterLine)
+		}
 	}
 }
 

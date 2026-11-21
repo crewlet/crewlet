@@ -333,6 +333,14 @@ func (r Record) TextOf(opening string, whole, budget int) (kept string, cut int)
 	return opening[:at] + textMarker(r, Size(whole-at), Size(whole)), whole
 }
 
+// Cut is opening, all of it, ended by the marker [Record.TextOf] writes for a
+// text of whole bytes cut there: a cut its caller made by a rule of its own,
+// said as r says one, which [Record.Opening] reads back. whole is more than
+// opening's length.
+func (r Record) Cut(opening string, whole int) string {
+	return opening + textMarker(r, Size(whole-len(opening)), Size(whole))
+}
+
 // Opening is the opening [Record.Text] kept of a text of whole bytes that it
 // cut, read back off kept, the value it wrote; ok is false where kept is not
 // such a cut, a text Text kept whole (whole zero) included. Exact: the
