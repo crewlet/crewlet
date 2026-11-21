@@ -322,6 +322,123 @@
         "null"
       ]
     },
+    "AppleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "Optional. IDs (digits) of the ad accounts agents may be given. Absent: every ad account the connections' API users reach.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approvers": {
+          "description": "Optional. Handles of human seats asked first about a spend, a creative or an account change an agent asks for. Only an administrator may answer; without this list every administrator is asked.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "connections": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AppleAdsConnection"
+          },
+          "description": "The Apple Ads API users the engine signs in as, each under its connection id (lowercase letters, digits and hyphens, starting with a letter). Required when enabled.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "spend": {
+          "$ref": "#/$defs/GrowthSpend",
+          "description": "Optional. The spending caps per ad account, in its currency. An ad account without both caps refuses every spend act; reads, operate changes and pausing still work."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AppleAdsConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "description": "The API user's client ID, SEARCHADS. followed by an identifier, shown under Account Settings, API once its public key is uploaded.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "key_id": {
+          "description": "The uploaded public key's ID, shown beside the client ID.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "org_id": {
+          "description": "Optional. The organization's ID (digits), shown beside the account name in Apple Ads. When set, the API user must answer it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "private_key": {
+          "description": "Reference to the sealed private key whose public half was uploaded, the PEM block from BEGIN EC PRIVATE KEY to END EC PRIVATE KEY that openssl ecparam wrote. Apple keeps no copy.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "team_id": {
+          "description": "The API user's team ID, SEARCHADS. followed by an identifier, shown beside the client ID.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Assistant": {
       "additionalProperties": false,
       "properties": {
@@ -2523,6 +2640,70 @@
         "null"
       ]
     },
+    "GrowthCap": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "description": "The ad account's ID, as the vendor writes it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "currency": {
+          "description": "The account's currency as an ISO 4217 code (EUR). It must equal the account's own currency, read live, or every spend call on the account is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "daily": {
+          "description": "The ceiling on the account's daily capacity after any approved change, a decimal amount in the account's currency (200.00). It limits the budgets agents may set, not what the vendor delivers on one day.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "per_change": {
+          "description": "The most one approved change may add to the account's daily capacity, a decimal amount in the account's currency (50.00).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GrowthSpend": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "The spending caps of each ad account agents may ask to spend on. An account without both caps refuses every spend call; reads, operate calls and pausing still work.",
+          "items": {
+            "$ref": "#/$defs/GrowthCap"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "HarnessAuth": {
       "additionalProperties": false,
       "properties": {
@@ -2687,6 +2868,10 @@
         "app_store_connect": {
           "$ref": "#/$defs/AppStoreConnect",
           "description": "App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."
+        },
+        "apple_ads": {
+          "$ref": "#/$defs/AppleAds",
+          "description": "Apple Ads API users, each one organization's client credentials and private key, through which the engine makes every Apple Ads Platform API call for the agents. Absent = disabled."
         },
         "atlassian": {
           "$ref": "#/$defs/Atlassian",
@@ -4482,6 +4667,49 @@
         "null"
       ]
     },
+    "RoleAppleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "ad_accounts": {
+          "description": "IDs (digits) of the ad accounts this agent may touch. Required while enabled.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may use Apple Ads through the engine's tools. No agent holds a key or a token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reads campaigns, ad groups, keywords, ads, creatives and reports. operate: also pauses, lowers budgets and bids, adds negative keywords at once, and asks an administrator for any spend or creative customers see. administer: also asks for ad account changes and deletes.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAvatar": {
       "additionalProperties": false,
       "properties": {
@@ -4937,6 +5165,10 @@
         "app_store_connect": {
           "$ref": "#/$defs/RoleAppStoreConnect",
           "description": "This seat's App Store Connect access: whether it is on, its level and its apps."
+        },
+        "apple_ads": {
+          "$ref": "#/$defs/RoleAppleAds",
+          "description": "This seat's Apple Ads access: whether it is on, its level and its ad accounts."
         },
         "aws": {
           "$ref": "#/$defs/RoleAWS",
