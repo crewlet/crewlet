@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -25,7 +24,7 @@ import (
 
 // standard200k is the window a claude-sonnet-4-5 member holds a run to.
 var standard200k, _ = executor.Window(executor.ClaudeCodeName,
-	executor.WindowAsk{Model: "claude-sonnet-4-5", AuthMode: config.AuthSubscription})
+	executor.WindowAsk{Model: "claude-sonnet-4-5", SignIn: executor.SignInFirstParty})
 
 // countOf is a count of tokens read whole, its thread restarting nowhere.
 func countOf(tokens int64) *sandbox.ResumedCount {

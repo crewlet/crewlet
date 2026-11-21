@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -330,9 +329,9 @@ func claudeWindow(tokens, standard int, known bool) sandbox.ExecutorWindow {
 // to, on the route the member reaches its model by: exactly off its env where
 // ask says so ([claudePlatform]), else coarsely by its sign-in ([claudeRouteOf]).
 func (ClaudeCode) Window(ask WindowAsk) sandbox.ExecutorWindow {
-	route := claudeRouteOf(ask.AuthMode)
+	route := claudeRouteOf(ask.SignIn)
 	if ask.Exact {
-		route = claudePlatform(ask.AuthMode, ask.Env)
+		route = claudePlatform(ask.SignIn, ask.Env)
 	}
 	w := claudeCodeWindowOn(ask.Model, route)
 	w.OlderText = claudeTextRateOf(ask.Model) == claudeOlderTextRate
@@ -352,9 +351,8 @@ func (ClaudeCode) PinnedWindow(model string) int { return claudeCodeWindow(model
 // the least window off Anthropic's API, the side that tells more. The launch
 // floor reads the entry's platform exactly ([claudePlatform]), since there a
 // smaller window costs a session rather than words.
-func claudeRouteOf(mode config.HarnessAuthMode) claudeRoute {
-	switch mode {
-	case config.AuthSubscription, config.AuthAPIKey, config.AuthInheritEnv:
+func claudeRouteOf(signIn SignIn) claudeRoute {
+	if signIn == SignInFirstParty {
 		return claudeRouteAnthropic
 	}
 	return claudeRouteElsewhere
@@ -370,8 +368,8 @@ func claudeRouteOf(mode config.HarnessAuthMode) claudeRoute {
 // [claudeRouteElsewhere], the least window. The launch's later run
 // environment is not read; a platform switched there is the floor's stated
 // residual.
-func claudePlatform(mode config.HarnessAuthMode, env map[string]string) claudeRoute {
-	if route := claudeRouteOf(mode); route == claudeRouteAnthropic || mode != config.AuthEnv {
+func claudePlatform(signIn SignIn, env map[string]string) claudeRoute {
+	if route := claudeRouteOf(signIn); route == claudeRouteAnthropic || signIn != SignInOwnEnv {
 		return route
 	}
 	unsure := false

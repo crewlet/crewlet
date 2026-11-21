@@ -918,12 +918,26 @@ func memberWindow(member *harness.Provider, exact bool) sandbox.ExecutorWindow {
 
 // windowAsk is what a window of member is asked by.
 func windowAsk(member *harness.Provider, exact bool) executor.WindowAsk {
-	ask := executor.WindowAsk{Model: member.ModelArgument(), AuthMode: config.HarnessAuthMode(member.AuthMode()),
+	ask := executor.WindowAsk{Model: member.ModelArgument(), SignIn: signInOf(config.HarnessAuthMode(member.AuthMode())),
 		Exact: exact}
 	if exact {
 		ask.Env = member.SandboxEnv()
 	}
 	return ask
+}
+
+// signInOf is how an entry signed in by mode hands its harness credentials, as
+// the executor judges a window's route: first-party alone for a login, a key or
+// the host's own environment (config refuses a sign-in switch in such an
+// entry's env), its own env for `env`, and none this build knows otherwise.
+func signInOf(mode config.HarnessAuthMode) executor.SignIn {
+	switch mode {
+	case config.AuthSubscription, config.AuthAPIKey, config.AuthInheritEnv:
+		return executor.SignInFirstParty
+	case config.AuthEnv:
+		return executor.SignInOwnEnv
+	}
+	return ""
 }
 
 // turnCharged is what t's turn has charged in each window of w, by period, read

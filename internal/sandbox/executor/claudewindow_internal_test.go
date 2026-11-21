@@ -3,7 +3,6 @@ package executor
 import (
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -190,21 +189,21 @@ func TestEveryClaudeRouteIsValid(t *testing.T) {
 	}
 }
 
-// A TELLING JUDGES AN ENTRY ON ITS COARSE ROUTE: Anthropic's own API for a
-// login, a key or the host's environment, and the least window off it for an
-// entry signed in by its own env or a mode this build does not know.
+// A TELLING JUDGES AN ENTRY ON ITS COARSE ROUTE: Anthropic's own API for an
+// entry handing its harness first-party credentials alone, and the least
+// window off it for an entry signed in by its own env or a sign-in this build
+// does not know.
 //
-// Mutation: read an inherit-env entry as a route of its own, or an env entry
-// as Anthropic's, and a case goes red.
+// Mutation: read an env-signed entry as Anthropic's, or an unknown sign-in as
+// first-party, and a case goes red.
 func TestATellingJudgesAnEntryOnItsCoarseRoute(t *testing.T) {
 	t.Parallel()
-	for mode, want := range map[config.HarnessAuthMode]claudeRoute{
-		config.AuthSubscription: claudeRouteAnthropic, config.AuthAPIKey: claudeRouteAnthropic,
-		config.AuthInheritEnv: claudeRouteAnthropic, config.AuthEnv: claudeRouteElsewhere,
-		config.HarnessAuthMode("a-later-builds-mode"): claudeRouteElsewhere,
+	for signIn, want := range map[SignIn]claudeRoute{
+		SignInFirstParty: claudeRouteAnthropic, SignInOwnEnv: claudeRouteElsewhere,
+		SignIn("a-later-builds-sign-in"): claudeRouteElsewhere,
 	} {
-		if got := claudeRouteOf(mode); got != want {
-			t.Errorf("an entry signed in by %q is judged on the route %q, want %q", mode, got, want)
+		if got := claudeRouteOf(signIn); got != want {
+			t.Errorf("an entry signed in %q is judged on the route %q, want %q", signIn, got, want)
 		}
 	}
 }
