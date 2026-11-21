@@ -35,13 +35,20 @@ func (l *limitsSet) seen() []int64 {
 
 func (l *limitsSet) option(o *Options) { o.setMemoryLimit = l.set }
 
-// runtimeOverhead is what this test binary's runtime holds beyond its live
-// heap: what a limit must leave past the pools for the runtime itself.
+// runtimeOverhead is what this test binary's runtime holds outside its heap's
+// objects and spans (its metadata, its stacks and the rest): what a limit must
+// leave past the pools for the runtime itself. Never total less live, which in
+// a binary running many engines at once counts their garbage too.
 func runtimeOverhead() int64 {
-	s := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"},
-		{Name: "/gc/heap/live:bytes"}}
+	s := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/heap/free:bytes"}, {Name: "/memory/classes/heap/released:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"}}
 	metrics.Read(s)
-	return int64(s[0].Value.Uint64()) - int64(s[1].Value.Uint64()) - int64(s[2].Value.Uint64())
+	n := int64(s[0].Value.Uint64())
+	for _, heap := range s[1:] {
+		n -= int64(heap.Value.Uint64())
+	}
+	return n
 }
 
 // A GITLET NODE'S RESERVE AND ITS GO MEMORY LIMIT KEEP THE SAME LINES, at every
