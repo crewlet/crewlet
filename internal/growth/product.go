@@ -6,21 +6,26 @@ import (
 	"slices"
 )
 
-// Call is one call of a growth tool by a seat's turn; for a held call, the
-// held call a person answered and who answered it.
+// Call is one call of a growth tool by a seat's turn: ID names a call made at
+// once, which a product records it under ([Record.Call]); a held call names
+// the held call a person answered and who answered it instead.
 type Call struct {
-	Handle, Turn, Tool string
-	Args               map[string]any
-	HeldCall, Approver string
+	ID, Handle, Turn, Tool string
+	Args                   map[string]any
+	HeldCall, Approver     string
 }
 
 // Hold is a write as its product prepared it: the class it comes to against
 // its target as read now ([Classify]), the digest of the exact vendor
 // operations and the target's before-state it binds to, and for a held call
 // the identity of what it decides (delegated.Subject) and what a person reads.
+// Ask is what the access log records of the ask: its connection, account,
+// target, digests, changes and money; the engine adds the seat, turn, tool,
+// class and held call.
 type Hold struct {
 	Class                               Class
 	Binding, Subject, Question, Context string
+	Ask                                 Record
 }
 
 // RefusalKind is why a product refused a call before any vendor was reached.
