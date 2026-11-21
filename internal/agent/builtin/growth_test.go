@@ -433,6 +433,32 @@ func TestAGrowthSpendOrAdminCallIsHeldForAnAdministrator(t *testing.T) {
 	}
 }
 
+// A BRAKE SENT THROUGH A HELD TOOL IS MADE AT ONCE: a lower that comes to
+// operate as its target reads now is applied without a person or a hold, as
+// its own call; a raise through the same tool is still held.
+//
+// Mutation: hold every call of a held tool whatever its class, and a budget
+// cut waits a day on an administrator's step-up.
+func TestAHeldToolsBrakeIsMadeAtOnce(t *testing.T) {
+	t.Parallel()
+	ads := &fakeAds{levels: map[string]growth.Level{"sre": growth.LevelOperate}, budget: "50"}
+	_, reg := growthTools(t, ads)
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	hold := builtin.NewCallHold(desk, callSeal(t), nil, nil)
+	entry, _ := reg.Lookup(growthSpendTool)
+	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
+	got, isHeld := hold.Hold(ctx, growthTurn(t, "sre"), tools.HeldCall{Name: growthSpendTool, Entry: entry,
+		Args: map[string]any{"campaign": "c1", "daily_budget": "40.00"}})
+	if isHeld || got.Failed || len(desk.recorded) != 0 || !slices.Equal(ads.applied, []string{growthSpendTool}) {
+		t.Fatalf("a lower through the spend tool answered %q, held %v, asked %d, applied %v", got.Output, isHeld,
+			len(desk.recorded), ads.applied)
+	}
+	if _, isHeld = hold.Hold(ctx, growthTurn(t, "sre"), tools.HeldCall{Name: growthSpendTool, Entry: entry,
+		Args: map[string]any{"campaign": "c1", "daily_budget": "60.00"}}); !isHeld || len(ads.applied) != 1 {
+		t.Errorf("a raise through the spend tool was held %v and applied %v", isHeld, ads.applied)
+	}
+}
+
 // An approved call is made once, and only while its target is what the
 // administrator was shown: one that moved, or one with no approval, sends
 // nothing.
