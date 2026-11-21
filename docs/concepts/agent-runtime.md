@@ -1,3 +1,4 @@
+
 # Agent Runtime
 
 The agent runtime (`internal/agent`, wired together by `internal/engine`) runs a seat's turns: what wakes a seat, what a turn is handed, and how the process stops without abandoning one.
@@ -543,21 +544,30 @@ stateDiagram-v2
 
 ### Steering a running turn
 
-Short of stopping a turn, a person can **steer** it: send a note that the turn reads at its next step and keeps to for the rest of the turn. A note is sent from the seat's page, its panel, its row in **Company › Structure**'s Table or the turn's own page, or from the person's own assistant with `steer_turn`. It is the seat's holder's, its lead's or an administrator's to send, as a pause is.
+Short of stopping a turn, a person can **steer** it: send a note that the turn
+reads at its next step, and keeps to for the rest of the turn. A note is sent
+from the seat's page, its panel, its row in **Company › Structure**'s Table or
+the turn's own page, or from the person's own assistant with `steer_turn`. It is the seat's holder's,
+its lead's or an administrator's to send, as a pause is. Before the turn
+launches its executor in its box, the note travels on an ephemeral scatter to
+every node, decided on the turn's seat, which only the node running the turn
+can name — so the note asks that node first — and that node is the one that
+answers. From the launch on, the note waits sealed on the executor's record in the
+coordination store, which any node files it on: its next launch's brief, a step
+where its harness takes notes ([Notes to a running
+run](code-sandbox.md#notes-to-a-running-run)), or the review that judges its work
+reads it, and an executor parked on a question reads it once the question is
+answered. The turn's own record says what became of it, the note redacted (`agent_turn_steered`:
+`delivered` where it was read — the round, or the kind of step inside the launch —
+and where a later launch's brief told it again after a step that took it never
+handed it over; `expired` when the turn ended first; `missed` where a step took
+it for a reader that never had it, or every serve of it to a Claude Code
+hook was lost and a serve's session proves it absent, and no later launch
+whose job started told it; or `unconfirmed` where the executor was handed it
+and never confirmed reading it, a hook's note confirmed only by the job's own
+session, and a note whose every lost serve its harness gave up). See [Turn
+Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 
-- Before the turn launches its executor in its box, the note travels on an ephemeral scatter to every node, decided on the turn's seat, which only the node running the turn can name, so the note asks that node first and that node answers.
-- From the launch on, the note waits sealed on the executor's record in the coordination store, which any node files it on. It is read by its next launch's brief, a step where its harness takes notes ([Notes to a running run](code-sandbox.md#notes-to-a-running-run)), or the review that judges its work; an executor parked on a question reads it once the question is answered.
-
-The turn's own record says what became of it (`agent_turn_steered`):
-
-| Outcome | Meaning |
-|---|---|
-| `delivered` | read: the round, or the kind of step inside the launch; also where a later launch's brief told it again after a step that took it never handed it over |
-| `expired` | the turn ended first |
-| `missed` | a step took it for a reader that never had it, or every serve of it to a Claude Code hook was lost and a serve's session proves it absent, and no later launch whose job started told it |
-| `unconfirmed` | the executor was handed it and never confirmed reading it: a hook's note confirmed only by the job's own session, and a note whose every lost serve its harness gave up |
-
-See [Turn Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 ### Graceful shutdown
 
 SIGINT / SIGTERM trigger a **drain with the probes up**: the node stops taking new work, lets running turns finish, hands its seats back, and only then closes its HTTP listener and backends, so a restart picks up cleanly. The engine owns the process signals exclusively; nothing else in the process, the embedded API server included, may install a handler.
