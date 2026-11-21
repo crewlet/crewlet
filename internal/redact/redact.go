@@ -1358,6 +1358,18 @@ func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
 	return v
 }
 
+// quotedMarker is where a marker begins in text at i past a quote, escaped or
+// not, that opens it, or i where none does: the quote a value was written in,
+// left standing when a pass replaced the value inside it.
+func quotedMarker[T textual](text T, i int) int {
+	for _, q := range []string{`\"`, `"`, `'`} {
+		if tHasPrefix(text[i:], q) && markerLen(text[i+len(q):]) > 0 {
+			return i + len(q)
+		}
+	}
+	return i
+}
+
 // sameLine reports whether a and b, a <= or > b, lie on one line of text.
 func sameLine[T textual](text T, a, b int) bool {
 	a, b = min(a, b), max(a, b)
@@ -1450,6 +1462,11 @@ func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (
 		// markup that closes what the line opened, its first word read as
 		// the rule's `\S+` read it.
 		r.from, r.opening = pastMarkup(text, start, sep-1, end, prior)
+		if q := quotedMarker(text, r.from); q > r.from {
+			// A quote and then a marker: a pass took the value, as a
+			// marker where the value begins says ([valueRead.lines]).
+			r.from = q
+		}
 		word := wordEnd(text, r.from)
 		switch {
 		case word > r.from && isValue(text[r.from:word]):
