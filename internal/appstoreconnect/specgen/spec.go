@@ -190,7 +190,10 @@ type relation struct {
 // relations is, per resource type, the relationships its schema declares.
 func (s *spec) relations() map[string]map[string]relation {
 	out := map[string]map[string]relation{}
-	for _, sc := range s.Components.Schemas {
+	// IN NAME ORDER, every schema of a type adding its relationships: several
+	// schemas describe one type, and a first-seen choice made the output vary.
+	for _, name := range sortedKeys(s.Components.Schemas) {
+		sc := s.Components.Schemas[name]
 		t := s.resolve(sc.Properties["type"])
 		if _, hasID := sc.Properties["id"]; len(t.Enum) != 1 || !hasID {
 			continue
@@ -210,8 +213,15 @@ func (s *spec) relations() map[string]map[string]relation {
 				rels[name] = relation{To: to.Enum[0], One: one}
 			}
 		}
-		if _, seen := out[t.Enum[0]]; !seen || len(rels) > len(out[t.Enum[0]]) {
-			out[t.Enum[0]] = rels
+		all := out[t.Enum[0]]
+		if all == nil {
+			all = map[string]relation{}
+			out[t.Enum[0]] = all
+		}
+		for rel, r := range rels {
+			if _, has := all[rel]; !has {
+				all[rel] = r
+			}
 		}
 	}
 	return out
