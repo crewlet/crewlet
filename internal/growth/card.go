@@ -46,16 +46,16 @@ type CardAct struct {
 	Changes []CardChange `json:"changes"`
 	// Danger marks an act that cannot be undone (a delete, a revoke), which
 	// the card asks to be confirmed.
-	Danger bool `json:"danger,omitempty"`
+	Danger bool `json:"danger"`
 	// Text is what is published, in full, never cut; TextLimit is the
 	// vendor's limit in characters, 0 for none.
 	Text      string `json:"text,omitempty"`
-	TextLimit int    `json:"text_limit,omitempty"`
+	TextLimit int    `json:"text_limit"`
 	// TargetExcerpt, TargetRating and TargetAuthor describe what a reply
 	// answers: an excerpt of the review, its stars and its author's name,
 	// shown on the card alone.
 	TargetExcerpt string `json:"target_excerpt,omitempty"`
-	TargetRating  int    `json:"target_rating,omitempty"`
+	TargetRating  int    `json:"target_rating"`
 	TargetAuthor  string `json:"target_author,omitempty"`
 }
 
@@ -69,7 +69,7 @@ type CardChange struct {
 	// Before is "" for a field the target does not hold yet.
 	Before string `json:"before"`
 	After  string `json:"after"`
-	Money  bool   `json:"money,omitempty"`
+	Money  bool   `json:"money"`
 }
 
 // CardMoney is a spend act's figures in micros of Currency, as JSON strings
