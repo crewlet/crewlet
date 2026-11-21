@@ -1585,7 +1585,7 @@
           ]
         },
         "kinds": {
-          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user), pr_merge (merging a change at the head it was asked about, ask_to_merge) and deploy (deploying a commit that holds merged changes, ask_to_deploy). other is never delegated.",
+          "description": "The kinds of request this rule delegates: ssh_operate (an agent's command on a server as its operate user), pr_merge (merging a change at the head it was asked about, ask_to_merge) and deploy (deploying a commit that holds merged changes, ask_to_deploy). ad_spend, public_post, account_admin and other are never delegated.",
           "items": {
             "type": [
               "string",
