@@ -28,6 +28,10 @@
 // to an observer its caller hands it, nil in every write the engine makes, so
 // the suites can kill a writer at every one.
 //
+// The allowlist is not isolation: a child runs as the engine's user and can
+// read whatever that user can. What it removes is the engine handing its
+// secrets over.
+//
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
 

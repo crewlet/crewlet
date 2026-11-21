@@ -146,6 +146,7 @@ const (
 	TrackerFeedDeferred              = "crewlet.tracker.feed.deferred"
 	TrackerFeedUnreadable            = "crewlet.tracker.feed.unreadable"
 	WorkPickups                      = "crewlet.work.pickups"
+	SeatWakesRouted                  = "crewlet.seat.wakes.routed"
 	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 func note(id string) steer.Note { return steer.Note{ID: id, Text: "use staging", By: "ops"} }
@@ -352,5 +353,29 @@ func TestARecordIsDeliveredExactlyWhereItWasRead(t *testing.T) {
 	}
 	if read.Retold || steer.Record(turn, n, steer.Expired()).Retold {
 		t.Error("a note read once, or expired, is recorded as told again")
+	}
+}
+
+// A NOTE'S RECORD HOLDS NO SECRET THE NOTE CARRIED. A person pastes what they
+// have at hand into a note, a token or a password among it; the run's record
+// holds the note sealed, and its agent_turn_steered record, read in the clear
+// by whoever reads the seat's trail, holds it redacted on every outcome, the
+// person's own words around it kept.
+//
+// Mutation: record note.Text as written in Record, and every shape is on the
+// record.
+func TestANotesRecordHoldsNoSecretTheNoteCarried(t *testing.T) {
+	t.Parallel()
+	turn := steer.Turn{Agent: "a", AgentHandle: "swe", Role: "Engineer", TurnID: "run-1"}
+	at := steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1, Boundary: types.SteerBoundaryRound}
+	for _, shape := range redacttest.Shapes() {
+		n := steer.Note{ID: "n-1", Text: "use staging, with\n" + shape.Sample + "\nthen redeploy", By: "founder"}
+		for _, end := range []steer.End{steer.Delivered(at), steer.Missed(at), steer.Expired()} {
+			got := steer.Record(turn, n, end).Note
+			if strings.Contains(got, shape.Sample) || !strings.Contains(got, "[REDACTED:") ||
+				!strings.HasPrefix(got, "use staging, with\n") || !strings.HasSuffix(got, "\nthen redeploy") {
+				t.Errorf("%s: a note's record holds %q", shape.Name, got)
+			}
+		}
 	}
 }

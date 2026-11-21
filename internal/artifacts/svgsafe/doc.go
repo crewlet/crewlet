@@ -29,7 +29,9 @@
 // anything expands, as is every processing instruction but the XML declaration
 // (`xml-stylesheet` loads a stylesheet), `xml:base`, a non-UTF-8 encoding and
 // every namespace but SVG's and XLink's. Names are matched by their exact SVG
-// spelling, as an XML reader does: `viewbox` is not `viewBox`.
+// spelling, as an XML reader does: `viewbox` is not `viewBox`. Element count and
+// nesting depth are bounded ([MaxElements], [MaxDepth]), and the root needs a
+// viewBox between [MinAspect] and [MaxAspect] times as wide as it is tall.
 //
 // WHAT IS STORED IS THE ENGINE'S RE-SERIALISATION, never the uploaded bytes
 // ([ParseFile]): the validated tree written out once, attributes in a fixed

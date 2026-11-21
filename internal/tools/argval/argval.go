@@ -11,6 +11,9 @@
 // closed set takes its member trimmed and without regard to case ([Choice]).
 // A property test holds the check and every tool reader to the same value
 // over a corpus of awkward inputs.
+//
+// The package is a leaf over the standard library, so the surface's check
+// and the builtin tools import it without a cycle.
 package argval
 
 import (

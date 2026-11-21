@@ -184,31 +184,23 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 // A meta payload that cannot be encoded is refused, and refused BEFORE the
 // record is written.
 //
-// This is twin-only behaviour that the contract suite structurally cannot
-// reach: every meta payload in coordtest is JSON-native by deliberate design,
-// so no case there can hand the store something a codec would reject. A
-// portable suite cannot hold a backend-specific path, which is exactly the
-// gap where a defect sits unnoticed — measured, a silent drop here passes both
-// packages.
+// Twin-only behaviour the contract suite cannot reach: every meta payload in
+// coordtest is JSON-native, so no case there hands the store something a codec
+// rejects, and a silent drop here would pass both packages.
 //
-// Pinned on the OBSERVABLE rather than on the error text: what a caller needs
-// is that the claim did not appear to succeed with its profile quietly
-// missing, because a node whose roles were dropped is one peers make placement
-// decisions about against a profile it never published.
+// Pinned on the OBSERVABLE, not the error text: the claim must not appear to
+// succeed with its profile quietly missing, since peers would make placement
+// decisions against roles the node never published.
 func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := memory.New()
 	resource := coord.NodeResource("n1")
 
-	// Both failure branches, because the second one is REACHED, not
-	// unreachable. It decodes bytes the encoder just produced, which reads
-	// like it cannot fail — and a probe refuted that: json.Number("1e1000")
-	// marshals happily and will not decode into map[string]any, because it
-	// overflows float64. Not exotic either; meta assembled from previously
-	// decoded JSON carries json.Number values as a matter of course. The
-	// reasoning that said "unreachable, label it" was wrong, and only
-	// running it said so.
+	// Both failure branches, because the second is reachable: it decodes
+	// bytes the encoder just produced, yet json.Number("1e1000") marshals and
+	// will not decode into map[string]any (it overflows float64). Meta built
+	// from previously decoded JSON carries json.Number values routinely.
 	for _, bad := range []struct {
 		name  string
 		value any

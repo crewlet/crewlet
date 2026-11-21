@@ -14,8 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -23,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -55,6 +58,8 @@ type wakeSealBody struct {
 	Label        provenance.Label `json:"label"`
 	OwesAnswer   bool             `json:"owes_answer"`
 	At           time.Time        `json:"at"`
+	Owes         string           `json:"owes"`
+	Seen         string           `json:"seen"`
 	Text         string           `json:"text" untrusted:"fence"`
 	Cut          int              `json:"cut"`
 }
@@ -84,7 +89,7 @@ func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.Sealed
 			TurnID: turnID, Job: job, ID: w.ID, Triggers: w.Triggers, Keys: w.Keys, By: w.By,
 			ByKind: string(w.ByKind), WorkingFor: w.WorkingFor, Conversation: w.Conversation,
 			Partition: w.Partition, Label: w.Label, OwesAnswer: w.OwesAnswer, At: w.At.UTC(),
-			Text: string(runes), Cut: w.Cut,
+			Owes: w.Owes, Seen: w.Seen, Text: string(runes), Cut: w.Cut,
 		})
 		if marshalErr != nil {
 			return sandbox.SealedWake{}, fmt.Errorf("engine: sealing wake %s to turn %s: %w", w.ID, turnID,
@@ -135,7 +140,7 @@ func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (ste
 	return steer.Wake{ID: body.ID, Triggers: body.Triggers, Keys: body.Keys, By: body.By,
 		ByKind: iam.ActorKind(body.ByKind), WorkingFor: body.WorkingFor, Conversation: body.Conversation,
 		Partition: body.Partition, Label: body.Label, OwesAnswer: body.OwesAnswer, At: body.At,
-		Text: body.Text, Cut: body.Cut}, true
+		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut}, true
 }
 
 // wakeUnverified says once that a wake on turnID's record does not open.
@@ -277,7 +282,8 @@ func joinedKey(trigger string) string { return workkey.Derive([]string{"wake-joi
 // every key its deliveries are dropped by ([steer.Wake.Keys]). Record is a
 // create, so a claim made again changes nothing. A key the ledger does not
 // take is said (steer_wake_unclaimed): that delivery runs as a turn of its
-// own, the safe direction, and the ending claims it again.
+// own, the safe direction, and the ending claims it again. Then its
+// conversation is read through its position ([runSteers.seeThrough]).
 func (s *runSteers) claim(ctx context.Context, ident runIdentity, wakes []steer.Wake) {
 	if s.completions == nil {
 		return
@@ -297,6 +303,27 @@ func (s *runSteers) claim(ctx context.Context, ident runIdentity, wakes []steer.
 				break
 			}
 		}
+		s.seeThrough(ctx, ident.turn.AgentHandle, w)
+	}
+}
+
+// seeThrough moves the seat's seen-through mark for w's conversation to the
+// record w was derived from, as a completed turn's own triggers move it
+// ([Dispatcher.advanceSeen], ADR-0120): AT THE CLAIM, the moment the run read
+// it, since a joined wake's delivery is never a turn's to record, and a later
+// wake there at or below it that asks nothing was read with it. Forward only;
+// a mark not taken is said, and that later wake runs, the safe direction.
+func (s *runSteers) seeThrough(ctx context.Context, handle string, w steer.Wake) {
+	if s.seen == nil || w.Seen == "" || w.Partition == "" {
+		return
+	}
+	at, err := statelog.ParsePosition(w.Seen)
+	if err != nil {
+		return
+	}
+	if err := s.seen.Advance(ctx, handle, w.Partition, at); err != nil {
+		log.WarnContext(ctx, "seen_through_not_recorded", "seat", handle, "wake_id", w.ID, "error", err,
+			"detail", "a later message in the wake's conversation that asks nothing may run as a turn of its own")
 	}
 }
 
@@ -313,10 +340,19 @@ func (s *runSteers) joined(ctx context.Context, ident runIdentity, items []opene
 	}
 	base := context.WithoutCancel(ctx)
 	claiming, claimed := context.WithTimeout(base, steerPublishBudget)
+	var triggers []string
 	for _, item := range items {
 		s.claim(claiming, ident, item.wakes)
+		for _, w := range item.wakes {
+			triggers = append(triggers, w.Triggers...)
+		}
 	}
 	claimed()
+	// AND A PERSON'S MESSAGE SHOWN QUEUED BEHIND THE SEAT is handed to the
+	// running work now: its line moves to the turn's own (queued.go).
+	if s.handedOver != nil && len(triggers) > 0 {
+		s.handedOver(base, ident.turn.AgentHandle, triggers)
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(base, steerPublishBudget)
 		defer cancel()
@@ -457,4 +493,60 @@ func (s *runSteers) carriedWakes(run sandbox.PendingRun) []runner.HeldWake {
 		}
 	}
 	return out
+}
+
+// served is every other conversation run's turn served, in the order its wakes
+// were filed ([sandbox.CoordinatorOptions.Served]): the conversation of each
+// wake a step read, not the run's own, at most [executordomain.MaxServed]. Its
+// end names them, and each conversation's next turn continues the session the
+// turn kept, which holds what the wake said. A wake no step read is left to a
+// turn of its own, whose end names it; one this node cannot open is said
+// (steer_wake_key_unknown) and its conversation reads its own head.
+func (s *runSteers) served(ctx context.Context, run sandbox.PendingRun) []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, n := range run.Steer.Notes {
+		if n.WakeEnd() != types.JoinDelivered {
+			continue
+		}
+		for _, w := range s.openWakes(run.TurnID, n) {
+			if w.Conversation == "" || w.Conversation == run.ConversationKey || slices.Contains(out, w.Conversation) {
+				continue
+			}
+			if len(out) == executordomain.MaxServed {
+				log.WarnContext(ctx, "executor_end_served_bounded", "turn_id", run.TurnID, "wake_id", w.ID,
+					"detail", "the turn's run read wakes of more conversations than its end names, so this "+
+						"wake's conversation reads its own head rather than the session the turn kept")
+				continue
+			}
+			out = append(out, w.Conversation)
+		}
+	}
+	return out
+}
+
+// turnReply is the obligation run's resumed turn answers: the one its turn
+// parked with ([resumeReply]), held to every wake a step of the run read as
+// well (ADR-0167), each one's own ([steer.Wake.Owes]) merged as a wake of the
+// turn's own partition would be ([strongerReply]), so the delivery check and
+// the review hold the turn to answering it. A wake no step read owes this turn
+// nothing: it runs as a turn of its own.
+func (s *runSteers) turnReply(run sandbox.PendingRun) (turn.Reply, error) {
+	reply, err := resumeReply(run)
+	if err != nil || s == nil {
+		return reply, err
+	}
+	for _, n := range run.Steer.Notes {
+		if n.WakeEnd() != types.JoinDelivered {
+			continue
+		}
+		for _, w := range s.openWakes(run.TurnID, n) {
+			if owed := turn.ParseReply(w.Owes); w.Owes != "" && owed.Valid() {
+				reply = strongerReply(reply, owed)
+			}
+		}
+	}
+	return reply, nil
 }

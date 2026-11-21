@@ -142,6 +142,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -390,13 +391,14 @@ func Expired() End { return End{outcome: types.SteerExpired} }
 //
 // THE ONE CONSTRUCTOR of the record, which every publisher calls — the runner,
 // the bridge's run inbox and an ending — so no two of them build it differently:
-// every outcome but an expiry says where, an expiry never names a step, and the
-// send time is always UTC.
+// every outcome but an expiry says where, an expiry never names a step, the
+// send time is always UTC, and the note is redacted ([redact.Secrets]): the
+// run's record holds it sealed, and this record is read in the clear.
 func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 	ev := types.AgentTurnSteered{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role,
 		TurnID: turn.TurnID, WorkKey: turn.WorkKey,
-		NoteID: note.ID, Outcome: types.SteerExpired, Note: note.Text,
+		NoteID: note.ID, Outcome: types.SteerExpired, Note: redact.Secrets(note.Text),
 		SteeredBy: note.By, SteeredByKind: string(note.ByKind), OperatorID: note.OperatorID,
 		SentAt: note.At,
 	}
@@ -441,7 +443,7 @@ type Wake struct {
 	WorkingFor string
 
 	// Conversation and Partition are where it was written: its conversation's
-	// identity and the inbox partition its delivery arrived in.
+	// identity and its thread's stamped partition key, never split by writer.
 	Conversation, Partition string
 
 	// Label is the fence its words are handed over in, decided as the turn's
@@ -451,6 +453,13 @@ type Wake struct {
 	// OwesAnswer says it asks for an answer, and At is when it was written.
 	OwesAnswer bool
 	At         time.Time
+
+	// Owes is the delivery obligation its delivery would have put on a turn
+	// of its own (turn.Reply's wire value), "" for none: what the turn whose
+	// run reads it is held to as well. Seen is the log position of the record
+	// it was derived from (notify.TriggerField), "" for a vendor's wake: how
+	// far its conversation is read once the run reads it (ADR-0120).
+	Owes, Seen string
 
 	// Text is its words, at most [MaxWakeRunes] of them, and Cut how many
 	// characters past those its message holds, which its conversation keeps.

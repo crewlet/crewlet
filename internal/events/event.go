@@ -43,6 +43,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/named"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -652,22 +653,28 @@ func NewTrace() TraceContext {
 // written to be read and two below the ceiling.
 const MaxDiagnosticBytes = 64 << 10
 
-// ClipDiagnostic applies [MaxDiagnosticBytes], marking the cut.
+// Diagnostic is a free-text diagnostic as an event holds it: REDACTED, then
+// held to [MaxDiagnosticBytes] with the cut marked. Every diagnostic field is
+// somebody else's words (an error a provider or a box wrote, a document a
+// decode quoted), so each is redacted here, once, and before the cut: a
+// credential a cut ran across leaves a head no rule knows ([redact.Prefix]).
 //
 // The HEAD is kept. A wrapped Go error reads outermost-first, so the head
 // names the operation that failed; and in the pathological case this bound
-// exists for — a decode failure quoting a document — the head is the message
-// and the tail is the document.
-//
-// Never through a rune: a byte slice splits whatever multi-byte character
-// straddles the cut, and a JSON encoder replaces the result with U+FFFD.
-func ClipDiagnostic(text string) string {
-	if len(text) <= MaxDiagnosticBytes {
-		return text
+// exists for, a decode failure quoting a document, the head is the message
+// and the tail is the document. Never through a rune, which a JSON encoder
+// replaces with U+FFFD, nor through a marker the redaction wrote, which read
+// in part is the text's own words ([redact.MarkersAround]).
+func Diagnostic(text string) string {
+	shown, whole := redact.Prefix(text, MaxDiagnosticBytes+redact.LongestMarker())
+	if whole <= MaxDiagnosticBytes {
+		return shown
 	}
-	// The marker is this package's own — it names the bound and why the
-	// event needed it — so the cut is taken with [textcut.Bytes] and the
-	// note appended here, rather than with Ellipsis and its bare "…".
-	return textcut.Bytes(text, MaxDiagnosticBytes) +
-		"\n…[diagnostic truncated at 64 KiB so the event could be published]"
+	cut := len(textcut.Bytes(shown, MaxDiagnosticBytes))
+	if begin, _, inside := redact.MarkersAround(shown, cut); inside {
+		cut = begin
+	}
+	// The marker is this package's own: it names the bound and why the
+	// event needed it, rather than [textcut.Ellipsis]'s bare "…".
+	return shown[:cut] + "\n…[diagnostic truncated at 64 KiB so the event could be published]"
 }

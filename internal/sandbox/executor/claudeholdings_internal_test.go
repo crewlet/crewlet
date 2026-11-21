@@ -31,19 +31,16 @@ import (
 // members their archive held ([hsFixtures]).
 
 // hsFixtures are the measured threads the cases read, each a member tree as its
-// session's archive held it, by release and name, with where it was cut from.
-// Each was cut as data, every line in its order with its keys in their order
-// and of their types: the probes' call ids are their own scripted ones
-// (`toolu_T1_a`), every other id is synthetic (the session in ctSession's
-// family, the file named by it, a subagent's `a` and sixteen hex digits, every
-// other uuid in ctUUID's form, so each parent still names its record), and a
-// path under a home directory is /tmp/box/ and its last element. A line over
-// 2 KiB that is no user record is ABRIDGED: each string in it over 256 bytes is
-// "(abridged)", and in the harness's own bookkeeping (no assistant or system
-// record) each list that long is empty, so its keys and their types stay. That
-// is the harness's own bulky text, a request's shape, a prompt snapshot, a
-// skill listing, and T4's three 2 MB padding blocks: what the reading reads of
-// such a line is its head alone. A user record is never abridged.
+// session's archive held it, by release and name. Each was cut as data, every
+// line in its order with its keys in their order and types: the probes' call ids
+// are their own scripted ones (`toolu_T1_a`), every other id is synthetic (the
+// session in ctSession's family, a subagent's `a` plus sixteen hex digits, every
+// other uuid in ctUUID's form so each parent still names its record), and a path
+// under a home directory is /tmp/box/ and its last element. A line over 2 KiB
+// that is no user record is ABRIDGED: each string over 256 bytes is "(abridged)"
+// and, in the harness's own bookkeeping, each list that long is empty, so keys
+// and types stay; the reading reads such a line's head alone. A user record is
+// never abridged.
 var hsFixtures = map[string]string{
 	"2.1.310/T1":  "probe T, T1 (a tree, clean end): its archive",
 	"2.1.322/T1":  "probe T, T1 (a tree, clean end): its archive",
@@ -247,23 +244,18 @@ func TestACallIsHeldOnlyThroughAWholeResultLine(t *testing.T) {
 	}
 }
 
-// A MAIN-THREAD LINE THAT IS NO RECORD LEAVES THE SESSION UNREAD: a whole line
-// that is not one JSON object, one whose head key is of another type, and a
-// counted record whose message does not decode each end the reading with no
-// reading, since a reading that passed one by would count a thread with a hole
-// in it as whole, and a record that held a call as one that held none. The
-// same thread without the line is read, and holds its call. A task
-// notification whose origin does not decode costs only the fact it could have
-// been: it is no notification, its subagent's leg is unanswered, and the
-// reading stands.
+// A MAIN-THREAD LINE THAT IS NO RECORD LEAVES THE SESSION UNREAD: a line that is
+// not one JSON object, one whose head key is of another type, and a counted
+// record whose message does not decode each end the reading with no reading,
+// since passing one by would count a thread with a hole as whole. The same
+// thread without the line is read and holds its call. A task notification whose
+// origin does not decode is no notification: its subagent's leg is unanswered
+// and the reading stands. A reply listing a batch's calls in no shape Claude
+// Code writes is no reading either ([holdingsWalk.idsFold]).
 //
-// A reply listing a batch's calls in no shape Claude Code writes is no reading
-// either: its request throws on one ([holdingsWalk.idsFold]).
-//
-// Mutation: pass a line that is no record by, read a counted record whose
-// message does not decode as one with no calls, or read past a batch's list
-// in no shape, and the reading stands; or take an origin that does not decode
-// for a line that is no record, and the notification's session is unread.
+// Mutation: pass a line that is no record by, or read an undecodable counted
+// record or batch list past, and the reading stands; take an undecodable origin
+// for a non-record line, and the notification's session is unread.
 func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_record", "record done"
@@ -313,23 +305,17 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 }
 
 // EVERY CHAINED RECORD OF THE MAIN THREAD IS HELD TO THE WRITER'S FLOOR by the
-// release it names, not the session's last writer alone, which is all its row
-// records: a box continues a session an older release wrote, so a session the
-// floor's own release last wrote can hold the records of one no rule of the
-// reading was measured on. A record of 2.1.305, one naming no release, one
-// naming a release this code cannot read (two numbers, or a number past what
-// an int holds), and one whose `version` is no string each make the session
-// no reading, wherever it lies: the brief, the call's use, its result, or an
-// attachment after it; and so does the brief or the call's use of 2.1.305
-// that carries no `parentUuid`, which Claude Code's resume reads as in a chain
-// as it reads any user or assistant record. A later writer reads, and so does
-// a record of the harness's bookkeeping that names no release or an old one,
-// which no rule reads.
-//
-// Mutation: skip the check, and each such session holds its call; read an
-// absent `version` as the floor's, and the record naming none is read; hold
-// only a record that carries a `parentUuid`, and the two that carry none are
-// read.
+// release it names, not the session's last writer alone: a box continues a
+// session an older release wrote, so a session the floor's release last wrote
+// can hold records no rule of the reading was measured on. A record of 2.1.305,
+// one naming no release or one this code cannot read (two numbers, one past an
+// int), or whose `version` is no string, makes the session no reading wherever
+// it lies; so does a brief or call's use of 2.1.305 with no `parentUuid`, which
+// Claude Code's resume reads as chained. A later writer reads, as does a
+// bookkeeping record naming no release or an old one, which no rule reads.
+// Mutation: skip the check, and each such session holds its call; read an absent
+// `version` as the floor's, or hold only a record with a `parentUuid`, and the
+// record naming none is read.
 func TestARecordWrittenBelowTheFloorEndsTheReading(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_floor", "floor done"
@@ -433,35 +419,18 @@ func TestASubagentRecordWrittenBelowTheFloorLeavesItUnreported(t *testing.T) {
 	}
 }
 
-// A CALL'S ID ON ANY RECORD OF ITS FILE IS ANOTHER CARRIER of it, counted
-// beside the call's own: Claude Code's resume loads and walks every user and
-// assistant record whatever its `isSidechain` or `agentId` says, and its
-// request keeps the first use of an id and the first result of it in the
-// message after that use, so a second carrier may stand in the call's place,
-// and its call is told, its uses or results past one. In the main thread, so
-// told: a reply of no `isSidechain` calling it first; one of an `agentId`;
-// one of no `parentUuid`, a root the walk reaches; and a result of no
-// `isSidechain` before the call's own, of another text. With none of them the
-// call is held; and a result of an `agentId` that is its only one is the
-// call's result as any other, and holds it. A request's blob repeating the
-// result and a queue operation are no record of the map, and hold nothing,
-// so the call they repeat holds its use alone and is told. A user record out
-// of the chain, whose call another reply made, is one Claude Code's resume
-// may hang under that reply (behind tengu_foamy_spring), which its model
-// cannot place: no reading. (A sidechain's record in the main file is no
-// reading at all: [TestAMainThreadTheResumeModelCannotPlaceIsUnread].) In
-// subagent A's thread rule 2 reads only one with a parentUuid, A's `agentId`
-// and `isSidechain` true: a result there naming no agent or another, or no
-// sidechain, is counted and leaves A's thread not whole, so A is not reported
-// and its call is told under its heading; one out of the chain is counted
-// too, and restarts A's thread, since Claude Code's walk reads a record of no
-// parentUuid as a root ([threadRestarts.See]).
-//
-// Mutation: count only the main thread's own records, and the carriers of no
-// `isSidechain` or of an `agentId` leave their call held; count only chained
-// ones, and the root's does; count only a subagent's own chained records, and
-// its records of another's count nothing; or pass a user or assistant record
-// that is not A's own by and leave A's thread whole, and A is reported.
+// A CALL'S ID ON ANY RECORD OF ITS FILE IS ANOTHER CARRIER of it, counted beside
+// the call's own: Claude Code's resume walks every user and assistant record
+// whatever its `isSidechain` or `agentId`, and its request keeps the first use
+// of an id and the first result after it, so a second carrier may take the
+// call's place and the call is told. Carriers: a reply of no `isSidechain`, of
+// an `agentId` or of no `parentUuid` (a root the walk reaches), and an earlier
+// result of no `isSidechain` and another text; a result of an `agentId` that is
+// the call's only one still holds it. A user record out of the chain whose call
+// another reply made is no reading (tengu_foamy_spring). In A's thread rule 2
+// reads only A's own chained records: another is counted and leaves A not
+// whole; one out of the chain restarts it ([threadRestarts.See]).
+// Mutation: count only own or only chained records, and a carrier leaves its call held.
 func TestACallsIDOnAnyRecordOfItsFileIsAnotherCarrier(t *testing.T) {
 	t.Parallel()
 	const x = "toolu_carried_x"
@@ -580,16 +549,14 @@ func TestACallsIDOnAnyRecordOfItsFileIsAnotherCarrier(t *testing.T) {
 	}
 }
 
-// A RESULT BEFORE THE LAST RESTART IS NOT LIVE: what a resumed session is
-// handed starts over at a restart, so a result before the main thread's last
-// one is told. Measured: s1's compaction, whose boundary follows its call's
-// result, and s2's trim, which kept none of the job's records, so its call is
-// not in the file at all; and, as both releases' readers read them, a
-// microcompaction's boundary, a span replaced and a root after the first,
-// written as one or a user record whose parentUuid is absent or the empty
-// string, which Claude Code's walk reads as one. A result between two
-// restarts is before the last. A result after the last restart is live, and
-// held.
+// A RESULT BEFORE THE LAST RESTART IS NOT LIVE: what a resumed session is handed
+// starts over at a restart, so a result before the main thread's last one is
+// told. Measured: s1's compaction (its boundary follows its call's result) and
+// s2's trim (it kept none of the job's records); and as both releases' readers
+// read them, a microcompaction's boundary, a span replaced, and a root after
+// the first (a user record whose parentUuid is absent or empty, as the walk
+// reads one). A result between two restarts is before the last; one after the
+// last is live, and held.
 //
 // Mutation: compare a result's line with the thread's FIRST restart, and the
 // result between two restarts is live.
@@ -663,20 +630,18 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 	}
 }
 
-// A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model
-// a preview in a result's place, it records the replacement beside the
-// result's own record, which keeps the whole output, and a resume hands its
-// model the preview again, so a call whose result such a record names is
-// told, whatever its result's own record holds and wherever the record lies;
-// a record replacing another call's result, or naming the call in an entry of
-// another kind, leaves it held. In a subagent's thread its own record tells
-// its call the same way, the subagent still reported. A record listing its
-// replacements in no shape Claude Code writes is no reading in the main
-// thread, and leaves a subagent's thread not whole.
-//
+// A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model a
+// preview in a result's place, it records the replacement beside the result's
+// own record, which keeps the whole output, and a resume hands its model the
+// preview again, so a call whose result such a record names is told, wherever
+// the record lies; a record replacing another call's result, or naming the call
+// in an entry of another kind, leaves it held. In a subagent's thread its own
+// record tells its call the same way. A record listing its replacements in no
+// shape Claude Code writes is no reading in the main thread, and leaves a
+// subagent's thread not whole.
 // Mutation: pass every content-replacement record over, or keep a replaced
-// result live, and the replaced call is held; or read past a record of no
-// shape, and the main thread's reading stands.
+// result live, and the call is held; read past a record of no shape, and the
+// main thread's reading stands.
 func TestAResultItsHarnessReplacedIsNotLive(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_replaced", "replaced done"
@@ -734,16 +699,13 @@ func TestAResultItsHarnessReplacedIsNotLive(t *testing.T) {
 // thread's last record descending from the last result, so the first result
 // lies off the chain, and a continuation hands its model each such result all
 // the same, with its call, as the resume recovers it: a result whose parent is
-// a record of a reply on the chain, its own call's. T1's, T2's and T4's
-// siblings, T5's Agent answer beside its sibling, and T4's linear calls past
-// the 5 MiB load path are each live, and each call the bridge answered is
-// held, T5's subagent's among them, which its Agent answer, off the chain,
-// answers; T3's answered call, its record a sibling the chain skips, is held, and
-// its open call, whose result the file never held, holds its use alone and is
-// told.
+// a record of a reply on the chain, its own call's. T1, T2, T4's siblings, T5's
+// Agent answer and T4's linear calls past the 5 MiB load path are live, each
+// call the bridge answered held; T3's answered call, a sibling the chain skips,
+// is held, and its open call, whose result the file never held, is told.
 //
-// Mutation: hold a result only on the chain its thread's last record
-// descends from, and every off-chain sibling is told.
+// Mutation: hold a result only on the chain its thread's last record descends
+// from, and every off-chain sibling is told.
 func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 	t.Parallel()
 	done := func(tag string) sandbox.LoggedCall { return hsLogged("toolu_"+tag, "crewlet "+tag+" done") }
@@ -792,116 +754,17 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 }
 
 // A CALL IS HELD ONLY WHERE ITS RESUMED REQUEST PAIRS ITS USE WITH ITS RESULT,
-// by the reading's pairing rule ([holdingsPairing]) over the order in which
-// the model of Claude Code's resume hands the main thread's records
-// ([threadChain]): its use's reply carries an id, the resume hands its use
-// and its result under every variant, and on every order, from the first
-// record of the use's reply to the later of the two, every record is a plain
-// record of that reply or a plain results record, the result after that first
-// record, no result of the reply's calls before it, and no compaction's
-// boundary at or after it; and its use names a tool of the bridge's, and its
-// id no other call the request may fold it with; a use whose reply carries no
-// id is its own test's ([TestACallWhoseUseCarriesNoReplyIDIsTold]). Each case
-// is a thread of the facility's records ([rcReply]), every reply of its own id
-// and every record of its own time, whose order the resume hands is stated
-// beside it. Where the request does pair a call the rule tells, the case is
-// named an over-tell: the rule is conservative there, knowingly.
-//
-// Told: a reply of another id between the use and its result, the result
-// recovered after it; another reply between the use's reply's first record
-// and the use, folded back past it; another reply between the use and its
-// result, both recovered beside the reply's first record, which another of
-// its records folds back past it (R1b); a prompt there, and one a retraction
-// leaves there once it took the results record that kept the reply folding
-// together; a microcompaction's boundary and another reply; the result placed
-// before the use's reply by the walk's fallback past a parent naming no
-// record; a result of another of the reply's calls the walk's fallback places
-// before it; a compaction's boundary handed after it; a use naming no tool of
-// the bridge's: Claude Code's own (Bash), whose result a context hint clears
-// (IAi @294945524, gAe @294943436), its memory server's, whose result it
-// withholds (dvs @289057540), its Poll, which its code mode folds (KFt
-// @293413848), or a server's whose name only begins with the bridge's; a
-// batch naming the call; its id one split from another call's,
-// or another split from it; a withdrawn attempt the walk does not hand, and a
-// use the retraction filter takes beside its reply's handed first record. And
-// each mark that keeps a record from being a plain one, on the use's record or
-// the result's: a virtual record, which the request drops (2.1.322's Nh skips
-// nS @283080327); a use that is the harness's own reply to a failed request,
-// an API error of the model "<synthetic>", which it drops too (A8, there); a
-// result a shutdown stamped, which the resume rewrites (@295255175), one that
-// is a compaction's summary, one delivering a task, which the request may drop
-// (@298573770), and one whose origin is a voice call's or a task
-// notification's, each of which it renders anew (@298573820, @298574409); and
-// a results record between the reply's records answering an id Claude Code
-// writes of its own, a project's read, which ends the fold's merge (Aje, in
-// the scan @298577650). And the over-tells: another reply, or a prompt,
-// between the reply's first record and the use with the result before it; a
-// prompt with another call's result between the reply's records; a
-// microcompaction's boundary before the use; a result marked meta; an API
-// error's mark alone on the use, or the model "<synthetic>" alone, neither of
-// which A8 is; a batch's list on the use's record naming another call, whose
-// split calls alone the request folds (GWi @291388775); and a result whose
-// origin, or whose meta mark, does not decode, which the request reads as no
-// origin (`origin?.kind`) and as not meta (`isMeta===!0`), the rule as a mark
-// it cannot read. Held: each case's control, a use of the reply's
-// second record, a result recovered before the use but after the reply's
-// first record, and one written before the reply, which the resume recovers
-// after its first record all the same, as it does another call's result
-// written there; a record of the reply after the result, a results record of
-// another call between the reply's records, a microcompaction's boundary
-// before the reply, a result marked not meta, two calls of one reply each with
-// its own result, an id of a split one's form where no call carries the id it
-// reads as split from, and a result whose origin names
-// no kind, which the request reads only by its kind. No reading, so told: a
-// result hung under a reply between it and its use (ADJ1, R1a, R1c), which
-// tengu_foamy_spring may hang under its call's record (whyResultByCall).
-//
-// ON A COMPACTED MAIN THREAD, the facility's own relink and leaf-set cases
-// read whole, the call x1 written after the boundary: held where the relinked
-// order hands it whole, under the summary the anchor (F1n and both its
-// controls), past a lagging checkpoint the resume does not start from (I3a,
-// I3d to I3i, R2b, R2c, S1), from a checkpoint the boundary or the last record
-// a stop hook's summary (S2, S3), and where an earlier boundary named what it
-// kept, a list of none stood beside a segment, or a segment alone relinked
-// (B1 to B3); told where a checkpoint in the leaf set leaves the call off the
-// conversation (I3b, I3c, R2a, and R3a by a segment alone); and no reading
-// where the anchor holds the call or lies between it and its result (F1a to
-// F1f).
-//
-// In a subagent's thread the rule reads each order the subagent's own load
-// hands (newThreadChain(agent)), its subagent reported: another reply inside
-// the use's reply is told, and the result written before its use and handed
-// after it is held, as the control is; and C1 folds there as in the main
-// thread, so a batch naming the call, a result split from its id and its id
-// split from another call's are each told. A call whose id is one Claude
-// Code writes of its own is told by C4 (its results record is no plain one).
-//
-// Mutation: pair a subagent's call by its records' lines in the file, and the
-// subagent's use inside a reply split by another is held, and the result
-// written before its use told; tell every call, and each held case is told;
-// take F for the use's record, not its reply's first, and the use folded back
-// past another reply is held; drop the test of another reply in the stretch,
-// and so is that use, and R1b's; read every user record as plain, and the
-// prompts' cases are held; read every system record as plain, and the
-// microcompaction's boundary before the use is held; drop the result after F
-// with C5, which holds it too, and the result the fallback places before the
-// reply is held; drop C5 alone, and the early result is held; drop C6, and the
-// boundary after the use is held; hold a call whatever tool its use names,
-// and each use naming no tool of the bridge's is held; drop the batch's or
-// the split ids' fold, in the main thread or a subagent's, and each is held;
-// read a reply's record
-// as plain though it is virtual, marked an API error, of the model
-// "<synthetic>" or listing a batch, and each case of that mark on the use is
-// held; read a results record as plain though it is virtual, stamped by a
-// shutdown, a summary, delivering a task, of an origin of a kind, of an origin
-// or a meta mark that does not decode, or answering an id Claude Code writes
-// of its own, and each case of that mark is held, the last the poll_ call's
-// too; drop C2 and the
-// order's own test of the use, and the retracted use is held; read on past a
-// main thread the model cannot place at its end, and each no-reading case is
-// read; take a system record for a turn record in the leaf set's pick, and
-// R2a's call is held; or read Y1t directly in that pick, and I3b's and I3c's
-// are.
+// by the pairing rule ([holdingsPairing]) over the order the resume's model
+// hands the main thread's records ([threadChain]): from the use's reply's first
+// record to the later of use and result every record is plain (that reply's or a
+// results record), the result after that first record, none of the reply's other
+// results before it, no compaction boundary at or after it; the use names a
+// bridge tool, its id no other call's fold (no reply id:
+// [TestACallWhoseUseCarriesNoReplyIDIsTold]). A subagent's thread reads its own
+// load's order (newThreadChain(agent)). Told: another reply, prompt or boundary
+// in the span, a non-bridge tool, batch or split ids, each mark making a record
+// not plain; one the request pairs is an over-tell, knowingly.
+// Mutation: tell every call, drop a test, or read a marked record as plain.
 func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testing.T) {
 	t.Parallel()
 	const x, y = "toolu_pair_x", "toolu_pair_y"
@@ -1356,31 +1219,16 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 
 // A CALL WHOSE USE CARRIES NO REPLY ID IS TOLD (the pairing rule's C0,
 // [holdingsPairing]): the request's fold merges an assistant record into the
-// latest earlier message of its `message.id` as written, an absent id among
-// them, and its deserializer stamps a fresh id only on a record that carries
-// no `requestId` either (2.1.322's e_n @295266158, 2.1.310's TJt
-// @248494944). So an id-less use carrying a requestId merges back across
-// other messages into another id-less reply that carries one, and one
-// carrying none is a message apart from an id-less record beside it: neither
-// is a shape the rule can place. Told: an id-less use with a requestId after
-// another such reply, across a results message and another reply (N1). And
-// the over-tells, the rule conservative there, knowingly: an id-less use
-// alone, with no requestId (N2) or with one (N3), and one whose id is the
-// empty string, which the deserializer stamps as it does an absent one
-// (`!message.id`), each of which the request does pair. Held: N1 with every
-// reply of its own id. Each record is of its own time. Told before the rule
-// reaches C0: a use with no id and no requestId, another such record between
-// it and its result (N4), since the resume recovers a record beside a reply
-// by the reply's id (2.1.322's fWo @293749272, 2.1.310's Rpo @247134223,
-// each grouping only an assistant record whose `message.id` says something),
-// so it hands a result under the id-less use to no model (C2); under the
-// record between, the result would be one tengu_foamy_spring may hang under
-// its call's record (whyResultByCall).
-//
-// Mutation: drop C0, and each over-tell is held, each id-less record read as
-// of one reply; or tell every call at C0, and N1's control is told. N1 is
-// told by C3 as well (its fold's window holds msg_q's record), and N4 by C2,
-// so dropping C0 alone leaves each told.
+// latest earlier message of its `message.id` as written, absent ids included,
+// and its deserializer stamps a fresh id only on a record with no `requestId`
+// either (2.1.322's e_n @295266158, 2.1.310's TJt @248494944). So an id-less use
+// with a requestId merges back across messages into another such reply, and one
+// with none is a message apart: no shape the rule can place. Told: N1. Over-told
+// knowingly, the request pairing each: N2, N3, an empty-string id. Held: N1 with
+// every reply of its own id. N4 is told before C0: the resume recovers records
+// beside a reply by its id (fWo @293749272, Rpo @247134223), so no model is
+// handed a result under the id-less use (C2; whyResultByCall).
+// Mutation: drop C0, and each over-tell is held; tell every call at C0, and N1's control is told.
 func TestACallWhoseUseCarriesNoReplyIDIsTold(t *testing.T) {
 	t.Parallel()
 	const x, z = "toolu_idless_x", "toolu_idless_z"
@@ -1543,37 +1391,17 @@ func TestTheBlockRulesReadEveryBlocksKind(t *testing.T) {
 }
 
 // A CALL WHOSE RECORD A RETRACTION NAMES IS TOLD: Claude Code's resume drops
-// every record whose uuid's first 24 characters are those of an entry of a
-// retraction list it hands, once it has walked the chain and recovered beside
-// each reply what it recovers ([threadChain], THE RETRACTION FILTER: 2.1.322
-// reads the list off a refused reply's fallback, a malformed reply's retry
-// and a reply's own; 2.1.310 off a fallback's alone). Each record has a uuid
-// of its own first 24 characters ([rcUUID]), so an entry names one record.
-// Told: a call whose use's record or whose result's record a fallback names;
-// whose use's record a retry names, which 2.1.310 hands, so the use is not
-// handed under every variant; whose use's record an entry names by its first 24
-// characters alone, by its first 30, or by its first 24 and another tail; and
-// whose use, a record of its reply beside the one on the chain and recovered
-// beside it, a fallback names. Held: no retraction; an entry of the use's
-// record's first 23 characters, which names no record; one naming it in
-// uppercase, which no record's lowercase uuid begins with; and a use beside
-// the record of its reply a fallback names on the chain, which the resume
-// recovered before it filtered, its result under the use. No reading: a
-// list in no shape Claude Code writes, a fallback's or a retry's; and a
-// result under the retracted record whose call its sibling made, which
-// tengu_foamy_spring may hang under that sibling (whyResultByCall). (A
-// subagent's thread holding any retraction list is not whole:
-// [TestARetractionListInASubagentsThreadLeavesItNotWhole].)
-//
-// Mutation: retract nothing, and each told call is held; read a retry's list
-// in neither release, and the retried call is held; read no entry of 24
-// characters, and that entry's call is held; read none shorter than a whole
-// uuid, and the 24's and the 30's calls are; compare an entry's hex digits
-// in either case, and the uppercase entry's call is told; retract every
-// record of a reply one of whose records a list names, as a filter run before
-// the recovery would leave it, and the use beside the retracted record is
-// told; or read a malformed list past its bad entry, and each such thread is
-// read.
+// every record whose uuid's first 24 characters are an entry of a retraction
+// list, after walking the chain and recovering beside each reply ([threadChain],
+// THE RETRACTION FILTER: 2.1.322 reads the list off a fallback, a retry and a
+// reply's own, 2.1.310 off a fallback's alone). Each record has a uuid of its own
+// first 24 characters ([rcUUID]). Told: a use or result a fallback names, a use
+// a retry names, an entry of 24, 30 or 24-plus-another-tail. Held: none, a
+// 23-character entry, an uppercase one, a use beside a chain record a fallback
+// names. No reading: a list in no shape, a result under a retracted record whose
+// call its sibling made (whyResultByCall); a subagent's list is
+// [TestARetractionListInASubagentsThreadLeavesItNotWhole]'s.
+// Mutation: retract nothing, or drop the retry, 24-character or case check.
 func TestACallWhoseRecordARetractionNamesIsTold(t *testing.T) {
 	t.Parallel()
 	const x = "toolu_retracted"
@@ -1644,31 +1472,18 @@ func TestACallWhoseRecordARetractionNamesIsTold(t *testing.T) {
 	}
 }
 
-// A MAIN THREAD THE RESUME'S MODEL CANNOT PLACE IS NO READING: where the
-// model of Claude Code's resume answers cannot tell for the thread
-// ([threadChain.Unknown]), the reading cannot say what the resume hands its
-// model, and tells every call, reading no line past the one the model first
-// could not place. A checkpoint a rewind or a withdrawal marked, or whose leaf
-// is no string; a sidechain's record, a fork's briefing or a file's snapshot
-// in the main thread; a reply whose content is a string, blank or not; a
-// user or assistant record whose message does not decode, counted or not; a
-// record of no uuid, of an uppercase one, or of one another record carries; a
-// progress record, which its load drops, handing each record after it that
-// names its uuid to the progress record's own parent; a result whose call
-// another record made than its parent, which the resume may hang under that
-// record behind tengu_foamy_spring, as a call whose parent is its own result,
-// written after it, makes it; and a compaction's metadata in no shape Claude
-// Code writes. None is in a main thread the probes kept. The thread itself is
-// read and holds its call, and so does it beside a checkpoint its last record
-// descends from, one naming no record, one naming no canonical uuid, and one
-// a compaction's boundary cleared, and where its compaction lists a record
-// written after its boundary beside one no thread holds, by which no resume
-// relinks. Every shape the model places, a walk past a parent written after
-// its record or a relink among them, is its own tests' ([threadChain]).
-//
-// Mutation: read past a thread the model cannot place, and each such thread
-// is read; or read on past its first such line, and the line after it that is
-// no record ends the reading in its place.
+// A MAIN THREAD THE RESUME'S MODEL CANNOT PLACE IS NO READING: where the model
+// of Claude Code's resume cannot tell for the thread ([threadChain.Unknown]),
+// every call is told and no line past the first unplaced one is read. Such: a
+// checkpoint a rewind or withdrawal marked, or whose leaf is no string; a
+// sidechain record, fork briefing or file snapshot; a reply of string content;
+// an undecodable user or assistant message; a record of no, uppercase or shared
+// uuid; a progress record; a result whose call another record made than its
+// parent (tengu_foamy_spring); a compaction's metadata in no shape Claude Code
+// writes. The thread without them is read, as beside a checkpoint its last
+// record descends from; shapes the model does place are [threadChain]'s tests.
+// Mutation: read past such a thread, or on past its first such line, and the
+// case is read or the next non-record line ends it.
 func TestAMainThreadTheResumeModelCannotPlaceIsUnread(t *testing.T) {
 	t.Parallel()
 	const x, out = "toolu_leaf", "leaf done"
@@ -1783,24 +1598,17 @@ func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 }
 
 // A RESULT'S TEXT IS A STRING OR ONE TEXT BLOCK: what a model is handed of a
-// call's output, as its harness recorded it, is the content's string, or the
-// text of a list of exactly one object of `type` "text" whose `text` is a
-// string, its other keys passed over, every key matched exactly and a key
-// written twice read by its last value. Every other content, a ToolSearch's
-// list of tool references, two text blocks, an empty list, an image, a key
-// spelt in another case, a `text` that is no string (null among it), absent
-// or null, has no text, -1, which no log's output matches. And a list of a
-// MiB is passed over past its second element: it costs its line's reading at
-// most 16 KiB more than a list of two, no allocation per element.
-//
-// Not parallel: the allocations are the process's, and a parallel case's
-// would be counted with this one's.
-//
-// Mutation: keep a copy of each element of a result's content list past its
-// first, and the long list costs an allocation an element;
-// or take any list's first text block for its text, and two blocks match;
-// take an element's `text` of any kind for its text, and a null one reads as
-// the empty text.
+// call's output is the content's string, or the text of a list of exactly one
+// object of `type` "text" whose `text` is a string, other keys passed over, keys
+// matched exactly, a repeated key read by its last value. Any other content
+// (tool references, two blocks, an empty list, an image, a key in another case,
+// a `text` that is no string) has no text, -1, which no log's output matches. A
+// MiB list is passed over past its second element: at most 16 KiB more than a
+// list of two, no allocation per element. Not parallel: the allocations are the
+// process's, and a parallel case's would count.
+// Mutation: copy each element past the first, and a long list costs an
+// allocation each; take any list's first text block or any `text` kind, and
+// two blocks match or a null reads as the empty text.
 func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 	const id = "toolu_text"
 	for name, tc := range map[string]struct {
@@ -1957,19 +1765,17 @@ func TestTheResumesMarkDecidesNothing(t *testing.T) {
 	}
 }
 
-// A STOPPED OR GIVEN-UP HARNESS'S OWN RESULT DOES NOT HOLD ITS CALL. Measured: a
-// harness stopped in a shell call records its exit code as the call's failed
-// result (ET0, its shell call renamed a call of a tool of the bridge's, as
-// every call the log keeps is), and one that gave up on a slow call records
-// its own timeout text as a failure (pB, a) while the bridge logged the
-// call's success and its output; each is told. The timeout text is as long as
-// that output, so it is told for its text as well as its failure: told still
-// as a success. A call the bridge answered in time (pB, c) is held: its
-// result is the log's, beside a request's blob that repeats it with a
-// reminder appended, which is no record of the thread.
+// A STOPPED OR GIVEN-UP HARNESS'S OWN RESULT DOES NOT HOLD ITS CALL. Measured:
+// a harness stopped in a shell call records its exit code as the call's failed
+// result (ET0; its shell call renamed a call of a bridge tool, as every logged
+// call is), and one that gave up on a slow call records its own timeout text as
+// a failure (pB, a) while the bridge logged success and output; each is told.
+// The timeout text is as long as that output, so it is told for its text too. A
+// call answered in time (pB, c) is held: its result is the log's, beside a
+// request's blob repeating it with a reminder, which is no record of the thread.
 //
-// Mutation: compare a result's text with the log's output by its length
-// alone, and the timeout text read as a success holds its call.
+// Mutation: compare a result's text with the log's output by length alone, and
+// the timeout text read as a success holds its call.
 func TestAStoppedOrGivenUpHarnesssOwnResultDoesNotHoldItsCall(t *testing.T) {
 	t.Parallel()
 	gaveUp := hsLogged("toolu_pb_a", "slow a finished its work")
@@ -2302,20 +2108,17 @@ func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
 }
 
 // HOLDINGS READ ONLY THE CONTINUED SESSION'S MEMBERS, as the layer names them:
-// another session's main thread, a thread deeper than the session's
-// subagents (a Workflow's), `agent-.jsonl`, and the session's saved compaction
-// under either of its names are passed over, so a call only they record is
-// absent, and the reading of the session's own main thread stands: the saved
-// compaction holds the call both as a main thread and as a sidechain of no
-// agent writes it, so a walk that read it as either thread would count it. A
-// depth-one subagent's thread and metadata are read, its call counted in its
-// thread; and either held twice, under two spellings, is no reading, since a
-// restore keeps the last copy.
+// another session's main thread, a thread deeper than the session's subagents (a
+// Workflow's), `agent-.jsonl`, and the saved compaction under either name are
+// passed over, so a call only they record is absent. The saved compaction holds
+// the call both as a main thread and as a sidechain of no agent writes it, so a
+// walk reading it as either would count it. A depth-one subagent's thread and
+// metadata are read; either held twice, under two spellings, is no reading,
+// since a restore keeps the last copy.
 //
-// Mutation: take any `projects/crewlet/<x>.jsonl` for the main thread, as a
-// person's transcript does, and another session's call is counted; read the
-// saved compaction, and its call is counted; or drop the check of a
-// subagent's member held twice, and its archive is read.
+// Mutation: take any `projects/crewlet/<x>.jsonl` for the main thread, or read
+// the saved compaction, and that call is counted; drop the check of a member
+// held twice, and its archive is read.
 func TestHoldingsReadOnlyTheContinuedSessionsMembers(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_member", "member done"
@@ -2653,96 +2456,16 @@ type hsMeasured map[string][]sandbox.LoggedCall
 
 // A SUBAGENT IS REPORTED ONLY WHERE ITS ONE CONVERSATION ANSWERED AND FINISHED
 // EVERY LEG (rule 2), the conversation the subagent's own load hands
-// ([threadChain], newThreadChain(agent)), so a call its thread holds is held
-// only then; otherwise it is told under the subagent's heading, the reading
-// saying which condition failed first.
-// Measured: P2(g)'s two subagents, one answered by its Agent call's own
-// result and one by its task notification, P2(h)'s with a tree of two calls
-// at once in each thread, P2(c)'s, P2(dc)'s, T5's on both releases and T10's
-// on both, the last on 2.1.322 past the turnCompanion record before its
-// notification, are reported, each call of a tool of the bridge's held and
-// each other told in the main list (P2(c)'s and P2(dc)'s shell calls, and
-// P2(h)'s calls of a server it named seat); P2(dc)'s box copy, its
-// subagent's thread cut back before its last reply (condition 5), and
-// P2(d)'s, are not: its Agent
-// call answered by the resume's own result (condition 3), and before that its
-// thread not whole, the call it was cut off in a record of its own that its
-// resumed conversation, chained past it, never hands (the strict rule). Built, each
-// otherwise reportable: a subagent whose metadata is missing, names a call of
-// another tool, or names an id a second Agent call carries; whose thread
-// restarts, holds a record of another agent's or a progress record, which
-// Claude Code's load drops and links past, lists a batch's calls in no shape
-// Claude Code writes, which its request throws on, marks an API error or
-// names the model of a reply in no shape Claude Code writes, opens on a
-// record that roots no chain, ends on an empty reply, on the text of a reply
-// cut before its call, on a reply its harness wrote itself (a failed
-// request's error, which ends the subagent and answers its call completed, or
-// a resume's "No response requested."), on one marked an API error though it
-// ended its turn, on one of the model "<synthetic>" though it ended its turn,
-// or on one cut at its token bound, or holds a skill's text, a leg the main
-// thread holds no call of (d4's record); whose thread starts a second leg it
-// finished, the main thread holding no call of it (condition 4 alone); whose
-// Agent call's answer names another agent, is a background subagent's, is a
-// failure, comes twice, precedes a restart of the main thread, lies on the
-// main thread's chain beside its call's record off it, or lies off it under a
-// record of no reply; whose notification names another agent, or a subagent
-// that did not complete (one before a restart of the main thread is
-// [TestANoticeBeforeTheLastRestartAnswersNoLeg]'s); or that was sent a
-// message whose result refused it with null, or left none, and no
-// notification answered. A message its own result
-// refused with the literal false is no leg, and one answered by a notification
-// is answered; a subagent a Task call started reads as one an Agent call did;
-// a prompt whose parentUuid is the empty string or absent roots its thread's
-// chain, as Claude Code's walk reads it; and the members' order is the box's
-// to choose. Built of the load's own records, each of its own id and time:
-// its conversation is reported, and so are two calls at once whose first
-// result its load recovers beside their reply, a leaf it hands, and a reply
-// that finished its leg written before the result it follows, the last of its
-// conversation all the same; and not a reply that finished on a branch its
-// call is not on, written last but stamped before its leaf, nor one its load
-// takes for its leaf, its call off the conversation (the strict rule); not a
-// reply that finished its leg written last but handed before its call, the
-// leg ending on its result along the conversation (condition 5); and not a
-// leg's start off the conversation, under a reply its load recovers
-// (condition 4, over the whole file). Not reported, its Agent call's answer
-// recovered beside the call's reply but placed after another reply written
-// inside that reply's records (R1i); reported, the answer right after the
-// call (R1j). And the shapes built against rule 2, each of its own records: not
-// whole where a reply that finished lies on a branch without the call (R2a,
-// with an own attachment on the call's branch; R2b, with an own stop hook's
-// summary there; V1, that attachment the leaf; V2, the finished branch
-// without the call written first and the leaf; V2b, both branches' replies
-// of one time, the first the leaf on the tie; R2c, two legs on it; R2d, two
-// legs interleaved with the call's result between them); reported where the
-// call lies in the first of two legs, in either order of the second's reply
-// and the attachment it names (2.1.310's resume), and where the call lies in
-// the second leg of 2.1.310's resume, its use under that attachment (R2g).
-//
-// Mutation: ignore a restart in a subagent's thread, and the restarted one is
-// reported; drop condition 4, and the second leg's subagent is reported; take
-// a reply of text for finished whatever it stopped for, and the cut pair's is;
-// take one for finished whatever it stopped for but a call, and the resume's
-// own reply's is; read past a reply's mark of an API error, and the marked
-// reply's is; take a reply of the model "<synthetic>" for a model's, and the
-// one of that model that ended its turn is; read past a model in no shape
-// Claude Code writes, and the reply whose model is null leaves its subagent
-// unfinished rather than not whole; or drop any other part of a condition
-// (the answer's liveness, its failure, its count, the metadata's one call, a
-// Task call as a start, a notification's status or agent, a record of another
-// agent's, a progress record, a batch's list in no shape, an answer handed
-// only beside its call's record handed), and the subagent its case built is
-// reported; or read a prompt's parentUuid that is empty or absent as naming
-// no record, and the subagent whose prompt carries it is not whole. Drop the
-// strict rule, and the reply that finished on another branch is reported, and
-// so is each shape built against rule 2 not whole; apply it to every own leaf,
-// the leaf aside or not, and the two calls at once are not whole; read
-// condition 5 in the file's order, and the reply handed before its call
-// reports its subagent while the one written before its result does not; or
-// count condition 4's leg starts along the conversation alone, and the leg's
-// start off it reports its subagent. Exempt a leg's own answer from the
-// pairing rule, and the answer behind another reply (R1i) reports its
-// subagent; or tell every call, and R1j's subagent goes unanswered, and R2g's
-// call and each two-leg control's is told.
+// ([threadChain], newThreadChain(agent)): a call its thread holds is held only
+// then, else it is told under the subagent's heading, the reading saying which
+// condition failed first. Measured and reported: P2(c), P2(dc), P2(g), P2(h), T5
+// and T10; not: P2(dc)'s box copy (condition 5) and P2(d) (condition 3, then the
+// strict rule: its thread is not whole). The built cases each fail one condition
+// of an otherwise reportable subagent (metadata, thread record, finish, leg
+// start, Agent answer, notification, message) or pass one Claude Code's walk
+// reads as it does (R1i/R1j, R2a-R2g, V1, V2: branches, legs, answer order).
+// Mutation: drop a condition or the strict rule, and the subagent its case
+// built is reported; tell every call, and R1j's and R2g's go unanswered.
 func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryLeg(t *testing.T) {
 	t.Parallel()
 	// conversation is hsForeground's session whose subagent's thread is what
@@ -3212,23 +2935,17 @@ func TestARetractionListInASubagentsThreadLeavesItNotWhole(t *testing.T) {
 }
 
 // A CALL A SUBAGENT'S LIST NAMES BEFORE ITS FAULT IS TOLD: where a subagent's
-// content-replacement record lists an asked call's result and then an entry
-// that is no object, or its reply's batch lists that call and then such an
-// entry, the subagent is not whole, and the call, whose use and result lie
-// whole in the main thread, is told all the same. Every entry a list hands
-// before its fault is read, as the entries of a whole list are: the harness
-// reads the entries it can of a list (it replaces a result an entry names; a
-// batch an entry names folds its calls), so an entry dropped with the one that
-// broke the list would leave a call held whose result its model was not
-// handed whole. A batch's entry reaches a call of the main thread where the
-// reading meets it before the main thread is decided, so that case's archive
-// holds the subagent's members first, an order a box may write them in. The
-// session whose subagent's lists name no such entry holds the call and
-// reports its subagent, in either order.
+// content-replacement record lists an asked call's result and then an entry that
+// is no object, or its reply's batch lists that call and then such an entry, the
+// subagent is not whole and the call, whole in the main thread, is told all the
+// same. Every entry before the fault is read, as in a whole list: the harness
+// reads the entries it can, so dropping them would hold a call whose result its
+// model was not handed whole. A batch's entry reaches a main-thread call where
+// the reading meets it before the main thread is decided, so that archive holds
+// the subagent's members first, an order a box may write. A list naming no such
+// entry holds the call and reports its subagent, in either order.
 //
-// Mutation: walk a list whole before it hands an entry, answering its fault
-// before any entry it read (in the replacements' accessor, or in the
-// batch's), and the call that list names is held.
+// Mutation: walk a list whole before handing an entry, and its call is held.
 func TestACallASubagentsListNamesBeforeItsFaultIsTold(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_test_listed", "listed done"
@@ -3360,21 +3077,17 @@ func TestASubagentPastTheChainsBoundIsCountedStill(t *testing.T) {
 }
 
 // AN ANSWER CARRYING A HANDBACK ANSWERS NO LEG (rule 2, condition 3). Under a
-// handback contract a subagent delivers its report through a call of its own,
+// handback contract a subagent delivers its report through its own call,
 // SubagentHandback, and its completion answers its caller with the harness's
-// words in place of its report (2.1.322's pkn, 2.1.310's Owr): a call's own
-// answer then carries a `handback` key, and a task notification's result
-// names the tool, in each of the three forms both releases write (the report
-// delivered as a message, not reported yet, none delivered). So an Agent
-// call's completed answer carrying `handback` or `handbackReport`, a
-// background subagent's notification in each form, and a SendMessage's
-// notification carrying one leave the subagent unreported, its call told
-// under its heading; and a leg one of whose notifications carried one is
-// answered by no other, though a later one carries none.
+// words (2.1.322's pkn, 2.1.310's Owr): a call's answer carries a `handback`
+// key, and a notification's result names the tool, in each of the three forms
+// both releases write (report delivered, not reported yet, none delivered). So
+// an Agent answer carrying `handback` or `handbackReport`, and a notification
+// in any form, leave the subagent unreported, its call told; a leg one of
+// whose notifications carried one is answered by no other.
 //
-// Mutation: read past a call's own answer's handback, and its subagent is
-// reported; read past a notification's, and each notified subagent is; or
-// keep only the last notification's, and the one notified twice is.
+// Mutation: read past a call's answer's handback or a notification's, and the
+// subagent is reported; keep only the last notification's, and the one notified twice is.
 func TestAnAnswerCarryingAHandbackAnswersNoLeg(t *testing.T) {
 	t.Parallel()
 	forms := map[string]string{
@@ -3442,20 +3155,16 @@ func TestAnAnswerCarryingAHandbackAnswersNoLeg(t *testing.T) {
 	}
 }
 
-// A NOTICE BEFORE THE LAST RESTART ANSWERS NO LEG (rule 2, condition 3):
-// what a resumed session is handed starts over at a restart, so a task
-// notification counts only where its line follows the main thread's last
-// one, as a result does ([TestAResultBeforeTheLastRestartIsNotLive]): the
-// reading's own forward guard, beside the model of Claude Code's resume,
-// which hands a microcompaction's boundary's records before it, since a
-// release after 2.1.322 that cut there would hand less. A background
-// subagent's notification before a microcompaction's boundary, or between
-// two, leaves it unreported, its call told under its heading; one after the
-// last answers its leg, and its subagent is reported.
+// A NOTICE BEFORE THE LAST RESTART ANSWERS NO LEG (rule 2, condition 3): what a
+// resumed session is handed starts over at a restart, so a task notification
+// counts only where its line follows the main thread's last one, as a result
+// does ([TestAResultBeforeTheLastRestartIsNotLive]). This is the reading's own
+// forward guard: a release after 2.1.322 that cut at a microcompaction's
+// boundary would hand less. A notification before a boundary, or between two,
+// leaves its subagent unreported, its call told; one after the last answers.
 //
-// Mutation: hold a notification to no restart, and the one before the
-// boundary answers its leg; or compare its line with the main thread's first
-// restart, and the one between two does.
+// Mutation: hold a notification to no restart, and the one before the boundary
+// answers its leg; compare with the first restart, and the one between two does.
 func TestANoticeBeforeTheLastRestartAnswersNoLeg(t *testing.T) {
 	t.Parallel()
 	// restarted is hsBackground's session whose main thread goes on from its
@@ -3532,20 +3241,17 @@ func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
 }
 
 // A TASK NOTIFICATION IS READ LINE BY LINE, as Claude Code writes one and as
-// probe T's T10 measured it on both releases: its header; the subagent's id,
-// an agent's by the layer's rule; the leg's, one the call-id rule holds; any
-// number of output files; and a status of completed, nothing after the status
-// read. Any other text names no subagent's leg: no header, or one with more on
-// its line; an agent or a leg outside its rule; the ids in the other order; a
-// line between them and the status; or a status other than completed, or with
-// more on its line. Read as the walk reads one: the text a user record's
-// content, through the line's reading ([threadReader.Next]) and the message's
-// [threadMessage.Notification].
+// probe T's T10 measured it on both releases: header; the subagent's id (an
+// agent's by the layer's rule); the leg's (one the call-id rule holds); any
+// number of output files; a status of completed, nothing read after it. Any
+// other text names no leg: another header, an id outside its rule or in the
+// other order, a stray line before the status, another status, or more on a
+// line. Read as the walk reads one: a user record's content, through
+// [threadReader.Next] and [threadMessage.Notification].
 //
-// Mutation: read any status as completed, read past a line that is no output
-// file, or take a leg outside the call-id rule, and a text of another shape
-// answers a leg; end the text's reading without deciding its last line, and
-// a notification ending at its status names none.
+// Mutation: read any status as completed, a non-output-file line past, or a leg
+// outside the call-id rule, and another shape answers a leg; leave the last
+// line undecided, and a notification ending at its status names none.
 func TestATaskNotificationIsReadLineByLine(t *testing.T) {
 	t.Parallel()
 	const head, done = "<task-notification>\n", "<status>completed</status>"
@@ -3968,20 +3674,16 @@ func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing
 	}
 }
 
-// WHAT MEMBERS HAND OUT IS HELD TO THE ARCHIVE'S BUDGET, the one the archive's
-// plaintext is held to, apart from what its stream inflates to: a sparse
-// member hands out holes its stream does not hold. Under a plaintext bound of
-// a mebibyte, a subagent's thread of a whole first line, a hole of 600 KiB and
-// a break, whose lines each stay under the line's bound and whose stream is a
-// few kibibytes, is read; two of them hand out past the budget, and the
-// second is no reading, the layer's bound named. And a metadata of holes, at
-// its own bound, after a thread whose hole of 1000 KiB left it less than
-// that, hands out past what is left, and is no reading too, in the reading's
-// own words.
+// WHAT MEMBERS HAND OUT IS HELD TO THE ARCHIVE'S BUDGET, the one its plaintext
+// is held to, apart from what its stream inflates to: a sparse member hands out
+// holes its stream does not hold. Under a one-MiB bound, a subagent's thread (a
+// whole first line, a 600 KiB hole, a break; each line under the line bound, the
+// stream a few KiB) is read; two hand out past the budget and the second is no
+// reading, the layer's bound named. A metadata of holes at its own bound, after
+// a thread whose 1000 KiB hole left less than that, is no reading either.
 //
-// Mutation: hand each member the whole plaintext bound, and both threads are
-// read; or read a metadata past what is left of the budget, and the one after
-// the long thread is read.
+// Mutation: hand each member the whole bound, and both threads are read; or
+// read a metadata past what is left, and the one after the long thread is read.
 func TestWhatMembersHandOutIsHeldToTheArchivesBudget(t *testing.T) {
 	t.Parallel()
 	bounds := scrubBounds{plain: 1 << 20}

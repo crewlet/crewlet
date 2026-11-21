@@ -1022,6 +1022,9 @@ type Engine struct {
 	// runSteers is this node's half of the notes a turn's executor holds on
 	// its record, from launch to the turn's end (runsteer.go, ADR-0067).
 	runSteers *runSteers
+	// wakeRouters is this node's routers of its busy seats' held inboxes
+	// (wakerouter.go, ADR-0167).
+	wakeRouters seatRouters
 	// codeSearchWire is this node's code search scatter envelopes, both
 	// halves, and codeSearchLocal the answerer its own searches go to where it
 	// has no broker (codesearch.go).
@@ -1578,7 +1581,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// an ingress-only node with no runtime still files a person's note on a
 		// run another node launched.
 		runSteers: newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue).
-			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)),
+			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)).
+			seeingThrough(ledgerstore.NewSeenThrough(backends.Fleet)),
 		codeSearchWire:      codeSearchWire,
 		presenceWire:        presenceWire,
 		relayWire:           relayWire,
@@ -1632,6 +1636,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// write its launch makes to create the run's record (before any box or
 	// harness exists), and every late offer after it (steer.go).
 	steers.runs = e.runSteers
+	// A wake a run reads takes its message's queued line down (queued.go).
+	e.runSteers.telling(e.settleWaiting)
 	// The settles those records take off the path that took end with the node:
 	// each asks its store until it answers, no longer than this node's
 	// teardown, which is when its store goes. Every take is asked once more as
@@ -2373,6 +2379,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Settled == nil {
 		d.Settled = e.settleWaiting
 	}
+	if d.Idle == nil {
+		d.Idle = e.nudgeRouter
+	}
 	if d.DeadLettered == nil {
 		d.DeadLettered = e.reportDeadLetter
 	}
@@ -2772,6 +2781,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// drain while its keeps upload, is given back on this allowance once the last
 	// has ended.
 	e.stopSandbox()
+	// The routers of busy seats' held inboxes, once the coordinator that starts
+	// them has stopped.
+	e.stopRouters()
 	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()

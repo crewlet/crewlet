@@ -3,7 +3,8 @@
 // containment (`contains`, a chip set) and string prefix on indexed paths,
 // combined by AND; one order path with the document id as the tie-break; a
 // bounded limit; and a keyset cursor. Pure: it names no table it does not
-// compile against and opens nothing.
+// compile against and opens nothing. Every value is a bound parameter, never
+// spliced into the SQL, since a document's words reach it.
 //
 // # An unindexed filter is refused, never answered by a scan
 //

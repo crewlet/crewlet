@@ -133,6 +133,9 @@ type EndRecord struct {
 	Ask string
 
 	Ending executorkeep.Ending
+
+	// Served is [TurnEnd.Served].
+	Served []string
 }
 
 // LogAnswer is how the executor log settled one record a coordinator asked of
@@ -3330,12 +3333,22 @@ type TurnEnd struct {
 	Ask string
 
 	Ending executorkeep.Ending
+
+	// Served is every other conversation the turn served, each one whose wake
+	// a step of its run read ([CoordinatorOptions.Served]): each then
+	// continues the session the turn kept. None for a turn whose record is
+	// gone, which took its wakes with it.
+	Served []string
 }
 
 // turnEndOf is the end of the turn run's row belongs to, ending as ending.
-func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
-	return TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID, ConversationKey: run.ConversationKey,
+func (c *Coordinator) turnEndOf(ctx context.Context, run PendingRun, ending executorkeep.Ending) TurnEnd {
+	end := TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID, ConversationKey: run.ConversationKey,
 		WorkKey: run.WorkKey, WorkSince: run.WorkSince, Ask: run.TaskDescription, Ending: ending}
+	if c.served != nil {
+		end.Served = c.served(ctx, run)
+	}
+	return end
 }
 
 // OweEnd records on the turn's run row how the turn ended
@@ -3444,7 +3457,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		run = c.settleUnresolved(ctx, run, askEvery)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
 		ending.Exhausted = run.ExhaustedSessions
-		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
+		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}
 	}
@@ -3506,7 +3519,7 @@ func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 			end.TurnID, err)
 	}
 	record := EndRecord{Handle: end.Handle, Turn: end.TurnID, ConversationKey: end.ConversationKey,
-		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending}
+		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending, Served: end.Served}
 	var lastErr error
 	ended := false
 	c.askRecord(ctx, "end", end.TurnID, c.recordBudget, func(ctx context.Context) (bool, error) {

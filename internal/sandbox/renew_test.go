@@ -161,7 +161,11 @@ func newRenewRig(t *testing.T) *renewRig {
 	if err := broker.Subscribe(t.Context(), control, group, func(ctx context.Context, ev *events.Event) queue.Result {
 		left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
 		r.mu.Lock()
-		r.seen = append(r.seen, delivered{id: ev.ID, left: left, waiting: len(broker.Backlog(control, group))})
+		waiting, err := broker.Backlog(ctx, control, group, 1<<12)
+		if err != nil {
+			t.Errorf("read the control topic's mail: %v", err)
+		}
+		r.seen = append(r.seen, delivered{id: ev.ID, left: left, waiting: len(waiting)})
 		n, before := len(r.seen), r.before
 		r.mu.Unlock()
 		if before != nil {

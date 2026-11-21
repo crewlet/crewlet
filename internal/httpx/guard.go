@@ -47,7 +47,6 @@ const (
 // an IP in the URL is judged before the proxy hears of it, a NAME the proxy
 // resolves is not. Not an [http.Transport]: fails closed ([ErrUnguarded]).
 // An OPERATOR-configured address goes through [Client].
-// address goes through [Client].
 func Guarded(timeout time.Duration) *http.Client {
 	g := newGuard(&net.Dialer{Timeout: guardDialTimeout, KeepAlive: guardKeepAlive}, onNetwork)
 	return g.wrap(Customized(timeout, g.install))

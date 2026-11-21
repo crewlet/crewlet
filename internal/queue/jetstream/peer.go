@@ -27,19 +27,19 @@ func (q *Queue) Peer(ctx context.Context, opts ...queue.Option) (*Queue, error) 
 	return newQueueOn(ctx, q.cfg, q.embedded, false, queue.Resolve(opts...))
 }
 
-// Backlog reports the events a subscription retains and has not acked: the
-// mail an unowned seat is holding. Test-facing, because seat ownership rests
-// on "the mail survived".
+// Backlog reads the mail a subscription holds without consuming it
+// ([queue.EventQueue.Backlog]): each mailbox from its group's ack floor through
+// a throwaway ack-none consumer ([Queue.peek]), the lane's first, at most limit.
+// From the ack floor, so it can return mail above the floor already acked.
 //
 // SIZED FROM THE STREAM, NEVER FROM THE CONSUMER: the stream stores and acks a
 // publish before the consumer's pending count catches up, so a consumer-sized
-// read answers "no mail" for mail that is there. The conformance suite owes
-// READ-YOUR-OWN-WRITE (queuetest.Capabilities) and asserts absences with no
-// wait, so a lagging view would blame the operation under test for the mail.
-//
-// On a laned topic the lane's mail is part of it ([queue.HasLane]), listed
-// first, as the mailbox the subscription takes first.
-func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Event, error) {
+// read answers "no mail" for mail that is there. The conformance suite asserts
+// absences with no wait, so a lagging view would blame the operation under test.
+func (q *Queue) Backlog(ctx context.Context, topic, group string, limit int) ([]*events.Event, error) {
+	if err := queue.CheckBacklogLimit(limit); err != nil {
+		return nil, err
+	}
 	stream, err := q.streamFor(ctx, topic)
 	if err != nil {
 		return nil, err
@@ -47,13 +47,16 @@ func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Eve
 	var out []*events.Event
 	if queue.HasLane(topic) {
 		lane := queue.LaneOf(topic)
-		held, laneErr := q.backlogOf(ctx, stream, lane, consumerName(lane, group))
+		held, laneErr := q.backlogOf(ctx, stream, lane, consumerName(lane, group), limit)
 		if laneErr != nil {
 			return nil, laneErr
 		}
 		out = append(out, held...)
 	}
-	held, err := q.backlogOf(ctx, stream, topic, consumerName(topic, group))
+	if len(out) >= limit {
+		return out, nil
+	}
+	held, err := q.backlogOf(ctx, stream, topic, consumerName(topic, group), limit-len(out))
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +124,9 @@ func (q *Queue) runningOn(key attachKey) (priority, background int) {
 	return priority, background
 }
 
-// backlogOf is [Queue.Backlog] for one durable consumer reading one subject.
-func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*events.Event, error) {
+// backlogOf is [Queue.Backlog] for one durable consumer reading one subject,
+// at most most events.
+func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string, most int) ([]*events.Event, error) {
 	cons, err := q.js.Consumer(ctx, stream, name)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -146,7 +150,7 @@ func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*e
 	// holds; a narrower one loses mail. From the ack floor, not the head: under interest retention
 	// the first N on a shared subject are another group's.
 	above := int(lastSeq) - int(info.AckFloor.Stream)
-	limit := min(stored, above)
+	limit := min(stored, above, most)
 	if limit <= 0 {
 		return nil, nil
 	}

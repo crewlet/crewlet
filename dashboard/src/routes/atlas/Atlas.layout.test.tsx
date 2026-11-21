@@ -7,7 +7,7 @@
  * sideways, on a wide screen and on a phone.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { graphItemKey } from "@crewlethq/ui";
@@ -300,29 +300,43 @@ test("the same company on the same canvas draws its lanes in the same places", a
   expect(places()).toEqual(first);
 });
 
-// FULLSCREEN ARRANGES FOR THE SCREEN: the map's box keeps its size while the
-// canvas fills the screen, so a map arranged for the box would stand small in
-// it. A screen-sized element stands in for the held one, which a headless
-// browser does not resize. Mutation: measure the box alone.
-test("a map held fullscreen is arranged for the screen, and for its box again after", async () => {
-  await mount(1024, shapedCompany(GROWN_LANES), "#/company/atlas", undefined, 0, 768);
+// FULLSCREEN HOLDS THE SCREEN, ARRANGED FOR IT: the map's own control takes
+// its canvas fullscreen, the map is arranged and fitted for the screen, and
+// leaving gives the box its own arrangement back. Drawing a new arrangement on
+// a new canvas removed the element holding the screen, which dropped it at
+// once. Mutation: key the canvas on its arrangement again.
+test("the Fullscreen control holds the screen with the map arranged for it, and gives the box back", async () => {
+  await mount(1440, shapedCompany(GROWN_LANES), "#/company/atlas", undefined, 0, 900);
   await shownMap();
   const box = document.querySelector<HTMLElement>(".atlas-map")!;
   const card = () => getComputedStyle(box).getPropertyValue("--crewlet-graph-canvas-card-width");
   const boxed = card();
-  const screen = document.createElement("div");
-  screen.style.cssText = "position: fixed; inset: 0 auto auto 0; width: 1920px; height: 1080px;";
-  box.append(screen);
-  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => screen });
-  try {
-    document.dispatchEvent(new Event("fullscreenchange"));
-    await eventually(() => expect(card()).not.toBe(boxed));
-  } finally {
-    Reflect.deleteProperty(document, "fullscreenElement");
-    screen.remove();
-  }
-  document.dispatchEvent(new Event("fullscreenchange"));
-  await eventually(() => expect(card()).toBe(boxed));
+  const canvas = document.querySelector<HTMLElement>(".atlas-map .crewlet-graph-canvas")!;
+  /** The map's world inside its canvas, filling it along one side. */
+  const fitted = () => {
+    const room = canvas.querySelector(".crewlet-canvas__viewport")!.getBoundingClientRect();
+    const world = canvas.querySelector(".crewlet-graph-canvas__world")!.getBoundingClientRect();
+    expect(inside(world, room), "the map is in view").toBe(true);
+    expect(Math.max(world.width / room.width, world.height / room.height)).toBeGreaterThan(0.75);
+  };
+
+  await userEvent.click(page.getByRole("button", { name: "Fullscreen", exact: true }));
+  await eventually(() => expect(card()).not.toBe(boxed));
+  await eventually(() => {
+    expect(document.fullscreenElement).toBe(canvas);
+    expect(canvas.isConnected).toBe(true);
+    const held = canvas.getBoundingClientRect();
+    expect([held.width, held.height]).toEqual([innerWidth, innerHeight]);
+    fitted();
+  });
+
+  await userEvent.click(page.getByRole("button", { name: "Leave fullscreen" }));
+  await eventually(() => {
+    expect(document.fullscreenElement).toBeNull();
+    expect(card()).toBe(boxed);
+    expect(document.querySelector(".atlas-map .crewlet-graph-canvas")).toBe(canvas);
+    fitted();
+  });
 });
 
 // A PHONE'S LANES KEEP THEIR TITLES: a grown company on a phone fits as marks,
@@ -380,6 +394,31 @@ test("a filter fits the map to the answer it narrows to, not the one it replaces
   expect(
     document.querySelector(".crewlet-graph-canvas__world")!.getBoundingClientRect().width,
   ).not.toBe(whole);
+  for (const lane of drawn(".crewlet-graph-canvas__lane")) {
+    expect(inside(lane.getBoundingClientRect(), canvas)).toBe(true);
+  }
+});
+
+// A FILTER THAT RE-ARRANGES THE MAP AT ANOTHER CARD WIDTH IS FITTED AT IT: the
+// fit asked for with the filter lands before the kit measures the new card,
+// so a map narrowed to two lanes stood at two thirds of its size in a corner
+// of the canvas. Mutation: run on a kit that keeps an untouched fit through
+// new card sizes (no `refitKey`).
+test("a filter that changes the card width fits the map at the new width", async () => {
+  const company = shapedCompany(GROWN_LANES);
+  const two = {
+    ...company,
+    nodes: company.nodes.filter((node) => node.lane === "entry" || node.lane === "code"),
+  };
+  await mount(1440, company, "#/company/atlas", (params) => (params.lane ? two : company));
+  const canvas = await shownMap();
+  const box = document.querySelector<HTMLElement>(".atlas-map")!;
+  const card = () => getComputedStyle(box).getPropertyValue("--crewlet-graph-canvas-card-width");
+  const whole = card();
+  location.hash = "#/company/atlas?lane=entry&lane=code";
+  await eventually(() => expect(drawn(".crewlet-graph-canvas__lane")).toHaveLength(2));
+  expect(card()).not.toBe(whole);
+  await eventually(() => expect(filling(canvas)).toBeGreaterThan(0.9));
   for (const lane of drawn(".crewlet-graph-canvas__lane")) {
     expect(inside(lane.getBoundingClientRect(), canvas)).toBe(true);
   }
