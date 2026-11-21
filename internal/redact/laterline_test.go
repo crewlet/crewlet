@@ -169,3 +169,62 @@ func TestALiveStreamWritesAValueALaterLineGivesAsTheWholeTextDoes(t *testing.T) 
 		}
 	}
 }
+
+// WHAT SETTLED SETTLES IS THE WHOLE REDACTION'S START, however a caller takes
+// it: over the same texts, at every line's end c, Secrets of the text up to
+// s = Settled(text[:c]) opens Secrets of the whole, as a caller showing only
+// the settled lines takes it (an assistant's turn, a box's kept output, a
+// run's title and its head, a frame's end read from its start).
+//
+// Mutation: as [TestAKeyWhoseValueALaterLineGivesHoldsThatLineAsItSettles]'s,
+// and a prefix ends in the line a second reading takes the value from, shown.
+func TestWhatSettledSettlesIsTheWholeRedactionsStart(t *testing.T) {
+	t.Parallel()
+	for i, text := range laterLineTexts(3000) {
+		want := redact.Secrets(text)
+		for c := 0; c < len(text); {
+			if j := strings.IndexByte(text[c:], '\n'); j >= 0 {
+				c += j + 1
+			} else {
+				c = len(text)
+			}
+			s := redact.Settled(text[:c])
+			if head := redact.Secrets(text[:s]); !strings.HasPrefix(want, head) {
+				t.Fatalf("text %d, settled %d of %d:\ntext %q\nhead %q\nwant %q", i, s, c, text, head, want)
+			}
+			if end, _ := redact.SettledEnd(text[:s], 0); !strings.HasPrefix(want, end) {
+				t.Fatalf("text %d, settled %d of %d, its end:\ntext %q\n end %q\nwant %q", i, s, c, text, end, want)
+			}
+		}
+	}
+}
+
+// SETTLED STILL REACHES THE END OF A TEXT WHOSE KEYS ARE DECIDED: ordinary
+// lines, and keys whose value stands on their own line, plain, in a logged
+// string, a concatenated one and an echo, settle whole once their line ends;
+// and a key whose string's readings find nothing below holds no further than
+// they read, [redact.MaxReach] past it, and the text past that settles.
+//
+// Mutation: hold a key's line to the text's end while a reading is pending,
+// and none of these settle.
+func TestSettledStillReachesTheEndOfATextWhoseKeysAreDecided(t *testing.T) {
+	t.Parallel()
+	ok := strings.Repeat("build step ok\n", 64)
+	for _, text := range []string{
+		ok,
+		"password: hunter2x9\n" + ok,
+		`{"log": "password: hunter2x9\n"}` + "\n" + ok,
+		`"password: hunter2x9\n" +` + "\n" + ok,
+		`echo "Password: hunter2x9" >> k` + "\n" + ok,
+		`{"log": "Password: hunter2x9"}` + "\r\n" + ok,
+	} {
+		if got := redact.Settled(text); got != len(text) {
+			t.Errorf("Settled %d of %d:\n%q", got, len(text), text[:min(len(text), 120)])
+		}
+	}
+	past := strings.Repeat("build step ok\n", redact.MaxReach/14+64)
+	text := `{"log": "Password:\n"}` + "\n" + past
+	if got := redact.Settled(text); got != len(text) {
+		t.Errorf("a key whose readings find nothing below: Settled %d of %d", got, len(text))
+	}
+}
