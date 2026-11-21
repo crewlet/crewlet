@@ -64,13 +64,6 @@ func (s *Settling) Kept() int { return cap(s.s.text) }
 
 func (s *Settling) Asks() int { return s.s.asks }
 
-// SettledWhole is [Settled] read whole by its readers ([settle]), with no
-// settling: the oracle a settling is held to.
-func SettledWhole(text string) int {
-	n, _ := settle(text)
-	return n
-}
-
 // SettlingKeeps is [settlingKeeps].
 const SettlingKeeps = settlingKeeps
 
@@ -118,9 +111,10 @@ var EarlyText = earlyText
 var HoldBytes, WholeBytes = holdBytes, wholeBytes
 
 // settledFrom is how far the text is settled from at, chained as a live
-// stream chains [Settled] ([Stream.settle]).
-func settledFrom(text string, at int) int {
-	return at + Settled(text[at:])
+// stream chains [Settled] ([Stream.settle]), each ask held to the loop
+// ([SettledByBoth]).
+func settledFrom(t testing.TB, text string, at int) int {
+	return at + SettledByBoth(t, text[at:])
 }
 
 // lined is text with a line break after every 2 KiB that runs without one,
@@ -177,7 +171,7 @@ func TestAFlushWritesTheRedactionAsFarAsTheTextIsSettled(t *testing.T) {
 			}
 			final, held, err := s.Flush()
 			flushes++
-			settled = settledFrom(text[:at], settled)
+			settled = settledFrom(t, text[:at], settled)
 			want := Secrets(text[:settled])
 			switch {
 			case err != nil:

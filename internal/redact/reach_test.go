@@ -235,7 +235,7 @@ func TestAPasswordKeysSeparatorIsReadToMaxReach(t *testing.T) {
 	// 2; the text is 9 bytes and n spaces past the key.
 	awaited := func(n int) string { return "x\nEnter password" + spaces(n) + "\n" }
 	for n, want := range map[int]int{reach - 10: 2, reach - 9: len(awaited(reach - 9))} {
-		if got := settledByBoth(t, awaited(n)); got != want {
+		if got := redact.SettledByBoth(t, awaited(n)); got != want {
 			t.Errorf("a key %d bytes before the text's end: Settled = %d, want %d", 9+n, got, want)
 		}
 		text := awaited(n) + "= hunter2x9\n"

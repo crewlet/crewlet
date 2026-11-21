@@ -16,6 +16,18 @@ func SettledTwoWays(text string) (swept, looped int) {
 	return h.settled(), h.settledByLoop()
 }
 
+// SettledByBoth is [Settled] of text, which it holds to the loop
+// ([SettledTwoWays]): every text a test asks Settled about holds the sweep to
+// the loop there too, for the cost of the loop alone.
+func SettledByBoth(t testing.TB, text string) int {
+	t.Helper()
+	swept, looped := SettledTwoWays(text)
+	if swept != looped {
+		t.Errorf("Settled settled %d, and a hold a pass %d; the text's end:\n%q", swept, looped, text[max(0, len(text)-2000):])
+	}
+	return swept
+}
+
 // HeldTexts are the package's internal texts [Settled] is held to, for its
 // external tests: every shape of [gutterShapes] and [seamShapes], and lines of
 // each of [passwordKeyGroups].
