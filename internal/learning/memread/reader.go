@@ -374,15 +374,12 @@ func answerWith(owner string, answer any, refuse func(string) ([]byte, error)) (
 	}
 	// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the asker
 	// would read the broker's refusal as a holder that never answered — so
-	// this refuses it, saying how large it was. Every collection of a memory
-	// answer is paged, a diary note is bounded where it is written
-	// (learning.MaxContentChars), and the two texts nothing bounds — an
-	// episode's ask and its account — are listed as their openings
-	// ([ListedTextBytes]); an overview row is three counts and one bounded
-	// note. So neither answer comes near the ceiling. ONE EPISODE READ WHOLE
-	// carries the two texts one completed turn's event carried, which this
-	// same ceiling held, so it is bounded by that event and not by anything
-	// here — and should one ever not fit, it is refused, by its size, rather
+	// this refuses it, saying how large it was. A memory answer is bounded
+	// where it is read ([pageBytes]; a diary note where it is written), and
+	// an overview row is three counts and one bounded note, so neither
+	// reaches this. It is the last guard for ONE EPISODE READ WHOLE, which
+	// carries the two texts one completed turn's event carried, held to this
+	// same ceiling: should one ever not fit, it is refused by its size rather
 	// than cut.
 	out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
 	if err != nil {
