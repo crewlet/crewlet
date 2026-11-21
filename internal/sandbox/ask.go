@@ -193,6 +193,15 @@ func (a Ask) Redacted() Ask {
 		}
 		a.Decision = &d
 	}
+	if a.Held != nil && a.Held.Acting != nil {
+		// THE DECISION A HELD CALL CARRIES OUT, as its seat asked it and a
+		// person chose: words, beside the closed ids and act a call is
+		// matched to, which stay.
+		held, act := *a.Held, *a.Held.Acting
+		act.Question, act.Choice = redact.Secrets(act.Question), redact.Secrets(act.Choice)
+		held.Acting = &act
+		a.Held = &held
+	}
 	return a
 }
 
