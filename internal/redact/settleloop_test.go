@@ -22,13 +22,14 @@ type heldText struct {
 // key decided by the next line, which holds a key of its own.
 var heldRunShapes = []string{"| Password: |", "**Password:**", "- **Password:**", "password:", `"password": "`, "pwd="}
 
-// heldTexts is every text Settled is held to in the package's tests:
-// transcripts of [transcriptLines], random short shapes of keys, armours and
-// password's keys, [heldStructured] texts, the key fixtures, real keys in
-// every wrapping, the family of a password's key after an END on its line,
-// the gutter and seam shapes and the lines of password's keys
-// ([redact.HeldTexts]); and long runs of holds, alone, after an armour, and a
-// run of keys then blank lines.
+// heldTexts are texts Settled is held to at their line ends: transcripts of
+// [transcriptLines], random short shapes of keys, armours and password's keys,
+// written plainly and inside strings, [heldStructured] texts, the key
+// fixtures, real keys in every wrapping, the family of a password's key after
+// an END on its line, the gutter and seam shapes and the lines of password's
+// keys ([redact.HeldTexts]), [blocksBeforeAKey]; and long runs of holds, alone,
+// after an armour, and a run of keys then blank lines. Every other text a test
+// asks Settled about is held to the loop where it asks ([settledByBoth]).
 func heldTexts(r *rand.Rand) []heldText {
 	var texts []heldText
 	add := func(name, text string) {
@@ -43,8 +44,9 @@ func heldTexts(r *rand.Rand) []heldText {
 	}
 	toks := []string{"password: ", "pwd: ", "x ", "passwd ", `"password": "`, "-----BEGIN RSA PRIVATE KEY-----",
 		"-----BEGIN RSA PRIVATE KEY-----" + `\n`, keyLine, `\n`, "7\u2192", " ", ":", `"`, "|", "pwd=",
-		"-----END RSA PRIVATE KEY-----", "**Password:**", "| Password: |", "- ", keyLikeRun}
-	for i := range 1500 {
+		"-----END RSA PRIVATE KEY-----", "**Password:**", "| Password: |", "- ", keyLikeRun,
+		`\"password\": \"`, `{"log":"{\"password\": \"`, `\\\"password\\\": \\\"`, `\"`}
+	for i := range 1000 {
 		var b strings.Builder
 		for range 1 + r.IntN(6) {
 			for range 1 + r.IntN(5) {
@@ -77,6 +79,9 @@ func heldTexts(r *rand.Rand) []heldText {
 	for _, name := range slices.Sorted(maps.Keys(held)) {
 		add(name, held[name])
 	}
+	for i, text := range blocksBeforeAKey() {
+		add(fmt.Sprintf("a block before a password's key, %d", i), text)
+	}
 	armour := "k: -----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n\n"
 	for _, line := range heldRunShapes {
 		run := strings.Repeat(line+"\n", 1500) + "hunter2secretvalue9\nok\n"
@@ -88,17 +93,17 @@ func heldTexts(r *rand.Rand) []heldText {
 	return texts
 }
 
-// SETTLED IN ONE PASS ANSWERS WHAT A HOLD A PASS DID: over [heldTexts], at
+// SETTLED IN ONE PASS ANSWERS WHAT A HOLD A PASS DOES: over [heldTexts], at
 // every line end of a short text and the first and last ten and about ten more
-// of a long one, [redact.Settled]'s sweep of the holds settles exactly where
-// the loop it replaced, resolving one hold a pass ([redact.SettledByLoop]),
-// settles.
+// of a long one, [redact.Settled]'s sweep of the holds settles exactly where a
+// loop resolving one hold a pass settles ([redact.SettledTwoWays]).
 //
 // Mutation: lower no rewritable point for a claim beside a block, move a
-// point to the line above a hold's, stop the sweep a bar early, or count an
+// point to the line above a hold's, start a hold's or a block's bar a line
+// early, end a block's a byte short, stop the sweep a bar early, or count an
 // unread hold at the end's rewritable point rather than the point's, and a
 // text settles elsewhere.
-func TestSettledInOnePassAnswersWhatAHoldAPassDid(t *testing.T) {
+func TestSettledInOnePassAnswersWhatAHoldAPassDoes(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 3))
 	cuts := 0
@@ -114,12 +119,46 @@ func TestSettledInOnePassAnswersWhatAHoldAPassDid(t *testing.T) {
 				continue
 			}
 			cuts++
-			if got, want := redact.Settled(tx.text[:c]), redact.SettledByLoop(tx.text[:c]); got != want {
+			if got, want := redact.SettledTwoWays(tx.text[:c]); got != want {
 				t.Fatalf("%s, at %d: Settled settled %d, and a hold a pass %d; the text's end:\n%q", tx.name, c, got, want, tx.text[max(0, c-2000):c])
 			}
 		}
 	}
 	t.Logf("%d cuts", cuts)
+}
+
+// settledByBoth is [redact.Settled] of text, which it holds to a loop
+// resolving one hold a pass ([redact.SettledTwoWays]): every text a test asks
+// Settled about holds the sweep to the loop there too.
+func settledByBoth(t testing.TB, text string) int {
+	t.Helper()
+	swept, looped := redact.SettledTwoWays(text)
+	if swept != looped {
+		t.Errorf("Settled settled %d, and a hold a pass %d; the text's end:\n%q", swept, looped, text[max(0, len(text)-2000):])
+	}
+	return swept
+}
+
+// blocksBeforeAKey are texts whose key's block, open on its BEGIN's line,
+// meets a password's key on the next line after a one-byte gutter or an
+// escaped break, under a wrapping or none, after a line of a key's END and a
+// password's key or none.
+func blocksBeforeAKey() []string {
+	var texts []string
+	for _, above := range []string{"", "  7\u2192passwd -----END RSA PRIVATE KEY-----\"| pwd: | x \n"} {
+		for _, g := range []string{"", "  ", "| "} {
+			for _, body := range []string{keyLine[:56] + ":", keyLine} {
+				for _, lead := range []string{`\n7` + "\u2192", `\n+`, `\n3`, "7\u2192", "+"} {
+					for _, key := range []string{"- **Password:**", "| Password: |", "password: "} {
+						for _, below := range []string{"7\u2192" + `\r\nPassword: |`, "ok"} {
+							texts = append(texts, above+g+"-----BEGIN RSA PRIVATE KEY-----"+body+"\n"+lead+key+`AKIAABCDEFGHIJKLMNOP"\n`+"\n"+below+"\n")
+						}
+					}
+				}
+			}
+		}
+	}
+	return texts
 }
 
 // The pieces a [heldStructured] text is built of.

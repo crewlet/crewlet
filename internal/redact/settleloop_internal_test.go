@@ -8,11 +8,12 @@ import (
 	"testing"
 )
 
-// SettledByLoop is [Settled] as a loop resolving one hold a pass answers it,
-// the oracle [heldLines.settled]'s sweep is held to.
-func SettledByLoop(text string) int {
+// SettledTwoWays is [Settled] of text and what a loop resolving one hold a
+// pass answers, the oracle [heldLines.settled]'s sweep is held to, the text's
+// holds read once for both.
+func SettledTwoWays(text string) (swept, looped int) {
 	h, _ := holding(text)
-	return h.settledByLoop()
+	return h.settled(), h.settledByLoop()
 }
 
 // HeldTexts are the package's internal texts [Settled] is held to, for its
