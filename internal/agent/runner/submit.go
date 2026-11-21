@@ -91,16 +91,16 @@
 //
 // A phase's durable record (agent_phase_completed) holds its prompts, its
 // model's answer and prose, its notes, its failure and each call's arguments
-// and answer REDACTED BEFORE THEY ARE CUT (recordredact.go), where the record
-// is built: a credential a cut runs across, cut first, leaves a head no rule
-// knows. Only the record: the model read every answer as it came, as an
-// executor's harness does, and the record is what a person reads later. A
+// and answer REDACTED BEFORE THEY ARE CUT (recordredact.go): a credential a
+// cut runs across, cut first, leaves a head no rule knows. Its live frame
+// shows them redacted before their end is taken (liveredact.go). Only those:
+// the model read every answer as it came, as an executor's harness does. A
 // call's arguments are redacted as values, each beside its key, never as the
-// JSON text, which a redaction can leave no JSON. The size a cut states is
-// the redaction's, as an executor's record states it. An executor run's call
-// whose log kept only an opening of its answer, raw, is recorded as the
-// redaction of that opening's settled lines (redact.Settled), the rest said
-// by the bytes the log measured past them.
+// JSON text, which a redaction can leave no JSON. A cut states the
+// redaction's size. An executor run's call whose log kept only an opening of
+// its answer, raw, is recorded as the redaction of that opening's settled
+// lines (redact.Settled), the rest said by the bytes the log measured past
+// them.
 package runner
 
 import (

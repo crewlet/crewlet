@@ -1275,6 +1275,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 	// else a phase working and declining by turns extends itself on nobody's
 	// decision.
 	unjudged := 0
+	// WHAT THE PHASE'S FRAMES HAVE REDACTED, across its invocations, which fold
+	// onto one another: every frame shows the phase's words again.
+	words := new(liveWords)
 	for {
 		// What the phase holds BEFORE this invocation, by value: the loop calls
 		// OnProgress from inside Run, and `out` is written only after it returns.
@@ -1316,7 +1319,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 			Steer: steering,
 			OnProgress: func(live toolloop.Result) {
 				folded := foldOnto(prior, live)
-				emit.progress(ctx, ph, iteration, folded, capsOf(policy, folded.MaxRounds))
+				emit.progress(ctx, ph, iteration, words, folded, capsOf(policy, folded.MaxRounds))
 			},
 		})
 		if err != nil {
