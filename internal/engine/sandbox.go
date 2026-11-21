@@ -1276,6 +1276,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
 	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher), e.leads)
+	// AND EVERY WAKE A CONTINUATION OF THE RUN'S SESSION MAY HOLD, off the same
+	// record: each one read, and each its job was served and never read.
+	input.Resume.Wakes = e.runSteers.carriedWakes(in.Run)
 	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -2821,6 +2824,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// SHOWED IT TOOK is recorded delivered by every read of the job's box
 		// that settles its serves. See runsteer.go.
 		SteersConfirmed: e.runSteers.confirmed,
+		// AND EVERY WAKE A JOB A RELAUNCH REPLACED NEVER READ is reported once
+		// the relaunch's write removed it, its delivery left to a turn of its
+		// own. See wakeitem.go.
+		WakesEnded: e.runSteers.wakesEnded,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,

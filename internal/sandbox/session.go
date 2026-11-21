@@ -1184,12 +1184,12 @@ func openPlaces(calls BridgeLog, last int) []int {
 // session packed from its job holds ([SessionCapture.NoteCursor]): every read
 // where its harness ended its own run, up to the first read marked unanswered
 // ([NoteRead.Unanswered]) or restarted ([NoteRead.Restarted]), or the place of
-// a note a hook was served and nothing read ([RunNote.Place]); none where it
-// was cut off. A continuation tells every note past it as notes the session may
-// already show (internal/agent/runner's keptSession). An item for one job stops
-// nothing; a telling of its call is read against the cursor as stamped, at the
-// place of the write that recorded it ([CallTelling.Place]). See the package
-// doc, "A turn's notes".
+// a note or wake item a hook was served and nothing read ([RunNote.Place]);
+// none where it was cut off. A continuation tells every note and wake past it
+// as ones the session may already show (internal/agent/runner's keptSession).
+// A late call's item stops nothing; a telling of its call is read against the
+// cursor as stamped, at the place of the write that recorded it
+// ([CallTelling.Place]). See the package doc, "A turn's notes".
 func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
@@ -1198,7 +1198,7 @@ func notesHeld(run PendingRun, cutOff bool) int {
 	for _, n := range run.Steer.Notes {
 		stop := 0
 		switch {
-		case n.For != "":
+		case n.For != "" && !n.IsWake():
 		case n.Read == nil:
 			stop = n.Place
 		case n.Read.Unanswered || n.Read.Restarted:

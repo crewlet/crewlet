@@ -573,7 +573,7 @@ func putNote(t *testing.T, records coord.SandboxRuns, turnID string, n sandbox.R
 }
 
 // THE FILER'S STATUSES ARE THE INBOX'S. The store files a late call for a job
-// only in the statuses its harness takes notes in ([sandbox.LateCallStatuses]),
+// only in the statuses its harness takes notes in ([sandbox.ItemStatuses]),
 // which are the inbox's ([steerTakeStatuses]): an item filed in any other is
 // one no reader of the job takes, and one refused in a status the inbox serves
 // is a call the job is never handed as it lands.
@@ -582,8 +582,8 @@ func putNote(t *testing.T, records coord.SandboxRuns, turnID string, n sandbox.R
 // differ.
 func TestTheFilersStatusesAreTheInboxs(t *testing.T) {
 	t.Parallel()
-	if !slices.Equal(sandbox.LateCallStatuses, steerTakeStatuses) {
-		t.Errorf("the store files late calls in %v, and the inbox takes notes in %v", sandbox.LateCallStatuses,
+	if !slices.Equal(sandbox.ItemStatuses, steerTakeStatuses) {
+		t.Errorf("the store files late calls in %v, and the inbox takes notes in %v", sandbox.ItemStatuses,
 			steerTakeStatuses)
 	}
 }

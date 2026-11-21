@@ -804,10 +804,13 @@ yet:
   serves, which a person's authority is decided on; a reader opens both before
   using either
   ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
-  The one other entry, an item handing a late call to the job working on its
-  round, is the tool log's own account, unsealed, and is never handed as
-  anybody's note ([A relaunch continues the turn's
-  session](code-sandbox.md#a-relaunch-continues-the-turns-session)).
+  The two other entries are items for the job working on its round: one
+  handing it a late call, the tool log's own account, unsealed and never
+  handed as anybody's note ([A relaunch continues the turn's
+  session](code-sandbox.md#a-relaunch-continues-the-turns-session)); and a
+  wake, somebody's message about its work, signed in a key domain of its own
+  and handed in its writer's fence, never as a note ([Notes to a running
+  run](code-sandbox.md#notes-to-a-running-run)).
 
 The launch **hands the box over in the write that creates the record**: the
 box stops taking notes just before that write, and every note it held that the
