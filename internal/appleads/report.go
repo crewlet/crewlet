@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The promoted objects a report reads.
@@ -187,7 +188,7 @@ func daysOf(args map[string]any, now time.Time, zone *time.Location) (growth.Day
 		return growth.Days{}, invalid("give `range` or `start` and `end`, not both.")
 	case named != "":
 		if !growth.Range(named).Valid() {
-			return growth.Days{}, invalid("`range` is %s.", rangeNames())
+			return growth.Days{}, invalid("`range` is %s.", words.Or(rangeNames()))
 		}
 		return growth.Range(named).Resolve(now, zone)
 	case start == "" && end == "":
