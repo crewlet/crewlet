@@ -248,18 +248,19 @@ func TestTheCutTakesTheBytesItCountedWhereverItsElementsLie(t *testing.T) {
 	}
 }
 
-// A WAY NOT KEPT TAKES NO ROOM: a line that is JSON for a mebibyte and torn at
-// its end has its JSON spooled past its way's room into a gzip member of its
-// own, which is cut back out of the spool once the line is no JSON, so the
-// spool the second reading reads holds the line's text alone, no larger than
-// gzip makes of it.
+// A WAY NOT KEPT TAKES NO ROOM: a line that is JSON for a mebibyte of short
+// fields and torn at its end has its JSON spooled past its way's room into a
+// gzip member of its own, which is cut back out of the spool once the line is
+// no JSON, so the spool the second reading reads holds the line's text alone,
+// no larger than gzip makes of it. (One long string would never spill: its
+// value is held until it closes.)
 //
-// Mutation: let a way go without cutting the spool back, and the spool holds
-// both ways, past the bound, or reads back otherwise than counted.
+// Mutation: let a way go without cutting the spool back, and the reading that
+// goes on from the line finds the spool past where the line began.
 func TestAWayNotKeptTakesNoRoom(t *testing.T) {
 	t.Parallel()
 	s := newScrubber([]string{longValue})
-	torn := `{"text":"` + randomBase64(24, 1<<20)
+	torn := "{" + strings.Repeat(`"k":"v",`, 1<<20/8)
 	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": torn + "\n"})
 	var spooled int64
 	held := func(n int64) {

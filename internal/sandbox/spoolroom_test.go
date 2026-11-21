@@ -91,7 +91,8 @@ func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 // its scrub's part is back, the room holding the sealed spool alone.
 //
 // Mutation: split the scrub's part off first, give it the take's whole room,
-// or keep it past the take, and the part, the seal or the room goes red.
+// leave the spool's members out of the room, or keep it past the take, and the
+// part, the seal or the room goes red.
 func TestATakesScrubSpoolsInWhatItsSealedSpoolLeaves(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -114,6 +115,11 @@ func TestATakesScrubSpoolsInWhatItsSealedSpoolLeaves(t *testing.T) {
 		if want := takeRoomBytes - executorkeep.SealedMaxBytes; spool.Bytes != want || spool.Dir != dir {
 			t.Errorf("the take named its scrub %d bytes in %s, want %d in the process's own %s", spool.Bytes,
 				spool.Dir, want, dir)
+		}
+		if least := executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) +
+			executorkeep.SpoolMembersMostBytes; spool.Bytes < least {
+			t.Errorf("the take named its scrub %d bytes, short of the %d a kept session at the bound comes to "+
+				"as gzip writes it, with every member", spool.Bytes, least)
 		}
 		if used := roomInUse(rig.coordinator); used != spooled.spool.Size {
 			t.Errorf("once the take is done the room holds %d bytes, want its sealed spool's %d", used,
