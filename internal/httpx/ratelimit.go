@@ -92,6 +92,9 @@ func Sleep(ctx context.Context, d time.Duration) error {
 // RetryAfter reads a `Retry-After` header (RFC 9110, section 10.2.3): a
 // number of seconds, or an HTTP date read against now. A date already past is
 // a wait of zero. False for a header that is absent, negative or says neither.
+// A vendor's own reset header is read in its client, not here: each spells
+// it differently (Datadog's `X-RateLimit-Reset` counts seconds, DigitalOcean's
+// `Ratelimit-Reset` is a Unix time), so one shared reader would misread one.
 func RetryAfter(h http.Header, now time.Time) (time.Duration, bool) {
 	raw := strings.TrimSpace(h.Get("Retry-After"))
 	if raw == "" {

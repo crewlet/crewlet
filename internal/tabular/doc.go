@@ -15,4 +15,7 @@
 // XLSX is written with the standard library alone (a minimal SpreadsheetML
 // package over archive/zip, inline strings and numbers, no styles), because a
 // download of rows a person already saw needs nothing a dependency would add.
+//
+// A test walks the tree and fails on a CSV writer built outside this package,
+// so no export can skip the escaping.
 package tabular

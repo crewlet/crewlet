@@ -8,7 +8,8 @@
 // the coalescing, the expiry, the large-room bound and the agents. What a kind
 // owns is where its members can be looking ([Focus], checked per kind by
 // [CheckFocus]), and the decision of who may be in one of its rooms, which is
-// never this package's. An artifact's room and a chat room are the two kinds
+// never this package's. The vocabulary ([Member], [Activity], [Roster]) is this
+// package's rather than any kind's, for that reason. An artifact's room and a chat room are the two kinds
 // this build keeps ([RoomArtifact], [RoomChat]).
 //
 // # Presence is told, never stored

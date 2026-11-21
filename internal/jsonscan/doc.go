@@ -12,6 +12,9 @@
 // take's scrub, the Claude Code thread layer, the context meter, a person's transcript): one grammar, so a
 // line one of them reads as JSON is a line every one of them reads as JSON.
 //
+// The package is a LEAF over the standard library, its tests included (a test fails on any other import): its
+// readers sit at heights no other package spans, and one engine import would stop one of them using it.
+//
 // # The contract
 //
 // [New] reads one JSON text: exactly one value, with blanks (space, tab, line feed, carriage return)
