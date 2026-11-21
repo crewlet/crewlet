@@ -161,6 +161,7 @@ import { DelegatedMark } from "~/components/Delegation.tsx";
 import { delegatedRuleOf } from "~/lib/delegation.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { callOfTurn, turnById } from "~/lib/seatturn.ts";
 import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
 import { itemAddress, turnItem } from "~/lib/work.ts";
 import type {
@@ -471,11 +472,13 @@ export function useTurnView(turnId: string): TurnView {
   const phaseEvents = usePhaseEvents();
 
   // THE SEAT THIS TURN IS ON, off its live overlay: where in the turn it is,
-  // its node, and the call running now. `turn` is the overlay's own record of
-  // the turn a seat is on — a parked turn has no live call and still has it.
+  // its node, and the call running now. `turns` is the overlay's own record of
+  // the turns a seat is on — a parked turn has no live call and still has it —
+  // and the seat may run others beside this one, so each is read by this id.
   const seatRow = useMemo(() => seatOnTurn(agents, turnId), [agents, turnId]);
-  const stage: TurnStage | "" = seatRow?.turn?.turn_id === turnId ? seatRow.turn.stage : "";
-  const liveCall = seatRow?.live_call?.turn_id === turnId ? seatRow.live_call : null;
+  const liveTurn = turnById(seatRow, turnId);
+  const stage: TurnStage | "" = liveTurn?.stage ?? "";
+  const liveCall = callOfTurn(seatRow, turnId);
 
   // THE ANSWER IS ASKED AGAIN when this turn moves on the stream: a phase of
   // it lands, its seat's stage changes, or its reflection pass's sentinel
@@ -579,9 +582,10 @@ export function useTurnView(turnId: string): TurnView {
       .map((e) => fromPhaseEvent(e))
       .filter((r): r is PhaseRecord => r !== null);
     const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
-    const live = agents
-      .filter((a) => a.live_call && a.live_call.turn_id === turnId)
-      .map((a) => fromLiveCall(a.live_call!, a.role, a.turn));
+    const live = agents.flatMap((a) => {
+      const call = callOfTurn(a, turnId);
+      return call ? [fromLiveCall(call, a.role, turnById(a, turnId))] : [];
+    });
     // Within a turn, oldest first: a turn is read forwards. `mergePhases`
     // orders newest first, which is right for a feed and wrong here.
     return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
@@ -643,13 +647,12 @@ export function useTurnView(turnId: string): TurnView {
   const story = useMemo(() => tellStory(events), [events]);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
 
-  const workItem =
-    seatRow?.turn?.turn_id === turnId && seatRow.turn.work_item
-      ? seatRow.turn.work_item
-      : ((field(rec.summary, "work_item") ??
-          field(opened, "work_item") ??
-          liveCall?.work_item ??
-          null) as WorkItemRef | null);
+  const workItem = liveTurn?.work_item
+    ? liveTurn.work_item
+    : ((field(rec.summary, "work_item") ??
+        field(opened, "work_item") ??
+        liveCall?.work_item ??
+        null) as WorkItemRef | null);
   // WHOSE TURN, by the AGENT ID its phases (or its own records) name, paired
   // with the roster by that id. Never by the role NAME, which namesakes share:
   // a second "Engineer" was drawn as the first one's turn.
@@ -659,9 +662,7 @@ export function useTurnView(turnId: string): TurnView {
     str(opened, "agent_id");
   const seat = seatRow ?? (agentId ? agents.find((a) => a.agent_id === agentId) : undefined);
   const role = seat?.role || phases[0]?.role || rec.summary?.actor || str(opened, "role");
-  const startedAt =
-    tsKey(str(opened, "started_at")) ||
-    (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
+  const startedAt = tsKey(str(opened, "started_at")) || (liveTurn ? tsKey(liveTurn.started_at) : 0);
   // No stored event naming where the turn ran yet (or the answer not read
   // yet) leaves the node the live call reports running it.
   const nodes = data?.nodes.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];

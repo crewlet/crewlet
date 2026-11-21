@@ -70,7 +70,7 @@ var opaqueFields = func() map[string]carried {
 	rows := map[string]carried{
 		"internal/api/livestate.Envelope.payload":              {types: event()},
 		"internal/store.EventRecord.payload":                   {types: event()},
-		"internal/api/livestate.overlayView.live_call":         {types: []string{"internal/api/livestate.LiveCall", "internal/api/livestate.leanCall", "internal/api/livestate.withheldCall"}},
+		"internal/api/livestate.overlayView.live_calls":        {types: []string{"internal/api/livestate.LiveCall", "internal/api/livestate.leanCall", "internal/api/livestate.withheldCall"}},
 		"internal/api/operator.ActAnswer.receipt":              {types: []string{"internal/agent/builtin.markChatReadAnswer"}},
 		"internal/api/queries.DecisionItem.run":                {types: []string{"internal/events/types.WorkItem", "internal/decision.Decision", "internal/sandbox.BridgeCall", "internal/sandbox.ElidedCall", "internal/api/queries.toldCall"}},
 		"internal/api/queries.Immutable.Answer":                {types: []string{"internal/api/queries.CodePage", "internal/api/queries.CheckLogPage"}},

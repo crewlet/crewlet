@@ -130,6 +130,7 @@ import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } fr
 import { useOwnRemark } from "./remark.tsx";
 import { usePaged } from "~/lib/usePaged.ts";
 import { EngineLine } from "~/components/InlineToken.tsx";
+import { callOf, turnOf } from "~/lib/seatturn.ts";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
 const ACTIVITY_POLL_MS = 30_000;
@@ -348,7 +349,7 @@ export function Activity({
   // THE NUMBER THE RUNNING TURN WILL HAVE: its own, where a parked segment was
   // already charged, and otherwise the one after every turn counted so far.
   const liveOrdinal = useMemo(() => {
-    const id = live?.turn?.turn_id ?? live?.live_call?.turn_id ?? "";
+    const id = turnIdOf(live);
     const charged = turns.items.find((t) => t.turn_id === id);
     if (charged?.ordinal) return charged.ordinal;
     return (item.spend?.turns ?? 0) + 1;
@@ -1046,7 +1047,7 @@ function LiveRow({
   const name = chrome.seatName?.(handle) ?? handle;
   const turn = turnIdOf(row);
   const doing = doingWords(row);
-  const since = Date.parse(row.turn?.started_at ?? row.live_call?.started_at ?? "");
+  const since = Date.parse(turnOf(row)?.started_at ?? callOf(row)?.started_at ?? "");
   // THE PROFILE CARD'S CLOCK (`fmtElapsed`), seconds under a minute: the
   // list's `shortAge` reads a sub-minute turn as "for 0m" where the seat's
   // own card said "0s" of the same turn.

@@ -305,3 +305,7 @@ its own silence on one clock, which is the evidence the rule asks for.
   of real time after the decision and, on clocks within the bound, no later
   than the box timeout and four times `objstore.AssumedClockSkew` after it,
   plus one ask's wait. On the deciding node nothing changes.
+
+## Amendment: a seat runs up to its cap of runs
+
+A seat no longer takes no other work while its run works: it holds up to its cap of runs, one per conversation (ADR-0169).

@@ -24,7 +24,7 @@ type turnsGate struct {
 	free int
 }
 
-func (g *turnsGate) admit(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *turnsGate) admit(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.free == 0 {

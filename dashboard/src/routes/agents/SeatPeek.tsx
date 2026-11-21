@@ -136,6 +136,7 @@ import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/type
 import { useRuns } from "~/lib/runs.ts";
 import { useExecutors } from "~/lib/store-hooks.ts";
 import { runStanding } from "~/lib/runStanding.ts";
+import { callOf, turnOf } from "~/lib/seatturn.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
@@ -245,8 +246,8 @@ function SeatPeekBody({
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const status = human ? undefined : statusOf(state);
-  const turn = agent?.turn ?? null;
-  const call = agent?.live_call ?? null;
+  const turn = turnOf(agent);
+  const call = callOf(agent);
   const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
   // ASKED FOR BY ITS ADDRESS ([turnItem]): a key another task claimed first
   // would number this turn on the claimant's list.

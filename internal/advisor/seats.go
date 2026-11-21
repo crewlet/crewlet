@@ -17,9 +17,16 @@ import (
 // only on exact numbers: each seat's busy time is the sum of its turns' own
 // durations, its stopped time the spans its own records say it could not take
 // a turn (paused, out of its model's limit, stopped on its budget), and its
-// idle time what is left of its available time. They say nothing until those
+// idle time what is left of its capacity. They say nothing until those
 // numbers cover the whole window, the group of seats was the same for all of
 // it, and it worked enough items to judge.
+
+// CAPACITY IS ITS AVAILABLE TIME TIMES ITS sandbox.max_concurrent_runs, the
+// turns it runs at once ([Staffing.capacity]): turns that overlap add their durations,
+// and never more than that many overlap, so busy never reads above 100%. A
+// union of the turns' intervals cannot be read (a turn's segments are spread
+// over the data nodes, and only its ending record states its duration), and
+// would call a seat with a slot free all day fully busy.
 
 // The staffing classes: the owner's to add a seat like the busiest of a group
 // whose work waits for it, and a note that a group of idle seats could lose one.
@@ -46,7 +53,7 @@ const (
 	minWaitDay  = time.Hour
 	minWaitDays = 4
 	// maxIdlePercent and minBusyPercent: every seat idle a tenth or less of
-	// its available time and busy six tenths or more.
+	// its capacity and busy six tenths or more.
 	maxIdlePercent = 10
 	minBusyPercent = 60
 	// minItemsWorked: ten items in the window, so a week is a sample.
@@ -84,11 +91,22 @@ type SeatTime struct {
 	Measured bool
 }
 
-// available is the window less the seat's stopped time, and idle what is left
-// of it after its busy time.
+// available is the window less the seat's stopped time.
 func (s Staffing) available(t SeatTime) time.Duration { return max(s.To.Sub(s.From)-t.Stopped, 0) }
 
-func (s Staffing) idle(t SeatTime) time.Duration { return max(s.available(t)-t.Busy, 0) }
+// capacity is the turn-time role r's seat could have spent over the window: its
+// available time for each turn it runs at once. THE CAP THE ROLE HOLDS NOW, in
+// the document judged: a revision that changed it mid-window makes the figure
+// approximate across the change, where [Staffing.unchanged] holds only the
+// seats themselves to the window.
+func (s Staffing) capacity(t SeatTime, r *config.Role) time.Duration {
+	return s.available(t) * time.Duration(r.Seat().Sandbox.ConcurrentRuns())
+}
+
+// idle is what is left of the seat's capacity after its busy time.
+func (s Staffing) idle(t SeatTime, r *config.Role) time.Duration {
+	return max(s.capacity(t, r)-t.Busy, 0)
+}
 
 // windowSaid is the window as a finding names it.
 func (s Staffing) windowSaid() string {
@@ -287,9 +305,10 @@ func (s Staffing) measured(g seatGroup) bool {
 }
 
 // addSeat is one finding per group whose work waited for its seats day after
-// day while every seat of it was busy: the owner's to add a seat like its
-// busiest. Silent without exact numbers over the whole week, an unchanged
-// group, and ten items worked.
+// day while every seat of it was busy against its capacity: the owner's to let
+// its seats run one more turn at once, or to add a seat like its busiest.
+// Silent without exact numbers over the whole week, an unchanged group, and
+// ten items worked.
 func addSeat(c *config.Company, ev Evidence) []Finding {
 	s := ev.StaffingWeek
 	if s == nil {
@@ -311,8 +330,8 @@ func addSeat(c *config.Company, ev Evidence) []Finding {
 		ok := true
 		for _, r := range g.roles {
 			t := s.Seats[r.Seat().Handle()]
-			a := s.available(t)
-			if a == 0 || s.idle(t)*100 > maxIdlePercent*a || t.Busy*100 < minBusyPercent*a {
+			a := s.capacity(t, r)
+			if a == 0 || s.idle(t, r)*100 > maxIdlePercent*a || t.Busy*100 < minBusyPercent*a {
 				ok = false
 				break
 			}
@@ -325,7 +344,7 @@ func addSeat(c *config.Company, ev Evidence) []Finding {
 			continue
 		}
 		f := stallFinding(ClassAddSeat, AreaSetup, g.subject(),
-			fmt.Sprintf("%s item-hours waited for %s, its seats busy %d%% of their available time, %s",
+			fmt.Sprintf("%s item-hours waited for %s, its seats busy %d%% of their capacity, %s",
 				hoursSaid(flow.due), seatsSaid(g), percentOf(busy, avail), s.windowSaid()),
 			[]Fact{{Key: "wait_minutes", Value: int64(flow.due / time.Minute)},
 				{Key: "busy_percent", Value: int64(percentOf(busy, avail))},
@@ -358,12 +377,12 @@ func removeSeat(c *config.Company, ev Evidence) []Finding {
 		ok := true
 		for _, r := range g.roles {
 			t := s.Seats[r.Seat().Handle()]
-			a := s.available(t)
-			if a == 0 || s.idle(t)*100 < minRemoveIdlePercent*a {
+			a := s.capacity(t, r)
+			if a == 0 || s.idle(t, r)*100 < minRemoveIdlePercent*a {
 				ok = false
 				break
 			}
-			idle, avail = idle+s.idle(t), avail+a
+			idle, avail = idle+s.idle(t, r), avail+a
 			if least == nil || t.Busy < s.Seats[least.Seat().Handle()].Busy {
 				least = r
 			}
@@ -372,7 +391,7 @@ func removeSeat(c *config.Company, ev Evidence) []Finding {
 			continue
 		}
 		f := engineFinding(ClassRemoveSeat, g.subject(),
-			fmt.Sprintf("%s idle %d%% of their available time, %s", seatsSaid(g), percentOf(idle, avail),
+			fmt.Sprintf("%s idle %d%% of their capacity, %s", seatsSaid(g), percentOf(idle, avail),
 				s.windowSaid()),
 			[]Fact{{Key: "idle_percent", Value: int64(percentOf(idle, avail))},
 				{Key: "wait_minutes", Value: int64(flow.due / time.Minute)}, {Key: "seats", Value: int64(len(g.roles))}},
@@ -427,12 +446,15 @@ func rolesOf(c *config.Company, unitID string, redact bool) ([]any, bool) {
 // template's own duty).
 var cloneLeftOut = []string{"handle", "name", "email", "avatar", "contact", "mcp_env", "schedules"}
 
-// addSeatFix offers one seat cloned from template into its unit, with the
-// first free name and handle; a seat in no unit opens the roles.
+// addSeatFix offers, FIRST, every seat of g running one more turn at once —
+// the same seats and their context, at the cost of their boxes running side
+// by side — and then one seat cloned from template into its unit, with the
+// first free name and handle; a group in no unit opens the roles.
 func addSeatFix(c *config.Company, g seatGroup, template *config.Role) Fix {
 	handle := template.Seat().Handle()
-	open := Fix{Kind: FixOpenSetting, Options: []Option{}, Setting: "roles",
-		Sentence:  fmt.Sprintf("Add a seat like %s: the same job, model and limits under a new name.", template.Name),
+	sentence := fmt.Sprintf("Let these seats run one more turn at once (sandbox.max_concurrent_runs), "+
+		"or add a seat like %s: the same job, model and limits under a new name.", template.Name)
+	open := Fix{Kind: FixOpenSetting, Options: []Option{}, Setting: "roles", Sentence: sentence,
 		Unchanged: "Every other seat stays as it is."}
 	if g.unit == nil || g.unit.ID == "" {
 		return open
@@ -459,17 +481,59 @@ func addSeatFix(c *config.Company, g seatGroup, template *config.Role) Fix {
 		return Change{Entity: EntityUnits, ID: g.unit.ID, Set: map[string]any{"roles": append(roles, clone)},
 			Summary: fmt.Sprintf("Add %s to %s, like %s", newHandle, g.unit.ID, handle)}, true
 	}
+	var options []Option
+	if ch, ok := raiseConcurrentRuns(c, g, true); ok {
+		if checked, checkable := raiseConcurrentRuns(c, g, false); checkable && CheckChange(c, checked) == nil {
+			options = append(options, Option{Label: "Run one more turn at once on each seat", Change: ch})
+		}
+	}
 	ch, ok := withClone(true)
 	checked, checkable := withClone(false)
-	if !ok || !checkable || CheckChange(c, checked) != nil {
+	if ok && checkable && CheckChange(c, checked) == nil {
+		options = append(options, Option{Label: fmt.Sprintf("Add %s, like %s", name, template.Name), Change: ch})
+	}
+	if len(options) == 0 {
 		return open
 	}
-	return Fix{Kind: FixConfigChange, Options: []Option{{Label: fmt.Sprintf("Add %s, like %s", name, template.Name),
-		Change: ch}},
-		Sentence: fmt.Sprintf("Add a seat like %s: the same job, model and limits under a new name, "+
-			"with no schedule of its own.", template.Name),
-		Unchanged: fmt.Sprintf("%s's contact, credentials and schedules are not copied: add any it needs by hand.",
-			template.Name)}
+	return Fix{Kind: FixConfigChange, Options: options, Sentence: sentence,
+		Unchanged: fmt.Sprintf("A new seat copies no contact, credentials or schedules from %s: add any "+
+			"it needs by hand.", template.Name)}
+}
+
+// raiseConcurrentRuns is g's unit with each of g's seats taking one more turn at
+// once than the sandbox.max_concurrent_runs it holds now, from the redacted
+// document where redact ([rolesOf]); false where a seat is not found.
+func raiseConcurrentRuns(c *config.Company, g seatGroup, redact bool) (Change, bool) {
+	roles, ok := rolesOf(c, g.unit.ID, redact)
+	if !ok {
+		return Change{}, false
+	}
+	raised := map[string]int{}
+	for _, r := range g.roles {
+		raised[r.Seat().Handle()] = r.Seat().Sandbox.ConcurrentRuns() + 1
+	}
+	found := 0
+	for i, r := range roles {
+		m, isMap := r.(map[string]any)
+		handle, _ := m["handle"].(string)
+		runs, in := raised[handle]
+		if !isMap || !in {
+			continue
+		}
+		sandbox, _ := m["sandbox"].(map[string]any)
+		sandbox = maps.Clone(sandbox)
+		if sandbox == nil {
+			sandbox = map[string]any{}
+		}
+		sandbox["max_concurrent_runs"] = runs
+		m = maps.Clone(m)
+		m["sandbox"] = sandbox
+		roles[i] = m
+		found++
+	}
+	return Change{Entity: EntityUnits, ID: g.unit.ID, Set: map[string]any{"roles": roles},
+			Summary: fmt.Sprintf("Let %s run one more turn at once", strings.Join(g.handles(), ", "))},
+		found == len(g.roles)
 }
 
 // freeSeat is the first "<Name> N" and "<handle>-N" no seat of c holds.

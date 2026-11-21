@@ -28,7 +28,7 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   // THE SIDEBAR'S RUNNING GROUP'S OWN SELECTION, so the two name the same
-  // seats in the same order: the count is every working seat, and the rows
+  // seats in the same order: the count is every running turn, and the rows
   // are the first four whose turn has an id — a seat whose turn has none yet
   // is counted here and listed on Live › Now running, which "Open live view"
   // goes to.

@@ -1097,18 +1097,20 @@ describe("a turn watched to its end", () => {
         handle: "ceo",
         role: "CEO",
         activity: "working",
-        live_call: {
-          versions: ZERO_VERSIONS,
-          turn_id: "t1",
-          phase: "review",
-          iteration: 1,
-          model: "claude-sonnet-5",
-          in_progress: true,
-          round_num: 0,
-          rounds_used: 1,
-          started_at: "2026-01-01T00:00:07Z",
-          updated_at: "2026-01-01T00:00:08Z",
-        },
+        live_calls: [
+          {
+            versions: ZERO_VERSIONS,
+            turn_id: "t1",
+            phase: "review",
+            iteration: 1,
+            model: "claude-sonnet-5",
+            in_progress: true,
+            round_num: 0,
+            rounds_used: 1,
+            started_at: "2026-01-01T00:00:07Z",
+            updated_at: "2026-01-01T00:00:08Z",
+          },
+        ],
       },
     ] as never);
     redraw();
@@ -1125,7 +1127,7 @@ describe("a turn watched to its end", () => {
         handle: "ceo",
         role: "CEO",
         activity: "idle",
-        live_call: null,
+        live_calls: [],
       },
     ] as never);
     redraw();
@@ -1155,18 +1157,20 @@ describe("a turn watched to its end", () => {
         handle: "ceo",
         role: "CEO",
         activity: "working",
-        live_call: {
-          versions: ZERO_VERSIONS,
-          turn_id: "t1",
-          phase: "execute",
-          iteration: 1,
-          model: "claude-sonnet-5",
-          in_progress: true,
-          round_num: 0,
-          rounds_used: 1,
-          started_at: "2026-01-01T00:00:01Z",
-          updated_at: "2026-01-01T00:00:02Z",
-        },
+        live_calls: [
+          {
+            versions: ZERO_VERSIONS,
+            turn_id: "t1",
+            phase: "execute",
+            iteration: 1,
+            model: "claude-sonnet-5",
+            in_progress: true,
+            round_num: 0,
+            rounds_used: 1,
+            started_at: "2026-01-01T00:00:01Z",
+            updated_at: "2026-01-01T00:00:02Z",
+          },
+        ],
       },
     ] as never);
     redraw();
@@ -1178,7 +1182,7 @@ describe("a turn watched to its end", () => {
         handle: "ceo",
         role: "CEO",
         activity: "idle",
-        live_call: null,
+        live_calls: [],
       },
     ] as never);
     redraw();

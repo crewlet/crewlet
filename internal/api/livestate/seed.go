@@ -31,8 +31,8 @@ type History struct {
 	Spend []tokens.Record
 
 	// Turns are each seat's newest turns, in any order: what a seat's last
-	// turn is seeded from, and a turn it left PARKED on a detached executor,
-	// which is still its turn after the restart.
+	// turn is seeded from, and every turn it left PARKED on a detached
+	// executor, each still its turn after the restart.
 	Turns []store.Turn
 
 	// Coverage is which nodes the reads above were answered by. Its
@@ -86,8 +86,8 @@ func (s *LiveState) SeededFrom() (eventfan.Coverage, bool) {
 // one seat's newest turn would be filed as its namesake's last turn as well.
 //
 // Through the same guards the stream moves them under: a last turn replaces
-// only an older one, and a parked turn lands only on a seat the stream has not
-// already put on a turn, and never for a turn the stream has already seen end.
+// only an older one, and a parked turn lands only where the stream has not
+// already put that turn on the seat, and never for a turn it has seen end.
 func (s *LiveState) seedTurns(turns []store.Turn) []string {
 	bySeat := map[string][]store.Turn{}
 	for _, t := range turns {
@@ -119,20 +119,27 @@ func (s *LiveState) seedTurns(turns []store.Turn) []string {
 				newStamp(ended))
 			break
 		}
-		// THE NEWEST TURN, ONLY IF IT IS PARKED. A turn with no completion
-		// at all is running or died mid-flight, and from the store those
-		// look identical — so it is not claimed as either.
-		if newest := list[0]; newest.Parked && agent.turn == nil {
-			if _, ended := s.endedTurns.get(newest.TurnID); !ended {
-				agent.turn = &LiveTurn{
-					TurnID:    newest.TurnID,
-					WorkItem:  cloneItem(newest.WorkItem),
-					StartedAt: newest.StartedAt.UTC().Format(time.RFC3339Nano),
-					Stage:     StageParked,
-					failed:    newest.Failed,
-				}
-				agent.turnAt = newStamp(newest.EndedAt.UTC().Format(time.RFC3339Nano))
+		// EVERY TURN IT LEFT PARKED, since a seat may hold several at once
+		// (sandbox.max_concurrent_runs). A turn with no completion at all
+		// is running or died mid-flight, and from the store those look
+		// identical — so it is not claimed as either.
+		for _, t := range list {
+			if !t.Parked || agent.turns[t.TurnID] != nil {
+				continue
 			}
+			if _, ended := s.endedTurns.get(t.TurnID); ended {
+				continue
+			}
+			if agent.turns == nil {
+				agent.turns = map[string]*heldTurn{}
+			}
+			agent.turns[t.TurnID] = &heldTurn{turn: &LiveTurn{
+				TurnID:    t.TurnID,
+				WorkItem:  cloneItem(t.WorkItem),
+				StartedAt: t.StartedAt.UTC().Format(time.RFC3339Nano),
+				Stage:     StageParked,
+				failed:    t.Failed,
+			}, at: newStamp(t.EndedAt.UTC().Format(time.RFC3339Nano))}
 		}
 		if !sameTurnOverlay(before, agent.overlay()) {
 			moved = append(moved, id)

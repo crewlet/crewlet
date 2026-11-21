@@ -88,7 +88,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	withLaunchModels(t, e, spent)
 	turns := e.node.InFlightTurns()
 
-	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
+	_, release, err := e.admitResume(t.Context(), "swe", "", sandbox.ResumeAnswer)
 	if err == nil {
 		// Admitted: the slot is given back before the case fails, so the
 		// engine's stop does not wait on it.
@@ -107,7 +107,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	}
 
 	// A COMPLETION IS ADMITTED, to be collected before its limit is asked.
-	_, release, err = e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
+	_, release, err = e.admitResume(t.Context(), "swe", "", sandbox.ResumeCompletion)
 	if err != nil {
 		t.Fatalf("admitResume of a completion on a limited seat = %v, want it admitted to be "+
 			"collected first", err)
@@ -159,8 +159,8 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	r := newDrainRig(t)
 	var admitted atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
-			ctx, release, err := next(ctx, handle, route)
+		return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+			ctx, release, err := next(ctx, handle, conversation, route)
 			if err == nil {
 				admitted.Add(1)
 			}
@@ -335,8 +335,8 @@ func newLimitedResume(t *testing.T, retryIn time.Duration) *limitedResume {
 	r := newDrainRig(t)
 	var admitted atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
-			ctx, release, err := next(ctx, handle, route)
+		return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+			ctx, release, err := next(ctx, handle, conversation, route)
 			if err == nil {
 				admitted.Add(1)
 			}
@@ -519,8 +519,8 @@ func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 		r := newDrainRig(t)
 		var admitted atomic.Int32
 		r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-			return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
-				ctx, release, err := next(ctx, handle, route)
+			return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+				ctx, release, err := next(ctx, handle, conversation, route)
 				if err == nil {
 					admitted.Add(1)
 				}

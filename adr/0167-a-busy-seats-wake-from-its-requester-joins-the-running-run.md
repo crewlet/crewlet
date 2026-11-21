@@ -35,3 +35,7 @@ Another writer's wake about the run's work, or a lead's, is no longer left alone
 **What no bridged call writes is not in it**: a push the box makes over git and a change its collection opens (the collection names a change by reference, not by the identity its wakes carry), and a held call a person approved, which the resume makes.
 
 Another writer's wake about a written record is ADR-0168's candidate.
+
+## Amendment: a seat runs up to its cap of runs
+
+A seat holds up to its cap of runs, one per conversation (ADR-0169); its inbox is held once its runs hold every slot, its router reads it while any run holds, and a wake a run's steps read makes its conversation that run's.
