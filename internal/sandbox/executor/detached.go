@@ -1409,7 +1409,7 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 	defer func() { _ = stream.Close() }()
 	events := r.harness.Events()
 	kept := &keepingLast{Decoder: events}
-	var dec Decoder = events
+	dec := events
 	if keepLast {
 		dec = kept
 	}
