@@ -1171,27 +1171,25 @@ func TestTheFleetRowSaysWhichEpochThisNodeLastApplied(t *testing.T) {
 			"applied %d, want %d and 0", row.Epoch, row.Applied, refusedFirst)
 	}
 
-	// Epochs up to 5 move the pointer with no tick between them, so the one
-	// apply below is of epoch 5.
+	// Four activations move the pointer with no tick between them, so the one
+	// apply below is of the last of them.
 	var applied int64
 	for range 4 {
 		applied = p.activate(t.Context(), t, companyDoc)
 	}
-	if applied != 5 {
-		t.Fatalf("the pointer is at epoch %d; the case needs 5", applied)
-	}
 	if err := p.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("apply epoch 5: %v", err)
+		t.Fatalf("apply epoch %d: %v", applied, err)
 	}
 	refused := p.activatePayload(t, "broken", brokenRevision)
 	if err := p.recon.Tick(t.Context()); err == nil {
 		t.Fatal("a revision that cannot be built applied cleanly")
 	}
 	row := p.fleetRow(t)
-	if row.Epoch != 6 || refused != 6 || row.Applied != 5 ||
+	if row.Epoch != refused || row.Applied != applied ||
 		configplane.ApplyStatus(row.Status) != configplane.StatusError {
 		t.Errorf("the fleet says this node attempted epoch %d (%s) and applied %d, want "+
-			"the refusal of 6 beside the 5 it runs", row.Epoch, row.Status, row.Applied)
+			"the refusal of %d beside the %d it runs", row.Epoch, row.Status, row.Applied,
+			refused, applied)
 	}
 }
 
@@ -1415,8 +1413,9 @@ func TestAReusedEpochNeverMarksAnUnappliedRevisionAsTheBootRow(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	// A FRESH COORDINATION STORE whose first activation — the same epoch —
-	// names another revision this node holds.
+	// A FRESH COORDINATION STORE whose activation at the same epoch names
+	// another revision this node holds: the stores count epochs apart (the
+	// KV's body takes a revision of its own), so it activates up to it.
 	recreated := memory.NewFleet()
 	document := p.seal(t, yamlToJSON(t, companyDoc))
 	other, err := p.store.Configs().Insert(t.Context(), store.Revision{
@@ -1426,12 +1425,14 @@ func TestAReusedEpochNeverMarksAnUnappliedRevisionAsTheBootRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store the other revision: %v", err)
 	}
-	published, err := recreated.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: other, Summary: "elsewhere", Payload: document, At: pinnedNow.Add(time.Hour),
-		ExpectAbsent: true, Origin: anOrigin,
-	})
-	if err != nil {
-		t.Fatalf("activate on the recreated store: %v", err)
+	var published coord.Activation
+	for published.Epoch < epoch {
+		if published, err = recreated.Activate(t.Context(), coord.ActivationRequest{
+			RevisionID: other, Summary: "elsewhere", Payload: document, At: pinnedNow.Add(time.Hour),
+			Origin: anOrigin,
+		}); err != nil {
+			t.Fatalf("activate on the recreated store: %v", err)
+		}
 	}
 	if published.Epoch != epoch {
 		t.Fatalf("the recreated store is at epoch %d, want the reused %d", published.Epoch, epoch)

@@ -490,7 +490,7 @@ func (f *Fleet) Body(_ context.Context, a coord.Activation) (json.RawMessage, bo
 	if !found {
 		return nil, false, nil
 	}
-	if !a.Body.Holds(stored.payload) {
+	if !a.Body.Describes(stored.payload) {
 		return nil, false, fmt.Errorf("coord/memory: the body %s is not the %d bytes the "+
 			"activation of %s names: %w", a.Body.SHA256, a.Body.Bytes, a.RevisionID, coord.ErrBodyCorrupt)
 	}

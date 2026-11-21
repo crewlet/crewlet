@@ -365,9 +365,9 @@ func BodyOf(payload json.RawMessage) BodyRef {
 // bodies had keys names none.
 func (r BodyRef) Named() bool { return r.SHA256 != "" }
 
-// Holds reports whether payload is exactly the body r names, by length and
-// digest.
-func (r BodyRef) Holds(payload []byte) bool {
+// Describes reports whether payload is exactly the body r names, by length
+// and digest.
+func (r BodyRef) Describes(payload []byte) bool {
 	return len(payload) == r.Bytes && BodyOf(payload).SHA256 == r.SHA256
 }
 

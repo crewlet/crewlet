@@ -1635,7 +1635,7 @@ func (f *FleetStore) Body(ctx context.Context, a coord.Activation) (json.RawMess
 	if err != nil {
 		return nil, false, unavailable("read the activation's body", err)
 	}
-	if !a.Body.Holds(entry.Value()) {
+	if !a.Body.Describes(entry.Value()) {
 		return nil, false, fmt.Errorf("coord/kv: %s/%s holds %d bytes that are not the %d the "+
 			"activation of %s names: %w", f.config.Bucket(), key, len(entry.Value()), a.Body.Bytes,
 			a.RevisionID, coord.ErrBodyCorrupt)

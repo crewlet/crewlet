@@ -128,7 +128,7 @@ func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 		t.Fatalf("the body of %d bytes read across the leaf's link: found=%v err=%v",
 			target.Body.Bytes, found, err)
 	}
-	if !published.Body.Holds(body) {
+	if !published.Body.Describes(body) {
 		t.Errorf("the leaf read %d bytes that are not the body published", len(body))
 	}
 }
