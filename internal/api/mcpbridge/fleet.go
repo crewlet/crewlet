@@ -47,6 +47,10 @@ type FleetOptions struct {
 	// under it.
 	Keyring recordseal.Keyring
 
+	// Answers is the node's answer budget the relay's OPENs and frames
+	// hold their weight of (internal/httprelay).
+	Answers *queue.AnswerBudget
+
 	// HolderWait bounds how long a box's call waits for a node that can
 	// answer it: through a takeover, the old holder's lease running out
 	// and the new one recovering the seat. Required.
@@ -81,7 +85,7 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	}
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
-		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: b.relayed(),
+		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: b.relayed(), Answers: opts.Answers,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)

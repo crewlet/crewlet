@@ -580,7 +580,7 @@ func fanQueue(t *testing.T, broker *memory.Broker, log *store.EventLog, id strin
 		t.Fatalf("start %s: %v", id, err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	stop, err := eventfan.Serve(t.Context(), q, id, log)
+	stop, err := eventfan.Serve(t.Context(), q, id, log, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve %s: %v", id, err)
 	}

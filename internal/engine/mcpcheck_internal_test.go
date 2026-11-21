@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 var checkingJane = iam.Actor{Name: "jane.doe", Kind: iam.ActorHuman, OperatorID: "session:abc"}
@@ -372,5 +374,36 @@ roles:
 		if tools := result.Nodes[0].Report.Tools; len(tools) != 1 || tools[0].Description != "TOKEN=[withheld]" {
 			t.Errorf("%s: the tool's description = %+v, want the seat's own credential, withheld", kind, tools)
 		}
+	}
+}
+
+// AN MCP TEST'S ANSWER HOLDS ITS WEIGHT BEFORE IT TESTS: with the node's
+// answer budget held by others for as long as the test may run, the answer
+// tests nothing and fails naming the budget, which its asker hears as a node
+// that did not answer.
+//
+// Mutation, red: test on after the hold is refused.
+func TestAnMCPTestsAnswerHoldsItsWeightBeforeItTests(t *testing.T) {
+	t.Parallel()
+	checks, err := newMCPChecks(recordseal.OneKey("k1", "the engine cases' fleet key material"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := queue.NewAnswerBudget(nil)
+	release, err := answers.Acquire(t.Context(), queue.AnswerHistory, queue.AnswerBudgetBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	e := &Engine{mcpChecks: checks, answerBudget: answers, testNode: "node-b"}
+	sealed, err := checks.wire.SealRequest(mcpCheckAsk{Version: mcpCheckWire, ID: "ask-1",
+		Deadline: time.Now().Add(mcpCheckReplyMargin + time.Second), Asker: "node-a",
+		Nodes: []string{"node-b"}, Server: "files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := e.answerMCPCheck(t.Context(), sealed); reply != nil || !errors.Is(err, queue.ErrAnswerBudget) {
+		t.Fatalf("an MCP test behind a held budget answered %d bytes and %v, want nothing and ErrAnswerBudget",
+			len(reply), err)
 	}
 }

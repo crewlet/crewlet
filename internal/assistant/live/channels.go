@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/words"
@@ -384,6 +385,17 @@ func (f *Fleet) answerReplay(ctx context.Context, raw []byte) ([]byte, error) {
 		}
 		return f.replays.SealReply(out)
 	}
+	// HELD FROM BEFORE THE READ until the reply is written, waited for no
+	// longer than an asker waits. On a gap the read crosses the estate router
+	// to a data node, whose answerers ask nobody (internal/queue's package
+	// doc, "The node's answer budget").
+	wait, cancel := context.WithTimeout(ctx, f.askBudget)
+	release, err := f.answers.Acquire(wait, queue.AnswerReplay, replayWeight)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("live: replay turn %s: %w", req.Turn, err)
+	}
+	defer release()
 	frames, ended, err := server.ReplayHere(ctx, req.Owner, req.Turn, req.After)
 	switch {
 	case errors.Is(err, ErrNotRunning):

@@ -33,7 +33,7 @@ func twoNodes(t *testing.T) (fleet *eventfan.Fleet, a, b *store.EventLog) {
 	}
 	qa, qb := start(), start()
 	a, b = openStore(t).Events(), openStore(t).Events()
-	stop, err := eventfan.Serve(t.Context(), qb, "node-b", b)
+	stop, err := eventfan.Serve(t.Context(), qb, "node-b", b, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("serve node-b: %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -787,17 +788,17 @@ func (r *Runner) statesTotalsOf(raw []byte, session string) bool {
 // continue its session, as its script recorded ([sessionRecord]), and whose
 // result states that session's totals has the base taken off: one that started
 // a new session, or stopped before its result, would be charged below nothing.
-func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	result sandbox.Result, streamed *runSpend, rec sessionRecord, stated string) (sandbox.Result, error) {
+func (r *Runner) ownSpend(base *piece, result sandbox.Result, streamed *runSpend, rec sessionRecord,
+	stated string) (sandbox.Result, error) {
 
 	if streamed != nil {
 		return streamed.on(result), nil
 	}
 	totals, ok := r.harness.(sessionTotals)
-	if !ok || !rec.continued {
+	if !ok || !rec.continued || base == nil {
 		return result, nil
 	}
-	raw, refusal, err := readWholeBytes(ctx, box, paths.BaseResult(), "what the continued session had spent")
+	raw, refusal, err := base.whole()
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -811,11 +812,11 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	}
 	// Only a result naming the base's own session (stated) has them taken off:
 	// one that stopped before its result states none.
-	base := r.harness.Parse(raw)
-	if !sandbox.ValidSessionID(stated) || stated != base.SessionID {
+	parsed := r.harness.Parse(raw)
+	if !sandbox.ValidSessionID(stated) || stated != parsed.SessionID {
 		return result, nil
 	}
-	return less(result, base), nil
+	return less(result, parsed), nil
 }
 
 // wrapperScript is the shell line a job runs under: the harness with its stdout
@@ -953,9 +954,21 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 // failure leave whole, and the transcript whole up to what the record keeps
 // ([transcriptHoldBytes]), past it as the record keeps it, its redaction
 // streamed ([transcriptLines]): the coordinator bounds what is sent, in one place.
-func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
+func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle,
+	answers *queue.AnswerBudget) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
+	// EVERY PIECE OPENED, WEIGHED AND HELD before any is read (collectpieces.go).
+	pieces, openErr := r.openCollection(ctx, box, paths, out)
+	if openErr != nil {
+		return sandbox.Result{}, openErr
+	}
+	defer pieces.close()
+	release, holdErr := holdCollection(ctx, answers, pieces)
+	if holdErr != nil {
+		return sandbox.Result{}, holdErr
+	}
+	defer release()
 	var refused []string
 
 	var (
@@ -966,7 +979,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		limits  string
 	)
 	if out.Events {
-		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout, false)
+		streamed, refusal, err := r.decodeStream(pieces.stream, false)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
@@ -980,12 +993,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// reading holds after is the record's halves, so the file is parsed beside
 	// nothing; the line is read again only where it stands for the file.
 	if out.Result != "" {
-		raw, refusal, err := readWholeBytes(ctx, box, out.Result, "the result its harness printed")
+		raw, refusal, err := pieces.result.whole()
 		if err != nil {
 			return sandbox.Result{}, err
 		}
 		if out.lastLineStandsIn(refusal, raw) {
-			again, _, err := r.decodeStream(ctx, box, out.Stdout, true)
+			again, err := r.redecodeStream(ctx, box, pieces.stream)
 			if err != nil {
 				return sandbox.Result{}, err
 			}
@@ -1037,7 +1050,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// started anew (the box's sentence, bounded where it enters the result,
 	// [sandbox.BoundFellBack]), and the harness's release. A refused record is
 	// a piece the run did not report.
-	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
+	recorded, recordRefusal, err := pieces.record.text()
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -1061,7 +1074,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
-	result, err = r.ownSpend(ctx, box, paths, result, spent, rec, stated)
+	result, err = r.ownSpend(pieces.base, result, spent, rec, stated)
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}
@@ -1069,13 +1082,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The transcript is the observability surface of an agent with no
 	// telemetry: the parser's from streamed events, else the error stream,
 	// read once and reused below for the failure detail.
-	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redact.LookBack)
-	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
-		refused = append(refused, refusal)
-		errTail, err = sandbox.FileTail{}, nil
-	}
+	errTail, refusal, err := pieces.errTail()
 	if err != nil {
-		return sandbox.Result{}, fmt.Errorf("executor: reading the error stream: %w", err)
+		return sandbox.Result{}, err
+	}
+	if refusal != "" {
+		refused = append(refused, refusal)
 	}
 	shown, unread := streamEnd(errTail, r.failureBound)
 	stderr := strings.TrimSpace(shown)
@@ -1095,7 +1107,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result.Transcript = continued
 	}
 
-	codeText, refusal, err := readWhole(ctx, box, paths.ExitCode(), "its exit status")
+	codeText, refusal, err := pieces.exitCode.text()
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -1108,7 +1120,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// A KILL FOR MEMORY DURING THE JOB, as the kernel counted it in the job's
 	// memory domain; the run ended at its ceiling where its harness was the
 	// process killed (SIGKILL, status 137).
-	result, refused, err = memoryKills(ctx, box, paths, result, refused, code)
+	result, refused, err = memoryKills(pieces.memory, result, refused, code)
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -1117,7 +1129,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// ([Paths.JobEnded]): such a run did not finish, whatever it wrote or exited
 	// with (a harness may exit 0 on SIGTERM), so it is never a success and its
 	// failure says so first. A word this build does not know is no end.
-	endedText, refusal, err := readWhole(ctx, box, paths.JobEnded(), "the record of how its job was ended")
+	endedText, refusal, err := pieces.ended.text()
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -1137,7 +1149,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// write its report there, and it survives a process group that died before
 	// the final message and a tool-only run that parses to no text. So it wins
 	// for the text, and its presence means success unless the process crashed.
-	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the harness wrote")
+	findingsText, refusal, err := pieces.findings.text()
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -1393,20 +1405,39 @@ func continuedNote(size int64, blank bool) string {
 		humanSize(size), why)
 }
 
-// decodeStream reads one event stream through a fresh decoder, and keeps its
-// last line where keepLast asks, which [Runner.Collect] reads again for where
-// the line stands for the result file — or answers a refusal where the box
-// would not open the stream because it is not a regular file ([notRegularPiece]).
-func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string, keepLast bool) (decodedStream, string, error) {
-	stream, err := box.OpenFile(ctx, path)
-	if refusal := notRegularPiece(err, path, "the event stream"); refusal != "" {
-		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
-			refusal, nil
+// decodeStream reads the event stream a collection opened through a fresh
+// decoder, no further than the size it was weighed at, and keeps its last line
+// where keepLast asks, which [Runner.Collect] reads again for where the line
+// stands for the result file — or answers the refusal of a stream the box
+// would not open because it is not a regular file ([notRegularPiece]).
+func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, string, error) {
+	if stream.refusal != "" {
+		return decodedStream{request: contextRead{why: "the run's event stream was not read: " +
+			stream.refusal}}, stream.refusal, nil
 	}
+	defer stream.close()
+	return r.decodeLines(io.LimitReader(stream.body, stream.size), keepLast)
+}
+
+// redecodeStream reads the stream a collection opened again, keeping its last
+// line: opened anew, and read no further than the size the first open was
+// weighed at, so a file renamed over it since adds nothing to what is held.
+func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream *piece) (decodedStream, error) {
+	if stream.refusal != "" || stream.size == 0 {
+		return decodedStream{}, nil
+	}
+	body, _, err := box.OpenRange(ctx, stream.path, 0, stream.size)
 	if err != nil {
-		return decodedStream{}, "", fmt.Errorf("executor: opening the event stream: %w", err)
+		return decodedStream{}, fmt.Errorf("executor: opening the event stream again: %w", err)
 	}
-	defer func() { _ = stream.Close() }()
+	defer func() { _ = body.Close() }()
+	again, _, err := r.decodeLines(io.LimitReader(body, stream.size), true)
+	return again, err
+}
+
+// decodeLines decodes an event stream's lines from stream through a fresh
+// decoder.
+func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, string, error) {
 	events := r.harness.Events()
 	kept := &keepingLast{Decoder: events}
 	dec := events
@@ -1559,12 +1590,12 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, l
 
 // memoryKills is result with the kills the kernel made for memory in the job's
 // domain while its harness ran, read off the script's two records of it.
-func memoryKills(ctx context.Context, box sandbox.Sandbox, paths Paths, result sandbox.Result,
-	refused []string, code string) (sandbox.Result, []string, error) {
+func memoryKills(records [2]*piece, result sandbox.Result, refused []string,
+	code string) (sandbox.Result, []string, error) {
 
 	var read [2]sandbox.MemoryDomain
-	for i, path := range []string{paths.MemoryBefore(), paths.MemoryAfter()} {
-		text, refusal, err := readWhole(ctx, box, path, "the record of its memory")
+	for i, record := range records {
+		text, refusal, err := record.text()
 		if err != nil {
 			return sandbox.Result{}, nil, err
 		}

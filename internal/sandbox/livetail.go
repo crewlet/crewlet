@@ -454,11 +454,14 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 // ([tailFailureOf]); condition is the engine's one rule ([builtin.Condition]),
 // handed in because its sentinels live above this package. Nil is refused.
 func ServeTail(ctx context.Context, q TailServer, owner, node string, pending PendingReader,
-	feeds *LiveFeeds, condition func(error) bool,
+	feeds *LiveFeeds, condition func(error) bool, answers *queue.AnswerBudget,
 ) (queue.Unsubscribe, error) {
 	if condition == nil {
 		return nil, errors.New("sandbox: a tail answerer needs the rule it tells a " +
 			"condition from a fault by")
+	}
+	if answers == nil {
+		return nil, errors.New("sandbox: a tail answerer needs the node's answer budget")
 	}
 	fail := func(ctx context.Context, req tailRequest, err error) TailFailure {
 		failure := tailFailureOf(err, condition)
@@ -501,6 +504,13 @@ func ServeTail(ctx context.Context, q TailServer, owner, node string, pending Pe
 		case feeds == nil:
 			reply.Failed = fail(ctx, req, errNoBackend())
 		default:
+			release, err := answers.Acquire(ctx, queue.AnswerTail, tailAnswerWeight)
+			if err != nil {
+				// A BUSY NODE, which a wait clears: answered unanswered.
+				reply.Failed = fail(ctx, req, fmt.Errorf("%w: %w", ErrTailUnanswered, err))
+				break
+			}
+			defer release()
 			out, err := feeds.Answer(ctx, run, req.Cursor)
 			switch {
 			case errors.Is(err, ErrBoxPaused):
@@ -516,6 +526,12 @@ func ServeTail(ctx context.Context, q TailServer, owner, node string, pending Pe
 		return json.Marshal(reply)
 	})
 }
+
+// tailAnswerWeight is what a computed tail holds of the node's answer budget
+// ([queue.AnswerBudget]) from its read until its reply is written: its text at
+// [MaxRunTextBytes] (1), escaped at worst six-fold in the reply, whose encoder
+// buffer and copy hold it three times (18), and one more: 5 MiB.
+const tailAnswerWeight = 20 * MaxRunTextBytes
 
 // nodeOf is the node an incarnation belongs to: the stable id before the
 // incarnation's own suffix (`<node>:<uuid>`), which is what a reader knows the

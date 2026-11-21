@@ -1110,8 +1110,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 		"A restart alone keeps the same lanes over the same memory, and clears it only where " +
 			"gitlet.max_transfers is unset and the memory was lowered after the node booted",
 		fmt.Sprintf("first the Go runtime's share for the executor's pools it runs (%s MiB of transcript reads, %s "+
-			"MiB on a node running seats), the store's page cache (a sixteenth of its memory) and its read lane (%s "+
-			"a core), then of the memory they leave", alone, seats, amount(t, gitproc.ReadMemory)),
+			"MiB on a node running seats) and the answers in flight (%s MiB), the store's page cache (a "+
+			"sixteenth of its memory) and its read lane (%s a core), then of the memory they leave", alone, seats,
+			mib(nodebudget.AnswersLine), amount(t, gitproc.ReadMemory)),
 		fmt.Sprintf("A node whose boot logged `code_cache_memory_short` keeps more than its memory, so its "+
 			"budget is zero: give it the `memory_needed` that line names, %s or more in all where it runs seats "+
 			"beside Gitlet at the default node.max_concurrent.", amount(t, seatsFloor(t))),
@@ -1131,8 +1132,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 				"on %s and %s cores, %d transfers, of the %d that %s holds", percent, core, amount(t, memory),
 				word(t, cores), zeroing, holds, amount(t, memory)),
 			fmt.Sprintf("both of what the executor's pools (%s MiB, or %s MiB on a node running seats too), the "+
-				"store's [page cache](../guides/deployment.md#the-page-cache) and the read lane (%s a core) leave",
-				alone, seats, amount(t, gitproc.ReadMemory)),
+				"answers in flight (%s MiB), the store's [page cache](../guides/deployment.md#the-page-cache) and "+
+				"the read lane (%s a core) leave", alone, seats, mib(nodebudget.AnswersLine),
+				amount(t, gitproc.ReadMemory)),
 			"[`code_maintenance_refused`](../reference/alarms.md) says so until the figure is lowered or " +
 				"unset, or the node is given memory past what it keeps, in place or at a boot. A restart alone " +
 				"changes nothing.",
@@ -1149,7 +1151,8 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 		{filepath.Join("docs", "guides", "deployment.md"), []string{
 			fmt.Sprintf("keeps them first and sizes Gitlet by what is left "+
 				"([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), %s MiB for the transcript reads its "+
-				"API answers and %s MiB where it runs seats too", alone, seats),
+				"API answers and %s MiB where it runs seats too, %s MiB for the answers in flight", alone, seats,
+				mib(nodebudget.AnswersLine)),
 			fmt.Sprintf("logging `code_cache_memory_short` once, but at the default `node.max_concurrent` give a "+
 				"node running seats beside Gitlet %s of memory or more in all", amount(t, seatsFloor(t))),
 		}},
@@ -1345,6 +1348,8 @@ func seatsBesideGitlet(t *testing.T) []string {
 			mib(runtimeShare(false, 0)), mib(runtimeShare(true, 0))),
 		fmt.Sprintf("reads of its boxes for its peers, %.1f MiB a turn,", float64(turn)/(1<<20)),
 		fmt.Sprintf("and its read lane, %s for each read slot (a core)", amount(t, gitproc.ReadMemory)),
+		fmt.Sprintf("the node's [answer budget](../guides/deployment.md#the-engines-memory-limit) over the "+
+			"limit's nine tenths, %s MiB", mib(nodebudget.AnswersLine)),
 	}
 	for _, cores := range []int{1, 2, 4, 8} {
 		memory := int64(cores) * gitproc.CoreMemory
@@ -1362,9 +1367,9 @@ func seatsBesideGitlet(t *testing.T) []string {
 			if cores == 1 {
 				plural = ""
 			}
-			want = append(want, fmt.Sprintf("| %s, %s core%s | %s | %s | %s | %s | %d | %s | %s |",
-				amount(t, memory), word(t, cores), plural, yes, mib(lines.Runtime), mib(lines.PageCache),
-				mib(lines.ReadLane), transfers, mib(serving), mib(max(0, memory-kept))))
+			want = append(want, fmt.Sprintf("| %s, %s core%s | %s | %s | %s | %s | %s | %d | %s | %s |",
+				amount(t, memory), word(t, cores), plural, yes, mib(lines.Runtime), mib(lines.Answers),
+				mib(lines.PageCache), mib(lines.ReadLane), transfers, mib(serving), mib(max(0, memory-kept))))
 			if seats && cores == 1 {
 				want = append(want, fmt.Sprintf("so %s running seats beside Gitlet keeps %s MiB more than its "+
 					"memory", amount(t, memory), mib(kept-memory)))
@@ -1378,15 +1383,28 @@ func seatsBesideGitlet(t *testing.T) []string {
 	turnMiB := float64(turn) / (1 << 20)
 	return append(want,
 		fmt.Sprintf("so every Gitlet node keeps the transcript reads' pool, with seats or without; on a node "+
-			"without seats of %s of memory a core in all, that costs it at most %s transfer",
-			amount(t, gitproc.CoreMemory), word(t, readsCost(t, false))),
+			"without seats of %s of memory a core in all, that costs it %s", amount(t, gitproc.CoreMemory),
+			transfersCost(t, readsCost(t, false))),
 		fmt.Sprintf("logs `code_cache_memory_short` once at boot with the figures; at the default "+
 			"`node.max_concurrent`, give a node running seats beside Gitlet %s of memory or more in all",
 			amount(t, seatsFloor(t))),
-		fmt.Sprintf("what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools, the "+
-			"store's page cache and its read lane), %s for each of its `transfer_slots`, and the serving share",
-			amount(t, gitproc.TransferMemory)),
+		fmt.Sprintf("what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools and "+
+			"the answers in flight, the store's page cache and its read lane), %s for each of its "+
+			"`transfer_slots`, and the serving share", amount(t, gitproc.TransferMemory)),
 		fmt.Sprintf("or, on a node running seats, a lower `node.max_concurrent` (%.1f MiB a turn)", turnMiB))
+}
+
+// transfersCost is n transfers as the page says what a pool costs: "no
+// transfer", "at most one transfer", "at most two transfers".
+func transfersCost(t *testing.T, n int) string {
+	t.Helper()
+	switch n {
+	case 0:
+		return "no transfer"
+	case 1:
+		return "at most one transfer"
+	}
+	return "at most " + word(t, n) + " transfers"
 }
 
 // readsCost is the most transfers the transcript reads' pool, which every

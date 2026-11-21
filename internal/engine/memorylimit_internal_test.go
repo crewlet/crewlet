@@ -84,7 +84,7 @@ func TestAGitletNodesReserveAndLimitKeepTheSameLines(t *testing.T) {
 			boot := testBootstrap(t)
 			boot.Node.Roles = shape.roles
 			lines := e.budgetNode(&boot).Of(shape.memory, shape.cores)
-			kept := lines.Runtime + lines.PageCache + lines.ReadLane
+			kept := lines.Kept()
 			transfers := TestGitTransfers * gitproc.TransferMemory
 			left := max(0, shape.memory-kept)
 			serving := min(int64(shape.cores)*cache.ServingMemoryPerCore,
