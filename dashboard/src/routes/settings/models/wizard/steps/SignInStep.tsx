@@ -27,6 +27,7 @@ import {
   type Draft,
   type Method,
 } from "../draft.ts";
+import { credentialExample } from "../examples.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
 
 export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
@@ -92,14 +93,6 @@ export function methodWords(harness: string, method: Method): { label: string; d
   return METHOD_WORDS[method];
 }
 
-/** The key field's placeholder: the vendor's own prefix where it has one. */
-const KEY_PLACEHOLDER: Readonly<Record<string, string>> = {
-  "claude-code": "sk-ant-api03-…",
-  codex: "sk-…",
-  copilot: "github_pat_…",
-  grok: "xai-…",
-};
-
 /** What the credential field says, by whether it is new or replaces a stored one. */
 function credentialHelp(d: Draft, replacing: boolean): string {
   const word = credentialWord(d);
@@ -157,7 +150,7 @@ export function SignInStep({
       <ChoiceList
         label="Method"
         value={draft.method}
-        onChange={(v) => onChange({ method: v as Method, credential: "" })}
+        onChange={(v) => onChange({ method: v as Method })}
         options={methods.map((m) => ({
           value: m,
           label: methodWords(draft.harness, m).label,
@@ -236,11 +229,7 @@ export function SignInStep({
               value={draft.credential}
               required
               onChange={(v) => onChange({ credential: v })}
-              placeholder={
-                word === "token"
-                  ? "sk-ant-oat01-…"
-                  : (KEY_PLACEHOLDER[draft.harness] ?? "Paste the key")
-              }
+              placeholder={credentialExample(draft)}
               help={credentialHelp(draft, replacing)}
               error={errors.credential}
             />

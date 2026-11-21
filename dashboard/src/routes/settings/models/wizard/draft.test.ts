@@ -27,12 +27,16 @@ import {
   draftProblems,
   emptyDraft,
   entityOf,
+  keptOf,
   messageOf,
+  modelId,
   nextDocument,
   stepOf,
   suggestedVariable,
+  withChoices,
   type Draft,
 } from "./draft.ts";
+import { credentialExample, modelExample } from "./examples.ts";
 import { droppedWords } from "./steps/Review.tsx";
 import { fixable, hasSandbox } from "./draft.ts";
 
@@ -152,6 +156,186 @@ describe("the entry", () => {
     expect(d.provider).toBe("openrouter");
     expect(d.model).toBe("qwen-coder");
     expect(d.variable).toBe("OR_KEY");
+  });
+});
+
+/**
+ * A CHOICE TAKES WHAT BELONGS TO IT: a model and its effort are named by the
+ * vendor the harness, provider or cloud sends them to, and a pasted credential
+ * and its secret's name belong to the provider they sign in to. A changed
+ * choice never carries one vendor's value to another; an edit back on its own
+ * choice gets the model's values back.
+ */
+describe("a changed choice", () => {
+  const adding = { original: null, taken: ["ANTHROPIC_API_KEY"], named: false };
+  const onAnthropic = draft({
+    key: "oc",
+    harness: "opencode",
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    effort: "high",
+    variable: "ANTHROPIC_API_KEY_OC",
+  });
+
+  test("of provider clears the model, its effort and the key typed for the last one", () => {
+    const { draft: next, named } = withChoices(onAnthropic, { provider: "openai" }, adding);
+    expect(next.model).toBe("");
+    expect(next.effort).toBe("");
+    expect(next.credential).toBe("");
+    expect(next.variable).toBe("OPENAI_API_KEY");
+    expect(named).toBe(false);
+    expect(modelId({ ...next, model: "gpt-5.5" })).toBe("openai/gpt-5.5");
+  });
+
+  test("of provider replaces a secret name typed for the last provider, and keeps one typed after", () => {
+    const typed = withChoices(onAnthropic, { variable: "MY_KEY" }, adding);
+    expect(typed.named).toBe(true);
+    const moved = withChoices(typed.draft, { provider: "openai" }, { ...adding, named: true });
+    expect(moved.draft.variable).toBe("OPENAI_API_KEY");
+    const kept = withChoices(moved.draft, { variable: "MY_OPENAI_KEY" }, adding);
+    expect(
+      withChoices(kept.draft, { key: "renamed" }, { ...adding, named: kept.named }).draft.variable,
+    ).toBe("MY_OPENAI_KEY");
+  });
+
+  test("of harness or of cloud clears the model; another way into the same vendor keeps it", () => {
+    const claude = draft({ model: "claude-opus-5-5", effort: "max" });
+    expect(withChoices(claude, { harness: "codex" }, adding).draft.model).toBe("");
+    expect(withChoices(claude, { method: "cloud" }, adding).draft.model).toBe("");
+    const bedrock = { ...claude, method: "cloud" as const, cloud: "bedrock" as const };
+    expect(withChoices(bedrock, { cloud: "vertex" }, adding).draft.model).toBe("");
+    const token = withChoices(claude, { method: "token" }, adding).draft;
+    expect([token.model, token.effort]).toEqual(["claude-opus-5-5", "max"]);
+    expect(token.credential).toBe("");
+    expect(token.variable).toBe("CLAUDE_CODE_OAUTH_TOKEN");
+  });
+
+  test("on an edit keeps the stored key only for its own provider, and gives it back there", () => {
+    const original = { ...onAnthropic, credential: "", variable: "ANTHROPIC_API_KEY" };
+    const editing = { original, taken: [], named: true };
+    expect(keptOf(original, original, undefined, false).credential).toBe(true);
+    const away = withChoices(original, { provider: "openai" }, editing);
+    expect(away.draft.variable).toBe("OPENAI_API_KEY");
+    expect(away.draft.model).toBe("");
+    expect(keptOf(away.draft, original, undefined, false).credential).toBe(false);
+    expect(entityOf({ ...away.draft, model: "gpt-5.5" }).env).toEqual({
+      OPENAI_API_KEY: "${OPENAI_API_KEY}",
+    });
+    const back = withChoices(
+      away.draft,
+      { provider: "anthropic" },
+      { ...editing, named: away.named },
+    );
+    expect([back.draft.variable, back.draft.model, back.draft.effort]).toEqual([
+      "ANTHROPIC_API_KEY",
+      "claude-sonnet-5-5",
+      "high",
+    ]);
+    expect(keptOf(back.draft, original, undefined, false).credential).toBe(true);
+  });
+
+  test("of harness drops the uses the new harness cannot run", () => {
+    const helper = draft({
+      intent: "assistant",
+      uses: { ...noUses(), assistant: true, advisor: true },
+    });
+    const codex = withChoices(helper, { harness: "codex" }, adding).draft;
+    expect([codex.uses.assistant, codex.uses.advisor, codex.intent]).toEqual([
+      false,
+      false,
+      "none",
+    ]);
+    const coder = draft({
+      intent: "all",
+      uses: usesForIntent("all", ["pm"], false),
+      runIn: "direct",
+    });
+    const gemini = withChoices(coder, { harness: "gemini-cli" }, adding).draft;
+    expect([gemini.intent, gemini.runIn, Object.values(gemini.uses.jobs).flat()]).toEqual([
+      "none",
+      "",
+      [],
+    ]);
+  });
+});
+
+describe("a model id on a harness that names its provider", () => {
+  test("always names the chosen provider, a provider's own slash included", () => {
+    const oc = { harness: "opencode", provider: "openrouter" };
+    expect(modelId({ ...oc, model: "qwen/qwen3-coder" })).toBe("openrouter/qwen/qwen3-coder");
+    expect(modelId({ ...oc, model: "openrouter/qwen/qwen3-coder" })).toBe(
+      "openrouter/qwen/qwen3-coder",
+    );
+    expect(modelId({ ...oc, provider: "groq", model: "openai/gpt-oss-120b" })).toBe(
+      "groq/openai/gpt-oss-120b",
+    );
+  });
+
+  test("an edit saved as it opened writes the model it read", () => {
+    const raw = {
+      harness: "opencode",
+      model: "openrouter/qwen/qwen3-coder",
+      env: { OPENROUTER_API_KEY: "${OR_KEY}" },
+    };
+    const model = view({ key: "open", harness: "opencode", model: raw.model, raw });
+    expect(entityOf(draftOf(model), baseOf(model)).model).toBe("openrouter/qwen/qwen3-coder");
+  });
+});
+
+/** ONE TABLE FOR EVERY EXAMPLE: the placeholder, the key's prefix and the hint name one vendor. */
+describe("the examples", () => {
+  const ex = (patch: Partial<Draft>) => {
+    const d = { ...emptyDraft(), ...patch };
+    return [modelExample(d).placeholder, modelExample(d).naming, credentialExample(d)];
+  };
+
+  test.each([
+    [{ harness: "opencode", provider: "openai" }, "gpt-5.5", "Sent as openai/<model>.", "sk-…"],
+    [
+      { harness: "opencode", provider: "anthropic" },
+      "claude-sonnet-5-5",
+      "Sent as anthropic/<model>.",
+      "sk-ant-api03-…",
+    ],
+    [
+      { harness: "opencode", provider: "openrouter" },
+      "qwen/qwen3-coder",
+      "Sent as openrouter/<model>.",
+      "sk-or-v1-…",
+    ],
+    [
+      { harness: "opencode", provider: "groq" },
+      "The model's id at Groq",
+      "Sent as groq/<model>.",
+      "gsk_…",
+    ],
+    [
+      { harness: "claude-code" },
+      "claude-sonnet-5-5",
+      "In the harness's own naming.",
+      "sk-ant-api03-…",
+    ],
+    [
+      { harness: "claude-code", method: "token" as const },
+      "claude-sonnet-5-5",
+      "In the harness's own naming.",
+      "sk-ant-oat01-…",
+    ],
+    [
+      { harness: "claude-code", method: "cloud" as const, cloud: "vertex" as const },
+      "The model's id at Google Vertex AI",
+      "In the harness's own naming.",
+      "Paste the key",
+    ],
+    [{ harness: "codex" }, "gpt-5.5", "In the harness's own naming.", "sk-…"],
+    [
+      { harness: "cursor-agent" },
+      "The model's id",
+      "In the harness's own naming.",
+      "Paste the key",
+    ],
+  ])("follow %o", (patch, placeholder, naming, key) => {
+    expect(ex(patch)).toEqual([placeholder, naming, key]);
   });
 });
 

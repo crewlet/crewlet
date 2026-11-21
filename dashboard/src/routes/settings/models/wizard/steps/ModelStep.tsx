@@ -38,14 +38,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import type { ModelAlias } from "~/protocol/models.ts";
 import { product } from "../../words.ts";
 import { effortLevels, factsOf, modelId, namesProvider, type Draft } from "../draft.ts";
-
-/** The model field's placeholder, in the harness's own naming where it has a familiar one. */
-const MODEL_PLACEHOLDER: Readonly<Record<string, string>> = {
-  "claude-code": "claude-opus-5-5",
-  codex: "gpt-5.5",
-  opencode: "claude-sonnet-5-5",
-  pi: "claude-sonnet-5-5",
-};
+import { modelExample } from "../examples.ts";
 
 /** An alias's name, with the version it resolves to when the sign-in reaches the vendor's own service. */
 function aliasLabel(alias: ModelAlias, draft: Draft) {
@@ -146,7 +139,7 @@ export function ModelStep({
   const [chosen, setChosen] = useState<"alias" | "another" | null>(null);
   const another = chosen === "another" || (chosen === null && draft.model !== "" && !isAlias);
   const [open, setOpen] = useState(false);
-  const catalogued = another ? answer?.models.find((m) => m.id === draft.model.trim()) : undefined;
+  const catalogued = another ? answer?.models.find((m) => m.id === modelId(draft)) : undefined;
 
   const options = useMemo<ComboboxOption[]>(() => {
     const q = draft.model.trim().toLowerCase();
@@ -156,9 +149,11 @@ export function ModelStep({
       .map((m) => ({ value: m.id, label: m.id, hint: m.name }));
   }, [answer, draft.model]);
 
-  const naming = namesProvider(draft.harness)
-    ? `Sent as ${modelId({ ...draft, model: draft.model || "<model>" })}.`
-    : "In the harness's own naming.";
+  const example = modelExample(draft);
+  const naming =
+    namesProvider(draft.harness) && draft.model.trim()
+      ? `Sent as ${modelId(draft)}.`
+      : example.naming;
   const source = listing.loading
     ? "Reading the catalogue."
     : answer?.source === "models.dev"
@@ -194,7 +189,7 @@ export function ModelStep({
           label="Suggested models"
           mono
           value={draft.model}
-          placeholder={MODEL_PLACEHOLDER[draft.harness] ?? "The model's id"}
+          placeholder={example.placeholder}
           onValueChange={(next) => {
             onChange(next);
             setOpen(options.length > 0);
