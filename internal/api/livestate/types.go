@@ -393,7 +393,7 @@ type Overlay struct {
 
 	// Turns are the turns the seat is on — running, or parked on a detached
 	// executor — oldest first by start, and `[]` when it is on none: up to
-	// its sandbox.max_concurrent_runs at once, one by default.
+	// its sandbox.max_concurrent_runs at once, two by default.
 	// ALWAYS PRESENT: the overlay is merged into a client's row rather than
 	// replacing it, so an omitted key reads as "unchanged" and would leave a
 	// finished turn on the client's row.
