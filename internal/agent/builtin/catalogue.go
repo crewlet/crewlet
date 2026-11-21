@@ -215,7 +215,8 @@ type Filing struct {
 	Group Group
 	Gate  Gate
 	// Vendor is the vendor permission the tool needs, the zero value for one
-	// the engine's own estates serve.
+	// the engine's own estates serve or one calling its vendor on a credential
+	// the engine alone holds (a growth tool, ADR-0170).
 	Vendor VendorNeed
 	// Rank orders the tools of one group: reads before writes, the
 	// everyday before the rare.
@@ -407,19 +408,25 @@ var growthGates = map[growth.Level]Gate{
 	growth.LevelAdminister: GateGrowthAdminister,
 }
 
-// growthFiling is a growth tool's filing, from its catalog: its gate by its
-// class's level, its vendor the product's lane, ranked in its catalog's order.
-// False for a tool no registered catalog lists.
-func growthFiling(tool string) (Filing, bool) {
-	kind, ok := growth.KindOfTool(tool)
-	if !ok {
-		return Filing{}, false
+// growthFiling is a growth tool's filing among the registered catalogs, false
+// for a tool none lists.
+func growthFiling(tool string) (Filing, bool) { return growthFilingIn(growth.Catalogs(), tool) }
+
+// growthFilingIn is tool's filing among catalogs: gated by its class's level,
+// ranked by its place in the one growth group, catalog after catalog as
+// [Catalogued] lists them. It needs no vendor permission: the engine alone
+// holds a growth credential (ADR-0170), so no seat grant explains a refusal.
+func growthFilingIn(catalogs []growth.Catalog, tool string) (Filing, bool) {
+	rank := 0
+	for _, c := range catalogs {
+		for _, t := range c.Tools {
+			if t.Name == tool {
+				return Filing{Group: GroupGrowth, Gate: growthGates[t.Class.Level()], Rank: rank}, true
+			}
+			rank++
+		}
 	}
-	c, _ := growth.CatalogOf(kind)
-	rank := slices.IndexFunc(c.Tools, func(t growth.Tool) bool { return t.Name == tool })
-	def := c.Tools[rank]
-	return Filing{Group: GroupGrowth, Gate: growthGates[def.Class.Level()], Rank: rank,
-		Vendor: VendorNeed{Vendor: c.API, Lane: kind, Level: string(def.Class.Level())}}, true
+	return Filing{}, false
 }
 
 // Catalogued is every tool the catalogue lists, in its order: group by group,
