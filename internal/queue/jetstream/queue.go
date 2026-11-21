@@ -1182,6 +1182,7 @@ func (q *Queue) DialLeases(ctx context.Context) (*nats.Conn, error) {
 	// own, so only an answer of the fleet's JetStream proves it (ADR-0173).
 	var path *dataPath
 	if move := q.leaseMove(nc); move != nil {
+		//nolint:contextcheck // the probe outlives the dial, stopped by Stop
 		path = startLeaseLink(q.leaseLinkTiming(js), func() error { return q.leaseHop(nc) },
 			move, q.log, time.Now())
 	}

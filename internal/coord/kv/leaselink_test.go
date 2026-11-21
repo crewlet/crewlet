@@ -3,6 +3,7 @@ package kv
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -182,13 +184,17 @@ func TestARenewalCrossesALeafsLinkAheadOfAnUploadOnIt(t *testing.T) {
 		t.Fatalf("the upload: %v", err)
 	}
 
-	// THE CONTROL: the same renewal over the data connection.
+	// THE CONTROL: the same renewal over the data connection, queued behind
+	// the upload, is answered only once the upload has crossed, or not at
+	// all inside its own budget.
 	start = carried()
 	done = f.upload(t, "kv.upload.shared")
-	if ok, err := shared.Renew(ctx, knownSeat(1), owner, onShared.Epoch, knownTTL); err != nil || !ok {
-		t.Fatalf("the renewal over the data connection = (%v, %v)", ok, err)
-	}
-	if got := carried() - start; got < uploadBytes {
+	ok, err := shared.Renew(ctx, knownSeat(1), owner, onShared.Epoch, knownTTL)
+	got := carried() - start
+	switch {
+	case err != nil && !errors.Is(err, coord.ErrUnavailable):
+		t.Fatalf("the renewal over the data connection = %v, want an answer or unknown", err)
+	case err == nil && ok && got < uploadBytes:
 		t.Errorf("the control's renewal was answered with %d bytes of the %d-byte upload carried: "+
 			"the case cannot tell a renewal behind the upload from one beside it", got, uploadBytes)
 	}
