@@ -50,7 +50,8 @@ export type AccessLaneKey =
   | "google_cloud"
   | "ssh"
   | "google_analytics"
-  | "google_ads";
+  | "google_ads"
+  | "search_console";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";
