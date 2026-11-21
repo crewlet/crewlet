@@ -1,12 +1,13 @@
-package tools_test
+package redact_test
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A CALL'S ARGUMENTS AS A PERSON IS SHOWN THEM HOLD NO SECRET AND STAY ONE
@@ -39,17 +40,20 @@ func TestACallsArgumentsAsShownHoldNoSecretAndStayOneObject(t *testing.T) {
 		"path":        "internal/a.go",
 		"count":       json.Number("12345678901234567890"),
 	}
-	raw, err := tools.RecordArgs(tools.RedactedArgs(args))
+	text, err := plainjson.Marshal(redact.Args(args), "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := string(text)
 	for _, secret := range []string{aws, password, key, "9876543210987", sample["github-token"], "ghp_Zz9Zz9Zz9"} {
 		if strings.Contains(raw, secret[:min(len(secret), 12)]) {
 			t.Errorf("the arguments hold %q: %s", secret[:12], raw)
 		}
 	}
-	back := tools.ReadArgs(raw)
-	if back == nil {
+	var back map[string]any
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&back); err != nil || dec.More() {
 		t.Fatalf("the arguments are no longer one object: %s", raw)
 	}
 	tokens, _ := back["tokens"].(map[string]any)

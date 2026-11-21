@@ -353,9 +353,10 @@ type Sources struct {
 	RunAnswers *sandbox.AnswerSeal
 
 	// HeldCalls opens the arguments of a call a run holds for a person's
-	// approval (ADR-0077), for a reader who may approve it: an executor
-	// row's `held_arguments` and the MCP answer's `approvals`. Nil, or a
-	// seal that does not open here, answers them null.
+	// approval (ADR-0077): an executor row's `held_arguments` and the MCP
+	// answer's `approvals`, as sent to who may answer the call while it
+	// waits and redacted to every other reader. Nil, or a seal that does
+	// not open here, answers them null.
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE

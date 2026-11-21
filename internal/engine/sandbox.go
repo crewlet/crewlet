@@ -1857,7 +1857,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label, Withdrawn: asked.Withdrawn,
+		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited,
 	}
 	if refused := asked.Refused; refused != nil {
 		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
@@ -1878,7 +1878,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
 		// arguments, so they are opened for a deny as well.
 		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
-			args, err := seal.OpenArguments(held.TurnID, call)
+			args, err := seal.OpenRawArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
 				// node cannot open leaves the call unmade, and the run is
@@ -2814,7 +2814,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunUnresumable,
+		Unresumable: e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed
@@ -2849,10 +2849,12 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// FUNCTION FOR EVERY REASON, because to the indicator they are
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
-		Stopped: e.releaseWorkingStatus,
+		Stopped: e.runStopped,
 		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
-		// each finds it waiting (ADR-0125). See delegated.go.
-		Parked: e.wakeDelegates,
+		// each finds it waiting (ADR-0125), and a run parked by
+		// `wait_for_run` is watched until its run leaves (ADR-0176). See
+		// delegated.go and runwaits.go.
+		Parked: e.runParked,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.

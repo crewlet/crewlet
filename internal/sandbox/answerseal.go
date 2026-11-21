@@ -114,6 +114,11 @@ type AnswerWords struct {
 	// the row records in the clear, so a refusal never reads as a wordless
 	// answer, nor an answer as a refusal (ADR-0114).
 	Refusal *AnswerRefusal
+
+	// Waited is how the run a wait was for left its seat's slots, where the
+	// engine answered a run parked by `wait_for_run` (ADR-0176), nil
+	// otherwise; Text is then the engine's one sentence of it.
+	Waited *types.RunWaited
 }
 
 // attribution is who the resumed turn is told gave this answer: an answer by
@@ -149,6 +154,7 @@ type sealedAnswer struct {
 	Choice     string            `json:"choice"`
 	Label      *provenance.Label `json:"label"`
 	Refusal    *AnswerRefusal    `json:"refusal"`
+	Waited     *types.RunWaited  `json:"waited"`
 }
 
 // Seal is answer recording words as the answer to the question run's job
@@ -160,7 +166,7 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 	body, err := json.Marshal(sealedAnswer{
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
 		By: words.By, ByKind: words.ByKind, OperatorID: words.OperatorID, Text: words.Text,
-		Choice: words.Choice, Label: words.Label, Refusal: words.Refusal,
+		Choice: words.Choice, Label: words.Label, Refusal: words.Refusal, Waited: words.Waited,
 	})
 	if err != nil {
 		return RecordedAnswer{}, fmt.Errorf("sandbox: encoding the answer to run %s: %w", run.TurnID, err)
@@ -214,7 +220,7 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	}
 	return AnswerWords{Text: sealed.Text, Choice: sealed.Choice, Via: sealed.Via, By: sealed.By,
 		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID, Label: sealed.Label,
-		Refusal: sealed.Refusal}, nil
+		Refusal: sealed.Refusal, Waited: sealed.Waited}, nil
 }
 
 // refusalWord names what a seal or a row holds, for the error that says the two

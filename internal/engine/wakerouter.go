@@ -501,9 +501,10 @@ func (e *Engine) writtenOf(ctx context.Context, handle string, runs []sandbox.Pe
 }
 
 // routableRuns is the runs of runs a wake can be routed to: launched, in a status
-// that takes items.
+// that takes items. A copy: runs stays whole for a caller that also reads the
+// runs no wake routes to, a run parked on another ([Engine.beside]).
 func routableRuns(runs []sandbox.PendingRun) []sandbox.PendingRun {
-	return slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
+	return slices.DeleteFunc(slices.Clone(runs), func(run sandbox.PendingRun) bool {
 		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
 	})
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -245,5 +247,112 @@ func TestAHeldCallIsInFlightUntilItsAnswerIsCarriedOut(t *testing.T) {
 			t.Fatalf("recording the result: %v", err)
 		}
 		step("made", false)
+	}
+}
+
+// A HELD CALL'S ARGUMENTS OPEN REDACTED UNLESS ASKED FOR RAW. Every reader but
+// who consents to or makes the pending call reads OpenArguments, so a key in a
+// string, a password under its key and a provider token come back as markers
+// there, the rest as it was; OpenRawArguments gives back the bytes the call
+// would send, which the approval's digest is of.
+//
+// Mutation: return the opened arguments from OpenArguments without redact.Args,
+// and the secrets come back from it.
+func TestAHeldCallsArgumentsOpenRedactedUnlessAskedRaw(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	key, token := sample["anthropic-key"], sample["github-token"]
+	password := strings.TrimPrefix(sample["password"], "password: ")
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := NewCallSeal(cipher)
+	held := HeldCall{ID: "0190f3a8-0000-7000-8000-000000000009", LaunchID: "l1", Server: "ops", Raw: "run",
+		Digest: "sha256:d1"}
+	sent := map[string]any{"command": "curl -H 'x-api-key: " + key + "' https://example.com",
+		"password": password, "token": token, "path": "internal/a.go"}
+	if held.Arguments, err = seal.SealArguments("t1", held, sent); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := seal.OpenRawArguments("t1", held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest, _ := HeldArgumentsDigest(sent)
+	if got, _ := HeldArgumentsDigest(raw); got != wantDigest || raw["password"] != password {
+		t.Errorf("the raw arguments are %v, want the ones the call would send", raw)
+	}
+	shown, err := seal.OpenArguments("t1", held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{key, password, token} {
+		for name, v := range shown {
+			if s, _ := v.(string); strings.Contains(s, secret) {
+				t.Errorf("the arguments shown hold a secret under %q: %v", name, shown)
+			}
+		}
+	}
+	if shown["path"] != "internal/a.go" || !strings.Contains(shown["command"].(string), redact.Marker) {
+		t.Errorf("the arguments shown are %v, want the secrets as markers and the rest as it was", shown)
+	}
+}
+
+// A HELD CALL'S ARGUMENTS OPEN AS SENT ONLY TO WHO MAY ANSWER IT WHILE IT
+// WAITS, with the digest Allow once names; a reader who may not, and every
+// reader once the call is answered, get them redacted and no digest.
+//
+// Mutation: drop either arm of OpenArgumentsFor's rule, and a case reads the
+// token.
+func TestAHeldCallsArgumentsOpenAsSentOnlyToWhoMayAnswerItWhileItWaits(t *testing.T) {
+	t.Parallel()
+	var token string
+	for _, s := range redacttest.Shapes() {
+		if s.Name == "github-token" {
+			token = s.Sample
+		}
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := NewCallSeal(cipher)
+	held := HeldCall{ID: "0190f3a8-0000-7000-8000-00000000000a", LaunchID: "l1", Server: "ops", Raw: "run",
+		Digest: "sha256:d1"}
+	sent := map[string]any{"command": "deploy --token " + token}
+	if held.Arguments, err = seal.SealArguments("t1", held, sent); err != nil {
+		t.Fatal(err)
+	}
+	waiting := PendingRun{TurnID: "t1", LaunchID: "l1", Status: StatusAwaiting, HeldCall: &held,
+		Question: "May swe run it?"}
+	answered := waiting
+	answered.Status, answered.Answer = StatusResumed, &RecordedAnswer{RecordedAt: time.Now().UTC()}
+	wantDigest, _ := HeldArgumentsDigest(sent)
+	for _, c := range []struct {
+		name      string
+		run       PendingRun
+		mayAnswer bool
+		raw       bool
+	}{
+		{"who may answer it, while it waits", waiting, true, true},
+		{"who may not answer it, while it waits", waiting, false, false},
+		{"who may answer it, once answered", answered, true, false},
+		{"who may not answer it, once answered", answered, false, false},
+	} {
+		args, digest, err := seal.OpenArgumentsFor(c.run, c.mayAnswer)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		command, _ := args["command"].(string)
+		switch {
+		case c.raw && (command != sent["command"] || digest != wantDigest):
+			t.Errorf("%s reads %q with digest %q, want it as sent with its digest", c.name, command, digest)
+		case !c.raw && (strings.Contains(command, token) || !strings.Contains(command, redact.Marker) || digest != ""):
+			t.Errorf("%s reads %q with digest %q, want the token as a marker and no digest", c.name, command, digest)
+		}
 	}
 }

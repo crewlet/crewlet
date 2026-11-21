@@ -144,6 +144,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}); tool != nil {
 		c.AskTool = tool
 	}
+	// AND THE RUNS IN FLIGHT AROUND IT, which it lists, messages and waits
+	// for through the same rows (ADR-0176).
+	if desk := newRunsDesk(e); desk != nil {
+		c.RunsAround = desk
+	}
 	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
 	// sealed under the fleet keyring.
 	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher), heldActs{engine: e},

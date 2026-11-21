@@ -1,6 +1,8 @@
 package coord_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,8 +55,7 @@ func TestAnActivationIsSizedAtItsWidest(t *testing.T) {
 		Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api",
 			CreatedAt: time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)},
 	}
-	payload := []byte(`{"__encrypted__":"enc:v1:k1:abcd"}`)
-	sized, err := coord.ActivationBytes(request, payload)
+	sized, err := coord.ActivationBytes(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestAnActivationIsSizedAtItsWidest(t *testing.T) {
 		request.At, request.At.Add(123_456_789), request.At.Add(time.Second - time.Nanosecond),
 	} {
 		at := coord.ActivationAt(request.At, previous)
-		stored, err := coord.ActivationValue(request, payload, at)
+		stored, err := coord.ActivationValue(request, widest, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,14 +87,13 @@ func TestAnActivationsOriginIsSizedAtItsWidest(t *testing.T) {
 		RevisionID: "00000000-0000-0000-0000-000000000000", Summary: "a summary", At: checked,
 		Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api", CreatedAt: checked},
 	}
-	payload := []byte(`{"__encrypted__":"enc:v1:k1:abcd"}`)
-	sized, err := coord.ActivationBytes(request, payload)
+	sized, err := coord.ActivationBytes(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	written := checked.Add(123_456_789)
 	request.At, request.Origin.CreatedAt = written, written
-	stored, err := coord.ActivationValue(request, payload, written)
+	stored, err := coord.ActivationValue(request, widest, written)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,11 @@ func TestAnActivationsOriginIsSizedAtItsWidest(t *testing.T) {
 	// AND AN ORIGIN THAT NAMES NO INSTANT STILL ENCODES NONE: sized at the
 	// widest, a zero instant would count an instant the pointer never carries.
 	request.Origin.CreatedAt = time.Time{}
-	sized, err = coord.ActivationBytes(request, payload)
+	sized, err = coord.ActivationBytes(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err = coord.ActivationValue(request, payload,
+	stored, err = coord.ActivationValue(request, widest,
 		written.Truncate(time.Second).Add(time.Second-time.Nanosecond))
 	if err != nil {
 		t.Fatal(err)
@@ -117,5 +117,64 @@ func TestAnActivationsOriginIsSizedAtItsWidest(t *testing.T) {
 	if len(stored) != sized {
 		t.Errorf("a pointer whose origin names no instant is %d bytes at its widest, sized at %d",
 			len(stored), sized)
+	}
+}
+
+// widest names a body at what one key holds: the longest reference a pointer
+// carries, which ActivationBytes sizes every pointer with.
+var widest = coord.BodyRef{Bytes: coord.MaxValueBytes, SHA256: strings.Repeat("a", 64)}
+
+// A SUMMARY IS MEASURED AS THE POINTER ENCODES IT: a control byte is six
+// bytes there, a quote or a backslash two, and HTML is not escaped. Held at
+// coord.MaxSummaryBytes, refused a byte past as coord.ErrSummaryTooLong.
+//
+// Mutation: measure the summary raw, and the control bytes fit when encoded
+// they do not.
+func TestASummaryIsMeasuredAsThePointerEncodesIt(t *testing.T) {
+	t.Parallel()
+	for summary, want := range map[string]int{
+		"plain":      5,
+		"a<b && c>d": 10,
+		`say "hi"\`:  12,
+		"\x01\n":     8,
+		"caf\u00e9":  5,
+	} {
+		if got := coord.SummaryBytes(summary); got != want {
+			t.Errorf("SummaryBytes(%q) = %d, want %d", summary, got, want)
+		}
+	}
+	if err := coord.HoldSummary(strings.Repeat("s", coord.MaxSummaryBytes)); err != nil {
+		t.Errorf("a summary at the bound was refused: %v", err)
+	}
+	escaped := strings.Repeat("\x01", coord.MaxSummaryBytes/6+1)
+	if err := coord.HoldSummary(escaped); !errors.Is(err, coord.ErrSummaryTooLong) {
+		t.Errorf("a summary of %d control bytes, %d encoded, = %v, want coord.ErrSummaryTooLong",
+			len(escaped), coord.SummaryBytes(escaped), err)
+	}
+}
+
+// A POINTER WITH A SUMMARY AT ITS BOUND AND A FULL ORIGIN FITS ITS OWN BOUND,
+// so a write the summary bound admits is one both backends take: the pointer
+// bound is the backstop no valid writer reaches.
+//
+// Mutation: raise coord.MaxSummaryBytes to the pointer's bound, and it does
+// not fit.
+func TestAPointerWithASummaryAtItsBoundFits(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
+	size, err := coord.ActivationBytes(coord.ActivationRequest{
+		RevisionID: "00000000-0000-0000-0000-000000000000", At: at, Restore: true,
+		Summary: strings.Repeat("s", coord.MaxSummaryBytes),
+		Origin: coord.RevisionOrigin{Author: strings.Repeat("a", 256), AuthorKind: "operator",
+			OperatorID: "pat:" + strings.Repeat("0", 36), Source: "api", CreatedAt: at},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coord.HoldPointer(size); err != nil {
+		t.Errorf("a pointer of %d bytes with its summary at the bound was refused: %v", size, err)
+	}
+	if err := coord.HoldPointer(coord.MaxPointerBytes + 1); !errors.Is(err, coord.ErrValueTooLarge) {
+		t.Errorf("a pointer a byte past its bound = %v, want coord.ErrValueTooLarge", err)
 	}
 }

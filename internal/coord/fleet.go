@@ -3,6 +3,8 @@ package coord
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -323,7 +325,8 @@ type Activation struct {
 	// It is the coordination store's own revision of the pointer key, not
 	// a number this engine keeps: an append-only sequence the store
 	// assigns is the one counter two nodes activating at the same instant
-	// cannot both win.
+	// cannot both win. INCREASING, NEVER CONSECUTIVE: the body's write takes
+	// a revision of the same sequence, so no reader counts on a gap's size.
 	Epoch      int64
 	RevisionID string
 	At         time.Time
@@ -337,7 +340,65 @@ type Activation struct {
 	// the fleet had lost rather than choosing one ([ActivationRequest.Restore]).
 	// It describes this activation alone: the next write sets it again.
 	Restored bool
+
+	// Body names the revision's sealed document, which rides a key of its own
+	// ([Plane.Body]). Zero on a pointer written in the layout before bodies
+	// had keys, which no read of the body takes.
+	Body BodyRef
 }
+
+// BodyRef names an activation's body: its length and its SHA-256, which is
+// also its key, so one key is one set of bytes and two activations of the
+// same document share it. The length sizes the body's read
+// ([Plane.BodyCrossing]); the digest is what that read checks.
+type BodyRef struct {
+	Bytes  int    `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+// BodyOf is the reference to payload, a body in [CanonicalPayload]'s form.
+func BodyOf(payload json.RawMessage) BodyRef {
+	sum := sha256.Sum256(payload)
+	return BodyRef{Bytes: len(payload), SHA256: hex.EncodeToString(sum[:])}
+}
+
+// Named reports whether r names a body at all: a pointer written before
+// bodies had keys names none.
+func (r BodyRef) Named() bool { return r.SHA256 != "" }
+
+// Check refuses a reference no write makes, with [ErrBodyCorrupt]: a length
+// outside 1..[MaxValueBytes], or a digest that is not 64 lowercase hex digits.
+// Any admitted connection can write the pointer (ADR-0094), and the length
+// sizes a read and the posture's grace ([Plane.BodyCrossing]), so it is held
+// to its shape before either trusts it.
+func (r BodyRef) Check() error {
+	if r.Bytes < 1 || r.Bytes > MaxValueBytes {
+		return fmt.Errorf("%w: it names a body of %d bytes, outside 1 to %d",
+			ErrBodyCorrupt, r.Bytes, MaxValueBytes)
+	}
+	if len(r.SHA256) != sha256.Size*2 || strings.Trim(r.SHA256, "0123456789abcdef") != "" {
+		return fmt.Errorf("%w: it names the digest %q, which is not 64 lowercase hex digits",
+			ErrBodyCorrupt, textcut.Within(r.SHA256, sha256.Size*2))
+	}
+	return nil
+}
+
+// Describes reports whether payload is exactly the body r names, by length
+// and digest.
+func (r BodyRef) Describes(payload []byte) bool {
+	return len(payload) == r.Bytes && BodyOf(payload).SHA256 == r.SHA256
+}
+
+// ErrBodyless is an activation pointer that names no body: written by a build
+// from before bodies had keys of their own. Definite, never unavailable: no
+// retry changes it, one new write does.
+var ErrBodyless = errors.New("coord: the activation pointer names no body. Every node must run " +
+	"this build; then POST /config/reload publishes the company in the layout it reads")
+
+// ErrBodyCorrupt is a body whose bytes are not the ones its activation names:
+// another length or another digest. Definite, never unavailable: the key holds
+// the same bytes until it is written again.
+var ErrBodyCorrupt = errors.New("coord: the activation's body is not the bytes its pointer names")
 
 // RevisionOrigin is the record a revision was WRITTEN with, travelling with
 // the pointer so a peer adopting the revision keeps it.
@@ -526,13 +587,10 @@ type ActivationRequest struct {
 
 	Summary string
 
-	// Payload is the SEALED body, travelling IN the pointer's own write so
-	// a peer can apply the revision it names. Required, and a JSON object —
-	// a company document, which the caller has sealed into an envelope
-	// that is one ([CanonicalPayload]). It is carried as JSON rather than
-	// as bytes because it IS JSON: as bytes, the record encoded it as
-	// base64, and the envelope's ciphertext was base64 already, so every
-	// body went on the wire encoded twice and a third larger for nothing.
+	// Payload is the SEALED body, written under its own digest before the
+	// pointer that names it ([Plane.Activate]). Required, and a JSON object —
+	// a company document, which the caller has sealed into an envelope that
+	// is one ([CanonicalPayload]); held to [MaxValueBytes].
 	Payload json.RawMessage
 
 	// At is the instant the caller activated the revision at. The pointer
@@ -614,12 +672,10 @@ var ErrPayloadNotDocument = errors.New("coord: an activation's payload must be a
 // document COMPACTED, and otherwise byte for byte what the caller handed in —
 // no HTML escaping, no re-ordering.
 //
-// ONE FORM FOR BOTH BACKENDS, because the real one encodes the payload inside
-// a JSON record, and encoding/json compacts whatever it embeds: a twin that
-// kept the caller's whitespace would hand back bytes the broker never would,
-// and a case certified on the twin would be certifying a different store. A
-// sealed envelope is compact already, so for the one producer in production
-// this is the identity.
+// ONE FORM FOR BOTH BACKENDS, and the form a body's digest is taken over
+// ([BodyOf]): one document written with other whitespace is the same body
+// under the same key. A sealed envelope is compact already, so for the one
+// producer in production this is the identity.
 func CanonicalPayload(payload json.RawMessage) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
@@ -641,9 +697,9 @@ func CanonicalPayload(payload json.RawMessage) (json.RawMessage, error) {
 // who wrote it ([RevisionOrigin]). The record evolves additively: a later build
 // keeps every key with its meaning, because this build reads its pointer during
 // a rolling upgrade. In the contract, not the KV backend, because the pointer
-// is held to [MaxValueBytes]: the twin measures the bytes the KV would write,
-// so a document one backend takes the other takes (internal/api/configapi
-// checks the bound first).
+// is held to [MaxPointerBytes]: the twin measures the bytes the KV would write,
+// so a write one backend takes the other takes (internal/api/configapi checks
+// the bound first).
 type ActivationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
@@ -658,13 +714,10 @@ type ActivationRecord struct {
 	Source     string        `json:"source,omitempty"`
 	CreatedAt  time.Time     `json:"created_at,omitzero"`
 
-	// Payload is the revision's sealed body, IN the pointer so the two are
-	// one write (see [Plane.Activate] for the race two writes lost), and as
-	// the JSON object it is rather than as bytes, which the record would
-	// encode as base64 over an envelope whose ciphertext is base64 already.
-	// Every pointer carries one: an activation is refused without a body
-	// ([CanonicalPayload]).
-	Payload json.RawMessage `json:"payload,omitempty"`
+	// Body names the revision's sealed body, which rides its own key so
+	// every read of the pointer stays small ([MaxPointerBytes]). Every pointer
+	// this build writes names one.
+	Body BodyRef `json:"body"`
 
 	// Restored is [Activation.Restored]. Absent on a choice, which is every
 	// pointer but a boot's restore.
@@ -680,15 +733,13 @@ func (r ActivationRecord) Origin() RevisionOrigin {
 }
 
 // ActivationValue is the pointer's stored form for req — its origin, in UTC,
-// and its body payload with it — at the instant at, which is decided against
-// the pointer the write replaces ([ActivationAt]) and so is known only inside
-// the write: the one encoding every backend stores, and holds to
-// [MaxValueBytes].
+// and the body it names — at the instant at, which is decided against the
+// pointer the write replaces ([ActivationAt]) and so is known only inside the
+// write: the one encoding every backend stores, and holds to
+// [MaxPointerBytes].
 //
-// THE PAYLOAD IS EMBEDDED VERBATIM: encoding/json HTML-escapes what it embeds
-// unless told not to, and a body that came back with `<` spelled `\u003c`
-// would be a different body from the one [CanonicalPayload] promised.
-func ActivationValue(req ActivationRequest, payload json.RawMessage, at time.Time) ([]byte, error) {
+// NO HTML ESCAPING, so a summary is measured as written ([SummaryBytes]).
+func ActivationValue(req ActivationRequest, body BodyRef, at time.Time) ([]byte, error) {
 	origin := req.Origin.UTC()
 	var out bytes.Buffer
 	enc := json.NewEncoder(&out)
@@ -697,36 +748,41 @@ func ActivationValue(req ActivationRequest, payload json.RawMessage, at time.Tim
 		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
 		Author: origin.Author, AuthorKind: origin.AuthorKind, OperatorID: origin.OperatorID,
 		Source: origin.Source, CreatedAt: origin.CreatedAt,
-		Payload: payload, Restored: req.Restore,
+		Body: body, Restored: req.Restore,
 	}); err != nil {
 		return nil, fmt.Errorf("encode the activation: %w", err)
 	}
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
-// ActivationBytes is how large the pointer's value for req, its body payload,
-// is at its widest: [ActivationValue] with both its instants, the pointer's
-// and its origin's, written with every fractional digit an instant encodes. A
+// ActivationBytes is how large the pointer's value for req is at its widest:
+// [ActivationValue] naming the largest body a key holds, with both its
+// instants, the pointer's and its origin's, written with every fractional
+// digit an instant encodes. A
 // store moves the pointer's instant forward past the pointer it replaces
 // ([ActivationAt]), and a later instant can encode longer — a millisecond on,
 // ".1Z" is ".101Z" — while a config write's dry run sizes the pointer its
 // write would make at an instant before that write's own, the origin's
-// included. So a request this sizes within [MaxValueBytes] is one the store
+// included. So a request this sizes within [MaxPointerBytes] is one the store
 // takes at whatever instants it is written at. For a caller holding a write to
 // the bound before it commits to anything (internal/api/configapi), which has
-// no instant but its own.
-func ActivationBytes(req ActivationRequest, payload json.RawMessage) (int, error) {
+// no instant but its own, and for both backends.
+func ActivationBytes(req ActivationRequest) (int, error) {
 	if !req.Origin.CreatedAt.IsZero() {
 		// A ZERO ORIGIN INSTANT STAYS ZERO: an origin that names none
 		// encodes none ([RevisionOrigin.UTC]).
 		req.Origin.CreatedAt = widestIn(req.Origin.CreatedAt)
 	}
-	value, err := ActivationValue(req, payload, widestIn(req.At))
+	value, err := ActivationValue(req, widestBody, widestIn(req.At))
 	if err != nil {
 		return 0, err
 	}
 	return len(value), nil
 }
+
+// widestBody names a body at [MaxValueBytes], the longest reference a pointer
+// carries.
+var widestBody = BodyRef{Bytes: MaxValueBytes, SHA256: strings.Repeat("f", sha256.Size*2)}
 
 // widestIn is the last instant of t's second, in UTC: the instant in it that
 // encodes with every fractional digit an instant has.
@@ -744,33 +800,37 @@ var ErrActivationRaced = errors.New("coord: the activation moved under this writ
 
 // Plane is the fleet's config activation pointer and per-node apply status.
 type Plane interface {
-	// Activate points the fleet at a revision and publishes its PAYLOAD in the
-	// same write, returning the activation with the store's epoch (the pointer
-	// key's revision, so no two activations share one).
+	// Activate points the fleet at a revision, returning the activation with
+	// the store's epoch (the pointer key's revision) and the body it names.
 	//
-	// Pointer and payload are ONE record: as two keys, concurrent activations
-	// (booting nodes, an edit whose body landed before its compare-and-set was
-	// refused) left a pointer naming an overwritten body, and every peer read
-	// "no such revision". The payload is sealed by the caller and never opened
-	// here; only that it IS a document is checked ([ErrPayloadNotDocument]).
-	//
-	// [ActivationRequest.Expect] gives the loser of two concurrent edits
-	// [ErrActivationRaced], not a silent overwrite.
+	// THE BODY FIRST, under its digest; then the pointer, which names it; and
+	// no body is removed while a pointer names it or a flip could still name
+	// it ([BodyRetention]). Content addressed, two writers' bodies are two keys
+	// unless they are one document, so no flip names a body another overwrote.
+	// The payload is sealed by the caller; only that it IS a document is
+	// checked ([ErrPayloadNotDocument]). [ActivationRequest.Expect] gives the
+	// loser of two concurrent edits [ErrActivationRaced].
 	Activate(ctx context.Context, req ActivationRequest) (Activation, error)
 
-	// Payload returns the sealed payload of the revision the fleet is
-	// pointed at, and false when the store holds a DIFFERENT revision's.
+	// Body returns the sealed body a's pointer names, in [CanonicalPayload]'s
+	// form, read given the time its recorded size takes to arrive
+	// ([Plane.BodyCrossing]). False when the key is gone: the pointer moved on
+	// and the sweep removed it, so the caller reads the pointer again.
 	//
-	// Only the current one is kept: a lagging node needs exactly the revision
-	// the pointer names, so a history would grow unbounded in a bucket with
-	// no retention. History and diffs live in each node's company_config
-	// table. What comes back is [CanonicalPayload]'s form.
-	//
-	// RAISES on an unreachable store, as [Plane.Target] does: "a revision I
-	// cannot build" and "I cannot reach the store" are opposite paths.
-	Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error)
+	// Exactly the bytes a names, or [ErrBodyCorrupt]; a pointer naming no body
+	// is [ErrBodyless]. RAISES on an unreachable store, as [Plane.Target]
+	// does: "a revision I cannot build" and "I cannot reach the store" are
+	// opposite paths.
+	Body(ctx context.Context, a Activation) (json.RawMessage, bool, error)
 
-	// Target reads the pointer, reporting whether one has ever been set.
+	// BodyCrossing is how long a's body takes to cross this node's connection
+	// to the store at the slowest pace allowed: none in process. No I/O. A
+	// node is behind for at least this while it reads the body, which the
+	// posture counts (internal/configplane's FleetView).
+	BodyCrossing(a Activation) time.Duration
+
+	// Target reads the pointer, reporting whether one has ever been set. The
+	// pointer is small, so the read is.
 	//
 	// RAISES rather than answering empty: "nothing has been activated" and
 	// "the store cannot be read" send a node down opposite paths, and
@@ -1508,12 +1568,21 @@ type Markers interface {
 	// record families no clock ages, reporting how many went. A failure
 	// part-way reports the markers already removed beside the error.
 	//
-	// It also removes a part ([RunParts]) written before cutoff whose
-	// sandbox run's record is gone, which a removal leaves behind when its
-	// node stops between the two ([SandboxRuns]). Whether the run has a
-	// record is read after the part is found, so a record written under the
-	// turn again keeps its parts.
+	// It also removes a part ([RunParts]) written before cutoff whose run's
+	// record, read after the part is found, is gone ([SandboxRuns]).
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// ActivationBodies is the sweep of the activation's bodies no pointer names,
+// at its own horizon ([BodyRetention]), under the maintenance duty.
+type ActivationBodies interface {
+	// SweepBodies removes every body ([Plane.Body]) written before cutoff
+	// that the pointer, read after the body is found, does not name,
+	// reporting how many went. A flip names a body written at most half of
+	// [BodyRetention] before it, so a cutoff [BodyRetention] back never
+	// removes a body a flip in flight will name. The one answer it changes:
+	// the body of an activation the pointer moved past becomes absent.
+	SweepBodies(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // Fleet is a backend that serves all of the shared state, which is what the
@@ -1569,6 +1638,7 @@ type Fleet interface {
 	BackupRegister
 	MaintenanceRegister
 	Markers
+	ActivationBodies
 	Custody
 	UploadReservations
 	SaveAllowances

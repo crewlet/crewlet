@@ -476,7 +476,18 @@ type Wake struct {
 	// triage found it information about the work (ADR-0168), which the run
 	// may read and answer, never a request it acts on (ADR-0109).
 	Informs bool
+
+	// FromRun and FromSeat are the run that sent it with `message_run` and
+	// that run's seat, "" for a wake from the seat's inbox (ADR-0176): a
+	// message from a run working for the same requester, read as information
+	// and never a request. By names that requester, Label is the sending
+	// executor's ([provenance.Executor]), and it carries no keys, owes nothing
+	// and names no conversation.
+	FromRun, FromSeat string
 }
+
+// FromARun reports whether w is a message another run sent ([Wake.FromRun]).
+func (w Wake) FromARun() bool { return w.FromRun != "" }
 
 // Joined is the agent_turn_joined record of what became of w, handed to job:
 // outcome, at the step at names, nil where no step is known. THE ONE

@@ -145,7 +145,8 @@ const (
 
 	// SourceExecutor is what a seat's executor said to a person: the
 	// question it stopped to ask, the context it gave with it and the
-	// options it offered. The harness writes it in the seat's name, and
+	// options it offered; or to another run, a message it sent with
+	// `message_run` (ADR-0176). The harness writes it in the seat's name, and
 	// it is neither a message in a room nor a colleague's ask — the run
 	// reached nobody through either, and a reader auditing a transcript has
 	// to tell it from both. Every door labels it by one rule ([Executor]).

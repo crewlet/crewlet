@@ -1368,9 +1368,9 @@ export interface McpHeldWhole {
   launch_id: string;
   question: string;
   context: string;
-  /** Every argument the call would send, opened from its seal. */
+  /** Every argument the call would send, opened from its seal; redacted once it is answered. */
   arguments: Record<string, unknown>;
-  /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it. */
+  /** What Allow once of a call read whole names, so it is given only from a surface that showed all of it; "" once answered. */
   arguments_sha256: string;
 }
 

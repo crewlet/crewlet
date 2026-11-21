@@ -64,8 +64,8 @@ func (s *lostSpy) seen() []lostCall {
 }
 
 // askedBy is the ask a colleague put to the turn every case here launches.
-var askedBy = ColleagueAsk{ChannelID: "a2a-1", Question: "Which branch carries the fix?",
-	Chain: []string{"ceo"}}
+var askedBy = ColleagueAsk{ChannelID: "a2a-1", Chain: []string{"ceo"}}.
+	WithQuestion("Which branch carries the fix?")
 
 // launchAsked launches a running run for a turn a colleague's ask woke, its row
 // carrying the ask as a real launch writes it ([TurnRef.ColleagueAsk]).
@@ -111,7 +111,7 @@ func TestALostRunHandsItsTurnToTheEngineBeforeItsRecordGoes(t *testing.T) {
 	}
 	got := calls[0]
 	if got.run.ColleagueAsk == nil || got.run.ColleagueAsk.ChannelID != askedBy.ChannelID ||
-		got.run.ColleagueAsk.Question != askedBy.Question {
+		got.run.ColleagueAsk.RawQuestion() != askedBy.RawQuestion() {
 		t.Errorf("the engine was handed ask %+v, want the one the turn's row carries", got.run.ColleagueAsk)
 	}
 	if got.run.Ending == nil || got.run.Ending.Reason != types.ExecutorFailureCollect ||
