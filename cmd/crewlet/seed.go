@@ -467,16 +467,16 @@ func (s tierBSeed) is(opened []byte) (bool, error) {
 }
 
 // isFleets reports whether the seed's file is the revision the fleet's pointer
-// names, read from the pointer's own payload as a peer's reconciler reads it,
+// names, read from the body the pointer names as a peer's reconciler reads it,
 // and answers that revision as this node's history would keep it.
 //
-// An error is a comparison that could not be made — the payload is gone with
-// a pointer that moved since it was read, or it does not open under this
+// An error is a comparison that could not be made — the body is gone with a
+// pointer that moved on since it was read, or it does not open under this
 // node's keyring — and never a claim that the two differ.
 func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane,
 	target coord.Activation, cipher secrets.Cipher) (bool, store.Revision, error) {
 
-	payload, found, err := plane.Payload(ctx, target.RevisionID)
+	payload, found, err := plane.Body(ctx, target)
 	if err != nil {
 		return false, store.Revision{}, fmt.Errorf("read the fleet's revision %s: %w",
 			target.RevisionID, err)

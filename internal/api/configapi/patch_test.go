@@ -654,15 +654,15 @@ func TestAStalePreconditionIsStillRefused(t *testing.T) {
 
 // A DOCUMENT ITS ACTIVATION CANNOT CARRY IS REFUSED BEFORE ANYTHING IS STORED.
 //
-// The document reaches every node sealed inside the activation pointer, one
+// The document reaches every node sealed as the activation's body, one
 // coordination value held to coord.MaxValueBytes. A patch grows the active
 // document by up to a body each time and the seal adds a third, so one past
-// the pointer's bound was stored as history no node could activate. Here a
-// 2.5 MiB document is patched past six, each body inside its bound: the write
-// is refused as too large, naming both sizes, and no revision is stored.
+// the bound was stored as history no node could activate. Here a 2.5 MiB
+// document is patched past six, each body inside its bound: the write is
+// refused as too large, naming both sizes, and no revision is stored.
 //
-// Mutation: hold the document to the pointer's bound only after the revision
-// is stored, or not at all, and a revision is kept that nothing can activate.
+// Mutation: hold the document to the bound only after the revision is stored,
+// or not at all, and a revision is kept that nothing can activate.
 func TestADocumentItsActivationCannotCarryIsRefusedBeforeAnythingIsStored(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -689,7 +689,7 @@ func TestADocumentItsActivationCannotCarryIsRefusedBeforeAnythingIsStored(t *tes
 		t.Fatalf("decode the refusal: %v", err)
 	}
 	if body["error"] != "body_too_large" || body["document_bytes"] == nil ||
-		body["pointer_bytes"] == nil || body["max_pointer_bytes"] != float64(coord.MaxValueBytes) {
+		body["body_bytes"] == nil || body["max_body_bytes"] != float64(coord.MaxValueBytes) {
 		t.Errorf("the refusal does not say what was too large, and by how much: %s", res.Body.String())
 	}
 	if after := s.revisionCount(t); after != before {

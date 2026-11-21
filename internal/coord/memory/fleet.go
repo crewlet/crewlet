@@ -164,10 +164,20 @@ type Fleet struct {
 	// that bug.
 	version uint64
 
-	epoch   int64
-	target  coord.Activation
-	set     bool
+	epoch  int64
+	target coord.Activation
+	set    bool
+
+	// bodies is every activation body written, by digest, with the instant
+	// of its last write, until [Fleet.SweepMarkers] removes one no pointer
+	// names: the KV's content-addressed keys.
+	bodies map[string]storedBody
+}
+
+// storedBody is one activation body and when it was last written.
+type storedBody struct {
 	payload json.RawMessage
+	at      time.Time
 }
 
 // windowKey is one window's count: the counter's name, the window's width and
@@ -237,6 +247,7 @@ func NewFleet() *Fleet {
 		grants:            newGrantRecords(),
 		mcpSignIns:        newMCPSignInRecords(),
 		accepted:          newAcceptedRecords(),
+		bodies:            map[string]storedBody{},
 	}
 }
 
@@ -436,43 +447,58 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
-	// The payload and the pointer in one step, as the KV writes them in
-	// one record (see [coord.Plane.Activate]). THE INSTANT IS DECIDED UNDER
-	// THE SAME MUTEX as the compare, against the pointer being replaced —
-	// see [coord.ActivationAt].
+	// HELD TO THE KV's BOUNDS, the body to what one key holds and the
+	// pointer, at its widest, to its own, refused before anything changes.
+	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+		return coord.Activation{}, err
+	}
+	size, err := coord.ActivationBytes(req)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err = coord.HoldPointer(size); err != nil {
+		return coord.Activation{}, err
+	}
+	// The body, then the pointer, as the KV writes them (see
+	// [coord.Plane.Activate]), here in one step under the mutex. THE INSTANT
+	// IS DECIDED UNDER THE SAME MUTEX as the compare, against the pointer
+	// being replaced — see [coord.ActivationAt].
 	var previous time.Time
 	if f.set {
 		previous = f.target.At
 	}
 	at := coord.ActivationAt(req.At, previous)
-	// HELD TO WHAT ONE KEY HOLDS by the very record the KV writes for it,
-	// refused before anything here changes.
-	value, err := coord.ActivationValue(req, payload, at)
-	if err != nil {
-		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
-	}
-	if err := coord.HoldValue("the activation pointer", len(value)); err != nil {
-		return coord.Activation{}, err
-	}
-	f.payload = payload
+	body := coord.BodyOf(payload)
+	f.bodies[body.SHA256] = storedBody{payload: payload, at: time.Now()}
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID, At: at, Summary: req.Summary,
-		Origin: req.Origin.UTC(), Restored: req.Restore,
+		Origin: req.Origin.UTC(), Restored: req.Restore, Body: body,
 	}
 	f.set = true
 	return f.target, nil
 }
 
-// Payload returns the current revision's sealed payload.
-func (f *Fleet) Payload(_ context.Context, revisionID string) (json.RawMessage, bool, error) {
+// Body returns the body a names, false once the sweep removed it.
+func (f *Fleet) Body(_ context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	if !a.Body.Named() {
+		return nil, false, fmt.Errorf("coord/memory: read the body of %s: %w", a.RevisionID, coord.ErrBodyless)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.set || f.target.RevisionID != revisionID || f.payload == nil {
+	stored, found := f.bodies[a.Body.SHA256]
+	if !found {
 		return nil, false, nil
 	}
-	return slices.Clone(f.payload), true, nil
+	if !a.Body.Holds(stored.payload) {
+		return nil, false, fmt.Errorf("coord/memory: the body %s is not the %d bytes the "+
+			"activation of %s names: %w", a.Body.SHA256, a.Body.Bytes, a.RevisionID, coord.ErrBodyCorrupt)
+	}
+	return slices.Clone(stored.payload), true, nil
 }
+
+// BodyCrossing is none: the twin is in the node's own process.
+func (f *Fleet) BodyCrossing(coord.Activation) time.Duration { return 0 }
 
 // Target reads the pointer.
 func (f *Fleet) Target(context.Context) (coord.Activation, bool, error) {
@@ -1377,9 +1403,22 @@ func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
 	return out
 }
 
-// SweepMarkers removes nothing, because the twin keeps no markers: a delete
-// here removes the entry from its map, so the state a KV backend reaches only
-// after its sweep is the state this one is always in. That is the contract's
-// promise read from the other side — sweeping changes no answer — and the
-// suite holds both backends to it.
-func (f *Fleet) SweepMarkers(context.Context, time.Time) (int64, error) { return 0, nil }
+// SweepMarkers removes the activation bodies written before cutoff that the
+// pointer does not name, as the KV's sweep does, and no marker, because the
+// twin keeps none: a delete here removes the entry from its map, so the state a
+// KV backend reaches only after its sweep is the state this one is always in.
+// That is the contract's promise read from the other side — sweeping changes
+// no answer — and the suite holds both backends to it.
+func (f *Fleet) SweepMarkers(_ context.Context, cutoff time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var swept int64
+	for digest, body := range f.bodies {
+		if (f.set && digest == f.target.Body.SHA256) || !body.at.Before(cutoff) {
+			continue
+		}
+		delete(f.bodies, digest)
+		swept++
+	}
+	return swept, nil
+}

@@ -1201,7 +1201,7 @@ func refuses(t *testing.T, db *store.DB, plane coord.Plane) {
 	if err != nil || !pointed {
 		t.Fatalf("the tick's read of the pointer: pointed=%v err=%v", pointed, err)
 	}
-	payload, found, err := plane.Payload(t.Context(), target.RevisionID)
+	payload, found, err := plane.Body(t.Context(), target)
 	if err != nil || !found {
 		t.Fatalf("the tick's read of revision %s: found=%v err=%v", target.RevisionID, found, err)
 	}

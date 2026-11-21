@@ -1601,9 +1601,11 @@ func (s *stubProfiles) Count(context.Context, string) (int, error) { return len(
 // fleet view has to survive one of its columns being unreadable.
 type brokenPlane struct{}
 
-func (brokenPlane) Payload(context.Context, string) (json.RawMessage, bool, error) {
+func (brokenPlane) Body(context.Context, coord.Activation) (json.RawMessage, bool, error) {
 	return nil, false, errUnreadablePlane
 }
+
+func (brokenPlane) BodyCrossing(coord.Activation) time.Duration { return 0 }
 
 func (brokenPlane) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
 	return coord.Activation{}, errUnreadablePlane

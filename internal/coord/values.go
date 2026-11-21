@@ -1,6 +1,8 @@
 package coord
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -16,8 +18,8 @@ import (
 // 6,290,688-byte read (internal/jsapi's MaxReadable) beside the most header a
 // key's write carries, which internal/coord/kv derives and holds this figure
 // to. It binds a sandbox run's row and parts (internal/sandbox's RowBytes) and
-// the activation pointer ([ActivationValue], held by internal/api/configapi);
-// other records' own fields keep them far below it.
+// the activation's body, the company document sealed ([BodyRef], held by
+// internal/api/configapi); other records' own fields keep them far below it.
 const MaxValueBytes = 6_290_542
 
 // MaxValueCrossing is the longest a CHANGE of a run's value at [MaxValueBytes],
@@ -52,4 +54,64 @@ func HoldValue(key string, size int) error {
 	return fmt.Errorf("%w: %d bytes for %s, past the %d one key holds — every read of a key "+
 		"carries its value base64-encoded in one reply, which a leaf's link closes on past the "+
 		"transport", ErrValueTooLarge, size, key, MaxValueBytes)
+}
+
+// MaxPointerBytes is the most the activation pointer may be ([ActivationValue]):
+// every probe, heartbeat and tick on every node reads it, so its read must
+// cross a link at the slowest pace allowed inside a probe's 1.875 s. At this
+// bound a read's reply (internal/jsapi's ReplyBytes, the most write header
+// included) is 12,144 bytes: 0.35 s at the floor. Its fixed fields take under 600 bytes and
+// [MaxSummaryBytes] 4 KiB, so the rest is room for an origin no valid one
+// approaches. The company document rides its own key, named by the pointer.
+const MaxPointerBytes = 8 << 10
+
+// MaxSummaryBytes is the most a revision's summary may take in the activation
+// pointer, measured as the pointer encodes it ([SummaryBytes]). Half the
+// pointer, and above the longest summary a writer composes (crewlet-operator's,
+// at 2,722 bytes). A caller's summary past it is refused where it enters
+// ([HoldSummary]), never cut: it is that person's words.
+const MaxSummaryBytes = 4 << 10
+
+// BodyRetention is how long the activation's body a pointer no longer names
+// stays before the marker sweep removes it ([Markers.SweepMarkers]). A write
+// flips the pointer to its body no later than half of this after it wrote the
+// body, so the sweep never removes a body a flip still in flight will name
+// (internal/coord/kv's Activate, ADR-0175).
+const BodyRetention = MarkerRetention
+
+// ErrSummaryTooLong is a revision summary past [MaxSummaryBytes], refused
+// before anything is written: a definite answer that names the summary, since
+// only a shorter summary changes it.
+var ErrSummaryTooLong = errors.New("coord: a revision summary past what the activation pointer carries")
+
+// SummaryBytes is how many bytes summary takes in the activation pointer: its
+// JSON encoding without the quotes, so an escaped byte counts as written (a
+// control byte is six).
+func SummaryBytes(summary string) int {
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	// A string always encodes.
+	_ = enc.Encode(summary)
+	return out.Len() - len("\"\"\n")
+}
+
+// HoldSummary refuses a summary past [MaxSummaryBytes] with [ErrSummaryTooLong],
+// naming its size as the pointer encodes it; nil for one that fits.
+func HoldSummary(summary string) error {
+	if n := SummaryBytes(summary); n > MaxSummaryBytes {
+		return fmt.Errorf("%w: %d bytes as the pointer encodes it, past the %d it may take",
+			ErrSummaryTooLong, n, MaxSummaryBytes)
+	}
+	return nil
+}
+
+// HoldPointer refuses an activation pointer of size bytes past
+// [MaxPointerBytes] with [ErrValueTooLarge]; nil for one that fits.
+func HoldPointer(size int) error {
+	if size <= MaxPointerBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: %d bytes for the activation pointer, past the %d it may be, since every "+
+		"probe on every node reads it", ErrValueTooLarge, size, MaxPointerBytes)
 }

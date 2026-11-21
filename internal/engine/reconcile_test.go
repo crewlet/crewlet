@@ -428,9 +428,9 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Target: found=%v err=%v", found, err)
 	}
-	payload, found, err := p.fleet.Payload(t.Context(), target.RevisionID)
+	payload, found, err := p.fleet.Body(t.Context(), target)
 	if err != nil || !found {
-		t.Fatalf("Payload: found=%v err=%v", found, err)
+		t.Fatalf("Body: found=%v err=%v", found, err)
 	}
 	// The pointer is append-only, so re-activating the SAME revision mints a
 	// new epoch every node watches: how a rotated secret reaches the fleet.
@@ -559,7 +559,7 @@ func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) 
 			if err != nil {
 				t.Fatalf("Target: %v", err)
 			}
-			payload, _, err := p.fleet.Payload(t.Context(), target.RevisionID)
+			payload, _, err := p.fleet.Body(t.Context(), target)
 			if err != nil {
 				t.Fatalf("Payload: %v", err)
 			}
@@ -1464,8 +1464,12 @@ func (s *swappablePlane) Target(ctx context.Context) (coord.Activation, bool, er
 	return s.plane().Target(ctx)
 }
 
-func (s *swappablePlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
-	return s.plane().Payload(ctx, revisionID)
+func (s *swappablePlane) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	return s.plane().Body(ctx, a)
+}
+
+func (s *swappablePlane) BodyCrossing(a coord.Activation) time.Duration {
+	return s.plane().BodyCrossing(a)
 }
 
 func (s *swappablePlane) RecordApply(ctx context.Context, status coord.NodeApply) error {
@@ -1548,9 +1552,9 @@ type heldPayload struct {
 	entered  chan struct{}
 }
 
-func (h *heldPayload) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
-	payload, found, err := h.Plane.Payload(ctx, revisionID)
-	if revisionID == h.revision {
+func (h *heldPayload) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	payload, found, err := h.Plane.Body(ctx, a)
+	if a.RevisionID == h.revision {
 		h.once.Do(func() {
 			close(h.entered)
 			h.during()
@@ -1600,13 +1604,12 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	}
 }
 
-// bodiless is a plane whose pointer names a revision it holds no body for,
-// which the store cannot produce (the body is written in the pointer's own
-// record): what a node sees when the pointer moved between its reads of the
-// target and the body.
+// bodiless is a plane whose pointer names a body it no longer holds: what a
+// node sees when the pointer moved on between its reads of the target and the
+// body, and the sweep took the body.
 type bodiless struct{ coord.Plane }
 
-func (bodiless) Payload(context.Context, string) (json.RawMessage, bool, error) {
+func (bodiless) Body(context.Context, coord.Activation) (json.RawMessage, bool, error) {
 	return nil, false, nil
 }
 
@@ -2540,14 +2543,14 @@ type midApplyPlane struct {
 	withheld atomic.Pointer[string]
 }
 
-func (m *midApplyPlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+func (m *midApplyPlane) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
 	if fn := m.during.Load(); fn != nil {
 		(*fn)()
 	}
-	if id := m.withheld.Load(); id != nil && *id == revisionID {
+	if id := m.withheld.Load(); id != nil && *id == a.RevisionID {
 		return nil, false, nil
 	}
-	return m.planeBackend.Payload(ctx, revisionID)
+	return m.planeBackend.Body(ctx, a)
 }
 
 // observe makes fn the window's observer.

@@ -49,6 +49,7 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 	var unknown *ActivationUnknownError
 	var invalid *ValidationError
 	var tooLarge *DocumentTooLargeError
+	var tooLong *SummaryTooLongError
 	switch {
 	case errors.As(err, &raced):
 		return &Reloaded{Error: httpjson.CodeRevisionAdvanced, StoredRevisionID: raced.Stored,
@@ -68,16 +69,20 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 				"be re-activated as it stands: " + invalid.Err.Error()}
 	case errors.As(err, &tooLarge):
 		// REFUSED FOR ITS SIZE, before anything was stored: the active
-		// company, sealed into the activation pointer beside this
-		// re-activation's own summary, makes a pointer past what one key of
-		// the coordination store holds. A definite answer, never a fault this
-		// node's log alone could explain.
+		// company, sealed, is past what one key of the coordination store
+		// holds. A definite answer, never a fault this node's log alone could
+		// explain.
 		return &Reloaded{Error: httpjson.CodeBodyTooLarge,
-			Detail: fmt.Sprintf("the active company, sealed into the activation pointer beside "+
-				"this re-activation's summary, makes a pointer of %d bytes, past the %d one key "+
+			Detail: fmt.Sprintf("the active company, sealed, is %d bytes, past the %d one key "+
 				"of the coordination store holds, so it was not re-activated; the value is "+
 				"sealed: make the company document smaller, then POST /config/reload "+
-				"re-activates it", tooLarge.PointerBytes, coord.MaxValueBytes)}
+				"re-activates it", tooLarge.BodyBytes, coord.MaxValueBytes)}
+	case errors.As(err, &tooLong):
+		return &Reloaded{Error: httpjson.CodeSummaryTooLong,
+			Detail: fmt.Sprintf("the re-activation's summary is %d bytes as the activation pointer "+
+				"encodes it, past the %d it may take, so it was not re-activated; the value is "+
+				"sealed: POST /config/reload with a shorter X-Summary re-activates it",
+				tooLong.SummaryBytes, coord.MaxSummaryBytes)}
 	case errors.Is(err, ErrNoActiveRevision):
 		return &Reloaded{Error: httpjson.CodeNoActiveRevision,
 			Detail: "the fleet runs no company to re-activate"}
