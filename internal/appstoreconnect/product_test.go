@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -31,14 +32,51 @@ type store struct {
 	state    string
 	reviewed string
 	writes   []string
+	// kids is each request's key, "METHOD path kid", from its token's header.
+	kids []string
+	// analytics is the apps holding an ongoing analytics request.
+	analytics map[string]bool
+}
+
+// kidOf is the key ID a request's bearer token names.
+func kidOf(r *http.Request) string {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	head, _, _ := strings.Cut(token, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(head)
+	if err != nil {
+		return ""
+	}
+	var h struct {
+		Kid string `json:"kid"`
+	}
+	_ = json.Unmarshal(raw, &h)
+	return h.Kid
 }
 
 func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	body, _ := io.ReadAll(r.Body)
+	s.kids = append(s.kids, r.Method+" "+r.URL.Path+" "+kidOf(r))
 	w.Header().Set("X-Rate-Limit", "user-hour-lim:3500;user-hour-rem:3400;")
 	switch {
+	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/apps/") && strings.HasSuffix(r.URL.Path, "/analyticsReportRequests"):
+		if s.analytics[strings.Split(r.URL.Path, "/")[3]] {
+			_, _ = io.WriteString(w, `{"data": [{"type": "analyticsReportRequests", "id": "Q1", "attributes": {"accessType": "ONGOING", "stoppedDueToInactivity": false}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data": []}`)
+	case r.Method == "POST" && r.URL.Path == "/v1/analyticsReportRequests":
+		s.writes = append(s.writes, "analytics")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"data": {"type": "analyticsReportRequests", "id": "Q2"}}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/users":
+		_, _ = io.WriteString(w, `{"data": [{"type": "users", "id": "U1", "attributes": {"roles": ["MARKETING"]}}]}`)
+	case r.Method == "GET" && r.URL.Path == "/v1/users/U1":
+		_, _ = io.WriteString(w, `{"data": {"type": "users", "id": "U1", "attributes": {"roles": ["MARKETING"]}}}`)
+	case r.Method == "DELETE" && r.URL.Path == "/v1/users/U1":
+		s.writes = append(s.writes, "delete U1")
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == "GET" && r.URL.Path == "/v1/apps":
 		_, _ = io.WriteString(w, `{"data": [{"type": "apps", "id": "111", "attributes": {"name": "Notes", "bundleId": "com.example.notes"}},
 			{"type": "apps", "id": "222", "attributes": {"name": "Other", "bundleId": "com.example.other"}}]}`)
@@ -130,6 +168,16 @@ func (a *audit) Failed(_ context.Context, r growth.Record) (bool, error) {
 
 func product(t *testing.T, s *store, level string, team bool) (*appstoreconnect.Product, *audit) {
 	t.Helper()
+	return productKeys(t, s, level, team, nil)
+}
+
+// adminKeyID is the Admin slot's key ID in productKeys.
+const adminKeyID = "A1B2C3D4E5"
+
+// productKeys is product with admin's key in the Admin slot too, where set.
+func productKeys(t *testing.T, s *store, level string, team bool, admin *config.AppStoreConnectKey) (
+	*appstoreconnect.Product, *audit) {
+	t.Helper()
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
 	on := true
@@ -140,7 +188,8 @@ func product(t *testing.T, s *store, level string, team bool) (*appstoreconnect.
 				VendorNumber: "85012345", Keys: config.AppStoreConnectKeys{
 					Marketing:       &config.AppStoreConnectKey{KeyID: "2X9R4HXF34", PrivateKey: "${K}"},
 					CustomerSupport: &config.AppStoreConnectKey{KeyID: "K1L2M3N4P5", PrivateKey: "${K}"},
-					Finance:         &config.AppStoreConnectKey{KeyID: "9A8B7C6D5E", PrivateKey: "${K}"}}}}}},
+					Finance:         &config.AppStoreConnectKey{KeyID: "9A8B7C6D5E", PrivateKey: "${K}"},
+					Admin:           admin}}}}},
 		Roles: []config.Role{{Name: "Growth", Handle: "growth", Integrations: config.RoleIntegrations{
 			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"},
 				TeamResources: team}}}},
@@ -319,6 +368,107 @@ func TestSalesArePerCurrencyAndCutToTheSeatsApps(t *testing.T) {
 	for _, r := range sales.Rows {
 		if (r.Currency == "USD" && (r.Units != 2 || r.Proceeds != "1.4")) || (r.Currency == "JPY" && r.Proceeds != "200") {
 			t.Errorf("row %+v", r)
+		}
+	}
+}
+
+// THE ADMIN KEY MAKES ACCOUNT CHANGES AN ADMINISTRATOR ALLOWS, AND NOTHING
+// ELSE: a read goes through another key, or is refused where only the Admin
+// key could make it, even as the one key that would work; an admin act is
+// prepared and applied through it with the card never calling with it; and
+// every step names the key it went through.
+//
+// Mutation: let keyFor take the Admin slot for any call, and the read of the
+// team's certificates goes through the Admin key.
+func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
+	t.Parallel()
+	s := &store{}
+	p, a := productKeys(t, s, "administer", true, &config.AppStoreConnectKey{KeyID: adminKeyID, PrivateKey: "${K}"})
+	ctx := context.Background()
+	if _, err := p.Run(ctx, growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolRead,
+		Args: map[string]any{"operation": "certificates_getCollection"}}); refusal(err) != growth.RefusedForbidden ||
+		!strings.Contains(err.Error(), "Admin key") {
+		t.Errorf("a read only the Admin key could make answered %v", err)
+	}
+	if _, err := p.Run(ctx, growth.Call{ID: "r2", Handle: "growth", Tool: appstoreconnect.ToolRead,
+		Args: map[string]any{"operation": "users_getCollection"}}); err != nil {
+		t.Fatalf("a read another key may make answered %v", err)
+	}
+	remove := growth.Call{ID: "a1", Handle: "growth", Tool: appstoreconnect.ToolAdmin, Args: map[string]any{
+		"operation": "users_deleteInstance", "path": map[string]any{"id": "U1"}, "reason": "left the team"}}
+	hold, err := p.Prepare(ctx, remove)
+	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Via != "admin" {
+		t.Fatalf("the admin act was prepared as %+v (%v)", hold, err)
+	}
+	before := len(s.kids)
+	if _, err := p.Card(ctx, remove, hold.Binding); err != nil || len(s.kids) != before {
+		t.Errorf("the card answered %v and called %v", err, s.kids[before:])
+	}
+	approved := remove
+	approved.HeldCall, approved.Approver = "h1", "founder"
+	if _, err := p.Apply(ctx, approved, hold.Binding); err != nil || len(s.writes) != 1 {
+		t.Fatalf("the approved admin act answered %v and wrote %v", err, s.writes)
+	}
+	for _, k := range s.kids {
+		if strings.HasSuffix(k, " "+adminKeyID) && !strings.Contains(k, "/v1/users/U1") {
+			t.Errorf("the Admin key made %s", k)
+		}
+	}
+	for _, st := range a.steps {
+		if st.rec.Via == "" {
+			t.Errorf("the %s step names no key: %+v", st.step, st.rec)
+		}
+	}
+	if last := a.steps[len(a.steps)-1]; last.step != growth.StepApplied || last.rec.Via != "admin" {
+		t.Errorf("the last step is %+v", last)
+	}
+}
+
+// APP STORE ANALYTICS IS TURNED ON WITH AN ADMIN KEY PASTED ONCE: an app
+// already on is left alone, each new request is signed with the pasted key
+// alone, every step is recorded as the person's through the Admin key, and
+// neither the answer nor a record holds the key; a key that does not read, or
+// a connection nobody named, sends nothing.
+//
+// Mutation: sign the create with a stored key, or skip the existing request's
+// read, and a stored key creates it, or an app already on is asked again.
+func TestAppStoreAnalyticsIsTurnedOnWithAKeyPastedOnce(t *testing.T) {
+	t.Parallel()
+	s := &store{analytics: map[string]bool{"111": true}}
+	p, a := product(t, s, "read", false)
+	ctx := context.Background()
+	pasted := p8(t)
+	in := appstoreconnect.AnalyticsEnable{Connection: "main", KeyID: "P1A2S3T4E5", PrivateKey: pasted, By: "founder"}
+	apps, err := p.EnableAnalytics(ctx, in)
+	if err != nil || len(apps) != 2 || apps[0] != (appstoreconnect.AnalyticsApp{App: "111", State: appstoreconnect.AnalyticsAlreadyOn}) ||
+		apps[1] != (appstoreconnect.AnalyticsApp{App: "222", State: appstoreconnect.AnalyticsOn}) {
+		t.Fatalf("the turn-on answered %+v (%v)", apps, err)
+	}
+	var posts []string
+	for _, k := range s.kids {
+		if strings.HasPrefix(k, "POST /v1/analyticsReportRequests ") {
+			posts = append(posts, k)
+		}
+	}
+	if len(posts) != 1 || !strings.HasSuffix(posts[0], " P1A2S3T4E5") {
+		t.Errorf("the creates were signed %v, want once with the pasted key", posts)
+	}
+	if len(a.steps) != 1 || a.steps[0].step != growth.StepMade || a.steps[0].rec.Via != "admin" ||
+		a.steps[0].rec.Handle != "founder" || a.steps[0].rec.Tool != appstoreconnect.ToolAnalytics {
+		t.Errorf("the steps are %+v", a.steps)
+	}
+	if raw, _ := json.Marshal([]any{apps, a.steps}); strings.Contains(string(raw), "PRIVATE KEY") {
+		t.Error("the pasted key reached the answer or a record")
+	}
+	for name, bad := range map[string]appstoreconnect.AnalyticsEnable{
+		"a key that does not read": {Connection: "main", KeyID: "P1A2S3T4E5", PrivateKey: "not a key", By: "founder"},
+		"an unnamed connection":    {Connection: "eu", KeyID: "P1A2S3T4E5", PrivateKey: pasted, By: "founder"},
+		"a malformed key ID":       {Connection: "main", KeyID: "short", PrivateKey: pasted, By: "founder"},
+	} {
+		before := len(s.writes)
+		if _, err := p.EnableAnalytics(ctx, bad); refusal(err) == "" || len(s.writes) != before ||
+			strings.Contains(err.Error(), "not a key") {
+			t.Errorf("%s answered %v", name, err)
 		}
 	}
 }

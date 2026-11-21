@@ -304,6 +304,8 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionToolsApprove, authz.ActionSSHOperateApprove, authz.ActionReleaseApprove,
 		// and of a growth integration's spend, public or admin act
 		authz.ActionGrowthSpendApprove, authz.ActionGrowthPublicApprove, authz.ActionGrowthAdminApprove,
+		// and a person's own Admin key, pasted once to turn App Store analytics on
+		authz.ActionAppStoreAnalyticsEnable,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {

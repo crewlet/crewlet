@@ -34,7 +34,7 @@ A key's variable may be named at its own field alone: the company document refus
 
 ## Roles and keys
 
-Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another.
+Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another. The Admin key can manage the team's users and keys, so it makes an account change an administrator allowed, or a change Apple lets only Admin make, and nothing else: never a read or an operate change, even where it is the only key that could. Every call through it is on the access log, and a pass checks that it reads as a key without calling Apple with it. Every slot is empty until a person fills it, and removing a key from the company document takes effect on the next call.
 
 | Slot | Apple role | What agents can do with it |
 |---|---|---|
@@ -45,7 +45,7 @@ Each call goes through the connected key with the least access whose role may ma
 | `marketing` | Marketing | Listings, custom product pages, in-app events, internal TestFlight groups |
 | `developer` | Developer | Builds and TestFlight; with access to certificates, identifiers and profiles, signing and devices |
 | `app_manager` | App Manager | Versions, submissions, prices and availability, in-app purchases, external TestFlight |
-| `admin` | Admin | Users, invitations and every account change |
+| `admin` | Admin | Users, invitations and every account change, each allowed by an administrator; nothing else |
 
 The Account Holder has no key: an act only it may take is done in App Store Connect by that person.
 
@@ -77,6 +77,10 @@ A write is classed by what its target is when it is made: an edit to a version i
 ## Decisions
 
 A public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)). The administrator reads the exact request and the target as it is now; if the target changes before the answer, Allow once sends nothing and the agent is told to ask again. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log.
+
+## App Store analytics
+
+Impressions and product page views come from an ongoing analytics report request per app, which only an Admin key may create. A team that keeps no Admin key turns them on from the integration's settings: **Turn on App Store analytics**, paste an Admin key's ID and `.p8` file, at a fresh sign-in. Crewlet creates each app's request with it at once, keeps no copy, and asks you to revoke the key in App Store Connect afterwards; the access log records each request as yours. A team with a connected Finance, Sales or Access to Reports key reads the reports from then on.
 
 ## Limits
 

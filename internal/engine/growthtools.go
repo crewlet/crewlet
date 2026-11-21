@@ -57,6 +57,17 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	return e.growth
 }
 
+// AppStoreAnalytics is this node's App Store Connect product, which turns App
+// Store analytics on with an Admin key a person pastes once.
+func (e *Engine) AppStoreAnalytics() *appstoreconnect.Product {
+	for _, p := range e.growthProducts() {
+		if a, ok := p.(*appstoreconnect.Product); ok {
+			return a
+		}
+	}
+	return nil
+}
+
 // GrowthCards words each held growth act's decision card through its product.
 func (e *Engine) GrowthCards() growthCards { return growthCards{engine: e} }
 
