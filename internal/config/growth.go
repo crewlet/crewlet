@@ -36,6 +36,37 @@ type growthBlock interface {
 	GrowthSpend() *GrowthSpend
 }
 
+// growthSeat is a growth integration's seat block.
+type growthSeat interface {
+	// GrowthSeatLevel is the seat's level where its block is on, and ""
+	// where it is off.
+	GrowthSeatLevel() string
+}
+
+// GrowthLevels is the seat's level on each growth lane it is on at, by the
+// lane's kind: what internal/authz's growth grants admit to that product's
+// tools (org.Role.GrowthLevels). Found by reflection over the seat's blocks,
+// so a product adds no row here.
+func (r *Role) GrowthLevels() map[string]string {
+	out := map[string]string{}
+	v := reflect.ValueOf(&r.Integrations).Elem()
+	for n := range v.NumField() {
+		f := v.Field(n)
+		if f.Kind() != reflect.Pointer || f.IsNil() || !v.Type().Field(n).IsExported() {
+			continue
+		}
+		if s, ok := f.Interface().(growthSeat); ok {
+			if level := s.GrowthSeatLevel(); level != "" {
+				out[jsonName(v.Type().Field(n))] = level
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // growthAt is one growth block and where the document holds it.
 type growthAt struct {
 	path  Path

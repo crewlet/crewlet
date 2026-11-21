@@ -238,7 +238,7 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if !p.Stage.MayAct() {
 		return Decision{Reason: ReasonStage}
 	}
-	r, known := rules[a]
+	r, known := ruleOf(a)
 	if !known {
 		return Decision{Reason: ReasonUnknownAction}
 	}
