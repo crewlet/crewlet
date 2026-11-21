@@ -178,6 +178,7 @@ const SURFACE_NAMES: Record<string, string> = {
   aws: "AWS",
   google_cloud: "Google Cloud",
   ssh: "SSH",
+  meta_ads: "Meta Ads Manager",
   app_store_connect: "App Store Connect",
 };
 
@@ -263,6 +264,15 @@ export const CATALOG: Entry[] = [
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
+  },
+  {
+    key: "meta_ads",
+    name: "Meta Ads Manager",
+    description:
+      "Ad accounts, campaigns, ad sets, budgets and insights for Facebook and Instagram ads.",
+    vendor: "meta-ads",
+    surfaces: surfacesOf("meta_ads"),
+    doc: "meta-ads",
   },
   {
     key: "app_store_connect",

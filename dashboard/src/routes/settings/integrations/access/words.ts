@@ -395,6 +395,29 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "ssh_read, ssh_operate and ask_to_operate, built in",
     issued: "15 minutes",
   },
+  meta_ads: {
+    name: "Meta Ads Manager",
+    access: "Level on its ad accounts",
+    turnOn:
+      "Turning it on lets the agent use the chosen ad accounts at the chosen level through Crewlet's own tools. Nothing is created at Meta, and the agent holds no token.",
+    off: "The agent's next Meta Ads call is refused.",
+    remove: "There is nothing to remove: the agent never held a token.",
+    rotate:
+      "The agent holds no token, so there is nothing to rotate. Replace a system user's token on the integration's page.",
+    scope: {
+      noun: "Ad accounts",
+      singular: "ad account",
+      empty: "No ad account",
+      none: "No ad accounts are reachable yet",
+      noneLink: {
+        label: "Connect your Meta app",
+        doc: "meta-ads",
+        anchor: "connect-your-meta-app",
+      },
+    },
+    tool: "meta_ads tools, built in",
+    issued: "never: Crewlet makes every call",
+  },
   app_store_connect: {
     name: "App Store Connect",
     access: "Level on its apps",
