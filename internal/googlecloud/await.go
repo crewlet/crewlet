@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -23,30 +24,6 @@ const (
 	// next pass retries.
 	observeBudget = 3 * time.Minute
 )
-
-// clock is the time a client reads and waits by: the wall clock in
-// production, a test's own so a three-minute bound passes in no time.
-type clock struct {
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
-}
-
-// wallClock is the real time, waits ending early with their context.
-func wallClock() clock {
-	return clock{
-		now: func() time.Time { return time.Now().UTC() },
-		sleep: func(ctx context.Context, d time.Duration) error {
-			timer := time.NewTimer(d)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-timer.C:
-				return nil
-			}
-		},
-	}
-}
 
 // readBack is one kind of read that follows the engine's own write, by what
 // it waits to see.
@@ -148,20 +125,22 @@ func SettlingReason(err error) (string, bool) {
 // and doubling to observeCap, and answers how long it took. Done with an error
 // is final at once; past observeBudget it answers a [*Settling] naming the last
 // thing check saw. A context ended first answers the context's error.
-func (c clock) awaitObserved(ctx context.Context, what readBack, check func() (bool, error)) (time.Duration, error) {
-	start := c.now()
+func awaitObserved(
+	ctx context.Context, c googleauth.Clock, what readBack, check func() (bool, error),
+) (time.Duration, error) {
+	start := c.Now()
 	wait := observeFirst
 	for {
 		done, err := check()
 		if done {
-			return c.now().Sub(start), err
+			return c.Now().Sub(start), err
 		}
-		if c.now().Sub(start)+wait > observeBudget {
-			waited := c.now().Sub(start)
+		if c.Now().Sub(start)+wait > observeBudget {
+			waited := c.Now().Sub(start)
 			return waited, &Settling{What: string(what), Reason: what.reason(), Waited: waited, Last: err}
 		}
-		if serr := c.sleep(ctx, wait); serr != nil {
-			return c.now().Sub(start), serr
+		if serr := c.Sleep(ctx, wait); serr != nil {
+			return c.Now().Sub(start), serr
 		}
 		wait = min(wait*2, observeCap)
 	}

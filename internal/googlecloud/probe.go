@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -61,7 +62,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 // probeCheck is the Test button's check on clk (nil is the wall clock), and an
 // error only for inputs no check can be made with.
 func probeCheck(
-	ctx context.Context, company string, value func(string) string, hc *http.Client, clk *clock,
+	ctx context.Context, company string, value func(string) string, hc *http.Client, clk *googleauth.Clock,
 ) (setup.Verdict, error) {
 	email, provider, key := strings.TrimSpace(value("provisioner")), strings.TrimSpace(value("provider")),
 		strings.TrimSpace(value("federation_key"))
@@ -74,18 +75,18 @@ func probeCheck(
 	case provider == "":
 		return setup.Verdict{}, setup.Unusable("Paste the provider name the Cloud Shell block prints to test it.")
 	}
-	client, err := NewClient(ClientOptions{
+	client, err := NewClient(googleauth.Options{
 		Company: company, Provisioner: email, Provider: provider, FederationKey: key, HTTP: hc,
 	})
 	if err != nil {
 		return setup.Verdict{}, setup.Unusable(strings.TrimPrefix(err.Error(), "googlecloud: ") + ".")
 	}
 	if clk != nil {
-		client.clock = *clk
+		client.setClock(*clk)
 	}
 	ctx, cancel := context.WithTimeout(ctx, setup.VerifyBudget)
 	defer cancel()
-	if _, err = client.token(ctx, client.provisioner); err != nil {
+	if _, err = client.auth.FederatedToken(ctx, client.Provisioner()); err != nil {
 		return reachRefusal(ctx, client, company, err), nil
 	}
 	identity := client.IdentityProject()
@@ -126,19 +127,19 @@ func reachRefusal(ctx context.Context, c *Client, company string, err error) set
 	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		return setup.Unreachable("Google did not answer in time while Crewlet signed in as the provisioner.")
 	}
-	st, staged := errors.AsType[*stageError](err)
+	st, staged := errors.AsType[*googleauth.StageError](err)
 	var said setup.Fact
-	if api, ok := errors.AsType[*APIError](err); ok {
+	if api, ok := errors.AsType[*googleauth.APIError](err); ok {
 		said = setup.SaidBy("Google", api.Message)
 	}
 	switch {
-	case staged && st.stage == stageFederation:
+	case staged && st.Stage == googleauth.StageFederation:
 		return setup.Refused("Google's Security Token Service refused Crewlet's federation token.", said,
 			setup.Warning{Action: "Run the Cloud Shell block again so the provider holds Crewlet's current public " +
-				"key and accepts the subject `" + Subject(company) + "`. Check the provider name is the one the block printed."})
-	case staged && st.stage == stageImpersonation:
+				"key and accepts the subject `" + googleauth.Subject(company) + "`. Check the provider name is the one the block printed."})
+	case staged && st.Stage == googleauth.StageImpersonation:
 		return setup.Refused("Federation works, but Crewlet cannot act as "+c.Provisioner()+".", said,
-			setup.Warning{Action: "Grant `" + Principal(c.provider, company) + "` Workload Identity User on that service " +
+			setup.Warning{Action: "Grant `" + googleauth.Principal(c.auth.Provider(), company) + "` Workload Identity User on that service " +
 				"account. The Cloud Shell block does. Enable the IAM Service Account Credentials API on " +
 				c.IdentityProject() + "."})
 	default:
@@ -153,7 +154,7 @@ func readRefusal(ctx context.Context, err error, what, fix string) setup.Verdict
 		return setup.Unreachable("Google did not answer in time while Crewlet read " + what + ".")
 	}
 	summary := "Crewlet reaches the provisioner, but could not read " + what + "."
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	if !ok || api.Status >= http.StatusInternalServerError || api.Status == http.StatusTooManyRequests {
 		return setup.Unreachable(summary, setup.ErrorOf(err))
 	}

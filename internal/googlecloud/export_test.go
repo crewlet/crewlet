@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -12,7 +13,7 @@ import (
 // SetClock replaces the time a client reads and waits by, so a test's
 // three-minute bound passes in no time.
 func SetClock(c *Client, now func() time.Time, sleep func(context.Context, time.Duration) error) {
-	c.clock = clock{now: now, sleep: sleep}
+	c.setClock(googleauth.Clock{Now: now, Sleep: sleep})
 }
 
 // AwaitObserved is the one read-back wait, on a test's clock.
@@ -20,7 +21,7 @@ func AwaitObserved(
 	ctx context.Context, now func() time.Time, sleep func(context.Context, time.Duration) error,
 	what string, check func() (bool, error),
 ) (time.Duration, error) {
-	return clock{now: now, sleep: sleep}.awaitObserved(ctx, readBack(what), check)
+	return awaitObserved(ctx, googleauth.Clock{Now: now, Sleep: sleep}, readBack(what), check)
 }
 
 // ReadBacks is every kind of read that follows a write.
@@ -72,7 +73,7 @@ func OpenAccess(
 	vendor seataccess.Vendor, in seataccess.OpenInput, hc *http.Client,
 	now func() time.Time, sleep func(context.Context, time.Duration) error,
 ) (seataccess.Session, error) {
-	return vendor.(accessVendor).open(in, hc, &clock{now: now, sleep: sleep})
+	return vendor.(accessVendor).open(in, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }
 
 // ProbeWith is the Test probe on a test's transport and clock.
@@ -80,5 +81,5 @@ func ProbeWith(
 	ctx context.Context, company string, value func(string) string, hc *http.Client,
 	now func() time.Time, sleep func(context.Context, time.Duration) error,
 ) (setup.Verdict, error) {
-	return probeCheck(ctx, company, value, hc, &clock{now: now, sleep: sleep})
+	return probeCheck(ctx, company, value, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }

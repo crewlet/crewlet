@@ -46,7 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
-	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -118,7 +118,7 @@ type Engine struct {
 	// googleCloudIssuer holds the access tokens issued to agents' Google
 	// Cloud service accounts, one per account, in memory only. See
 	// googlecloudtoken.go.
-	googleCloudIssuer googlecloud.SeatIssuer
+	googleCloudIssuer googleauth.SeatIssuer
 	// issuers replaces the integrations that issue seat credentials, for a
 	// test of their shared contract; nil is the build's ([Engine.seatIssuers]).
 	issuers []seatIssuer
@@ -1684,7 +1684,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// servers retry that refusal on, before anything reads a seat's token:
 	// every reader of one installation meets the held refusal within the wait
 	// instead of asking GitHub again ([github.Issuer]). The same for every
-	// agent's Google Cloud token ([googlecloud.SeatIssuer]).
+	// agent's Google Cloud token ([googleauth.SeatIssuer]).
 	e.githubIssuer.RetryWait = e.seatRetryDelay
 	e.googleCloudIssuer.RetryWait = e.seatRetryDelay
 

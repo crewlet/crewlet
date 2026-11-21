@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -32,7 +33,7 @@ func newClientWorld(t *testing.T) *clientWorld {
 	key, pemText := fakeKey(t)
 	clock := newTestClock()
 	f := newFakeGoogle(t, &key.PublicKey, clock)
-	c, err := googlecloud.NewClient(googlecloud.ClientOptions{
+	c, err := googlecloud.NewClient(googleauth.Options{
 		Company: testCompany, Provisioner: provisioner, Provider: testProvider, FederationKey: pemText,
 		HTTP: f.server(t),
 	})
@@ -99,8 +100,8 @@ func TestAnUntrustedKeyIsRefusedAtFederationWithoutTheToken(t *testing.T) {
 	if !strings.Contains(err.Error(), "federation") || strings.Contains(err.Error(), "eyJ") {
 		t.Fatalf("error %q does not name federation, or carries the token", err)
 	}
-	if googlecloud.Status(err) != http.StatusBadRequest {
-		t.Errorf("status = %d, want STS's 400", googlecloud.Status(err))
+	if googleauth.Status(err) != http.StatusBadRequest {
+		t.Errorf("status = %d, want STS's 400", googleauth.Status(err))
 	}
 }
 
@@ -113,7 +114,7 @@ func TestASeatTokenNeedsTheProvisionersGrantOnTheAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := w.c.SeatToken(t.Context(), sa.UniqueID, time.Hour); googlecloud.Status(err) != http.StatusForbidden {
+	if _, _, err := w.c.SeatToken(t.Context(), sa.UniqueID, time.Hour); googleauth.Status(err) != http.StatusForbidden {
 		t.Fatalf("a mint before the grant: %v, want 403", err)
 	}
 	if err := w.c.EditAccountPolicy(t.Context(), sa.Email, func(p *googlecloud.Policy) bool {
@@ -198,7 +199,7 @@ func TestOnlyAnES256KeyIsAFederationKey(t *testing.T) {
 		"P-384": encode(p384), "RSA": encode(rsaKey), "not a PEM": "secret-not-a-key",
 		"a certificate block": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
 	} {
-		_, err := googlecloud.ParseFederationKey(text)
+		_, err := googleauth.ParseFederationKey(text)
 		if err == nil {
 			t.Errorf("%s was taken as a federation key", name)
 			continue
@@ -213,18 +214,18 @@ func TestOnlyAnES256KeyIsAFederationKey(t *testing.T) {
 // the Cloud Shell block, the provider and the engine agree.
 func TestTheFederationIdentityIsAPureFunctionOfTheCompany(t *testing.T) {
 	t.Parallel()
-	if got := googlecloud.Issuer(" Acme Corp "); got != "https://crewlet.invalid/acme-corp" {
+	if got := googleauth.Issuer(" Acme Corp "); got != "https://crewlet.invalid/acme-corp" {
 		t.Errorf("issuer %q", got)
 	}
-	if got := googlecloud.Subject("Acme Corp"); got != "crewlet:acme-corp" {
+	if got := googleauth.Subject("Acme Corp"); got != "crewlet:acme-corp" {
 		t.Errorf("subject %q", got)
 	}
 	want := "principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/crewlet/" +
 		"subject/crewlet:acme"
-	if got := googlecloud.Principal(testProvider, "Acme"); got != want {
+	if got := googleauth.Principal(testProvider, "Acme"); got != want {
 		t.Errorf("principal %q, want %q", got, want)
 	}
-	if got := googlecloud.Audience(testProvider); got != "//iam.googleapis.com/"+testProvider {
+	if got := googleauth.Audience(testProvider); got != "//iam.googleapis.com/"+testProvider {
 		t.Errorf("audience %q", got)
 	}
 }
@@ -233,19 +234,19 @@ func TestTheFederationIdentityIsAPureFunctionOfTheCompany(t *testing.T) {
 func TestAClientThatWouldFailEveryCallIsRefused(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	ok := googlecloud.ClientOptions{Company: testCompany, Provisioner: provisioner, Provider: testProvider,
+	ok := googleauth.Options{Company: testCompany, Provisioner: provisioner, Provider: testProvider,
 		FederationKey: pemText}
 	for _, tc := range []struct {
 		name  string
-		edit  func(*googlecloud.ClientOptions)
+		edit  func(*googleauth.Options)
 		field string
 	}{
-		{"a person's email", func(o *googlecloud.ClientOptions) { o.Provisioner = "ops@acme.example" }, "provisioner"},
-		{"a pool as the provider", func(o *googlecloud.ClientOptions) {
+		{"a person's email", func(o *googleauth.Options) { o.Provisioner = "ops@acme.example" }, "provisioner"},
+		{"a pool as the provider", func(o *googleauth.Options) {
 			o.Provider = "projects/1/locations/global/workloadIdentityPools/crewlet"
 		}, "provider"},
-		{"no key", func(o *googlecloud.ClientOptions) { o.FederationKey = "" }, "federation_key"},
-		{"a nameless company", func(o *googlecloud.ClientOptions) { o.Company = "!!" }, "company"},
+		{"no key", func(o *googleauth.Options) { o.FederationKey = "" }, "federation_key"},
+		{"a nameless company", func(o *googleauth.Options) { o.Company = "!!" }, "company"},
 	} {
 		opts := ok
 		tc.edit(&opts)
@@ -289,7 +290,7 @@ func TestEveryReadBackWaitsOutAStaleAnswer(t *testing.T) {
 		if reason != wantReason || !strings.Contains(err.Error(), "still the old state") {
 			t.Errorf("%s: reason %q in %q, want %q", what, reason, err, wantReason)
 		}
-		final := &googlecloud.APIError{Status: http.StatusForbidden, Message: "Policy update access denied."}
+		final := &googleauth.APIError{Status: http.StatusForbidden, Message: "Policy update access denied."}
 		reads = 0
 		_, err = googlecloud.AwaitObserved(t.Context(), clock.now, clock.sleep, what, func() (bool, error) {
 			reads++
@@ -314,7 +315,7 @@ func TestEveryReadBackWaitsOutAStaleAnswer(t *testing.T) {
 func TestOnlyTheNewAccountsOwnNotYetIsRetried(t *testing.T) {
 	t.Parallel()
 	email := "crewlet-sre-2baf@" + identity + ".iam.gserviceaccount.com"
-	notYet := &googlecloud.APIError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT",
+	notYet := &googleauth.APIError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT",
 		Message: "Service account " + email + " does not exist."}
 	if !googlecloud.AccountNotYet(notYet, email) {
 		t.Fatal("Google's live answer for a new account was not recognised")
@@ -322,7 +323,7 @@ func TestOnlyTheNewAccountsOwnNotYetIsRetried(t *testing.T) {
 	if googlecloud.AccountNotYet(notYet, "crewlet-qa-0000@"+identity+".iam.gserviceaccount.com") {
 		t.Fatal("another account's absence was waited on")
 	}
-	denied := &googlecloud.APIError{Status: http.StatusForbidden, Code: "PERMISSION_DENIED",
+	denied := &googleauth.APIError{Status: http.StatusForbidden, Code: "PERMISSION_DENIED",
 		Message: "Policy update access denied."}
 	if googlecloud.AccountNotYet(denied, email) || googlecloud.AccountNotYet(nil, email) {
 		t.Fatal("a refusal or a success was waited on")

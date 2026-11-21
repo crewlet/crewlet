@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -54,7 +55,7 @@ const accountKeyPrefix = string(atlas.VendorGoogleCloud) + "/"
 func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
 	base := in.HTTP
 	if base == nil {
-		base = httpx.Client(ClientTimeout)
+		base = httpx.Client(googleauth.ClientTimeout)
 	}
 	counted, calls := collect.Counted(base)
 	client, err := ClientFor(in.Config, in.Env, counted)
@@ -88,7 +89,7 @@ type atlasRead struct {
 // opposed to failing to answer it: a role it lacks there, or the 404 Google
 // answers for what a caller cannot see. Never a 401 and never a rate limit.
 func refused(err error) bool {
-	status := Status(err)
+	status := googleauth.Status(err)
 	return status == http.StatusForbidden || status == http.StatusNotFound
 }
 

@@ -1,4 +1,4 @@
-package googlecloud
+package googleauth
 
 import (
 	"crypto/ecdsa"
@@ -56,15 +56,15 @@ func Principal(provider, company string) string {
 func ParseFederationKey(text string) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(strings.TrimSpace(text)))
 	if block == nil || block.Type != "PRIVATE KEY" {
-		return nil, errors.New("googlecloud: the federation key is not a PKCS#8 PEM private key")
+		return nil, errors.New("googleauth: the federation key is not a PKCS#8 PEM private key")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, errors.New("googlecloud: the federation key's PEM holds no PKCS#8 private key")
+		return nil, errors.New("googleauth: the federation key's PEM holds no PKCS#8 private key")
 	}
 	key, ok := parsed.(*ecdsa.PrivateKey)
 	if !ok || key.Curve != elliptic.P256() {
-		return nil, errors.New("googlecloud: the federation key is not an ES256 (P-256) key")
+		return nil, errors.New("googleauth: the federation key is not an ES256 (P-256) key")
 	}
 	return key, nil
 }
@@ -74,20 +74,20 @@ func ParseFederationKey(text string) (*ecdsa.PrivateKey, error) {
 func signJWT(key *ecdsa.PrivateKey, kid, issuer, subject, audience string, now time.Time) (string, error) {
 	header, err := json.Marshal(map[string]string{"alg": "ES256", "typ": "JWT", "kid": kid})
 	if err != nil {
-		return "", fmt.Errorf("googlecloud: encode the token header: %w", err)
+		return "", fmt.Errorf("googleauth: encode the token header: %w", err)
 	}
 	claims, err := json.Marshal(map[string]any{
 		"iss": issuer, "sub": subject, "aud": audience,
 		"iat": now.Add(-jwtSkew).Unix(), "exp": now.Add(jwtLifetime).Unix(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("googlecloud: encode the token claims: %w", err)
+		return "", fmt.Errorf("googleauth: encode the token claims: %w", err)
 	}
 	input := b64(header) + "." + b64(claims)
 	digest := sha256.Sum256([]byte(input))
 	r, s, err := ecdsa.Sign(rand.Reader, key, digest[:])
 	if err != nil {
-		return "", fmt.Errorf("googlecloud: sign the federation token: %w", err)
+		return "", fmt.Errorf("googleauth: sign the federation token: %w", err)
 	}
 	// JWS FIXED-WIDTH r || s, never ASN.1: a DER signature is refused.
 	sig := make([]byte, 64)
