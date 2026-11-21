@@ -22,7 +22,7 @@ type conditionGate struct {
 	asked    int
 }
 
-func (g *conditionGate) admit(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *conditionGate) admit(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.asked++

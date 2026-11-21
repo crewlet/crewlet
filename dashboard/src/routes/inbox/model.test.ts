@@ -1100,7 +1100,9 @@ describe("what was answered", () => {
         answered(),
         seat({
           activity: "working",
-          turn: { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+          turns: [
+            { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+          ],
         }),
       ),
     ).toEqual({ state: "acting", at: "2026-09-30T11:05:00Z" });
@@ -1108,7 +1110,7 @@ describe("what was answered", () => {
     expect(
       followThrough(
         answered(),
-        seat({ activity: "working", turn: { work_item: { id: "t-9", key: "LEAD-9" } } }),
+        seat({ activity: "working", turns: [{ work_item: { id: "t-9", key: "LEAD-9" } }] }),
       ),
     ).toEqual({ state: "waiting" });
     expect(followThrough(answered(), seat({ paused: { at: "x" } }))).toEqual({

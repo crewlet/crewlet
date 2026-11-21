@@ -353,6 +353,26 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a delivery that reached a seat this node counts as held",
 		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },
 	}},
+	"HoldForAside": {{
+		name: "a delivery that would wait aside on an inbox holding as many as it keeps",
+		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldForAside(t.Context(), "swe") },
+	}},
+	"KeyBusy": {{
+		name: "whether a run still holds the key a delivery would wait aside under",
+		call: func(t *testing.T, rig *coordRig) { _, _ = rig.coordinator.KeyBusy(t.Context(), "swe", RunKey("t1")) },
+	}},
+	"SeatCount": {{
+		name: "the seat's counts against its cap",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatCount("swe") },
+	}},
+	"HeldBeside": {{
+		name: "the runs a launch starts beside",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.HeldBeside("swe", "t9") },
+	}},
+	"ConversationBusy": {{
+		name: "whether a run works a delivery's conversation, reading the seat's rows",
+		call: func(t *testing.T, rig *coordRig) { _, _ = rig.coordinator.ConversationBusy(t.Context(), "swe", "c") },
+	}},
 	"Readmit": {{
 		name: "a signal that a seat's conditions may have cleared",
 		call: func(_ *testing.T, rig *coordRig) {
@@ -1218,6 +1238,20 @@ func (s *refusingStore) FileWake(ctx context.Context, turnID string, filing Wake
 		return RunNote{}, errRefusedCall
 	}
 	return s.inner.FileWake(ctx, turnID, filing)
+}
+
+func (s *refusingStore) AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error) {
+	if s.called("AskFoldIn") {
+		return FoldIn{}, errRefusedCall
+	}
+	return s.inner.AskFoldIn(ctx, turnID, f)
+}
+
+func (s *refusingStore) AnswerFoldIn(ctx context.Context, turnID, id string, a FoldInAnswered) (FoldIn, error) {
+	if s.called("AnswerFoldIn") {
+		return FoldIn{}, errRefusedCall
+	}
+	return s.inner.AnswerFoldIn(ctx, turnID, id, a)
 }
 
 func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {

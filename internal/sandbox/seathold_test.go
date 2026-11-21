@@ -129,6 +129,8 @@ func (h *flakyHold) Release(context.Context, string, queue.Attachment) error {
 	return nil
 }
 
+func (h *flakyHold) Readmit(context.Context, string, string, string) (int, error) { return 0, nil }
+
 // A LAUNCH HOLDS ITS SEAT FROM THE ROW IT WRITES, before the box exists and with
 // no started event processed at all.
 //
@@ -441,6 +443,10 @@ func (h *inboxHold) Hold(ctx context.Context, _ string, inbox queue.Attachment) 
 
 func (h *inboxHold) Release(ctx context.Context, _ string, inbox queue.Attachment) error {
 	return h.q.ResumeTopic(ctx, seatInbox, seatInboxGroup, inbox, "sandbox")
+}
+
+func (h *inboxHold) Readmit(ctx context.Context, _, key, _ string) (int, error) {
+	return h.q.Readmit(ctx, seatInbox, seatInboxGroup, key)
 }
 
 // A SEAT'S ROUTER IS TOLD EACH TIME ITS RUNS START OR STOP HOLDING IT, and when

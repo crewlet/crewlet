@@ -37,8 +37,9 @@ external stream by name.
 
 Nothing else to deploy: the KV lives on the **stream's own NATS broker**, on
 every topology, over the queue's own connection on an external cluster and over
-a second connection to the same server on an embedded one. Both connections are watched: the
-NATS client closing either for good stops the node for its supervisor to
+a second connection to the same server on an embedded one; the node's holds
+ride a lease connection of their own on both. Every one of them is watched: the
+NATS client closing any for good stops the node for its supervisor to
 restart.
 
 **One stream every node can reach.** The default embedded server binds no

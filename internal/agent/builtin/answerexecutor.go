@@ -35,6 +35,10 @@ type RunDesk interface {
 	// Answerer is who gave run's recorded answer, empty where the seal does
 	// not open here.
 	Answerer(run sandbox.PendingRun) string
+	// AnswerFoldIn records an answer to fold-in id on run's row and tells the
+	// seat holding it ([sandbox.AnswerDesk.AnswerFoldIn]).
+	AnswerFoldIn(ctx context.Context, run sandbox.PendingRun, id string, a sandbox.FoldInAnswered) (sandbox.FoldIn,
+		error)
 }
 
 // RunDeps are answer_executor's dependencies.
@@ -86,7 +90,10 @@ func (t *answerExecutor) Description() string {
 		"seat, as soon as that seat is free of any other turn's executor. Use " +
 		"this for any parked executor, including one started by a schedule, an " +
 		"assignment or a colleague, which has no conversation to reply in. Find " +
-		"parked executors and their questions on the executors board."
+		"parked executors and their questions on the executors board. With " +
+		"`fold_in`, it instead answers whether another person's request, waiting " +
+		"behind a running executor, joins that executor's work: `choice` approve " +
+		"or refuse, found among the caller's decisions."
 }
 
 func (t *answerExecutor) Parameters() map[string]any {
@@ -108,6 +115,12 @@ func (t *answerExecutor) Parameters() map[string]any {
 				"type": "string",
 				"description": "The id of the option chosen, where the executor's question " +
 					"offers options: one of its `decision.options` on the executors board.",
+			},
+			"fold_in": map[string]any{
+				"type": "string",
+				"description": "The fold-in you are answering, by its `id` among your decisions: " +
+					"whether another person's request joins the running executor's work. " +
+					"`launch_id` is then the running job's, and `choice` approve or refuse.",
 			},
 			"answer": map[string]any{
 				"type": "string",
@@ -149,6 +162,9 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	choice := strings.TrimSpace(argString(args, "choice"))
+	if foldIn := strings.TrimSpace(argString(args, "fold_in")); foldIn != "" {
+		return t.answerFoldIn(ctx, actor, turnID, launchID, foldIn, choice, answer), nil
+	}
 	switch {
 	case answer == "" && choice == "":
 		return failed(AnswerExecutorTool + " needs a `choice` naming the option chosen, or an " +

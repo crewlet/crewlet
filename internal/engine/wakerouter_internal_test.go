@@ -82,7 +82,7 @@ func TestOnlyTheRunsRequesterJoinsItAndOnlyAboutItsWork(t *testing.T) {
 			with(lead, func(o *wakeOrigin) { o.conversation, o.item = "chat:C2", &types.WorkItem{} }), false,
 			ruleNone, stayOtherWork},
 	} {
-		rule, why := routeOf(tc.run, tc.ev, tc.o, tc.worked)
+		rule, why := routeOf(tc.run, tc.ev, tc.o, tc.worked, false)
 		if rule != tc.rule || why != tc.why {
 			t.Errorf("%s: routed (%q, %q), want (%q, %q)", tc.name, rule, why, tc.rule, tc.why)
 		}

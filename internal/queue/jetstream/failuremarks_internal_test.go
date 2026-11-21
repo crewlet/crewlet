@@ -70,7 +70,7 @@ func TestAMessageThatFailedIsMarkedUntilItIsSettled(t *testing.T) {
 		Sequence: jetstream.SequencePair{Stream: 41}, Timestamp: time.Now().UTC()}
 	subject := failureSubject(a.key, md)
 
-	a.apply(t.Context(), &answeredMsg{md: md}, wakeEvent, queue.Nak(errors.New("the message cannot be handled")))
+	a.apply(t.Context(), delivery{msg: &answeredMsg{md: md}, ev: wakeEvent}, queue.Nak(errors.New("the message cannot be handled")))
 	if _, marked, err := q.failureMarked(t.Context(), subject); err != nil || !marked {
 		t.Fatalf("after the message's own failure the broker holds its mark %v (%v), want it held",
 			marked, err)
@@ -79,7 +79,7 @@ func TestAMessageThatFailedIsMarkedUntilItIsSettled(t *testing.T) {
 	again := *md
 	again.NumDelivered++
 	acked := &answeredMsg{md: &again}
-	a.apply(t.Context(), acked, wakeEvent, queue.Ack())
+	a.apply(t.Context(), delivery{msg: acked, ev: wakeEvent}, queue.Ack())
 	if acked.acked != 1 {
 		t.Fatalf("the message was acknowledged %d times, want once", acked.acked)
 	}
@@ -103,7 +103,7 @@ func TestANodesOwnFailureWritesNoMark(t *testing.T) {
 	md := &jetstream.MsgMetadata{NumDelivered: 1, Stream: "CREWLET_NOTIFICATIONS",
 		Sequence: jetstream.SequencePair{Stream: 42}, Timestamp: time.Now().UTC()}
 
-	a.apply(t.Context(), &answeredMsg{md: md}, wakeEvent, queue.NakNode(errors.New("the broker did not answer")))
+	a.apply(t.Context(), delivery{msg: &answeredMsg{md: md}, ev: wakeEvent}, queue.NakNode(errors.New("the broker did not answer")))
 	if _, marked, err := q.failureMarked(t.Context(), failureSubject(a.key, md)); err != nil || marked {
 		t.Errorf("after the node's own failure the broker holds a mark %v (%v), want none", marked, err)
 	}

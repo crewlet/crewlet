@@ -573,6 +573,11 @@ type RoleSandbox struct {
 	// one layer up from where the gate can see.
 	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 
+	// MaxConcurrentRuns caps how many of this seat's executor runs hold it at
+	// once, at most one per conversation; read through
+	// [RoleSandbox.ConcurrentRuns], which answers the default for unset.
+	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty"`
+
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
 	// Env is injected into this seat's executor run. External service
@@ -586,6 +591,24 @@ type RoleSandbox struct {
 	// at launch: such a key is left out of the run quietly, where any other
 	// key that resolves to nothing is left out and logged as a gap.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
+}
+
+// DefaultMaxConcurrentRuns is the runs a seat that names no
+// sandbox.max_concurrent_runs holds at once (ADR-0169). TWO: a second run keeps
+// a busy seat answering an unrelated request without a second seat, while a
+// seat at rest holds no box, so a run that never starts spends nothing; a third
+// would charge a third launch floor against the seat's budget for a gain only a
+// seat's own owner can judge.
+const DefaultMaxConcurrentRuns = 2
+
+// ConcurrentRuns is how many of the seat's executor runs may hold it at once:
+// its max_concurrent_runs, or [DefaultMaxConcurrentRuns] where it names none.
+// Nil-safe, so a seat with no sandbox block reads the default.
+func (s *RoleSandbox) ConcurrentRuns() int {
+	if s == nil || s.MaxConcurrentRuns == nil || *s.MaxConcurrentRuns < 1 {
+		return DefaultMaxConcurrentRuns
+	}
+	return *s.MaxConcurrentRuns
 }
 
 // Role is a SEAT in the org chart, held by an AI agent or a human.

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestOnlyTheRunsRequesterJoinsItAndOnlyAboutItsWork`, `internal/engine.TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn`, `internal/engine.TestAWakeTheRunReadBindsItsTurnAndReadsItsConversationThrough`, `internal/engine.TestAnUnreadOrRefusedWakeRunsAsATurnOfItsOwn`, `internal/engine.TestAWakeIsClaimedByTheKeysItsDeliveryIsDroppedBy`, `internal/engine.TestARouterLivesWhileItsSeatIsBusyAndEndsWithTheEngine`, `internal/engine.TestTheRoutersOutcomesAndRulesAreClosed`, `internal/sandbox.TestTheSeatsRouterIsToldWhenItsRunsHoldItAndWhenTheSeatGoes`, `internal/queue/memory.TestConformance`, `internal/queue/jetstream.TestConformance`, `internal/coord/kv.TestFleetContract`, `internal/usage.TestASeatsCodeDayIsStampedByWhatItCounts`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
+- **Enforced-by:** `internal/engine.TestOnlyTheRunsRequesterJoinsItAndOnlyAboutItsWork`, `internal/engine.TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn`, `internal/engine.TestAWakeTheRunReadBindsItsTurnAndReadsItsConversationThrough`, `internal/engine.TestAnUnreadOrRefusedWakeRunsAsATurnOfItsOwn`, `internal/engine.TestAWakeIsClaimedByTheKeysItsDeliveryIsDroppedBy`, `internal/engine.TestARouterLivesWhileItsSeatIsBusyAndEndsWithTheEngine`, `internal/engine.TestTheRoutersOutcomesAndRulesAreClosed`, `internal/sandbox.TestTheSeatsRouterIsToldWhenItsRunsHoldItAndWhenTheSeatGoes`, `internal/queue/memory.TestConformance`, `internal/queue/jetstream.TestConformance`, `internal/coord/kv.TestFleetContract`, `internal/usage.TestASeatsCodeDayIsStampedByWhatItCounts`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`, `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`, `internal/engine.TestAWakeIsAboutWhatARunWroteByExactIdentity`, `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`, `internal/sandbox.TestPendingStoreContract`, `internal/events/types.TestAWrittenSetHoldsEachRecordOnceAndDropsNothingAtItsBound`, `internal/agent/builtin.TestAWriteRecordsWhatItWroteOnceItLanded`, `internal/api/mcpbridge.TestABridgedCallRecordsWhatItCommitted`, `internal/chatlet.TestAReplyIsStampedWithTheConversationThePostRecords`
 - **Cost-when-tried:** before this record every wake reaching a seat whose executor run held it waited for the run to end, the requester's own follow-up ("use staging, not production") included, so a run of an hour worked the whole hour on what the follow-up corrected and a second turn then started over the result.
 - **Tag-status:** unreleased
 
@@ -22,10 +22,25 @@
 
 **Claiming at the filing.** A wake filed and never read would be dropped unworked. The claim at the read keeps the old behaviour as the fallback: whatever the run did not read runs on its own.
 
-## Left to later pieces of the series
-
-Objects the run created or wrote as a third match is crewlet/crewlet#1758's later piece; it needs this router and does not change its rule for the requester's own wakes.
-
 ## Amendment: the other wakes about the run's work are triaged
 
 Another writer's wake about the run's work, or a lead's, is no longer left alone: [ADR-0168](0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md) triages what this rule leaves and gates the choice. This rule still decides first and its joins are unchanged.
+
+## Amendment: a wake about a record the run wrote joins too
+
+**A third fixed rule, checked after the conversation and the work item: the requester's wake about a record the run created or wrote joins** (`wrote` on the counter), under every other condition above. The run keeps the set of those records on its bridged call log: each call's record step folds in the records its committed writes named (a work item it filed, updated or commented on; a change it opened, edited, reviewed, commented on, rebased or merged; a chat thread it posted in; a page it saved or remarked on; an artifact it remarked on), read with a write's own answer by the tool that made it, and only for a write that landed. Every opening of the log keeps the set, so it lives as long as the call log does: through a park, a relaunch, a new round and a takeover. Reads, refused and failed writes name nothing.
+
+**Each record is named exactly as a wake about it is**: a work item by `<backend>:<id>`, the identity the wake is charged by, and every other record by the conversation identity its wakes are stamped with, from the producing domain's own function (a change's, a chat thread's at the thread grain, never the writer-split partition key; a direct conversation's line; a page's; an artifact's). Membership is an equality, never a likeness: a model's or a matcher's similarity would let a wake's own words claim a run's work, and an inexact match joins another person's thread to the run. The set holds 128 records, the bulk threshold `turnctx.MaxWritten` defends, each id at most 256 bytes, about 200 KiB of the log's rest at their worst; past it a record is refused, nothing held is dropped, and the run says so once.
+
+**What no bridged call writes is not in it**: a push the box makes over git and a change its collection opens (the collection names a change by reference, not by the identity its wakes carry), and a held call a person approved, which the resume makes.
+
+Another writer's wake about a written record is ADR-0168's candidate.
+
+## Amendment: a seat runs up to its cap of runs
+
+A seat holds up to its cap of runs, one per conversation (ADR-0169); its inbox is held once its runs hold every slot, its router reads it while any run holds, and a wake a run's steps read makes its conversation that run's.
+
+## Amendment: the router's decisions are shared with the screen of a flowing inbox
+
+Below the seat's cap its inbox flows (ADR-0169), so a wake reaches the dispatcher while a run holds the seat: the screen routes it to the run it relates to on this rule, as the router would, under the router's own memo and lock, so one wake read by both is filed and triaged once, and then sets it aside until the run leaves. The router still runs while any run holds the seat, reading mail the dispatcher has not taken; the backlog read skips what its client holds aside, decided already.
+

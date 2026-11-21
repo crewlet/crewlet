@@ -46,6 +46,13 @@ func TestAPageIsBothThePartitionAndTheConversation(t *testing.T) {
 	if got := (doclet.Prompt{}).ConversationIdentity(empty, "subject"); got != "" {
 		t.Errorf("a page-less wake resolved to %q", got)
 	}
+	// AND A WRITE TO THE PAGE RECORDS THE IDENTITY ITS WAKES ARE STAMPED WITH
+	// (ADR-0167), exactly.
+	stamped := notify.NewPrompts(doclet.Prompt{}).Conversation(notify.Inbound{Source: doclet.Source,
+		Metadata: renamed})
+	if got := doclet.PageConversation("p-1"); got == "" || got != stamped || doclet.PageConversation("") != "" {
+		t.Errorf("a write to the page records %q, and a wake about it is stamped %q", got, stamped)
+	}
 }
 
 // THE PROMPT NAMES ONLY PAGE TOOLS THIS BUILD REGISTERS.

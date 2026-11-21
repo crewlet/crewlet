@@ -80,10 +80,6 @@ func MaskCall(v any, r Reach) any {
 	return nil
 }
 
-// For is the call as reader r receives it — [MaskCall] over the projection's
-// own shape.
-func (c *LiveCall) For(r Reach) any { return MaskCall(c, r) }
-
 // maskWhole masks the projection's own shape.
 func maskWhole(c *LiveCall, r Reach) any {
 	if r.Body && r.Tracker && r.Config {
@@ -238,17 +234,17 @@ type withheldCall struct {
 	BodyWithheld bool `json:"body_withheld"`
 }
 
-// For is the overlay as reader r receives it: its call masked by [MaskCall]
-// and its turn by the tracker rule.
+// For is the overlay as reader r receives it: each call masked by [MaskCall]
+// and each turn by the tracker rule.
 //
-// `any` AND NEVER *Overlay, because [Overlay.LiveCall] is typed *LiveCall and
+// `any` AND NEVER *Overlay, because [Overlay.LiveCalls] holds *LiveCall and
 // cannot hold a withheld call; the value is an [overlayView]. Nil answers nil.
 func (o *Overlay) For(r Reach) any {
 	if o == nil {
 		return nil
 	}
-	view := overlayView{Overlay: *o, LiveCall: MaskCall(o.LiveCall, r),
-		Turn: maskTurn(o.Turn, r)}
+	view := overlayView{Overlay: *o, LiveCalls: MaskCalls(o.LiveCalls, r),
+		Turns: maskTurns(o.Turns, r)}
 	view.LastError = o.LastError.For(r)
 	return view
 }
@@ -256,24 +252,48 @@ func (o *Overlay) For(r Reach) any {
 // overlayView is an [Overlay] as one reader receives it: a copy of the
 // overlay, with the two fields the mask changes shadowed.
 //
-// NEITHER SHADOW IS omitempty, because the overlay states both keys ALWAYS: a
-// null call or turn is how a client merging the overlay learns the seat has
-// none, and an omitted key would leave the one it held.
+// NEITHER SHADOW IS omitempty, because the overlay states both keys ALWAYS: an
+// empty list is how a client merging the overlay learns the seat has no call
+// or turn, and an omitted key would leave the ones it held.
 type overlayView struct {
 	Overlay
-	LiveCall any       `json:"live_call"`
-	Turn     *LiveTurn `json:"turn"`
+	LiveCalls []any      `json:"live_calls"`
+	Turns     []LiveTurn `json:"turns"`
 }
 
-// maskTurn is the turn as reader r receives it: without its work item when
-// they do not hold Worklet, as a copy.
-func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
-	if t == nil || r.Tracker || t.WorkItem == nil {
-		return t
+// MaskCalls is [MaskCall] over a seat's calls, in whichever list shape carries
+// them: the projection's []*LiveCall, or the []any an `agents` push builds of
+// [leanCall]s. Always a list, `[]` for none or for a shape it does not know.
+func MaskCalls(v any, r Reach) []any {
+	out := []any{}
+	switch calls := v.(type) {
+	case []*LiveCall:
+		for _, c := range calls {
+			if masked := MaskCall(c, r); masked != nil {
+				out = append(out, masked)
+			}
+		}
+	case []any:
+		for _, c := range calls {
+			if masked := MaskCall(c, r); masked != nil {
+				out = append(out, masked)
+			}
+		}
 	}
-	dup := *t
-	dup.WorkItem = nil
-	return &dup
+	return out
+}
+
+// maskTurns is the turns as reader r receives them: without their work items
+// when they do not hold Worklet, as a copy, and `[]` for none.
+func maskTurns(turns []LiveTurn, r Reach) []LiveTurn {
+	out := make([]LiveTurn, len(turns))
+	for i, t := range turns {
+		if !r.Tracker {
+			t.WorkItem = nil
+		}
+		out[i] = t
+	}
+	return out
 }
 
 // For is the executor as reader r receives it.
@@ -307,7 +327,7 @@ func (e ExecutorEntry) For(r Reach) ExecutorEntry {
 // MaskRow masks one `agents` or `seats` row (a roster row with the live
 // overlay merged onto it, [LiveState.MergeAgents], or an overlay row,
 // [LiveState.OverlayRows], its call already a [leanCall] where a push left
-// fields out) and returns a NEW map: the call through [MaskCall], the turn
+// fields out) and returns a NEW map: each call through [MaskCall], each turn
 // through the tracker rule, the failure through [ErrorInfo.For], every other
 // key as it was.
 func MaskRow(row map[string]any, r Reach) map[string]any {
@@ -318,11 +338,11 @@ func MaskRow(row map[string]any, r Reach) map[string]any {
 	for k, v := range row {
 		out[k] = v
 	}
-	if call, ok := row["live_call"]; ok {
-		out["live_call"] = MaskCall(call, r)
+	if calls, ok := row["live_calls"]; ok {
+		out["live_calls"] = MaskCalls(calls, r)
 	}
-	if turn, ok := row["turn"].(*LiveTurn); ok {
-		out["turn"] = maskTurn(turn, r)
+	if turns, ok := row["turns"].([]LiveTurn); ok {
+		out["turns"] = maskTurns(turns, r)
 	}
 	if failure, ok := row["last_error"].(*ErrorInfo); ok {
 		out["last_error"] = failure.For(r)

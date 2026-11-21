@@ -68,10 +68,10 @@
 // the last (crewlet/crewlet#1005). A link slower than the floor still fails a
 // write, and so can one busy with something ahead of it whose bytes no budget
 // counts. The worst case, about twelve minutes over three sends, holds
-// everything the node sends behind it, lease renewals among them, and on an
-// external broker the client checks no deadline while a request waits for the
-// connection's lock, which a large write holds for its whole socket Write: both
-// need the write windowed (crewlet/crewlet#1035).
+// everything the node sends behind it on the data link, and on an external
+// broker the client checks no deadline while a request waits for the
+// connection's lock, which a large write holds for its whole socket Write. A
+// node's holds ride neither (below).
 //
 // # What a link carries is read at its socket
 //
@@ -103,18 +103,18 @@
 //
 // # A node's leases ride a link of their own
 //
-// A renewal queued behind a large write crosses only after it, and at the floor
-// one message at the transport's ceiling outlasts every lease.
-// Queue.DialLeases offers holds a watched connection nothing else rides: on a
-// leaf a second leaf link in LeaseAccount, past the tunnel and ISOLATED, so it is told
-// no other leaf's interest; on an external broker a second dial that gives a
-// dead socket up within a heartbeat of the shortest lease; on a member one in
-// process. Each link is read by its account, never by a count.
+// A renewal queued behind a large write crosses after it, at the floor past
+// every lease (ADR-0174). Queue.DialLeases opens a watched connection nothing
+// else rides: on a leaf a second leaf link in LeaseAccount, past the tunnel and
+// ISOLATED from other leaves' interest; on an external broker a second dial
+// that gives a dead socket up within a heartbeat of the shortest lease; on a
+// member one in process. Each link is read by its account, never by a count.
 //
-// The lease link proves nothing of the data path, so Queue.DataPath judges a
-// probe of the fleet's JetStream: unanswered past a request's term, refused only
-// while the data link carried nothing (a probe queued behind a crossing is not
-// a dead path); past the link's own ping tolerance, refused regardless.
+// Two links can land apart, so a hold waits on Queue.DataPath (ADR-0173): a
+// probe of the fleet's JetStream refused past a request's term while the data
+// link carried nothing, or past the link's own ping tolerance. The lease link
+// gets the same probe, unmetered, and is moved off a member that answers
+// nothing, which still answers its pings.
 //
 // # A pull allocates for what it receives, never for what it may
 //

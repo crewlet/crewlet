@@ -70,6 +70,15 @@ func (p Prompt) ConversationIdentity(metadata map[string]string, subject string)
 	return p.PartitionKey(metadata, subject)
 }
 
+// PageConversation is the conversation a page IS, as every wake about it is
+// stamped: its identity ([Prompt.ConversationIdentity]) namespaced by this
+// source ([notify.Prompts.Conversation]). A turn's write to the page records
+// it (internal/agent/builtin), and a running run's router finds a wake about
+// the page by it, exactly (ADR-0167).
+func PageConversation(id string) string {
+	return notify.Namespaced(Source, Prompt{}.ConversationIdentity(map[string]string{MetaPageID: id}, ""))
+}
+
 // WakesActor implements [notify.Prompt]: never. Every change here is one the
 // actor already knows about.
 func (Prompt) WakesActor(notify.Inbound) bool { return false }

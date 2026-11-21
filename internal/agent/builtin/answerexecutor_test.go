@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,26 @@ type deskFake struct {
 
 func (d *deskFake) Answerer(run sandbox.PendingRun) string {
 	return sandbox.OpenedAnswerer(d.seal, run)
+}
+
+// AnswerFoldIn records the first answer to fold-in id on the run's row, as the
+// store does: the job's alone, never twice.
+func (d *deskFake) AnswerFoldIn(_ context.Context, run sandbox.PendingRun, id string,
+	a sandbox.FoldInAnswered) (sandbox.FoldIn, error) {
+	held, ok := d.runs[run.TurnID]
+	at := slices.IndexFunc(held.FoldIns, func(f sandbox.FoldIn) bool { return f.ID == id })
+	switch {
+	case !ok || at < 0 || held.FoldIns[at].Launch != held.LaunchID:
+		return sandbox.FoldIn{}, sandbox.ErrFoldInClosed
+	case !held.FoldIns[at].Open():
+		return held.FoldIns[at], sandbox.ErrFoldInAnswered
+	}
+	f := held.FoldIns[at]
+	f.Answer, f.AnsweredBy, f.AnsweredByKind = a.Answer, a.By, a.ByKind
+	held.FoldIns = slices.Clone(held.FoldIns)
+	held.FoldIns[at] = f
+	d.runs[run.TurnID] = held
+	return f, nil
 }
 
 // answerSeal is a fleet keyring's answer seal, under key material of its own.
@@ -473,5 +494,88 @@ func TestAHeldCallIsNotAnsweredByAnswerExecutor(t *testing.T) {
 	}
 	if len(desk.delivered) != 0 {
 		t.Fatalf("delivered %+v, want nothing", desk.delivered)
+	}
+}
+
+// running is a run of the CTO's seat working for the founder, its job asking a
+// fold-in of omar's request, open: omar leads the seat, so the authority alone
+// would admit his own answer.
+func running(t *testing.T, turnID string) sandbox.PendingRun {
+	t.Helper()
+	run := parked(t, turnID, sandbox.StatusRunning)
+	run.Question = ""
+	run.FoldIns = []sandbox.FoldIn{{ID: "f-1", Launch: run.LaunchID, Wake: "w-1", Asker: "omar",
+		AskerKind: iam.ActorHuman, Words: "also redo the logo", PutTo: []string{"founder", "jane"}}}
+	return run
+}
+
+// A FOLD-IN IS ANSWERED BY THE RUN'S REQUESTER OR A LEAD OF ITS SEAT, NEVER BY
+// ITS ASKER OR ANYBODY ELSE, AND ONCE. The requester's and the lead's approval
+// is recorded as theirs; the asker's own, a stranger's and a seat's are
+// refused with nothing recorded; a second answer is told whose came first; and
+// an answer to a fold-in whose job is over is told the request runs as its own
+// turn.
+//
+// Mutation: drop the asker check, decide the fold-in on anything but the
+// question's authority, or record past an answer, and this goes red.
+func TestAFoldInIsAnsweredByTheRequesterOrALeadNeverItsAskerAndOnce(t *testing.T) {
+	t.Parallel()
+	approve := map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "fold_in": "f-1", "choice": "approve"}
+	for _, tc := range []struct {
+		name    string
+		caller  iam.Principal
+		allowed bool
+	}{
+		{"the person the run works for", boundTo("founder"), true},
+		{"the run's seat's lead", boundTo("jane"), true},
+		{"the request's own asker, a lead", boundTo("omar"), false},
+		{"a colleague who is neither", boundTo("sam", iam.Apps...), false},
+		{"a seat, however granted", iam.Principal{ID: uuid.New(), Kind: iam.KindSeat,
+			Login: "agent-ceo", Seat: "agent-ceo", Stage: iam.StageActive, Grants: iam.AllGrants}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": running(t, "t1")}}
+			result, err := newAnswerExecutorRig(t, desk, tc.caller, seatLeads).Call(t.Context(), approve)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := desk.runs["t1"].FoldIns[0]
+			switch {
+			case tc.allowed && (result.Failed || f.Answer != sandbox.FoldInApprove || f.AnsweredBy != tc.caller.Seat):
+				t.Fatalf("%s's approval came to %+v, recorded %+v", tc.name, result, f)
+			case !tc.allowed && (!result.Failed || !f.Open()):
+				t.Fatalf("%s's approval came to %+v, recorded %+v; want it refused", tc.name, result, f)
+			}
+			if len(desk.delivered) != 0 {
+				t.Errorf("a fold-in's answer was delivered as a parked run's: %+v", desk.delivered)
+			}
+		})
+	}
+
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": running(t, "t1")}}
+	if result, err := newAnswerExecutorRig(t, desk, boundTo("founder"), seatLeads).Call(t.Context(),
+		approve); err != nil || result.Failed {
+		t.Fatalf("the first answer came to %+v, %v", result, err)
+	}
+	second, err := newAnswerExecutorRig(t, desk, boundTo("jane"), seatLeads).Call(t.Context(),
+		map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "fold_in": "f-1", "choice": "refuse"})
+	if err != nil || !second.Failed || !strings.Contains(second.Output, "founder") ||
+		desk.runs["t1"].FoldIns[0].Answer != sandbox.FoldInApprove {
+		t.Errorf("a second answer came to %+v, %v; want it refused naming the founder's", second, err)
+	}
+
+	moved := running(t, "t2")
+	moved.LaunchID = "launch-next"
+	ended := &deskFake{runs: map[string]sandbox.PendingRun{"t2": moved}}
+	for _, args := range []map[string]any{
+		{"turn_id": "t2", "launch_id": "launch-t2", "fold_in": "f-1", "choice": "approve"},
+		{"turn_id": "gone", "launch_id": "launch-gone", "fold_in": "f-1", "choice": "approve"},
+	} {
+		late, err := newAnswerExecutorRig(t, ended, boundTo("founder"), seatLeads).Call(t.Context(), args)
+		if err != nil || !late.Failed || !strings.Contains(late.Output, "runs as its own turn") ||
+			!ended.runs["t2"].FoldIns[0].Open() {
+			t.Errorf("a late approval came to %+v, %v; want it told the request runs as its own turn", late, err)
+		}
 	}
 }

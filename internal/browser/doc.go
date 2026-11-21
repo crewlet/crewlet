@@ -1,7 +1,9 @@
 // Package browser holds what the engine decides about Chromium that more than
 // one package reads: the oldest major the engine accepts and the suite
-// certifies ([MinChromiumMajor]), and that no Go but the artifact render's
-// client speaks DevTools (ADR-0165).
+// certifies ([MinChromiumMajor]), the Playwright release a seat's box installs
+// and the Chromium build it expects ([PlaywrightMCPRelease],
+// [ExpectedChromiumVersion]), and that no Go but the artifact render's client
+// speaks DevTools (ADR-0165).
 //
 // # The floor
 //
@@ -24,6 +26,17 @@
 // Raising it is argued here with what was measured, and moves the floor pin
 // to the newest patch of the new major in the same change:
 // TestThePinsMeetTheFloor fails while the two disagree.
+//
+// # The Playwright release
+//
+// A seat's box installs Playwright MCP with npm, from the lock
+// internal/browser/boxhelper keeps in tree/. Its two releases
+// ([PlaywrightMCPRelease], [PlaywrightCoreRelease]) and the Chromium build that
+// playwright-core expects ([ExpectedChromiumRevision],
+// [ExpectedChromiumVersion]) are decisions about the seat's browser, so they sit
+// here beside the floor, each the release somebody read: boxhelper's package
+// doc says how its tests hold them to the lock, and keep a bump of the lock
+// alone red until a person has read it and moved these.
 //
 // # DevTools only through the artifact render's client
 //

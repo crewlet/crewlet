@@ -21,9 +21,9 @@ import (
 const listBytes = 1 << 20
 
 // listCopies is how many copies of the list a reader may make: three at most,
-// measured (a line's decode keeps the message raw, the message's decode its
-// content, a call's block its result), plus one for headroom. A reader may
-// never spend anything per element.
+// measured over every reader held to it (the stream's and the result's make
+// none, [wireAlias]), plus one for headroom. A reader may never spend anything
+// per element.
 const listCopies = 4
 
 // listSlack is how many more allocations a list read to its end may cost than a
@@ -101,7 +101,8 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 		return func() { (&claudeEvents{}).Line(raw) }
 	}
 	parse := func(line string) func() {
-		return func() { _ = ClaudeCode{}.Parse(line) }
+		raw := []byte(line)
+		return func() { _ = ClaudeCode{}.Parse(raw) }
 	}
 	transcript := func(line string) func() {
 		raw := []byte(line)
@@ -206,7 +207,7 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 		"a run's event stream, its result's errors": {stream(ending),
 			"[error] the run ended: error_during_execution: cut \ufffd (+4 more line(s))"},
 		"a run's result, its errors": {func() string {
-			res := ClaudeCode{}.Parse(ending)
+			res := ClaudeCode{}.Parse([]byte(ending))
 			return res.Error + " | " + strconv.FormatBool(res.ContextExhausted)
 		}(), "error_during_execution: cut \ufffd\n\nbad \ufffd\n\nPrompt is too long | true"},
 		"a Claude Code transcript, a message's blocks": {transcript(reply),

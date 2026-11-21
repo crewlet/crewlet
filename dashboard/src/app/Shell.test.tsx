@@ -481,7 +481,7 @@ describe("the sidebar's figures", () => {
           handle: "c",
           role: "C",
           activity: "idle",
-          live_call: { in_progress: true, versions: ZERO_VERSIONS },
+          live_calls: [{ in_progress: true, versions: ZERO_VERSIONS }],
         },
         { id: "d", agent_id: "d", handle: "d", role: "D", activity: "needs" },
       ] as never),
@@ -506,12 +506,16 @@ describe("the sidebar's figures", () => {
     return {
       ...seat(role),
       activity: "working",
-      turn: {
-        turn_id: turn,
-        started_at: `2026-09-21T10:${String(at).padStart(2, "0")}:00Z`,
-        stage: "phase",
-        ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
-      },
+      turns: [
+        {
+          turn_id: turn,
+          started_at: `2026-09-21T10:${String(at).padStart(2, "0")}:00Z`,
+          stage: "phase",
+          ...(item
+            ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } }
+            : {}),
+        },
+      ],
     };
   }
 
@@ -569,7 +573,7 @@ describe("the sidebar's figures", () => {
     act(() =>
       store.applySeats([
         workingSeat("A", "t-a", 1),
-        seat("Fresh", { activity: "working", turn: null, live_call: null }),
+        seat("Fresh", { activity: "working", turns: [], live_calls: [] }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -605,7 +609,7 @@ describe("the sidebar's figures", () => {
     act(() =>
       store.applySeats([
         workingSeat("A", "t-a", 1),
-        seat("Fresh", { activity: "working", turn: null, live_call: null }),
+        seat("Fresh", { activity: "working", turns: [], live_calls: [] }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -630,8 +634,8 @@ describe("the sidebar's figures", () => {
         ["C", "D", "E"].map((role) => ({
           agent_id: `a-${role.toLowerCase()}`,
           activity: "idle",
-          turn: null,
-          live_call: null,
+          turns: [],
+          live_calls: [],
         })) as never,
       ),
     );
@@ -650,8 +654,8 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket);
     act(() =>
       store.applySeats([
-        seat("P", { activity: "working", turn: null, live_call: null }),
-        seat("Q", { activity: "working", turn: null, live_call: null }),
+        seat("P", { activity: "working", turns: [], live_calls: [] }),
+        seat("Q", { activity: "working", turns: [], live_calls: [] }),
       ] as never),
     );
     const rows = runningRows();

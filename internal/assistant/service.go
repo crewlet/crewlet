@@ -1045,11 +1045,20 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 // filled is a log's frames after seq after as a stream is handed them: where
 // the log no longer holds every frame after it (gap), a snapshot of the
 // transcript first, then the frames numbered past the snapshot.
+//
+// THE SNAPSHOT IS NUMBERED JUST BELOW THE FIRST FRAME KEPT, never after
+// after: a peer reads a replay a page at a time and asks again after the last
+// frame it drew, and a snapshot filling its page alone would otherwise leave
+// that ask in the gap, answered by another snapshot for every frame evicted.
 func (s *Service) filled(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
 	after uint64, frames []wire.Frame, gap bool) ([]wire.Frame, error) {
 
 	if !gap {
 		return frames, nil
+	}
+	if len(frames) > 0 {
+		// A gap is a first frame past after+1, so this never runs below after.
+		after = frames[0].Seq - 2
 	}
 	snap, err := s.snapshot(ctx, owner, row, after)
 	if err != nil {
@@ -1129,33 +1138,30 @@ func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 		Message: wire.ErrorTurnInterrupted.Sentence()}, nil
 }
 
-// snapshot is the turn as the transcript holds it, numbered after seq after.
+// snapshot is the turn as the transcript holds it, numbered after seq after,
+// cut to one frame ([fitSnapshot]).
 func (s *Service) snapshot(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
 	after uint64) (wire.Frame, error) {
 
-	transcript, err := s.transcripts.Transcript(ctx, owner, row.Conversation)
+	written, err := s.transcripts.TurnTranscript(ctx, owner, row.ID)
 	if err != nil {
 		return wire.Frame{}, s.readFailure(err)
 	}
-	snap := &wire.SnapshotEvent{Messages: []wire.Message{}, Steps: []wire.StepEvent{},
-		Cards: []wire.CardEvent{}}
-	for _, m := range transcript.Messages {
-		if m.Turn == row.ID {
-			snap.Messages = append(snap.Messages, m.Wire())
-		}
+	snap := &wire.SnapshotEvent{Messages: make([]wire.Message, 0, len(written.Messages)),
+		Steps: make([]wire.StepEvent, 0, len(written.Steps)),
+		Cards: make([]wire.CardEvent, 0, len(written.Cards))}
+	for _, m := range written.Messages {
+		snap.Messages = append(snap.Messages, m.Wire())
 	}
-	for _, st := range transcript.Steps {
-		if assistantdomain.StepID(row.ID, st.Index) == st.StepID {
-			st.TurnID = row.ID
-			snap.Steps = append(snap.Steps, st)
-		}
+	for _, st := range written.Steps {
+		st.TurnID = row.ID
+		snap.Steps = append(snap.Steps, st)
 	}
-	for _, c := range transcript.Cards {
-		if c.Turn == row.ID {
-			snap.Cards = append(snap.Cards, c.Event())
-		}
+	for _, c := range written.Cards {
+		snap.Cards = append(snap.Cards, c.Event())
 	}
-	return frameAt(row, after+1, s.now(), wire.Frame{Kind: wire.EventSnapshot, Snapshot: snap}), nil
+	return fitSnapshot(frameAt(row, after+1, s.now(), wire.Frame{Kind: wire.EventSnapshot,
+		Snapshot: snap}))
 }
 
 // frameAt stamps a frame's head for a stream no frame log numbers.

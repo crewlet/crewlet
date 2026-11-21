@@ -1033,6 +1033,10 @@ type Engine struct {
 	// wakeRouters is this node's routers of its busy seats' held inboxes
 	// (wakerouter.go, ADR-0167).
 	wakeRouters seatRouters
+
+	// waitsTold is what each wake waiting behind a busy seat was told of why
+	// it waits, so a person is told each reason once (foldin.go).
+	waitsTold waitsTold
 	// codeSearchWire is this node's code search scatter envelopes, both
 	// halves, and codeSearchLocal the answerer its own searches go to where it
 	// has no broker (codesearch.go).
@@ -2081,11 +2085,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			// window: its previous holder may not have lived to ask.
 			e.kickAccessReviews(s.Handle)
 		},
-		// A seat whose turn has ended re-checks what was refused for the turn
-		// running ([node.ErrSeatBusy]): an answer by turn that arrived mid-turn is
-		// the seat's next turn ([Engine.admitResume]).
+		// A SEAT RUNS UP TO ITS CAP OF TURNS, one per conversation, read
+		// fresh so an apply that changes the cap moves the next admission.
+		SeatTurns: e.seatRunCap,
+		// A seat whose turn has ended re-checks what was refused for the turns
+		// running ([node.ErrSeatFull], [node.ErrConversationBusy]): an answer by
+		// turn that arrived mid-turn is the seat's next turn ([Engine.admitResume]).
 		SeatTurnEnded: func(handle string) {
-			e.readmitResumes(waitSeatBusy, handle)
+			e.readmitResumes(waitSeatTurns, handle)
 		},
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
@@ -2355,6 +2362,15 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.HoldSandbox == nil {
 		// Live, as Answer below: the coordinator may arrive by apply.
 		d.HoldSandbox = e.holdSandboxSeat
+	}
+	if d.Beside == nil {
+		d.Beside = e.beside
+	}
+	if d.SetAside == nil {
+		d.SetAside = e.setAside
+	}
+	if d.HoldAside == nil {
+		d.HoldAside = e.holdAside
 	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark

@@ -72,11 +72,16 @@ type answeredBatch struct {
 func (b answeredBatch) Messages() <-chan jetstream.Msg { return b.msgs }
 func (b answeredBatch) Error() error                   { return b.err }
 
-// eventMsg is a delivered message holding an event, and nothing else a drain
-// reads of it.
+// eventMsg is a delivered message holding an event, its metadata unreadable
+// (a drain takes a message's stream sequence where it parses), and nothing
+// else a drain reads of it.
 type eventMsg struct{ jetstream.Msg }
 
 func (eventMsg) Data() []byte { return []byte(`{"type":"test.delivered"}`) }
+
+func (eventMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	return nil, errors.New("a test message carries no metadata")
+}
 
 // refusals are the errors the client keeps for a pull request the broker
 // answered at once with a status (checkMsg in nats.go's jetstream package):

@@ -536,6 +536,7 @@ roles:
 	})
 	e.secretsMu.Unlock()
 	builder := c.Org.AgentSeatByHandle("builder")
+	roomForRuns(builder, 3)
 
 	for _, turn := range []string{"t1", "t2", "t3"} {
 		if err := launchExecutor(t, e, c, builder, turn); err != nil {

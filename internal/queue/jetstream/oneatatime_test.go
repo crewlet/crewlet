@@ -70,10 +70,11 @@ func TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery(t *testing.T) {
 // hands it to, to the call that runs it, and the goroutine that call is made on.
 var inlinePath = []hop{
 	// Subscribe's handler: its consume loop hands it to dispatchOne in the take
-	// of each fetch, and dispatchOne to runHandler, which calls it.
+	// of each fetch and of a readmitted delivery's, and dispatchOne to
+	// runHandler, which calls it.
 	{from: "Queue.Subscribe", param: "h", carries: "Handler", to: "dispatchOne",
 		at: place{"Queue.Subscribe", []step{{calls: []string{"attach"}, once: true},
-			{calls: []string{"fetch", "fetchLane"}}}}},
+			{calls: []string{"fetch", "fetchLane", "readmittedOne"}}}}},
 	{from: "attachment.dispatchOne", param: "h", carries: "Handler", to: "runHandler",
 		at: place{decl: "attachment.dispatchOne"}},
 	{from: "runHandler", param: "h", carries: "Handler", at: place{decl: "runHandler"}},
@@ -100,6 +101,7 @@ var inlinePath = []hop{
 	// Each fetch hands what it takes to its take on the goroutine that fetched.
 	{from: "attachment.fetch", param: "take", at: place{decl: "attachment.fetch"}},
 	{from: "attachment.fetchLane", param: "take", at: place{decl: "attachment.fetchLane"}},
+	{from: "attachment.readmittedOne", param: "take", at: place{decl: "attachment.readmittedOne"}},
 }
 
 // hop is one step a value takes on its way to the call that runs it: in

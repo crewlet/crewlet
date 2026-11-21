@@ -151,7 +151,7 @@ type Role struct {
 
 	// Sandbox is what this seat's executor box reads beyond the engine-wide
 	// catalogue. See [RoleSandbox].
-	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."`
+	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs. Absent = the engine-wide settings only."`
 
 	// Placement constrains which nodes may run this seat; absent is
 	// anywhere, which is what a single-process deployment always means.
@@ -343,6 +343,13 @@ type RoleSandbox struct {
 	// "say nothing" would be the same zero.
 	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
 
+	// MaxConcurrentRuns caps how many of this seat's executor runs hold it at
+	// once, at most one per conversation (ADR-0169). UNSET is
+	// [org.DefaultMaxConcurrentRuns]; 0 or less is refused, since a seat that
+	// can hold no run could take no turn. A pointer so a seat that names the
+	// default and one that says nothing stay apart on a round trip.
+	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty" js:"min=1" desc:"How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2."`
+
 	// MCP names which of the seat's MCP servers run in its box rather than
 	// reach it over the seat's tool bridge, which every executor box is
 	// given and which serves every other MCP server the seat holds, each
@@ -405,6 +412,11 @@ func (s *RoleSandbox) validate(path Path) error {
 		p.add(at(path, "max_turns"), ErrOutOfRange,
 			"%d (a round cap cannot be negative; omit the field to inherit "+
 				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
+	}
+	if s.MaxConcurrentRuns != nil && *s.MaxConcurrentRuns < 1 {
+		p.add(at(path, "max_concurrent_runs"), ErrOutOfRange,
+			"%d (a seat holding no run could take no turn; omit the field for "+
+				"the default of two, or set a count of 1 or more)", *s.MaxConcurrentRuns)
 	}
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
@@ -889,12 +901,13 @@ func (r *Role) Seat() *org.Role {
 			env = nil
 		}
 		seat.Sandbox = &org.RoleSandbox{
-			PauseTTLSeconds: s.PauseTTLSeconds,
-			MaxTurns:        s.MaxTurns,
-			Setup:           seatSetupSteps(s.Setup),
-			MCP:             org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},
-			Env:             env,
-			OptionalKeys:    slices.Clone(s.OptionalKeys),
+			PauseTTLSeconds:   s.PauseTTLSeconds,
+			MaxTurns:          s.MaxTurns,
+			MaxConcurrentRuns: s.MaxConcurrentRuns,
+			Setup:             seatSetupSteps(s.Setup),
+			MCP:               org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},
+			Env:               env,
+			OptionalKeys:      slices.Clone(s.OptionalKeys),
 		}
 	}
 	return seat

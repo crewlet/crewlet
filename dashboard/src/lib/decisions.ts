@@ -5,9 +5,9 @@
  *
  * # Two groups, decided by the engine
  *
- * The engine's `decisions` lists what is put to the reader and, on their own
- * record, the parked runs they may answer though they are put to somebody
- * else: a run whose question went to a delegate, or to a colleague, that the
+ * The engine's `decisions` lists what is put to the reader (an ask, a parked
+ * run's question, a running executor's fold-in) and, on their own record, the
+ * runs they may answer though they are put to somebody else: a run whose question went to a delegate, or to a colleague, that the
  * reader may still unblock as the seat's lead or an administrator. Each item
  * says where it stands for the reader (`needs_you`, `may_answer`), decided by
  * the answer route's own authority, so no screen keeps a rule of its own:
@@ -36,8 +36,10 @@ import type {
   BudgetWindow,
   DecisionsAnswer,
   ExecutorRow,
+  FoldInItem,
   WorkAskRow,
 } from "~/protocol/index.ts";
+import { callOf, turnOf } from "./seatturn.ts";
 
 /** A seat the engine stopped for a spent token budget, as a decision. */
 export interface SeatCondition {
@@ -55,6 +57,7 @@ export interface SeatCondition {
 export type DecisionSubject =
   | { kind: "ask"; at: string; ask: WorkAskRow; accessChanged?: string[]; others?: boolean }
   | { kind: "run"; at: string; run: ExecutorRow; accessChanged?: string[]; others?: boolean }
+  | { kind: "fold_in"; at: string; foldIn: FoldInItem; accessChanged?: undefined; others?: boolean }
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /** How many change lines a note names before it counts the rest. */
@@ -108,6 +111,8 @@ export function decisionSubjects(
       subjects.push({ kind: "ask", at: item.at, ask: item.ask, accessChanged, others });
     if (item.kind === "run" && item.run)
       subjects.push({ kind: "run", at: item.at, run: item.run, accessChanged, others });
+    if (item.kind === "fold_in" && item.fold_in)
+      subjects.push({ kind: "fold_in", at: item.at, foldIn: item.fold_in, others });
   }
   for (const seat of seats) subjects.push({ kind: "seat", at: seat.at, seat });
   subjects.sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0));
@@ -169,7 +174,7 @@ export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindo
   const others: T[] = [];
   for (const c of conditions) {
     const raises = reader.configWrite || (c.window !== undefined && leads.has(c.row.handle ?? ""));
-    const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
+    const item = turnOf(c.row)?.work_item ?? callOf(c.row)?.work_item ?? null;
     const reassign = item !== null && reader.acts.includes("update_work_item");
     (raises || reassign ? mine : others).push(c);
   }

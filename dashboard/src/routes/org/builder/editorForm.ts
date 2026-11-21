@@ -138,6 +138,8 @@ export interface SeatForm {
   readonly pauseTTL: string;
   /** `sandbox.max_turns` as typed: digits, or empty for the default. */
   readonly maxTurns: string;
+  /** `sandbox.max_concurrent_runs` as typed: digits, or empty for the default. */
+  readonly maxRuns: string;
 }
 
 /** One of the per-phase chains a seat may carry beside `llm` ([PHASE_MODEL_FIELDS]). */
@@ -264,6 +266,7 @@ export function seatForm(
     placementLabels: labelEntries(getPath(data, ["placement", "labels"])),
     pauseTTL: numberText(getPath(data, ["sandbox", "pause_ttl_seconds"])),
     maxTurns: numberText(getPath(data, ["sandbox", "max_turns"])),
+    maxRuns: numberText(getPath(data, ["sandbox", "max_concurrent_runs"])),
   };
 }
 
@@ -303,6 +306,16 @@ export function wholeNumberError(typed: string): string | undefined {
   const t = typed.trim();
   if (t === "" || /^\d+$/.test(t)) return undefined;
   return "Write a whole number, or leave it empty for the default.";
+}
+
+/**
+ * Why a typed run cap cannot be written, or undefined: `max_concurrent_runs`
+ * is a count of runs, so 0 is refused as the engine refuses it, never "none".
+ */
+export function runCapError(typed: string): string | undefined {
+  const t = typed.trim();
+  if (t === "" || /^0*[1-9]\d*$/.test(t)) return undefined;
+  return "Write a whole number of at least 1, or leave it empty for two.";
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +579,11 @@ export function seatParts(
       wholeValue(form.pauseTTL),
     ),
     ...changed(["sandbox", "max_turns"], wholeValue(initial.maxTurns), wholeValue(form.maxTurns)),
+    ...changed(
+      ["sandbox", "max_concurrent_runs"],
+      wholeValue(initial.maxRuns),
+      wholeValue(form.maxRuns),
+    ),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {
