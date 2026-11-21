@@ -94,14 +94,14 @@ func TestAWakeBeforeTheFirstPassReachesItsSeat(t *testing.T) {
 		t.Fatalf("publish through the node's wake queue: %v", err)
 	}
 
-	if got := labelsOf(q.Queue.Backlog(inbox("ceo"), inboxGroup("ceo"))); !slices.Equal(got,
+	if got := labelsOf(mailOf(t, q.Queue, inbox("ceo"), inboxGroup("ceo"))); !slices.Equal(got,
 		[]string{"through-the-node"}) {
 		t.Fatalf("the seat's mailbox holds %v, want the wake published through the node: "+
 			"a wake sent before the first mailbox pass was dropped by the stream", got)
 	}
 	// The failure mode itself, so the case cannot pass on a twin that kept
 	// mail nobody subscribed to.
-	if got := q.Queue.Backlog(inbox("swe"), inboxGroup("swe")); len(got) != 0 {
+	if got := mailOf(t, q.Queue, inbox("swe"), inboxGroup("swe")); len(got) != 0 {
 		t.Fatalf("a wake published to a seat with no mailbox was kept (%v); this twin no "+
 			"longer drops what no consumer covers, so it certifies nothing here", labelsOf(got))
 	}
@@ -149,7 +149,7 @@ func TestAWakeToASeatWithNoMailboxIsRefused(t *testing.T) {
 	if _, err := q.Queue.EnsureSubscription(t.Context(), inbox("ceo"), inboxGroup("ceo")); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
-	if got := q.Queue.Backlog(inbox("ceo"), inboxGroup("ceo")); len(got) != 0 {
+	if got := mailOf(t, q.Queue, inbox("ceo"), inboxGroup("ceo")); len(got) != 0 {
 		t.Fatalf("a refused wake reached the broker anyway: %v", labelsOf(got))
 	}
 }
@@ -218,4 +218,15 @@ func labelsOf(evs []*events.Event) []string {
 		out = append(out, ev.Type)
 	}
 	return out
+}
+
+// mailOf is what a seat's mailbox holds ([queue.EventQueue.Backlog]): a refused
+// read fails the case rather than reading as an empty mailbox.
+func mailOf(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
+	t.Helper()
+	evs, err := q.Backlog(t.Context(), topic, group, 1<<12)
+	if err != nil {
+		t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+	}
+	return evs
 }

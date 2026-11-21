@@ -41,7 +41,7 @@ import (
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
 // highest version.
-const RecordVersion = 8
+const RecordVersion = 9
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -89,6 +89,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Record.Refusals", Since: 7, Path: []string{"refusals"}},
 	{Name: "Record.RefusalsElided", Since: 7, Path: []string{"refusals_elided"}},
 	{Name: "Turns.BusyMS", Since: 8, Path: []string{"turns", "busy_ms"}},
+	{Name: "LedgerRow.Disposition joined", Since: 9, Path: []string{"ledger", "disposition"},
+		Equals: string(types.DispositionJoined)},
 }
 
 // VersionedFields is the table, for the conformance suite.

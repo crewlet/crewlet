@@ -37,13 +37,12 @@ func (s *suite) runAttachment(t *testing.T) {
 		other.awaitLabels(t, "an untouched group to keep receiving", "e1", "e2")
 		mine.staysAt(ctx, t, 1, "a detached pair kept receiving")
 
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			// RETAINED for whoever attaches next — that is the whole
-			// point of detach being non-destructive.
-			awaitState(t, "e2 to be retained for the next attacher", func() bool {
-				return equalStrings(labelsOf(backlog(q, "topic.a", "grp")), []string{"e2"})
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		// RETAINED for whoever attaches next — that is the whole
+		// point of detach being non-destructive.
+		awaitState(t, "e2 to be retained for the next attacher", func() bool {
+			return equalStrings(labelsOf(backlog(q, "topic.a", "grp")), []string{"e2"})
+		})
 
 		// Re-attaching replays it: a seat that comes back finds its mail.
 		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(mine))
@@ -112,11 +111,10 @@ func (s *suite) runAttachment(t *testing.T) {
 		seen.awaitLabels(t, "only the first event to be handled", "e1")
 		seen.staysAt(ctx, t, 1, "the detach did not stop the next delivery")
 
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			awaitState(t, "the undelivered event to be retained", func() bool {
-				return equalStrings(labelsOf(backlog(q, "topic.detach1", "grp")), []string{"e2"})
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		awaitState(t, "the undelivered event to be retained", func() bool {
+			return equalStrings(labelsOf(backlog(q, "topic.detach1", "grp")), []string{"e2"})
+		})
 	})
 
 	t.Run("detach_removes_batch_subscription", func(t *testing.T) {
@@ -135,11 +133,10 @@ func (s *suite) runAttachment(t *testing.T) {
 		publish(ctx, t, q, "topic.b", newConvEvent("e2", "k"))
 		batches.staysAt(ctx, t, 1, "a detached batch consumer kept receiving")
 
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			awaitState(t, "e2 to be retained", func() bool {
-				return equalStrings(labelsOf(backlog(q, "topic.b", "grp")), []string{"e2"})
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		awaitState(t, "e2 to be retained", func() bool {
+			return equalStrings(labelsOf(backlog(q, "topic.b", "grp")), []string{"e2"})
+		})
 	})
 
 	t.Run("detach_releases_this_attachments_pause_holds", func(t *testing.T) {
@@ -256,11 +253,10 @@ func (s *suite) runAttachment(t *testing.T) {
 
 		publish(ctx, t, q, "seat.inbox", newEvent("held"))
 		j.staysAt(ctx, t, 0, "a quiesced attachment took new work")
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			awaitState(t, "the held event to stay in the mailbox", func() bool {
-				return equalStrings(labelsOf(backlog(q, "seat.inbox", "grp")), []string{"held"})
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		awaitState(t, "the held event to stay in the mailbox", func() bool {
+			return equalStrings(labelsOf(backlog(q, "seat.inbox", "grp")), []string{"held"})
+		})
 
 		resumed, err := q.Unquiesce(ctx, "seat.inbox", "grp")
 		if err != nil || !resumed {
@@ -313,7 +309,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		// deliverable on that (topic, group) and there is no consumer
 		// left to un-quiesce it, so the seat's next owner attaches to a
 		// subscription that never hands it anything.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 
 		entered := make(chan struct{})
@@ -498,7 +494,7 @@ func (s *suite) runFleet(t *testing.T) {
 		// Decommissioning a role must not depend on which node happened
 		// to run the seat.
 		peer := s.needPeer(t)
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		a := s.start(ctx, t)
 		b := s.startQueue(ctx, t, peer(t, a))
 

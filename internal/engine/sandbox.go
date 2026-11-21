@@ -1536,7 +1536,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // which later iterations' launcher seals briefs from ([agentLauncher.notes]).
 func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput, notes *rowSource,
 ) (input RunnerInput, tel turnTelemetry, err error) {
-	resumedReply, err := resumeReply(in.Run)
+	// AND EVERY WAKE ITS RUN READ: the turn answers those too (wakeitem.go).
+	resumedReply, err := e.runSteers.turnReply(in.Run)
 	if err != nil {
 		return input, tel, err
 	}
@@ -2827,6 +2828,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// the relaunch's write removed it, its delivery left to a turn of its
 		// own. See wakeitem.go.
 		WakesEnded: e.runSteers.wakesEnded,
+		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
+		// wake from the run's requester about its work handed to it. See
+		// wakerouter.go.
+		Busy: e.seatRunsMoved,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,

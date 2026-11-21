@@ -353,6 +353,24 @@ var ledgerCases = []fleetCase{{
 		}
 	},
 }, {
+	// WHO WORKED A KEY is the first record's detail: a skipped delivery names
+	// the turn whose run read it (internal/engine's skipJoined).
+	name: "a worked key says which record worked it first",
+	fn: func(h *fleetHarness) {
+		h.record("ceo", "wk-1", "turn-a", h.now())
+		h.record("ceo", "wk-1", "turn-b", h.now().Add(time.Second))
+		got := h.workedBy("ceo", "wk-1", "wk-2")
+		if by, ok := got["wk-1"]; !ok || by != "turn-a" {
+			h.t.Fatalf("a key first recorded by turn-a answered %q (worked %v)", by, ok)
+		}
+		if _, ok := got["wk-2"]; ok {
+			h.t.Fatal("an unrecorded key came back worked")
+		}
+		if _, ok := h.workedBy("cto", "wk-1")["wk-1"]; ok {
+			h.t.Fatal("one seat's completion answered for another seat")
+		}
+	},
+}, {
 	name: "asking about no keys is not an error",
 	fn: func(h *fleetHarness) {
 		if got := h.worked("ceo"); len(got) != 0 {

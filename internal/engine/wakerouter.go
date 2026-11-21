@@ -1,0 +1,480 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"maps"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// A busy seat's router (ADR-0167): while one of a seat's executor runs holds
+// it, the node holding the seat reads the seat's held inbox without consuming
+// it ([queue.EventQueue.Backlog]) and hands the run, as a wake item, every
+// wake from the run's own requester about the run's work ([routeOf]). A wake
+// the run reads is claimed and its delivery dropped after the run; one it never
+// reads runs as a turn of its own. The package doc's "A busy seat's wake router".
+
+// routeBackstop is how long a router waits for a nudge before it reads the
+// held inbox again. The nudge rides a best-effort stream subscription, so a
+// missed one only delays a join by this much; each read costs one throwaway
+// consumer's proposal on JetStream, so the figure is that cost per busy seat:
+// two minutes keeps a seat's runs of an hour to thirty reads.
+const routeBackstop = 2 * time.Minute
+
+// routeReadLimit is the most mail one read of a held inbox takes. A job holds
+// at most [sandbox.MaxJobWakes] wake items, and a follow-up deeper than 64
+// messages behind a run is on a seat so far behind that it waits its turn;
+// 64 keeps a read to one JetStream fetch page and its decode to a few MB.
+const routeReadLimit = 64
+
+// routeOutcome is what a router decided for one wake and job, the
+// [metrics.SeatWakesRouted] counter's `outcome`.
+type routeOutcome string
+
+const (
+	// routeJoined: the wake was filed on the run's record for its job.
+	routeJoined routeOutcome = "joined"
+	// routeRefused: the run's record took no more ([sandbox.ErrWakeClosed],
+	// [sandbox.ErrWakesSpent], [sandbox.ErrWakeTooLarge]).
+	routeRefused routeOutcome = "refused"
+	// routeLeftQueued: the rule matched nothing ([routeOf]).
+	routeLeftQueued routeOutcome = "left_queued"
+)
+
+// routeOutcomes is the closed set.
+var routeOutcomes = []routeOutcome{routeJoined, routeRefused, routeLeftQueued}
+
+// Valid reports whether o is one of [routeOutcomes].
+func (o routeOutcome) Valid() bool { return slices.Contains(routeOutcomes, o) }
+
+// routeRule is the part of the rule a wake matched, the counter's `rule`.
+type routeRule string
+
+const (
+	// ruleConversation: written in the conversation the run works in.
+	ruleConversation routeRule = "conversation"
+	// ruleWorkItem: about the work item the run was charged to.
+	ruleWorkItem routeRule = "work_item"
+	// ruleNone: it matched neither, or is not a wake a run takes.
+	ruleNone routeRule = "none"
+)
+
+// routeRules is the closed set.
+var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleNone}
+
+// Valid reports whether r is one of [routeRules].
+func (r routeRule) Valid() bool { return slices.Contains(routeRules, r) }
+
+// Why a wake stays on the inbox ([routeOf]), as seat_wake_left_queued says it.
+const (
+	stayKind        = "kind"          // not a ledgered type, or one answered on its own channel
+	stayScheduled   = "scheduled"     // a schedule's fire, its own instance
+	stayWorked      = "worked"        // the completion ledger records it worked
+	stayNoRequester = "no_requester"  // the run works for nobody it could be from
+	stayWriter      = "other_writer"  // from somebody other than the run's requester
+	stayOtherWork   = "other_work"    // neither the run's conversation nor its item
+	stayNoWords     = "no_words"      // carries none of its writer's words to hand over
+	stayRefused     = "record_closed" // the run's record took no more
+)
+
+// wakeOrigin is who one wake is from and what it is about, composed with the
+// functions dispatch composes a turn's requester with ([requesterOf],
+// [credentialRequesterOf], [workingForIn]) over the one wake.
+type wakeOrigin struct {
+	requester, login string
+	workingFor       *types.WorkingFor
+	conversation     string
+	item             *types.WorkItem
+}
+
+// originOf is ev's [wakeOrigin] as seat handle's turn would read it.
+func (e *Engine) originOf(handle string, ev *events.Event) wakeOrigin {
+	evs := []*events.Event{ev}
+	interactions := e.interactionsOf(evs, handle)
+	login, _ := credentialRequesterOf(evs, evs, interactions, handle)
+	item, _ := workItemOfEvent(ev)
+	return wakeOrigin{
+		requester:    requesterIdentity(e.Company(), requesterOf(evs, interactions, handle)),
+		login:        login,
+		workingFor:   workingForIn(evs),
+		conversation: notify.ConversationIdentityOf(ev),
+		item:         item,
+	}
+}
+
+// routeOf is whether wake ev, from o, joins run, and by which rule, else why it
+// stays. ONLY THE RUN'S OWN REQUESTER'S WAKES JOIN: a run is held to one
+// requester (ADR-0109), so another writer's words never reach it here.
+// worked says the completion ledger records one of ev's keys worked.
+func routeOf(run sandbox.PendingRun, ev *events.Event, o wakeOrigin, worked bool) (routeRule, string) {
+	switch {
+	// A TYPE THE LEDGER DOES NOT KEY would be claimed and run again. A
+	// delegated review and a colleague's ask or answer are answered on a
+	// channel of their own, which a run's turn answers only for its trigger.
+	case !inbox.Ledgered(ev.Type) || slices.Contains(ownChannel, ev.Type):
+		return ruleNone, stayKind
+	// A FIRE IS AN INSTANCE OF ITS SCHEDULE with its own cap, never a
+	// follow-up of the fire running (the answer match refuses it too).
+	case notify.Scheduled(o.conversation):
+		return ruleNone, stayScheduled
+	case worked:
+		return ruleNone, stayWorked
+	case run.Requester == "" && run.RequesterLogin == "":
+		return ruleNone, stayNoRequester
+	case o.requester != run.Requester || o.login != run.RequesterLogin ||
+		!sameWorkingFor(o.workingFor, run.WorkingFor):
+		return ruleNone, stayWriter
+	case run.ConversationKey != "" && o.conversation == run.ConversationKey:
+		return ruleConversation, ""
+	case run.WorkItem != nil && run.WorkItem.ID != "" && o.item != nil &&
+		o.item.Backend == run.WorkItem.Backend && o.item.ID == run.WorkItem.ID:
+		return ruleWorkItem, ""
+	}
+	return ruleNone, stayOtherWork
+}
+
+// ownChannel is the wake types answered on a channel of their own ([routeOf]).
+var ownChannel = []string{types.DelegatedReviewType, types.A2ARequestType, types.A2AMessageType}
+
+// sameWorkingFor reports whether a and b name the same requester to work for,
+// nil only equal to nil.
+func sameWorkingFor(a, b *types.WorkingFor) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Kind == b.Kind && a.Seat == b.Seat && a.Login == b.Login && slices.Equal(a.Apps, b.Apps)
+}
+
+// wakeFor is ev as the run's record holds it ([steer.Wake]): its id and keys
+// ([deliveryKeys]), its writer as o names them, where it was written (its
+// thread's stamped key and its record's position, which the claim reads its
+// conversation through), the obligation a turn of its own would carry
+// ([ReplyFor]), and its words and label as the turn's own ask would read them
+// ([turnAskFor]). False for a wake carrying none of its writer's words.
+func (e *Engine) wakeFor(handle string, ev *events.Event, o wakeOrigin) (steer.Wake, bool) {
+	ask := turnAskFor(e.notifyPrompts(), e.liveParties(), handle, []*events.Event{ev})
+	label := ask.Label()
+	if label == nil {
+		return steer.Wake{}, false
+	}
+	by, kind := o.requester, iam.ActorAgent
+	switch {
+	case o.login != "":
+		by, kind = o.login, iam.ActorOperator
+	case e.seatIsHuman(o.requester):
+		kind = iam.ActorHuman
+	}
+	owes := ""
+	if reply := ReplyFor([]*events.Event{ev}); reply.Awaited() {
+		owes = reply.String()
+	}
+	return steer.Wake{
+		ID: ev.ID.String(), Triggers: []string{ev.ID.String()}, Keys: deliveryKeys(ev),
+		By: by, ByKind: kind, WorkingFor: notify.WorkingForKey(o.workingFor),
+		Conversation: o.conversation, Partition: notify.KeyOfAll([]*events.Event{ev}), Label: *label,
+		OwesAnswer: obliges(ev), At: ev.Timestamp, Owes: owes, Seen: notify.TriggerOf(ev), Text: ask.Text(),
+	}, true
+}
+
+// seatIsHuman reports whether the live chart holds handle as a person's seat.
+func (e *Engine) seatIsHuman(handle string) bool {
+	company := e.Company()
+	if handle == "" || company == nil || company.Org == nil {
+		return false
+	}
+	role := company.Org.Role(handle)
+	return role != nil && role.IsHuman()
+}
+
+// seatRouters is this node's routers, one per busy seat it holds: running is
+// each seat's live one, and last the end of each seat's newest, which a router
+// started after it waits for, so no two read one seat at once.
+type seatRouters struct {
+	mu      sync.Mutex
+	running map[string]*seatRouter
+	last    map[string]<-chan struct{}
+	stopped bool
+}
+
+// seatRouter is one seat's router: its stop, its end, and its nudge, which
+// coalesces into one read.
+type seatRouter struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	nudge  chan struct{}
+}
+
+// poke asks the router for a read, never blocking.
+func (r *seatRouter) poke() {
+	select {
+	case r.nudge <- struct{}{}:
+	default:
+	}
+}
+
+// seatRunsMoved follows a seat's runs on this node ([sandbox.CoordinatorOptions.Busy]):
+// a router while one holds the seat, none otherwise. READ, NEVER PASSED, so
+// calls landing out of order end on the seat's state.
+func (e *Engine) seatRunsMoved(handle string) {
+	busy := false
+	if rt := e.sandbox.Load(); rt != nil {
+		busy, _ = rt.coordinator.SeatRuns(handle)
+	}
+	e.followSeat(handle, busy)
+}
+
+// followSeat starts handle's router where busy and none runs, and stops the
+// one running where not; a router started while the last is still ending waits
+// for it, so no two read one seat at once.
+func (e *Engine) followSeat(handle string, busy bool) {
+	routers := &e.wakeRouters
+	routers.mu.Lock()
+	defer routers.mu.Unlock()
+	r, running := routers.running[handle]
+	switch {
+	case !busy && running:
+		r.cancel()
+		delete(routers.running, handle)
+	// NO ROUTER WITHOUT A WAY TO READ AND FILE: an engine with no queue or
+	// run steers has no inbox to read or record to file on.
+	case busy && !running && !routers.stopped && e.backends != nil && e.backends.Queue != nil &&
+		e.runSteers != nil:
+		ctx, cancel := context.WithCancel(context.Background())
+		next := &seatRouter{cancel: cancel, done: make(chan struct{}), nudge: make(chan struct{}, 1)}
+		if routers.running == nil {
+			routers.running, routers.last = map[string]*seatRouter{}, map[string]<-chan struct{}{}
+		}
+		prev := routers.last[handle]
+		routers.running[handle], routers.last[handle] = next, next.done
+		go e.runRouter(ctx, handle, next, prev)
+	}
+}
+
+// nudgeRouter asks handle's router, where it has one, for a read
+// ([Dispatcher.Idle]): mail it skipped while a dispatch ran is read now.
+func (e *Engine) nudgeRouter(handle string) {
+	e.wakeRouters.mu.Lock()
+	r := e.wakeRouters.running[handle]
+	e.wakeRouters.mu.Unlock()
+	if r != nil {
+		r.poke()
+	}
+}
+
+// stopRouters stops every router and waits for each to end; none starts
+// after.
+func (e *Engine) stopRouters() {
+	routers := &e.wakeRouters
+	routers.mu.Lock()
+	routers.stopped = true
+	for _, r := range routers.running {
+		r.cancel()
+	}
+	routers.running = nil
+	ends := slices.Collect(maps.Values(routers.last))
+	routers.mu.Unlock()
+	for _, end := range ends {
+		<-end
+	}
+}
+
+// routerStreamBudget bounds a router's withdrawal of its nudges' subscriptions,
+// made as it ends on a context of its own: a broker that does not answer
+// leaves the ephemeral subscription to the broker's own reaping.
+const routerStreamBudget = 5 * time.Second
+
+// runRouter is r's goroutine, until ctx ends: once prev (the seat's router
+// before it) has ended, it reads the seat's held inbox at once, then on every
+// nudge (a publish to the inbox or its lane, a dispatch of the seat ending)
+// and at least every [routeBackstop], one read at a time.
+func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, prev <-chan struct{}) {
+	defer close(r.done)
+	defer r.cancel()
+	if prev != nil {
+		select {
+		case <-prev:
+		case <-ctx.Done():
+			return
+		}
+	}
+	subject, group, err := seatHold{engine: e}.inboxOf(handle)
+	if err != nil {
+		log.DebugContext(ctx, "seat_router_not_started", "seat", handle, "error", err.Error())
+		return
+	}
+	q := e.backends.Queue
+	for _, pattern := range []string{subject, queue.LaneOf(subject)} {
+		// BOTH: a backend stores lane mail under the lane's subject or the
+		// inbox's ([queue.SubjectFor]), and a nudge must reach either way.
+		unsub, err := q.SubscribeStream(ctx, pattern, func(context.Context, string, *events.Event) { r.poke() })
+		if err != nil {
+			log.WarnContext(ctx, "seat_router_unnudged", "seat", handle, "subject", pattern,
+				"error", err.Error(), "detail", "the router reads the seat's inbox at its backstop alone")
+			continue
+		}
+		defer func() {
+			stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), routerStreamBudget)
+			defer cancel()
+			_ = unsub(stop)
+		}()
+	}
+	decided := map[string]map[string]bool{}
+	backstop := time.NewTimer(routeBackstop)
+	defer backstop.Stop()
+	for {
+		e.routeSeat(ctx, handle, subject, group, decided)
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.nudge:
+		case <-backstop.C:
+		}
+		backstop.Reset(routeBackstop)
+	}
+}
+
+// routeSeat is one read of handle's held inbox (subject, group): every wake
+// [routeOf] gives the run holding the seat is filed for its job, each decided
+// once per job (decided records which, by job and wake id). NOTHING WHILE A
+// DISPATCH OF THE SEAT RUNS here: the turn that launched the run may not have
+// recorded its own triggers worked yet ([Dispatcher.Idle] nudges after).
+func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, decided map[string]map[string]bool) {
+	if e.dispatch != nil && e.dispatch.Running(handle) {
+		return
+	}
+	runs, err := e.runSteers.store.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		log.DebugContext(ctx, "seat_router_runs_unread", "seat", handle, "error", err.Error())
+		return
+	}
+	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
+		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
+	})
+	for job := range decided {
+		if !slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool { return run.LaunchID == job }) {
+			delete(decided, job)
+		}
+	}
+	if len(runs) == 0 {
+		return
+	}
+	mail, err := e.backends.Queue.Backlog(ctx, subject, group, routeReadLimit)
+	if err != nil {
+		log.DebugContext(ctx, "seat_router_inbox_unread", "seat", handle, "error", err.Error())
+		return
+	}
+	mail = slices.DeleteFunc(mail, func(ev *events.Event) bool {
+		return ev == nil || !slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool {
+			return !decided[run.LaunchID][ev.ID.String()]
+		})
+	})
+	worked := e.workedOf(ctx, handle, mail)
+	for _, ev := range mail {
+		e.routeWake(ctx, handle, runs, ev, worked, decided)
+	}
+}
+
+// workedOf is which of mail's keys the completion ledger records worked, in
+// one read; nil where there is no ledger or it could not be read (it fails
+// open, as the dispatcher's read does).
+func (e *Engine) workedOf(ctx context.Context, handle string, mail []*events.Event) map[string]bool {
+	if e.runSteers.completions == nil {
+		return nil
+	}
+	var keys []string
+	for _, ev := range mail {
+		keys = append(keys, deliveryKeys(ev)...)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return e.runSteers.completions.Worked(ctx, handle, keys)
+}
+
+// routeWake decides ev for the first of runs whose rule it matches, filing it
+// there, and records the decision for every run it was weighed for.
+func (e *Engine) routeWake(ctx context.Context, handle string, runs []sandbox.PendingRun, ev *events.Event,
+	worked map[string]bool, decided map[string]map[string]bool) {
+
+	id := ev.ID.String()
+	mark := func(job string) {
+		if decided[job] == nil {
+			decided[job] = map[string]bool{}
+		}
+		decided[job][id] = true
+	}
+	o := e.originOf(handle, ev)
+	isWorked := slices.ContainsFunc(deliveryKeys(ev), func(key string) bool { return worked[key] })
+	why := ""
+	for _, run := range runs {
+		if decided[run.LaunchID][id] {
+			continue
+		}
+		rule, stay := routeOf(run, ev, o, isWorked)
+		if rule == ruleNone {
+			mark(run.LaunchID)
+			why = stay
+			continue
+		}
+		wake, ok := e.wakeFor(handle, ev, o)
+		if !ok {
+			mark(run.LaunchID)
+			why = stayNoWords
+			continue
+		}
+		err := e.runSteers.fileWake(ctx, run.TurnID, run.LaunchID, wake)
+		switch {
+		case err == nil:
+			mark(run.LaunchID)
+			e.noteRouted(ctx, handle, run, id, routeJoined, rule, "", nil)
+			return
+		case errors.Is(err, sandbox.ErrWakeClosed), errors.Is(err, sandbox.ErrWakesSpent),
+			errors.Is(err, sandbox.ErrWakeTooLarge):
+			// NEVER AGAIN FOR THIS JOB: the record said no, and its delivery
+			// runs as a turn of its own after the run.
+			mark(run.LaunchID)
+			e.noteRouted(ctx, handle, run, id, routeRefused, rule, stayRefused, err)
+			return
+		default:
+			// THE STORE DID NOT ANSWER: undecided, so the next read asks again.
+			log.WarnContext(ctx, "seat_wake_not_filed", "seat", handle, "turn_id", run.TurnID,
+				"wake_id", id, "error", err.Error(),
+				"detail", "the run's record could not be reached; the next read files the wake again")
+			return
+		}
+	}
+	if why != "" {
+		e.noteRouted(ctx, handle, sandbox.PendingRun{}, id, routeLeftQueued, ruleNone, why, nil)
+	}
+}
+
+// noteRouted counts and says one decision of a router
+// ([metrics.SeatWakesRouted]), as steer_note_filed says a note's filing.
+func (e *Engine) noteRouted(ctx context.Context, handle string, run sandbox.PendingRun, wakeID string,
+	outcome routeOutcome, rule routeRule, why string, err error) {
+
+	e.metrics.Add(metrics.SeatWakesRouted, 1, metrics.Attrs{"outcome": string(outcome), "rule": string(rule)})
+	switch outcome {
+	case routeJoined:
+		log.InfoContext(ctx, "seat_wake_joined", "seat", handle, "turn_id", run.TurnID, "job", run.LaunchID,
+			"wake_id", wakeID, "rule", string(rule))
+	case routeRefused:
+		log.InfoContext(ctx, "seat_wake_left_queued", "seat", handle, "turn_id", run.TurnID,
+			"job", run.LaunchID, "wake_id", wakeID, "rule", string(rule), "reason", why, "error", err.Error(),
+			"detail", "the run's record takes no more wakes for this job; the wake runs as a turn of its own")
+	default:
+		log.DebugContext(ctx, "seat_wake_left_queued", "seat", handle, "wake_id", wakeID, "reason", why)
+	}
+}
