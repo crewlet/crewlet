@@ -77,7 +77,7 @@ func (w *syncWorld) reuseArms(b *testing.B, repo, git string, n int) {
 	clk := newClock()
 	var pool *gitproc.Pool
 	c, drop := w.coldCache(b, b.TempDir(), n, cache.FetchConcurrency, clk.on, func(o *cache.Options) {
-		pool = newPoolOf(b, o.Layout, git, runtime.NumCPU(), 0, 1<<40)
+		pool = newPoolOf(b, o.Layout, git, runtime.NumCPU(), 0, 1<<40, 0)
 		o.Git = pool
 	})
 	defer drop()

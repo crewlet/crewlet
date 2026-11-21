@@ -35,7 +35,7 @@ type Gitlet struct {
 
 	// MaxTransfers is the size of the pool's TRANSFER lane — the clones,
 	// fetches and pushes in flight — passed raw like MaxProcesses.
-	MaxTransfers int `yaml:"max_transfers,omitempty" json:"max_transfers,omitempty" js:"min=0;max=65536" desc:"Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."`
+	MaxTransfers int `yaml:"max_transfers,omitempty" json:"max_transfers,omitempty" js:"min=0;max=65536" desc:"Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the memory the executor's pools leave. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."`
 
 	// ImportAllowPrivate lifts the public-address rule from the one outbound git
 	// dial (internal/gitlet/gitproc's ResolveRemote): set, a remote's host is
