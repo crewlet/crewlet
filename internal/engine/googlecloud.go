@@ -14,8 +14,8 @@ import (
 
 // googleCloudPass adapts googlecloud.Reconcile to the pass contract: the
 // provisioner the engine reaches by federation, the levels Google's roles
-// leave grantable and the identity project's accounts, then each agent's own
-// service account.
+// leave grantable and the identity project's accounts, each agent's growth
+// identity (googlegrowth.go), then each agent's own Google Cloud account.
 //
 // NO TEARDOWN: the engine puts nothing company-wide at Google. Every agent's
 // account is disabled or deleted by the disconnect's access sync
@@ -84,12 +84,22 @@ func (p *googleCloudPass) run(ctx context.Context, _ setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: google cloud pass: %w", err)
 	}
+	growthHeld, err := p.engine.backends.Fleet.ListGoogleIdentities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: google cloud pass: read the growth identities: %w", err)
+	}
 	res, err := googlecloud.Reconcile(ctx, googlecloud.Options{
-		Client: client, Company: company.Config.Name, Seats: held,
+		Client: client, Company: company.Config.Name, Seats: held, Growth: growthHeld,
 		InUse: seataccess.LevelsInUse(company.Config, seataccess.LaneGoogleCloud),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: google cloud pass: %w", err)
 	}
-	return res.Findings(), nil
+	// THE GOOGLE IDENTITY PASS, before any Google growth lane's pass, which
+	// follows Google Cloud's in [integration.ConvergeOrder].
+	growth, err := p.engine.convergeGrowthIdentities(ctx, company.Config, client, growthHeld)
+	if err != nil {
+		return nil, fmt.Errorf("engine: google identity pass: %w", err)
+	}
+	return append(res.Findings(), growth...), nil
 }

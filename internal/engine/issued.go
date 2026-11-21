@@ -170,7 +170,7 @@ func (e *Engine) seatIssuers() []seatIssuer {
 	return []seatIssuer{
 		githubSeatIssuer{issuer: &e.githubIssuer},
 		awsSeatIssuer{issuer: &e.awsIssuer},
-		googleCloudSeatIssuer{engine: e, tokens: &e.googleCloudIssuer},
+		googleCloudSeatIssuer{engine: e, tokens: &e.googleIssuer},
 	}
 }
 
