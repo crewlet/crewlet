@@ -31,6 +31,8 @@ const (
 	skipEditInThread
 	// skipAbsorbed: a completed turn read its conversation past it.
 	skipAbsorbed
+	// skipJoined: a running turn's run read it as a wake ([joinedKey]).
+	skipJoined
 )
 
 // absorbed reports whether ev is at or below its seat's mark for its
