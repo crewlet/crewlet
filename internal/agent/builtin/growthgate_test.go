@@ -51,7 +51,8 @@ func TestASeatIsOfferedTheGrowthToolsItsLevelAllows(t *testing.T) {
 	reg := tools.NewRegistry()
 	product := &fakeAds{levels: map[string]growth.Level{"sre": growth.LevelRead}}
 	if _, err := builtin.Register(reg, builtin.Deps{Growth: builtin.GrowthDeps{
-		Products: []builtin.GrowthProduct{product}, Requesters: healthRequesters(), Chart: chart}}); err != nil {
+		Products: []builtin.GrowthProduct{product}, Requesters: healthRequesters(), Chart: chart,
+		Audit: &growthAudit{}}}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := reg.Snapshot()
