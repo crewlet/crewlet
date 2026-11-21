@@ -70,7 +70,7 @@ A seat names the apps it may touch (`apps`, required while on). Resources no app
 | `app_store_connect_admin` | admin | Asks for an account change or a delete that cannot be undone |
 | `app_store_connect_reviews` | read | An app's reviews, newest first, never the reviewer's name |
 | `app_store_connect_reply_to_reviews` | public | Asks to post 1 to 10 replies to one app's reviews, allowed or denied together |
-| `app_store_connect_sales` | read | One Pacific day's units and proceeds per app, territory and currency |
+| `app_store_connect_sales` | read | One Pacific day's units and proceeds per app, territory and currency; an in-app purchase's or subscription's row counts for the app whose SKU it names |
 
 A write is classed by what its target is when it is made: an edit to a version in Prepare for Submission is operate, the same edit to a live version public. A state Crewlet cannot read keeps the stricter class.
 

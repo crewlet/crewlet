@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/growth"
@@ -73,13 +74,13 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	allowed := map[string]bool{}
-	for _, a := range seat.Apps {
-		allowed[a] = true
+	bySKU, err := p.skusOf(ctx, t, seat.Apps)
+	if err != nil {
+		return nil, said(err)
 	}
 	for _, r := range rows {
-		if allowed[r.App] {
-			out.Rows = append(out.Rows, r)
+		if app, ok := attributed(r, seat.Apps, bySKU); ok {
+			out.Rows = append(out.Rows, app)
 		}
 	}
 	if len(out.Rows) == 0 {
@@ -88,4 +89,34 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 	p.note(ctx, growth.StepMade, recordOf(call, made{op: op, class: growth.ClassRead, team: t, path: "/v1/salesReports",
 		query: q}))
 	return out, nil
+}
+
+// skusOf maps the SKU of each of apps the team reaches to its app.
+func (p *Product) skusOf(ctx context.Context, t *team, apps []string) (map[string]string, error) {
+	infos, err := p.appsOf(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, a := range infos {
+		if a.SKU != "" && slices.Contains(apps, a.ID) {
+			out[a.SKU] = a.ID
+		}
+	}
+	return out, nil
+}
+
+// attributed is r as one of apps' rows, false for another app's. An in-app
+// purchase's or subscription's row names its own ID where an app's names the
+// app's, and its app by the app's SKU (Apple's sales report reference).
+func attributed(r SalesRow, apps []string, bySKU map[string]string) (SalesRow, bool) {
+	if r.parent == "" {
+		return r, slices.Contains(apps, r.App)
+	}
+	app, ok := bySKU[r.parent]
+	if !ok {
+		return SalesRow{}, false
+	}
+	r.Item, r.App = r.App, app
+	return r, true
 }
