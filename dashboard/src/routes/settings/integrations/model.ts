@@ -70,6 +70,17 @@ export interface ToolStory {
 }
 
 export const STORIES: Record<string, ToolStory> = {
+  apple_ads: {
+    does: [
+      "Read campaigns, keywords, search terms and performance in the ad accounts you choose",
+      "Pause, lower bids and budgets, and add negative keywords where you allow it",
+      "Ask you before any change that can raise spending, every time",
+    ],
+    identity:
+      "Agents never hold Apple Ads access. Crewlet keeps the company's API users and makes every call for them.",
+    byHand:
+      "Invite an API user in Apple Ads, make its key pair with OpenSSL, upload the public key under that user's Account Settings, API, and paste the private key and the IDs Apple shows here. Apple has no API that creates users or keys.",
+  },
   app_store_connect: {
     does: [
       "Read your apps, listings, reviews, TestFlight builds, sales and analytics",
