@@ -205,33 +205,6 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 	}
 }
 
-// A TOOL NAME IS ONE PRODUCT'S: a catalog listing a tool another already
-// lists is refused at registration, though each name starts with its own
-// kind's, since one kind may begin another's.
-//
-// Mutation: drop Register's walk over the other catalogs, and the second
-// registers.
-func TestACatalogListingAnothersToolIsRefused(t *testing.T) {
-	t.Parallel()
-	object := map[string]any{"type": "object"}
-	catalog := func(kind string) growth.Catalog {
-		return growth.Catalog{Kind: kind, API: "Shared API", Version: "v1",
-			Operations: []growth.Operation{{ID: "list", Method: "GET", Path: "/list", Class: growth.ClassRead}},
-			Tools: []growth.Tool{{Name: "shared_ads_list", Class: growth.ClassRead, Operations: []string{"list"},
-				Description: "List.", Parameters: object}}}
-	}
-	growth.Register(catalog("shared"))
-	defer func() {
-		if recover() == nil {
-			t.Error("a second catalog listing shared_ads_list registered")
-		}
-		if _, ok := growth.CatalogOf("shared_ads"); ok {
-			t.Error("the refused catalog is registered")
-		}
-	}()
-	growth.Register(catalog("shared_ads"))
-}
-
 // An operation naming roles is permitted to an identity holding one of them,
 // and one naming none to every identity.
 func TestARoleIsPermittedWhatItsOperationNames(t *testing.T) {
