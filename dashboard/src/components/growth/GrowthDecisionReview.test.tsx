@@ -30,6 +30,9 @@ const CARD: GrowthCard = {
     {
       target: "Spring sale",
       summary: "Raise the daily budget",
+      danger: false,
+      text_limit: 0,
+      target_rating: 0,
       changes: [
         {
           field: "amount_micros",

@@ -103,7 +103,7 @@ export interface GrowthCardChange {
   /** Its value once the act is applied; empty where the act clears it. */
   after: string;
   /** Whether both values are money. */
-  money?: boolean;
+  money: boolean;
 }
 
 /** One act of a held call (`growth.CardAct`): a batch of public acts holds up to ten. */
@@ -115,15 +115,15 @@ export interface GrowthCardAct {
   /** The fields it changes, in the order the vendor lists them. */
   changes: GrowthCardChange[];
   /** Whether the act cannot be undone at the vendor (a deletion, a revoked key). */
-  danger?: boolean;
+  danger: boolean;
   /** Text it publishes, whole: shown in full and never cut. */
   text?: string;
-  /** The vendor's limit on that text, in characters. */
-  text_limit?: number;
+  /** The vendor's limit on that text, in characters; 0 for none. */
+  text_limit: number;
   /** An excerpt of what it answers (a review's words), somebody's words. */
   target_excerpt?: string;
-  /** The stars of the review it answers, where it answers one. */
-  target_rating?: number;
+  /** The stars of the review it answers; 0 where it answers none. */
+  target_rating: number;
   /** Who wrote what it answers, as the vendor shows them: somebody's words. */
   target_author?: string;
 }

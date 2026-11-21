@@ -35,6 +35,9 @@ function spend(extra: Partial<GrowthCard> = {}): GrowthCard {
       {
         target: "Spring sale",
         summary: "Raise the daily budget",
+        danger: false,
+        text_limit: 0,
+        target_rating: 0,
         changes: [
           {
             field: "amount_micros",
@@ -112,6 +115,9 @@ test("money keeps every digit an int64 of micros can hold, and each currency its
       {
         target: "Brand",
         summary: "Raise the daily budget",
+        danger: false,
+        text_limit: 0,
+        target_rating: 0,
         changes: [
           {
             field: "amount",
@@ -165,6 +171,7 @@ test("a batch of ten replies shows every reply whole, under the review it answer
     acts: Array.from({ length: 10 }, (_, index) => ({
       target: `review-${index}`,
       summary: "Reply to a review",
+      danger: false,
       changes: [],
       text: reply,
       text_limit: 350,
@@ -192,6 +199,8 @@ test("an irreversible admin act is drawn in danger and held until the person con
       {
         target: "Old campaign",
         summary: "Delete the campaign",
+        text_limit: 0,
+        target_rating: 0,
         changes: [
           { field: "status", label: "Status", before: "PAUSED", after: "REMOVED", money: false },
         ],
@@ -297,16 +306,27 @@ test("a public act without text is drawn as the fields it changes, and a live de
       {
         target: "Nimbus Notes, version 4.2",
         summary: "change AppInfoLocalizations",
+        danger: false,
+        text_limit: 0,
+        target_rating: 0,
         changes: [
           {
             field: "subtitle",
             label: "Subtitle",
             before: "Notes that sync",
             after: "Notes for teams",
+            money: false,
           },
         ],
       },
-      { target: "Spring event", summary: "delete AppEvents", changes: [], danger: true },
+      {
+        target: "Spring event",
+        summary: "delete AppEvents",
+        changes: [],
+        danger: true,
+        text_limit: 0,
+        target_rating: 0,
+      },
     ],
   };
   draw(live);
@@ -327,6 +347,9 @@ test("a reply that replaces one shows the words it takes down", () => {
       {
         target: "review 1",
         summary: "reply to a review",
+        danger: false,
+        text_limit: 0,
+        target_rating: 0,
         text: "Fixed in 4.2, thank you.",
         target_author: "A reader",
         changes: [
@@ -335,6 +358,7 @@ test("a reply that replaces one shows the words it takes down", () => {
             label: "Reply",
             before: "We are looking into it.",
             after: "Fixed in 4.2, thank you.",
+            money: false,
           },
         ],
       },
@@ -343,4 +367,6 @@ test("a reply that replaces one shows the words it takes down", () => {
   draw(card);
   expect(screen.getByText("We are looking into it.")).toBeTruthy();
   expect(screen.getByText("Fixed in 4.2, thank you.")).toBeTruthy();
+  // A REPLY TO NOTHING RATED draws no stars: the engine sends 0 for none, never no key.
+  expect(screen.queryByRole("img", { name: /^Rated / })).toBeNull();
 });

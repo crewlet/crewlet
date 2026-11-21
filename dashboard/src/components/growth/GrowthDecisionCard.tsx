@@ -63,7 +63,7 @@ export function GrowthDecisionCard({
   failure,
 }: GrowthDecisionCardProps) {
   // ANY ACT THAT CANNOT BE UNDONE waits for a tick: an account act, or a live target's delete.
-  const danger = card.acts.some((act) => act.danger === true);
+  const danger = card.acts.some((act) => act.danger);
   // AN AMOUNT WITHOUT ITS CURRENCY cannot be read, so it cannot be allowed here.
   const unpriced = pricedIn(card) === undefined && carriesMoney(card);
   return (
@@ -258,9 +258,7 @@ function publicRow(act: GrowthCardAct, place: string): ChangeListRow {
     <div className="growth-decision__post">
       <div className="growth-decision__target">
         {/* The figure beside the stars: on a tinted row the empty ones are faint. */}
-        {act.target_rating === undefined ? null : (
-          <Rating value={act.target_rating} size="xs" showValue />
-        )}
+        {act.target_rating === 0 ? null : <Rating value={act.target_rating} size="xs" showValue />}
         <span className="growth-decision__author">{act.target_author ?? act.target}</span>
       </div>
       {act.target_excerpt ? <q className="growth-decision__excerpt">{act.target_excerpt}</q> : null}

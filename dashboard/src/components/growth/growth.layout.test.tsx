@@ -64,6 +64,9 @@ function spend(currency: string, micros: (units: number) => string): GrowthCard 
       {
         target: CAMPAIGN,
         summary: "Raise the daily budget",
+        danger: false,
+        text_limit: 0,
+        target_rating: 0,
         changes: [
           {
             field: "amount",
@@ -103,6 +106,7 @@ function batch(): GrowthCard {
     acts: Array.from({ length: 10 }, (_, index) => ({
       target: `review-${index}`,
       summary: "Reply to a review",
+      danger: false,
       changes: [],
       text: REPLY,
       text_limit: 350,
