@@ -368,6 +368,24 @@ func MarkerJobs(m Markers) []Job {
 	return []Job{Purge("coordination_markers", Fleet, Fixed(coord.MarkerRetention), m.SweepMarkers)}
 }
 
+// ActivationBodies is the coordination store's sweep of the activation's
+// bodies no pointer names (coord.ActivationBodies), declared by its consumer.
+type ActivationBodies interface {
+	// SweepBodies removes every activation body written before cutoff that
+	// the pointer does not name, reporting how many went.
+	SweepBodies(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// BodyJobs is the sweep for the activation's superseded bodies: once per
+// fleet, since the config bucket is one copy, at [coord.BodyRetention], where
+// the horizon is argued against the flip that may still name one.
+func BodyJobs(b ActivationBodies) []Job {
+	if b == nil {
+		return nil
+	}
+	return []Job{Purge("activation_bodies", Fleet, Fixed(coord.BodyRetention), b.SweepBodies)}
+}
+
 // ScheduleJobs is the sweep for the scheduled-run ledger.
 //
 // [NodeLocal]. The fleet half of scheduling — "may I start this fire" — moved

@@ -559,15 +559,16 @@ func TestAnUndecodableStatusRecordIsSkippedNotRaised(t *testing.T) {
 	}
 }
 
-// THE BODY RIDES THE POINTER AS THE JSON IT IS.
+// THE BODY RIDES ITS OWN KEY, UNDER ITS DIGEST, AS IT WAS SEALED.
 //
-// As bytes, encoding/json spells it base64 over a ciphertext already base64,
-// a third larger on the wire. The contract suite sees only what Payload
-// returns, so the WIRE SHAPE is asserted here.
+// The pointer is read by every probe on every node, so it carries only the
+// body's length and digest, and the body is stored raw under `body.<sha256>`.
+// The contract suite sees only what Body returns, so the WIRE SHAPE is
+// asserted here.
 //
-// Mutation: carry the payload as []byte in coord.ActivationRecord and the field is a
-// string.
-func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
+// Mutation: carry the payload in coord.ActivationRecord again, and the pointer
+// grows by the body; store the body under another key, and it is not found.
+func TestThePointerNamesItsBodyAndTheBodyRidesItsOwnKey(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	body := `{"__encrypted__":"enc:v1:k1:q8+/Zm9vYmFy=="}`
@@ -587,35 +588,85 @@ func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 	if err := json.Unmarshal(entry.Value(), &fields); err != nil {
 		t.Fatalf("decode the pointer: %v", err)
 	}
-	if got := string(fields["payload"]); got != body {
-		t.Errorf("the pointer's payload field is %s, want the object %s", got, body)
+	if _, carried := fields["payload"]; carried || strings.Contains(string(entry.Value()), "enc:v1") {
+		t.Errorf("the pointer carries the body itself: %s", entry.Value())
+	}
+	ref := coord.BodyOf([]byte(body))
+	var named coord.BodyRef
+	if err := json.Unmarshal(fields["body"], &named); err != nil || named != ref {
+		t.Errorf("the pointer names the body %s (%v), want %+v", fields["body"], err, ref)
+	}
+	stored, err := store.get(t.Context(), store.config, "body."+ref.SHA256)
+	if err != nil {
+		t.Fatalf("read the body's own key: %v", err)
+	}
+	if string(stored.Value()) != body {
+		t.Errorf("the body's own key holds %q, want the body as sealed", stored.Value())
 	}
 }
 
-// A POINTER THAT CARRIES NO BODY IS UNREADABLE, NOT ABSENT.
+// A POINTER THAT NAMES NO BODY IS READ, AND ITS BODY IS REFUSED, NEVER ABSENT.
 //
-// Nothing this build writes a pointer without its body. Answered "absent",
-// a converging node would read it as a pointer that moved since its Target and
-// wait for a body never coming. A pointer naming ANOTHER revision is still
-// absent: the control.
+// Only a build from before bodies had keys wrote one. Target answers it, so a
+// node holding the revision keeps running it and `POST /config/reload`
+// rewrites it; Body refuses it as coord.ErrBodyless, since answered "absent" a
+// converging node would read the pointer again for ever.
 //
-// Mutation: answer a bodiless pointer as not found and the first half fails.
-func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
+// Mutation: answer a bodiless pointer's body as not found and the case fails.
+func TestAPointerWithNoBodyIsReadAndItsBodyRefused(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	ctx := t.Context()
-	raw, err := json.Marshal(map[string]any{"revision_id": "rev-1", "at": time.Now().UTC()})
+	raw, err := json.Marshal(map[string]any{"revision_id": "rev-1", "at": time.Now().UTC(),
+		"payload": map[string]string{"name": "Acme"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.config.Put(ctx, activationKey, raw); err != nil {
 		t.Fatalf("plant the pointer: %v", err)
 	}
-	if got, found, err := store.Payload(ctx, "rev-1"); err == nil {
-		t.Errorf("a pointer with no body answered found=%v %s with no error", found, got)
+	target, found, err := store.Target(ctx)
+	if err != nil || !found || target.RevisionID != "rev-1" || target.Body.Named() {
+		t.Fatalf("Target of a pointer naming no body = %+v found=%v err=%v, want rev-1 naming none",
+			target, found, err)
 	}
-	if got, found, err := store.Payload(ctx, "rev-2"); err != nil || found {
-		t.Errorf("another revision's read = %s found=%v err=%v, want absent", got, found, err)
+	if got, found, err := store.Body(ctx, target); !errors.Is(err, coord.ErrBodyless) ||
+		errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("Body of a pointer naming no body = %s found=%v err=%v, want coord.ErrBodyless", got, found, err)
+	}
+}
+
+// A BODY THAT IS NOT THE BYTES ITS ACTIVATION NAMES IS A FAULT, NAMING ITS
+// KEY, NEVER AN OUTAGE: the key holds them until it is written again. Only a
+// hand or another process writes one, which the suite cannot plant.
+//
+// Mutation: drop the length or the digest check from Body and the forged body
+// is served.
+func TestAForgedBodyIsRefusedNamingItsKey(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	ctx := t.Context()
+	published, err := store.Activate(ctx, coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: time.Now(),
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorOperator, Source: "api",
+			CreatedAt: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	for name, forged := range map[string]string{
+		"another length": `{"v":10}`,
+		"another digest": `{"v":2}`,
+	} {
+		if _, err := store.config.Put(ctx, bodyKey(published.Body), []byte(forged)); err != nil {
+			t.Fatalf("%s: forge the body: %v", name, err)
+		}
+		got, found, err := store.Body(ctx, published)
+		if !errors.Is(err, coord.ErrBodyCorrupt) || errors.Is(err, coord.ErrUnavailable) ||
+			!strings.Contains(err.Error(), bodyKey(published.Body)) {
+			t.Errorf("%s: Body = %s found=%v err=%v, want coord.ErrBodyCorrupt naming the key",
+				name, got, found, err)
+		}
 	}
 }
 

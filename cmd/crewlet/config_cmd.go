@@ -17,8 +17,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // `crewlet config` — the Tier B company configuration, in the store.
@@ -772,6 +774,26 @@ type importTarget struct {
 	environ config.Source
 }
 
+// importSummary is the summary an import records: the -summary flag, refused
+// past what the activation pointer carries ([coord.HoldSummary]) since it is
+// the operator's words, or "imported from <file>", the path cut to
+// [summaryPartBytes] so that it fits even escaped whole.
+func importSummary(flag, path string) (string, error) {
+	summary := strings.TrimSpace(flag)
+	if summary == "" {
+		return "imported from " + textcut.Within(path, summaryPartBytes), nil
+	}
+	if err := coord.HoldSummary(summary); err != nil {
+		return "", fmt.Errorf("config import -summary: %w: write a shorter one", err)
+	}
+	return summary, nil
+}
+
+// summaryPartBytes bounds the caller's part of a summary this command composes
+// (a file's path, the names a run sealed): six bytes a byte escaped is under
+// coord.MaxSummaryBytes with room for the words.
+const summaryPartBytes = 512
+
 // importCompany writes a company document as a new revision, through whichever
 // route can actually reach the fleet.
 //
@@ -788,9 +810,9 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 	if t.path == "" {
 		return errors.New("config import needs a company document to read")
 	}
-	summary := strings.TrimSpace(t.summary)
-	if summary == "" {
-		summary = "imported from " + t.path
+	summary, err := importSummary(t.summary, t.path)
+	if err != nil {
+		return err
 	}
 
 	// THE CHARTER'S FAULTS ARE SAID, NEVER REFUSED HERE. An import is how a
