@@ -96,7 +96,8 @@ export function isLater(next: LogPosition, held: LogPosition): boolean {
  * the configuration), and no table of routes to questions would stay true, so
  * every live read asks again, quietly: each `useQuery`, and each `useRest`.
  * A rare, human-paced event, against a screen that otherwise drew what it held
- * before the change until it was reloaded.
+ * before the change until it was reloaded. A revision this node applied is
+ * the other such event (`Store.applyHealth`).
  */
 export const EVERY_QUESTION = "*";
 

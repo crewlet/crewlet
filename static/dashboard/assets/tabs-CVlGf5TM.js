@@ -1,0 +1,1 @@
+import{Ai as e}from"./Modal-BS0IxAmy.js";import{v as t}from"./roomNames-DnsGtW1Q.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};

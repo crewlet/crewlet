@@ -753,10 +753,12 @@ var Store = class {
 		this.emit("tools");
 	}
 	applyHealth(health) {
+		const was = this.state.lastHealth?.applied_epoch;
 		this.state.health = health ?? null;
 		if (health) this.state.lastHealth = health;
 		this.link(!!health);
 		this.emit("health");
+		if (health && was !== void 0 && health.applied_epoch > was) session.written(null, null, ["*"]);
 	}
 	setConnected(value) {
 		this.link(value);
