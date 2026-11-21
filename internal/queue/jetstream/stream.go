@@ -187,6 +187,28 @@
 // Its close for good stops the node, as the coordination connection's does
 // (Queue.Lost).
 //
+// A HOLD IS ONLY AS GOOD AS THE DATA PATH, which the lease link does not
+// prove: the two links land on members independently, and a data link whose
+// member is cut off from its peers reads linked. So Queue.ProveDataPath
+// probes the fleet's JetStream on the queue's own client every heartbeat of
+// the shortest lease, one probe in flight, and Queue.DataPath answers with no
+// round trip:
+//
+//	the first hop down (Queue.Link)                       refused at once
+//	"not available" answered, no success for 30 s         refused (jsprovision.LookupBudget)
+//	a probe out past its bound (the request term and its  refused, the bound counted
+//	  reply's crossing, about 5.03 s) while the data       from the link's last byte
+//	  link carried nothing at the floor over that bound
+//	a probe out past the link's own stale tolerance, a    refused: 246 s on the default
+//	  probe period and a read term, while the link moves   pings, read from the options in force
+//	otherwise                                             proven
+//
+// "Carried nothing" is read off the link's meter (LinkMeter), so a probe
+// queued behind a message that takes minutes to cross is never mistaken for
+// a dead path, and a link that dies mid-message is still refused within a
+// bound of its last byte. A member has no meter, and its probe is held to the
+// bound alone.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a

@@ -415,6 +415,18 @@ type Queue struct {
 	// under the lock.
 	timing jsprovision.Timing
 
+	// readyAt is when the boot proved the path to the fleet's JetStream: a
+	// leaf's or a clustered member's readiness answer, and otherwise the
+	// connection, made just before. The data path's first proof
+	// ([Queue.ProveDataPath]).
+	readyAt time.Time
+	// path is the data path's probe once [Queue.ProveDataPath] started it,
+	// and nil before; under mu.
+	path *dataPath
+	// pathTiming is what the probe waits on, ZERO FOR PRODUCTION
+	// ([Queue.dataPathTiming]): set only by this package's tests, before the
+	// probe starts.
+	pathTiming dataPathTiming
 	// leases is the lease connection [Queue.DialLeases] last handed out, for
 	// [Queue.LeaseLink]; under mu.
 	leases *nats.Conn
@@ -514,6 +526,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	if err := embedded.awaitClusterReady(ctx, q.js, q.cfg.Replicas); err != nil {
 		return nil, q.abandonOpen(err)
 	}
+	q.readyAt = time.Now()
 	if err := q.ensureStreams(ctx); err != nil {
 		return nil, q.abandonOpen(err)
 	}
@@ -2148,6 +2161,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 	// exist. Carrying them past a stop would leave a restarted queue
 	// silently deaf on subjects nothing is holding any more.
 	q.holds = map[attachKey]map[string]struct{}{}
+	path := q.path
 	q.mu.Unlock()
 
 	// Stop attachments concurrently so one unresponsive consumer bounds
@@ -2161,6 +2175,11 @@ func (q *Queue) Stop(ctx context.Context) error {
 	}
 	wg.Wait()
 	q.awaitKeeps(ctx)
+	// The probe asks over the connection closed below; stopped first, so
+	// none reads a connection closing under it as an unanswered path.
+	if path != nil {
+		path.stop()
+	}
 
 	if q.nc != nil {
 		q.nc.Close()

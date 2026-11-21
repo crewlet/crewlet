@@ -479,17 +479,27 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 	}
 
 	return withFreshPorts(t.Context(), t, "partitionable cluster", func(ctx context.Context, name string) (*Cluster, error) {
-		return startPartitionable(ctx, t, n, base, name)
+		return startPartitionable(ctx, t, n, base, name, false)
 	})
 }
 
-func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config, name string) (*Cluster, error) {
+// startPartitionable is [StartPartitionableCluster]'s attempt, optionally with
+// a LEAF LISTENER on every member, as [startCluster]'s: a partition cuts the
+// routes alone, so a leaf of a member cut off keeps its links to it.
+func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config, name string,
+	leafListeners bool) (*Cluster, error) {
 	t.Helper()
 	// Three port sets, reserved together for the reason freePorts exists:
 	// the members' real route ports, one relay port per ordered pair, and
-	// one dead port per member for the address it advertises.
-	ports := freePorts(ctx, t, n+n*(n-1)+n)
-	routePorts, relays, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
+	// one dead port per member for the address it advertises; and a fourth
+	// for the leaf listeners, where there are any.
+	leafPorts := 0
+	if leafListeners {
+		leafPorts = n
+	}
+	ports := freePorts(ctx, t, n+n*(n-1)+n+leafPorts)
+	routePorts, relays, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):n+n*(n-1)+n]
+	leaves := ports[n+n*(n-1)+n:]
 
 	c := &Cluster{life: t}
 	for i := range n {
@@ -540,6 +550,9 @@ func startPartitionable(ctx context.Context, t *testing.T, n int, base js.Config
 		// from outside the harness on a port a partition does not cut.
 		cfg.ClusterHost = "127.0.0.1"
 		cfg.ClusterAdvertise = hostPort(dead[i])
+		if leafListeners {
+			cfg.LeafHost, cfg.LeafPort = "127.0.0.1", leaves[i]
+		}
 		if err := c.start(ctx, t, cfg, i); err != nil {
 			return c, err
 		}

@@ -145,6 +145,10 @@ type embeddedServer struct {
 	// reads ([tunnel], [LinkMeter]); nil on a member. Started before the
 	// server and closed after it.
 	tunnel *tunnel
+	// pings is how long the leaf's own link may go without answering its
+	// pings before the leaf closes it ([leafPingTolerance]); zero on a
+	// member.
+	pings time.Duration
 }
 
 // LeaseAccount is the local account a leaf's LEASE LINK binds: the second leaf
@@ -152,6 +156,25 @@ type embeddedServer struct {
 // rides and nothing else ([Queue.DialLeases]; package doc, "A node's leases
 // ride a link of their own"). The data link binds the global account.
 const LeaseAccount = "CREWLET_LEASES"
+
+// leafPingTolerance is how long a leaf's link may go without a pong before the
+// leaf closes it as stale, read from opts as nats-server built them: the
+// leaf-node ping settings where set, else the server's, defaults filled in
+// (client.go setPingTimer, processPingTimer, v2.15.3). A PING whose round trip
+// exceeds MaxPingsOut intervals closes the link. Zero on a member.
+func leafPingTolerance(opts *server.Options) time.Duration {
+	if len(opts.LeafNode.Remotes) == 0 {
+		return 0
+	}
+	every, out := opts.PingInterval, opts.MaxPingsOut
+	if opts.LeafNode.PingInterval > 0 {
+		every = opts.LeafNode.PingInterval
+	}
+	if opts.LeafNode.MaxPingsOut > 0 {
+		out = opts.LeafNode.MaxPingsOut
+	}
+	return time.Duration(out) * every
+}
 
 // linkMeter is the meter of this broker's link to the members: a leaf's
 // tunnel's, and nil on a member, which crosses no link.
@@ -724,6 +747,9 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		removeScratch(scratch)
 		return nil, err
 	}
+	// Read before Start, as the listeners are: the defaults NewServer filled
+	// in are the leaf's link's own ([dataPath]).
+	pings := leafPingTolerance(opts)
 	// Start is joined, and every shutdown waits for it ([shutdownAndClean]).
 	started := make(chan struct{})
 	go func() {
@@ -770,7 +796,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
-		auth: auth, tunnel: tun,
+		auth: auth, tunnel: tun, pings: pings,
 	}, nil
 }
 

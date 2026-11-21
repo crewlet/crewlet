@@ -77,8 +77,8 @@ func TestALeafReadsEachOfItsLinksByAccount(t *testing.T) {
 	if err := q.LeaseLink(); err != nil {
 		t.Fatalf("a linked leaf's lease connection reads %v", err)
 	}
-	if err := q.Link(); err != nil {
-		t.Fatalf("a linked leaf's data link reads %v", err)
+	if err := q.DataPath(); err != nil {
+		t.Fatalf("a linked leaf's data path reads %v", err)
 	}
 
 	f.link.Cut(LeaseAccount)
@@ -86,14 +86,17 @@ func TestALeafReadsEachOfItsLinksByAccount(t *testing.T) {
 	if err := q.LeaseLink(); !strings.Contains(err.Error(), LeaseAccount) {
 		t.Errorf("the lease link's refusal %q does not name its account", err)
 	}
-	if err := q.Link(); err != nil {
-		t.Errorf("with only its lease link cut, the leaf's data link reads %v", err)
+	if err := q.DataPath(); err != nil {
+		t.Errorf("with only its lease link cut, the leaf's data path reads %v", err)
 	}
 	f.link.Mend(LeaseAccount)
 	until(t, "the mended lease link read up", func() bool { return q.LeaseLink() == nil })
 
 	f.link.Cut(server.DEFAULT_GLOBAL_ACCOUNT)
-	until(t, "the cut data link read down", func() bool { return q.Link() != nil })
+	until(t, "the cut data link read down", func() bool { return q.DataPath() != nil })
+	if err := q.Link(); err == nil {
+		t.Error("with its data link cut, the leaf's link reads up")
+	}
 	if err := q.LeaseLink(); err != nil {
 		t.Errorf("with only its data link cut, the leaf's lease connection reads %v", err)
 	}
