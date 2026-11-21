@@ -67,8 +67,8 @@ type fakeAds struct {
 	budget  string
 	calls   []string
 	applied []string
-	denied  []builtin.GrowthCall
-	refuse  *builtin.GrowthRefusal
+	denied  []growth.Call
+	refuse  *growth.Refusal
 }
 
 func (f *fakeAds) Catalog() growth.Catalog {
@@ -78,7 +78,7 @@ func (f *fakeAds) Catalog() growth.Catalog {
 
 func (f *fakeAds) Level(handle string) growth.Level { return f.levels[handle] }
 
-func (f *fakeAds) Call(_ context.Context, call builtin.GrowthCall) (any, error) {
+func (f *fakeAds) Call(_ context.Context, call growth.Call) (any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, call.Tool)
@@ -91,32 +91,32 @@ func (f *fakeAds) binding() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (f *fakeAds) Prepare(_ context.Context, call builtin.GrowthCall) (builtin.GrowthHold, error) {
+func (f *fakeAds) Prepare(_ context.Context, call growth.Call) (growth.Hold, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse != nil {
-		return builtin.GrowthHold{}, f.refuse
+		return growth.Hold{}, f.refuse
 	}
-	return builtin.GrowthHold{Binding: f.binding(), Subject: delegated.Subject(delegated.KindAdSpend, "c1", "60"),
+	return growth.Hold{Binding: f.binding(), Subject: delegated.Subject(delegated.KindAdSpend, "c1", "60"),
 		Question: "May sre raise Summer sale's daily budget from 50.00 to 60.00 EUR?",
 		Context:  "sre asks to raise the daily budget of campaign c1."}, nil
 }
 
-func (f *fakeAds) Card(context.Context, builtin.GrowthCall, string) (growth.Card, error) {
+func (f *fakeAds) Card(context.Context, growth.Call, string) (growth.Card, error) {
 	return growth.Card{}, nil
 }
 
-func (f *fakeAds) Apply(_ context.Context, call builtin.GrowthCall, binding string) (any, error) {
+func (f *fakeAds) Apply(_ context.Context, call growth.Call, binding string) (any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !builtin.GrowthBindingHolds(binding, f.binding()) {
-		return nil, builtin.ErrGrowthMoved
+	if !growth.BindingHolds(binding, f.binding()) {
+		return nil, growth.ErrMoved
 	}
 	f.applied = append(f.applied, call.Tool)
 	return map[string]any{"applied": true}, nil
 }
 
-func (f *fakeAds) Denied(_ context.Context, call builtin.GrowthCall) error {
+func (f *fakeAds) Denied(_ context.Context, call growth.Call) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.denied = append(f.denied, call)
@@ -233,7 +233,7 @@ func TestAGrowthSpendOrAdminCallIsHeldForAnAdministrator(t *testing.T) {
 		t.Errorf("the held call is %+v asked %q with %d options", h, ask.Question, len(ask.Decision.Options))
 	}
 
-	ads.refuse = &builtin.GrowthRefusal{Class: tools.RefusalForbidden, Said: "over the daily cap"}
+	ads.refuse = &growth.Refusal{Kind: growth.RefusedForbidden, Said: "over the daily cap"}
 	desk.recorded = nil
 	got, isHeld = hold.Hold(ctx, growthTurn(t, "sre"), tools.HeldCall{Name: growthSpendTool, Entry: entry,
 		Args: map[string]any{"campaign": "c1", "daily_budget": "900.00"}})

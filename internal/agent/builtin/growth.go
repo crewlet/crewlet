@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,52 +51,31 @@ type GrowthProduct interface {
 	Level(handle string) growth.Level
 	// Call makes a read or operate call. Its answer encodes as a JSON object
 	// and declares every field holding somebody's words (ADR-0040). A
-	// [*GrowthRefusal] reached no vendor and is said to the agent.
-	Call(ctx context.Context, call GrowthCall) (any, error)
+	// [*growth.Refusal] reached no vendor and is said to the agent.
+	Call(ctx context.Context, call growth.Call) (any, error)
 	// Prepare reads a held call's target live and builds what a person is
-	// asked: refused (a [*GrowthRefusal]: out of scope, the spend guard, the
+	// asked: refused (a [*growth.Refusal]: out of scope, the spend guard, the
 	// vendor's own validation), or the hold.
-	Prepare(ctx context.Context, call GrowthCall) (GrowthHold, error)
+	Prepare(ctx context.Context, call growth.Call) (growth.Hold, error)
 	// Card is a held call's decision card as its target reads now, Moved where
 	// it no longer matches binding.
-	Card(ctx context.Context, call GrowthCall, binding string) (growth.Card, error)
+	Card(ctx context.Context, call growth.Call, binding string) (growth.Card, error)
 	// Apply makes an approved held call once: under the account's apply lease
-	// it reads the target again and answers [ErrGrowthMoved] without calling
+	// it reads the target again and answers [growth.ErrMoved] without calling
 	// the vendor where it no longer matches binding, and re-checks the seat's
 	// level and scope and, for spend, the caps.
-	Apply(ctx context.Context, call GrowthCall, binding string) (any, error)
+	Apply(ctx context.Context, call growth.Call, binding string) (any, error)
 	// Denied records that a person denied the held call, or that it lapsed
 	// (call.Approver is the engine's actor).
-	Denied(ctx context.Context, call GrowthCall) error
+	Denied(ctx context.Context, call growth.Call) error
 }
 
-// GrowthCall is one call of a growth tool by a seat's turn; for a held call,
-// the held call a person answered and who answered it.
-type GrowthCall struct {
-	Handle, Turn, Tool string
-	Args               map[string]any
-	HeldCall, Approver string
+// growthRefusals maps a product's refusal onto the surface's.
+var growthRefusals = map[growth.RefusalKind]tools.Refusal{
+	growth.RefusedForbidden: tools.RefusalForbidden, growth.RefusedInvalid: tools.RefusalInvalid,
+	growth.RefusedNotFound: tools.RefusalNotFound, growth.RefusedConflict: tools.RefusalConflict,
+	growth.RefusedUnavailable: tools.RefusalUnavailable,
 }
-
-// GrowthHold is a held call as its product prepared it: the digest of the
-// exact vendor operations and the target's before-state it binds to, the
-// identity of what it decides ([delegated.Subject]), and what a person reads.
-type GrowthHold struct {
-	Binding, Subject, Question, Context string
-}
-
-// GrowthRefusal is a call refused before any vendor was reached, in words the
-// agent acts on.
-type GrowthRefusal struct {
-	Class tools.Refusal
-	Said  string
-}
-
-func (r *GrowthRefusal) Error() string { return r.Said }
-
-// ErrGrowthMoved is an approved call whose target changed since the person
-// was asked: nothing was sent.
-var ErrGrowthMoved = errors.New("builtin: the target changed since the call was approved")
 
 // growthTerms are every growth tool's requester terms.
 var growthTerms = requesterTerms{action: authz.ActionGrowthRequester,
@@ -182,7 +160,7 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if refusal != nil {
 		return *refusal, nil
 	}
-	answer, err := t.product.Call(ctx, GrowthCall{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
+	answer, err := t.product.Call(ctx, growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
 	if err != nil {
 		return growthFailure(ctx, t.Name(), err), nil
 	}
@@ -191,9 +169,13 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 
 // growthFailure is the answer of a call that did not reach its result.
 func growthFailure(ctx context.Context, tool string, err error) tools.Result {
-	var r *GrowthRefusal
+	var r *growth.Refusal
 	if errors.As(err, &r) {
-		return refusedBy(r.Class, err, r.Said)
+		class, ok := growthRefusals[r.Kind]
+		if !ok {
+			class = tools.RefusalInvalid
+		}
+		return refusedBy(class, err, r.Said)
 	}
 	return faulted(ctx, tool, err, tool+" didn't finish: the vendor's answer could not be read, so what it did "+
 		"is unknown.")
@@ -254,7 +236,7 @@ func (t *growthHeldTool) BeforeHold(ctx context.Context, turn *turnctx.Turn, _ m
 
 // PrepareHold reads the call's target live and builds its hold.
 func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result) {
-	hold, err := t.product.Prepare(ctx, GrowthCall{Handle: turn.Handle(), Turn: turn.RunID, Tool: t.Name(), Args: args})
+	hold, err := t.product.Prepare(ctx, growth.Call{Handle: turn.Handle(), Turn: turn.RunID, Tool: t.Name(), Args: args})
 	if err != nil {
 		r := growthFailure(ctx, t.Name(), err)
 		return HeldPrep{}, &r
@@ -293,11 +275,11 @@ func (t *growthHeldTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return refused(tools.RefusalForbidden, t.Name()+" didn't run: this agent's access was lowered since "+
 			"the call was approved. Nothing was sent."), nil
 	}
-	call := GrowthCall{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args, HeldCall: approval.HeldID,
+	call := growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args, HeldCall: approval.HeldID,
 		Approver: approval.By}
 	answer, err := t.product.Apply(ctx, call, approval.Binding)
 	switch {
-	case errors.Is(err, ErrGrowthMoved):
+	case errors.Is(err, growth.ErrMoved):
 		return refused(tools.RefusalConflict, t.Name()+" didn't run: what it changes moved since the call was "+
 			"approved, so it is not what the administrator allowed. Nothing was sent. Read it again, and call "+
 			t.Name()+" again to ask about it as it is now."), nil
@@ -314,12 +296,6 @@ func (t *growthHeldTool) RecordDenied(ctx context.Context, turn *turnctx.Turn, a
 	if !ok || approval.HeldID == "" {
 		return errors.New("builtin: a denied growth call names no approver or held call")
 	}
-	return t.product.Denied(ctx, GrowthCall{Handle: turn.Handle(), Turn: turn.RunID, Tool: t.Name(), Args: args,
+	return t.product.Denied(ctx, growth.Call{Handle: turn.Handle(), Turn: turn.RunID, Tool: t.Name(), Args: args,
 		HeldCall: approval.HeldID, Approver: approval.By})
-}
-
-// GrowthBindingHolds reports whether binding, as a person approved it, is
-// fresh, compared in constant time: what a product's Apply checks.
-func GrowthBindingHolds(approved, fresh string) bool {
-	return len(approved) == len(fresh) && subtle.ConstantTimeCompare([]byte(approved), []byte(fresh)) == 1
 }
