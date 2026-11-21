@@ -197,3 +197,38 @@ func TestACallersMistakeIsNeverHeldAsAGoogleRefusal(t *testing.T) {
 		t.Errorf("a proper ask after the mistake answered %v, want a token", err)
 	}
 }
+
+// AN API'S OWN HEADER RIDES THE CALL AND NEVER STANDS IN FOR THE ENGINE'S: a
+// manager's login-customer-id reaches Google, and an Authorization header a
+// product sets is dropped for the bearer the engine minted.
+//
+// Mutation: set the product's headers after the engine's, and the forged
+// bearer is sent.
+func TestAnAPIsHeaderRidesTheCallButNeverTheBearer(t *testing.T) {
+	t.Parallel()
+	f, conn := newFake(t)
+	token, _, err := conn.SeatToken(t.Context(), seatAccount, []string{analytics}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Send(t.Context(), googleauth.Call{Method: http.MethodGet,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x", Bearer: token, Reads: true,
+		Header: http.Header{"Login-Customer-Id": {"9876543210"}, "Authorization": {"Bearer forged"}}}, nil)
+	if err != nil {
+		t.Fatalf("a call carrying an API's header answered %v", err)
+	}
+	// A CALL WITH NO BEARER sends no Authorization, whatever the API's headers say.
+	_ = conn.Send(t.Context(), googleauth.Call{Method: http.MethodGet,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x", Reads: true,
+		Header: http.Header{"Authorization": {"Bearer forged"}}}, nil)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := f.seen[len(f.seen)-2]
+	if seen.Get("Login-Customer-Id") != "9876543210" || seen.Get("Authorization") != "Bearer "+token {
+		t.Errorf("Google read login-customer-id %q and authorization %q", seen.Get("Login-Customer-Id"),
+			seen.Get("Authorization"))
+	}
+	if bare := f.seen[len(f.seen)-1]; bare.Get("Authorization") != "" {
+		t.Errorf("a call with no bearer sent authorization %q", bare.Get("Authorization"))
+	}
+}
