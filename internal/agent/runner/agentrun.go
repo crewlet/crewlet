@@ -738,8 +738,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// holds, and the launch decides that once it has its box
 	// ([Runner.sessionDecided]).
 	basis := r.sessionBasis(ctx)
+	// AND THE RUNS IN FLIGHT AROUND IT, read once for its brief and for
+	// whether its surface offers the tools that reach them.
+	around := r.runsAround(ctx)
+	user = user.Then(prompts.KeyRunsAround, prompts.RunsAround(around, r.cfg.Turn.Context.FenceBoundary()))
 	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
-		executorActive(snapshot, r.boxServers()))
+		append(executorActive(snapshot, r.boxServers()), r.runTools(around)...))
 	if err != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, err

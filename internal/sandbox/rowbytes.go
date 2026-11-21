@@ -69,7 +69,7 @@ const (
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
-	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// KiB, which the 102,064 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
 
@@ -259,8 +259,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_335_469
-	measuredSpare       = 379_223
+	measuredOtherFields = 2_337_906
+	measuredSpare       = 376_786
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

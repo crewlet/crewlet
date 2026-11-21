@@ -81,6 +81,12 @@ type Ask struct {
 	// Decision is [HeldDecision]; it is recorded with the question
 	// ([PendingRun.HeldCall]), its LaunchID the job's.
 	Held *HeldCall
+
+	// Wait is the run `wait_for_run` parks the job until, nil for a question
+	// put to a person (ADR-0176): its Question is the engine's words, it is put
+	// to nobody (To and Decision empty), and the engine answers it once that run
+	// leaves [Holding]. Recorded on the row as [PendingRun.WaitsFor].
+	Wait *RunWait
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
@@ -120,7 +126,7 @@ func (a Ask) ownFaults() []error {
 		note(decision.CheckText("question", a.Question, decision.MaxQuestion, true))
 	}
 	note(decision.CheckText("context", a.Context, MaxAskContextBytes, false))
-	note(decision.CheckText("to", a.To, MaxAskToBytes, true))
+	note(decision.CheckText("to", a.To, MaxAskToBytes, a.Wait == nil))
 	// THE ENGINE'S ONE GRAMMAR OF A BRANCH (ADR-0008): it refuses what git
 	// does, non-UTF-8 (the JSON row would turn it into another branch's
 	// name), and past [gitref.MaxBranchBytes], a ref no push to Gitlet makes.
@@ -129,9 +135,17 @@ func (a Ask) ownFaults() []error {
 			"accepts (or is not UTF-8, or is past %d bytes): name the branch exactly as you "+
 			"pushed it, or leave it out", a.Branch, gitref.MaxBranchBytes)))
 	}
-	if a.Held != nil {
+	switch {
+	case a.Wait != nil:
+		// A WAIT IS PUT TO NOBODY: the engine answers it with how the run it
+		// waits for went, so it offers no choice and names no audience.
+		found = append(found, a.Wait.validate()...)
+		if a.Held != nil || a.Decision != nil || a.To != "" {
+			note(fieldRefusal("turn_id", "names a run to wait for on an ask that is also a question to a person"))
+		}
+	case a.Held != nil:
 		found = append(found, a.Held.validate(a.Decision)...)
-	} else if a.Decision == nil {
+	case a.Decision == nil:
 		// THE RUN'S OWN QUESTION IS A CHOICE, always (ADR-0100): the person
 		// answers it with one press, or in words through "Something else".
 		note(fieldRefusal("options", "is empty, and every question a run puts to a "+
@@ -173,6 +187,11 @@ func (a Ask) Redacted() Ask {
 	// tells a re-seeded run in general terms to check out what it pushed.
 	if redact.Secrets(a.Branch) != a.Branch {
 		a.Branch = ""
+	}
+	if a.Wait != nil {
+		w := *a.Wait
+		w.Reason = redact.Secrets(w.Reason)
+		a.Wait = &w
 	}
 	if a.Decision != nil {
 		d := *a.Decision
@@ -233,7 +252,7 @@ func (r PendingRun) AskedBy(launch string) bool {
 // everything the job asked on its way out gone.
 func withoutQuestion(r PendingRun) PendingRun {
 	r.Question, r.QuestionContext, r.Decision, r.Audience, r.Branch = "", "", nil, "", ""
-	r.HeldCall = nil
+	r.HeldCall, r.WaitsFor = nil, nil
 	return r
 }
 

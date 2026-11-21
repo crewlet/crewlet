@@ -66,10 +66,11 @@ func conversationsOf(own string, served []string) []string {
 
 // SeatCount is what this node counts of one seat's runs: Holding and Awaiting
 // as [Coordinator.SeatRuns] answers them in two bools, Reserved the slots a
-// launch or a resume has taken and whose write is still out, and Cap the most
-// runs the seat holds at once ([CoordinatorOptions.SeatCap]).
+// launch or a resume has taken and whose write is still out, Waiting the runs
+// parked on another run whose keys stay held ([Coordinator.waitingRuns]), and
+// Cap the most runs the seat holds at once ([CoordinatorOptions.SeatCap]).
 type SeatCount struct {
-	Holding, Reserved, Awaiting, Cap int
+	Holding, Reserved, Awaiting, Waiting, Cap int
 }
 
 // Full reports whether no run may start on the seat now: every slot is held
@@ -95,17 +96,36 @@ func (c *Coordinator) SeatCount(handle string) SeatCount {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	runs := c.runs[handle]
-	return SeatCount{Holding: runs.holding, Reserved: c.reserved[handle], Awaiting: runs.awaiting, Cap: limit}
+	waiting := 0
+	for _, run := range c.waitingRuns {
+		if run.handle == handle {
+			waiting++
+		}
+	}
+	return SeatCount{Holding: runs.holding, Reserved: c.reserved[handle], Awaiting: runs.awaiting,
+		Waiting: waiting, Cap: limit}
 }
 
 // busyLocked reports whether one of handle's runs this node counts in
-// [Holding], or one whose slot is reserved, works conversation. Under mu.
+// [Holding], one whose slot is reserved, or one parked on another run, works
+// conversation. Under mu.
 func (c *Coordinator) busyLocked(handle, conversation string) bool {
+	return c.busyBesideLocked(handle, conversation, "")
+}
+
+// busyBesideLocked is [Coordinator.busyLocked] apart from turn's own wait: a
+// run parked on another resumes into the conversations it kept busy. Under mu.
+func (c *Coordinator) busyBesideLocked(handle, conversation, turn string) bool {
 	if conversation == "" {
 		return false
 	}
 	for _, run := range c.heldRuns {
 		if run.handle == handle && slices.Contains(run.conversations, conversation) {
+			return true
+		}
+	}
+	for waiting, run := range c.waitingRuns {
+		if waiting != turn && run.handle == handle && slices.Contains(run.conversations, conversation) {
 			return true
 		}
 	}
@@ -161,20 +181,26 @@ func (c *Coordinator) servedOf(ctx context.Context, runs []PendingRun) map[strin
 		return out
 	}
 	for _, run := range runs {
-		if slices.Contains(Holding, run.Status) {
+		if slices.Contains(Holding, run.Status) || waitsOnARun(run) {
 			out[run.TurnID] = c.served(ctx, run)
 		}
 	}
 	return out
 }
 
-// seatRefusalLocked is why handle's seat starts no run of conversation now,
+// waitsOnARun reports whether run is parked by `wait_for_run`, whose keys stay
+// held while it waits ([Coordinator.waitingRuns]).
+func waitsOnARun(run PendingRun) bool {
+	return run.WaitsFor != nil && slices.Contains(Awaiting, run.Status)
+}
+
+// seatRefusalLocked is why handle's seat starts turn's run of conversation now,
 // nil where it does: the conversation worked by another of its runs, named
 // first since only that run's leaving lifts it, or every slot held or reserved. The refusal names what to wait on and wraps
 // [ErrSeatFull] or [ErrConversationBusy]. Under mu.
-func (c *Coordinator) seatRefusalLocked(handle, conversation string) *TurnRefused {
+func (c *Coordinator) seatRefusalLocked(turn, handle, conversation string) *TurnRefused {
 	limit := c.capOf(handle)
-	if c.busyLocked(handle, conversation) {
+	if c.busyBesideLocked(handle, conversation, turn) {
 		reason := "another of the seat's runs works the conversation"
 		return &TurnRefused{Refusal: Refusal{Condition: ConversationBusy, Reason: reason},
 			Cause: fmt.Errorf("%w: %s", ErrConversationBusy, reason)}
@@ -190,10 +216,10 @@ func (c *Coordinator) seatRefusalLocked(handle, conversation string) *TurnRefuse
 // seatRefusal is [Coordinator.seatRefusalLocked] for a caller not holding mu:
 // an owed resume's early check, before its admission is asked. The resume's
 // claim reserves again under the lock, which is the check that holds.
-func (c *Coordinator) seatRefusal(handle, conversation string) (Refusal, bool) {
+func (c *Coordinator) seatRefusal(turn, handle, conversation string) (Refusal, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if refused := c.seatRefusalLocked(handle, conversation); refused != nil {
+	if refused := c.seatRefusalLocked(turn, handle, conversation); refused != nil {
 		return refused.Refusal, true
 	}
 	return Refusal{}, false
@@ -208,7 +234,7 @@ func (c *Coordinator) reservingCount(run PendingRun, from, to string) (*countWri
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if countOf(to).holding > countOf(from).holding && !c.slotOfLocked(run.TurnID) {
-		if refused := c.seatRefusalLocked(run.AgentHandle, run.ConversationKey); refused != nil {
+		if refused := c.seatRefusalLocked(run.TurnID, run.AgentHandle, run.ConversationKey); refused != nil {
 			return nil, refused
 		}
 	}
@@ -232,33 +258,54 @@ func (c *Coordinator) slotOfLocked(turn string) bool {
 // out keeps what its writes' moves leave it ([Coordinator.wroteCountLocked]).
 // Under mu.
 func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, served map[string][]string) {
-	maps.DeleteFunc(c.heldRuns, func(turn string, run heldRun) bool {
-		gone := run.handle == handle && c.writing[turn] == nil
-		if gone {
-			c.freeLocked(turn, run)
-		}
-		return gone
-	})
+	for _, set := range []map[string]heldRun{c.heldRuns, c.waitingRuns} {
+		maps.DeleteFunc(set, func(turn string, run heldRun) bool {
+			gone := run.handle == handle && c.writing[turn] == nil
+			if gone {
+				c.freeLocked(turn, run)
+			}
+			return gone
+		})
+	}
 	for _, run := range runs {
-		if c.writing[run.TurnID] != nil || !slices.Contains(Holding, run.Status) {
+		if c.writing[run.TurnID] != nil {
 			continue
 		}
-		c.heldRuns[run.TurnID] = heldRun{handle: handle,
-			conversations: conversationsOf(run.ConversationKey, served[run.TurnID])}
+		held := heldRun{handle: handle, conversations: conversationsOf(run.ConversationKey, served[run.TurnID])}
+		switch {
+		case slices.Contains(Holding, run.Status):
+			c.heldRuns[run.TurnID] = held
+		case waitsOnARun(run):
+			c.waitingRuns[run.TurnID] = held
+		}
 	}
 }
 
 // heldMovedLocked records where the moves so far leave the run of writes, by
 // turn: held, with its conversations, while it counts in [Holding], else not.
 // Under mu, from [Coordinator.wroteCountLocked].
+//
+// A RUN PARKED ON ANOTHER RUN keeps its keys ([Coordinator.waitingRuns]), so
+// its mail waits aside behind it rather than starting a second turn on the
+// work it waits to go on with, until it resumes or ends (ADR-0176).
 func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 	if writes.counted.holding == 0 || writes.handle == "" {
-		if run, held := c.heldRuns[turn]; held {
+		run, held := c.heldRuns[turn]
+		if !held {
+			run, held = c.waitingRuns[turn]
+		}
+		delete(c.heldRuns, turn)
+		switch {
+		case !held:
+		case writes.waits && writes.counted.awaiting > 0:
+			c.waitingRuns[turn] = run
+		default:
 			c.freeLocked(turn, run)
-			delete(c.heldRuns, turn)
+			delete(c.waitingRuns, turn)
 		}
 		return
 	}
+	delete(c.waitingRuns, turn)
 	c.heldRuns[turn] = heldRun{handle: writes.handle,
 		conversations: conversationsOf(writes.conversation, writes.served)}
 }
@@ -282,11 +329,14 @@ const runKeyPrefix = "run/"
 func RunKey(turn string) string { return runKeyPrefix + turn }
 
 // keyBusyLocked reports whether one of handle's runs still holds key: the run
-// [RunKey] names in [Holding], or a conversation [Coordinator.busyLocked]
-// finds busy. Under mu.
+// [RunKey] names in [Holding] or parked on another run, or a conversation
+// [Coordinator.busyLocked] finds busy. Under mu.
 func (c *Coordinator) keyBusyLocked(handle, key string) bool {
 	if turn, ok := strings.CutPrefix(key, runKeyPrefix); ok {
 		run, held := c.heldRuns[turn]
+		if !held {
+			run, held = c.waitingRuns[turn]
+		}
 		return held && run.handle == handle
 	}
 	return c.busyLocked(handle, key)

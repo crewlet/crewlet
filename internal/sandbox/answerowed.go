@@ -1476,7 +1476,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 	// lands while they are deciding is one the wait below must not sleep
 	// through. See [Coordinator.waitOwed].
 	seen := c.signalsSeen()
-	if refusal, refused := c.seatRefusal(handle, run.ConversationKey); refused {
+	if refusal, refused := c.seatRefusal(run.TurnID, handle, run.ConversationKey); refused {
 		c.waitOwed(ctx, turnID, refusal, seen)
 		return
 	}

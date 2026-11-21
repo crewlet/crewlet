@@ -26,6 +26,11 @@ type runWrites struct {
 	// ([Coordinator.heldRuns]).
 	conversation string
 	served       []string
+
+	// waits says the run's row, as the latest write read it, parks it on
+	// another run (`wait_for_run`): parked so, its keys stay held
+	// ([Coordinator.waitingRuns]).
+	waits bool
 }
 
 // countWrite is one write that moves a run between its seat's sets, from the
@@ -104,6 +109,7 @@ func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *count
 	if run.ConversationKey != "" {
 		writes.conversation = run.ConversationKey
 	}
+	writes.waits = run.WaitsFor != nil
 	if w.slot && w.handle != "" {
 		c.reserved[w.handle]++
 	}

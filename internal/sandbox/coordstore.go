@@ -335,7 +335,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The held call and its audience are the old job's, and so are its
 		// fold-ins: an answer to one would let a request join work it was
 		// never asked for.
-		existing.HeldCall = nil
+		existing.HeldCall, existing.WaitsFor = nil, nil
 		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
@@ -2663,6 +2663,7 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 		}
 		run.Question, run.QuestionContext = ask.Question, ask.Context
 		run.Decision, run.Audience = ask.Decision, ask.To
+		run.WaitsFor = ask.Wait
 		if ask.Held != nil {
 			// A HELD CALL NAMES NO BRANCH (the run did not choose to stop): an
 			// earlier question's branch stays for the job carrying on.

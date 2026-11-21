@@ -654,7 +654,7 @@ func worstRow(t *testing.T) PendingRun {
 		wakes := make([]SealedWake, MaxItemWakes)
 		for i := range wakes {
 			wakes[i] = SealedWake{ID: plain(MaxWakeIDBytes), Sealed: []byte(plain(MaxWakeItemBytes / MaxItemWakes)),
-				At: worstAt}
+				At: worstAt, From: plain(MaxWakeIDBytes)}
 		}
 		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
@@ -973,6 +973,8 @@ func worstRow(t *testing.T) PendingRun {
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
+		// THE MESSAGES ITS JOB SENT OTHER RUNS, at their bound, for a job id.
+		RunSendsFor: uuid.NewString(), RunSends: MaxJobRunSends,
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
@@ -1182,6 +1184,8 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
 			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
 			"at their bound",
+		"WaitsFor": "a wait is the job's one question, never beside a held call (RecordAsk takes one per job, " +
+			"and a wait holds no call), and the held call, which the worst row sets, weighs more",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at

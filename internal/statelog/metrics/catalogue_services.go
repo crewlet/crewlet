@@ -1,5 +1,7 @@
 package metrics
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // serviceInstruments is the instruments of the services beside the state log: search, the change feed, the
 // notification service's inbound group, the work pickup, the object store's S3 requests and the code sandbox's
 // session spools.
@@ -173,6 +175,23 @@ func serviceInstruments() []Instrument {
 				"answers is approvers not reached. The `seat_wake_left_queued`, " +
 				"`seat_wake_triaged`, `seat_wake_foldin_*` and `seat_wake_aside` " +
 				"lines name the reason.",
+		},
+		{
+			Name: SeatRunCalls, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool", "outcome"},
+			Shows: "What became of each call an executor's run made to the tools " +
+				"for the runs in flight around it (ADR-0176), by `tool` " +
+				"(`" + toolname.ListRuns + "`, `" + toolname.MessageRun + "`, `" + toolname.WaitForRun +
+				"`, and `wait_answered` " +
+				"for the engine's answer to a wait): `listed`, `sent`, `waited`, " +
+				"`resumed` when a wait's run left its seat and the wait was " +
+				"answered, `failed` when a store or the publish failed, or " +
+				"`refused_` and the reason (`self`, `unknown_run`, `requester`, " +
+				"`not_working`, `harness`, `bound`, `cycle`, `caller_done`, " +
+				"`invalid`). " +
+				"`refused_requester` climbing is runs of one seat working for " +
+				"different people on the same work; `refused_bound` runs talking " +
+				"past what a handoff needs. The `seat_run_*` lines name the runs.",
 		},
 
 		// ---- the object store's S3 requests ---------------------------

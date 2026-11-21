@@ -81,7 +81,11 @@ func (d *Dispatcher) waitBeside(ctx context.Context, handle string, evs []*event
 // still held last, since the listing may trail the coordinator.
 func (e *Engine) beside(ctx context.Context, handle string, evs []*events.Event) (besideAnswer, error) {
 	rt := e.sandbox.Load()
-	if rt == nil || rt.coordinator.SeatCount(handle).Holding == 0 {
+	if rt == nil {
+		return besideAnswer{}, nil
+	}
+	// A RUN PARKED ON ANOTHER RUN keeps its conversation busy too (ADR-0176).
+	if count := rt.coordinator.SeatCount(handle); count.Holding == 0 && count.Waiting == 0 {
 		return besideAnswer{}, nil
 	}
 	conversation := conversationIdentityOf(evs)

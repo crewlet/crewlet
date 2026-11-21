@@ -226,3 +226,31 @@ func TestAQueuedLineNothingEndsComesDownAtItsMaximumAge(t *testing.T) {
 		t.Fatalf("the driver still holds %d indicators after the line expired", got)
 	}
 }
+
+// A TURN'S WORK WAITING ON ANOTHER RUN KEEPS ITS LINE UP, SAYING WHY. A turn
+// holding its conversation's indicator that stops to wait on another run
+// (ADR-0176) leaves the line up past its own hold's end, saying why, until the
+// wait is taken away; a turn this driver holds no line for is not told.
+func TestATurnsWaitKeepsItsLineUpSayingWhy(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+
+	const why = "is waiting for its other run on ENG-1 to finish"
+	if d.ExplainTurn("pm", "turn-1", "run-wait:turn-1:job-1", why) {
+		t.Fatal("a turn holding no line was told why it waits")
+	}
+	s := d.Begin(t.Context(), "pm", "turn-1", "execute", chatMeta(nil))
+	p.shownAtLeast(t, 1)
+	if !d.ExplainTurn("pm", "turn-1", "run-wait:turn-1:job-1", why) {
+		t.Fatal("the turn holding its line was not told why it waits")
+	}
+	s.End(t.Context(), false)
+	shown := p.shownAtLeast(t, 2)
+	if last := shown[len(shown)-1]; last != why || p.clears() != 0 {
+		t.Fatalf("after the turn's hold ended the line says %q (%d cleared), want why it waits", last, p.clears())
+	}
+	d.Dequeue(t.Context(), "pm", []string{"run-wait:turn-1:job-1"})
+	if p.clears() != 1 {
+		t.Fatalf("the answered wait cleared %d line(s), want one", p.clears())
+	}
+}

@@ -859,18 +859,22 @@ var ErrJobReplaced = errors.New("sandbox: the append's job was replaced, its rou
 // resumed segment an operation id.
 const MaxBridgeCalls = 200
 
-// The two tools whose calls END an executor's run as the bridge records them:
-// submitting its work, or asking a person and parking on the answer (ADR-0068).
-// Named here because the log's bound keeps them and the bridge's nudge reads
-// them; each is declared once in internal/toolname.
+// The tools whose calls END an executor's run as the bridge records them:
+// submitting its work, asking a person and parking on the answer (ADR-0068),
+// or parking until another run leaves its seat (ADR-0176). Named here because
+// the log's bound keeps them and the bridge's nudge reads them; each is
+// declared once in internal/toolname.
 const (
 	SubmitWorkTool = toolname.SubmitWork
 	AskAndWaitTool = toolname.AskAndWait
+	WaitForRunTool = toolname.WaitForRun
 )
 
-// EndsRun reports whether a call to the tool named is one of the two ways an
-// executor's run ends ([SubmitWorkTool], [AskAndWaitTool]).
-func EndsRun(tool string) bool { return tool == SubmitWorkTool || tool == AskAndWaitTool }
+// EndsRun reports whether a call to the tool named is one of the ways an
+// executor's run ends ([SubmitWorkTool], [AskAndWaitTool], [WaitForRunTool]).
+func EndsRun(tool string) bool {
+	return tool == SubmitWorkTool || tool == AskAndWaitTool || tool == WaitForRunTool
+}
 
 // Ends reports whether the call is one that ended its job: a call to
 // [EndsRun]'s two tools, or a call to a tool at Needs approval the bridge
@@ -1149,6 +1153,19 @@ type PendingRun struct {
 	// the call from being made twice. A KEY OF ITS OWN AT THE TOP OF THE ROW,
 	// carrying later keys inside it ([HeldCall.Extra]).
 	HeldCall *HeldCall `json:"held_call,omitempty"`
+
+	// WaitsFor is the run the job parked to wait for (`wait_for_run`), nil for
+	// any other question: written with the question by [PendingStore.RecordAsk],
+	// answered by the engine once that run leaves [Holding] (ADR-0176), and
+	// cleared when the next job opens. A KEY OF ITS OWN AT THE TOP OF THE ROW,
+	// carrying later keys inside it ([RunWait.Extra]).
+	WaitsFor *RunWait `json:"waits_for,omitempty"`
+
+	// RunSendsFor and RunSends are how many messages the job RunSendsFor names
+	// sent other runs ([PendingStore.CountRunSend]), within [MaxJobRunSends]: a
+	// count for an older job counts nothing.
+	RunSendsFor string `json:"run_sends_for,omitempty"`
+	RunSends    int    `json:"run_sends,omitempty"`
 
 	// OwedCall is the person-approved call the round's log is owed ([OwedCall]):
 	// set by the reset that clears a held call whose result is recorded
@@ -2599,6 +2616,13 @@ type PendingStore interface {
 	// [MaxWakeItemBytes] is [ErrWakeTooLarge]. A retry of a wake held answers
 	// its item. No fence. See the package doc, "A wake joins a running run".
 	FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error)
+
+	// CountRunSend counts delta messages the job names sent other runs
+	// ([PendingRun.RunSends]): a positive delta only while the record names that
+	// job, launching or running, its ending undecided, else [ErrWakeClosed], and
+	// within [MaxJobRunSends], else [ErrRunSendsSpent]; a negative one gives a
+	// send back whose message no run took, never below none. No fence.
+	CountRunSend(ctx context.Context, turnID, job string, delta int) error
 
 	// AskFoldIn records fold-in f on the run's row for its job ([FoldIn]):
 	// only while the row holds that job in [ItemStatuses] and no ending is
