@@ -60,6 +60,15 @@ const (
 	// predicate every statement through it repeats word for word, which is
 	// what lets the planner and the hint use it.
 	heldIdx = "executor_sessions_held_idx"
+
+	// servesKey is the index executor_session_serves' primary key
+	// (agent_handle, turn_id, conversation_key) builds: the conversations one
+	// turn serves beyond its own, and one of them.
+	servesKey = "sqlite_autoindex_executor_session_serves_1"
+
+	// servesLineIdx is the turns a conversation reads as served, in the
+	// order their ends applied: its served head and endings.
+	servesLineIdx = "executor_session_serves_line_idx"
 )
 
 // Tombstone reasons: why a turn takes no further record.
@@ -116,6 +125,25 @@ const (
 		SELECT base_turn FROM executor_sessions INDEXED BY ` + heldIdx + `
 		WHERE agent_handle = ? AND end_seq IS NULL AND launch_seq = 0
 		  AND base_turn <> '' AND turn_id <> ?`
+
+	// servesAnyStatement is whether a turn serves a conversation beyond its
+	// own; servesStatement whether it serves one.
+	servesAnyStatement = `
+		SELECT 1 FROM executor_session_serves INDEXED BY ` + servesKey + `
+		WHERE agent_handle = ? AND turn_id = ? LIMIT 1`
+	servesStatement = `
+		SELECT 1 FROM executor_session_serves INDEXED BY ` + servesKey + `
+		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ?`
+
+	// servedSessionStatement is the turns a conversation reads as served whose
+	// rows still name one session, which an end retiring that session drops.
+	servedSessionStatement = `
+		SELECT v.turn_id
+		  FROM executor_session_serves AS v INDEXED BY ` + servesLineIdx + `
+		 CROSS JOIN executor_sessions AS s INDEXED BY ` + sessionKey + `
+		 WHERE v.agent_handle = ? AND v.conversation_key = ?
+		   AND s.agent_handle = v.agent_handle AND s.turn_id = v.turn_id
+		   AND s.session_id = ? AND s.object IS NOT NULL`
 )
 
 // The statements an apply writes the rows with.
@@ -214,6 +242,33 @@ const (
 		DELETE FROM executor_sessions INDEXED BY ` + sessionKey + `
 		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ?
 		  AND end_seq IS NOT NULL AND end_seq <= ?`
+
+	// insertServedStatement is one conversation an ending turn served beyond
+	// its own, placed at the end's position.
+	insertServedStatement = `
+		INSERT INTO executor_session_serves (agent_handle, turn_id, conversation_key, end_seq)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (agent_handle, turn_id, conversation_key) DO NOTHING`
+
+	// absorbServedStatement deletes one turn a conversation reads as served
+	// that the ending turn's first read handed out, by its key, and only where
+	// it was placed at or before that read, as [absorbStatement] does.
+	absorbServedStatement = `
+		DELETE FROM executor_session_serves INDEXED BY ` + servesKey + `
+		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ? AND end_seq <= ?`
+
+	// dropServedStatement deletes one turn a conversation reads as served.
+	dropServedStatement = `
+		DELETE FROM executor_session_serves INDEXED BY ` + servesKey + `
+		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ?`
+
+	// turnServedStatement deletes every conversation one turn serves beyond
+	// its own, with its row; seatServedStatement every one a removed seat's
+	// turns serve.
+	turnServedStatement = `
+		DELETE FROM executor_session_serves INDEXED BY ` + servesKey + `
+		WHERE agent_handle = ? AND turn_id = ?`
+	seatServedStatement = `DELETE FROM executor_session_serves WHERE agent_handle = ?`
 
 	// tombStatement writes a turn's tombstone, keeping the first one a turn
 	// was given.
@@ -386,6 +441,37 @@ func absorbsOf(turns []string, own string, readThrough int64) ([]string, bool) {
 	return turns, true
 }
 
+// checkServed refuses an end's other conversations where they could not be
+// ones it served ([End.Served]): past [MaxServed], a key no row could hold, one
+// twice, or the turn's own. The writer refuses by it and the apply repeats it.
+func checkServed(served []string, own string) error {
+	if len(served) > MaxServed {
+		return invalid("the end names %d other conversations served and the maximum is %d",
+			len(served), MaxServed)
+	}
+	seen := make(map[string]bool, len(served))
+	for _, key := range served {
+		switch {
+		case key == "":
+			return invalid("the end names a conversation served with no key")
+		case key == own:
+			return invalid("the end names its own conversation among the others it served")
+		case seen[key]:
+			return invalid("the end names conversation %q as served twice", key)
+		}
+		if err := checkText("a conversation served", key, ConversationKeyMaxBytes); err != nil {
+			return err
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// servedValid reports whether served passes [checkServed]: a record the writer
+// would have refused applies as nothing, never as an error, which would stop
+// the applier on a record every node reads alike.
+func servedValid(served []string, own string) bool { return checkServed(served, own) == nil }
+
 // splitAbsorbs reads a row's absorbs column back: turn ids a comma apart,
 // which a canonical turn id never holds.
 func splitAbsorbs(column string) []string {
@@ -465,6 +551,27 @@ func held(ctx context.Context, tx *sql.Tx, handle, turn, except string) (bool, e
 	return true, nil
 }
 
+// served reports whether turn of handle's seat serves a conversation beyond its
+// own: conversationKey, or any where it is "". What an absorption or a dedupe
+// in the turn's own conversation asks before it takes the turn's row, and what
+// a begin asks of a base read as served.
+func served(ctx context.Context, tx *sql.Tx, handle, turn, conversationKey string) (bool, error) {
+	statement, args := servesAnyStatement, []any{handle, turn}
+	if conversationKey != "" {
+		statement, args = servesStatement, append(args, conversationKey)
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, statement, args...).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("executordomain: read the conversations %s's turn %s serves: %w",
+			handle, turn, err)
+	}
+	return true, nil
+}
+
 // heldBases is every base the live turns of handle's seat other than except
 // hold, read in one pass of the bases' index.
 func heldBases(ctx context.Context, tx *sql.Tx, handle, except string) (map[string]bool, error) {
@@ -486,7 +593,8 @@ func heldBases(ctx context.Context, tx *sql.Tx, handle, except string) (map[stri
 
 // baseStands is why a begin's base cannot be held, or "" where it can: the base
 // turn's row is still there, ended at or before the read that saw it, in the
-// begin's conversation, and naming the very session that read saw. The apply
+// begin's conversation or serving it ([served]), and naming the very session
+// that read saw. The apply
 // decides the row's base by it, and the writer says by it why a begin holds
 // nothing.
 //
@@ -506,8 +614,12 @@ func baseStands(ctx context.Context, tx *sql.Tx, handle, conversationKey string,
 	case !row.ended || row.endSeq > readThrough:
 		return "the base turn's row is not the ended turn the read saw", nil
 	case row.conversationKey != conversationKey:
-		return "the base turn is another conversation's", nil
-	case !row.hasObject || row.object != object || row.objectHash != hash:
+		serves, servesErr := served(ctx, tx, handle, baseTurn, conversationKey)
+		if servesErr != nil || !serves {
+			return "the base turn is another conversation's, and no longer serves this one", servesErr
+		}
+	}
+	if !row.hasObject || row.object != object || row.objectHash != hash {
 		return "the base turn's row no longer names the session the read saw: the seat's " +
 			"budget or its turn's end released it", nil
 	}
@@ -765,8 +877,13 @@ type endBody struct {
 // than the turn's unkept newest, an end stamped [wentOnVersion] or above keeps
 // that session and absorbs and dedupes; one below releases it, absorbing nothing.
 func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+	// SERVED BY THE STAMP, as [wentOnVersion] is: below [servedVersion] the end
+	// is applied as the build before applies it, naming nothing served.
+	if c.record.V < servedVersion {
+		p.Served = nil
+	}
 	if !present(p.Handle) || !present(p.Turn) || !p.Ending.Within() ||
-		len(p.AskExcerpt) > AskExcerptMaxBytes {
+		len(p.AskExcerpt) > AskExcerptMaxBytes || !servedValid(p.Served, p.ConversationKey) {
 		return 0, nil
 	}
 	if _, tombed, tombErr := readTomb(ctx, tx, p.Handle, p.Turn); tombErr != nil || tombed {
@@ -847,6 +964,14 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		return written, err
 	}
 	written += retired
+	for _, key := range p.Served {
+		res, err = tx.ExecContext(ctx, insertServedStatement, p.Handle, p.Turn, key, c.packed)
+		if err != nil {
+			return written, fmt.Errorf("executordomain: record that %s's turn %s served %q at %s: %w",
+				p.Handle, p.Turn, key, c.position, err)
+		}
+		written += affected(res)
+	}
 	// AFTER THE RETIREMENT, so a row that ran out says that rather than this.
 	if stale {
 		res, err = tx.ExecContext(ctx, releaseStatement, c.packed, p.Handle, p.Turn)
@@ -862,7 +987,10 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 
 // retireExhausted takes each session the turn ran out of context in off every ended
 // row of its conversation, its own included. Held rows too: a hold keeps a session
-// for a relaunch to continue, which would only meet the same end.
+// for a relaunch to continue, which would only meet the same end. A row the
+// conversation reads as served is another conversation's too, so the
+// conversation stops reading it instead, and the row keeps its session for the
+// conversations that still read it.
 func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if p.ConversationKey == "" {
 		return 0, nil
@@ -875,8 +1003,39 @@ func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (in
 				p.Handle, session, c.position, err)
 		}
 		written += affected(res)
+		turns, listErr := servedNaming(ctx, tx, p.Handle, p.ConversationKey, session)
+		if listErr != nil {
+			return written, listErr
+		}
+		for _, turn := range turns {
+			if res, err = tx.ExecContext(ctx, dropServedStatement, p.Handle, turn, p.ConversationKey); err != nil {
+				return written, fmt.Errorf("executordomain: drop %s's served turn %s at %s: %w",
+					p.Handle, turn, c.position, err)
+			}
+			written += affected(res)
+		}
 	}
 	return written, nil
+}
+
+// servedNaming is the turns conversationKey reads as served whose rows name
+// session, read whole and closed before any is dropped.
+func servedNaming(ctx context.Context, tx *sql.Tx, handle, conversationKey, session string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, servedSessionStatement, handle, conversationKey, session)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: read the turns %s's conversation reads as served: %w",
+			handle, err)
+	}
+	var out []string
+	for rows.Next() {
+		var turn string
+		if scanErr := rows.Scan(&turn); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		out = append(out, turn)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 // absorb deletes the conversation's ended rows the ending turn stands in for,
@@ -888,9 +1047,9 @@ func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (in
 //     merged even where held. AN EMPTY WORK KEY NEVER DEDUPES (ADR-0017), or
 //     every keyless turn would erase its keyless siblings.
 //
-// Neither takes a row a live turn holds as its base ([held]); its holder's own
-// end absorbs it later. A deleted row's tombstone is its own `end`'s, so
-// nothing recreates it.
+// Neither takes a row a live turn holds ([held]) or another conversation reads
+// as served ([served]); a later end shown it does. A deleted row's tombstone is
+// its own `end`'s. A served turn is absorbed off this conversation alone.
 func absorb(ctx context.Context, tx *sql.Tx, c applyContext, p End, work string,
 	row sessionRow) (int, bool, error) {
 
@@ -920,6 +1079,15 @@ func absorb(ctx context.Context, tx *sql.Tx, c applyContext, p End, work string,
 			return written, false, dropErr
 		}
 		written += n
+		// NO HOLD IS ASKED: dropping what the conversation reads releases no
+		// session, which stays on the turn's own row for whoever holds it.
+		res, execErr := tx.ExecContext(ctx, absorbServedStatement, p.Handle, shown, p.ConversationKey,
+			row.readThrough)
+		if execErr != nil {
+			return written, false, fmt.Errorf("executordomain: absorb %s's served turn %s at %s: %w",
+				p.Handle, shown, c.position, execErr)
+		}
+		written += affected(res)
 	}
 	return written, delivered, nil
 }
@@ -957,12 +1125,16 @@ func olderAttempts(ctx context.Context, tx *sql.Tx, handle, conversationKey, wor
 }
 
 // dropUnheld runs statement, a delete of one ended turn's row, unless a live
-// turn of the seat other than except holds that turn as its base.
+// turn of the seat other than except holds that turn as its base or another
+// conversation reads it as served.
 func dropUnheld(ctx context.Context, tx *sql.Tx, c applyContext, statement, handle, turn,
 	except string, args ...any) (int, error) {
 
 	holds, err := held(ctx, tx, handle, turn, except)
 	if err != nil || holds {
+		return 0, err
+	}
+	if holds, err = served(ctx, tx, handle, turn, ""); err != nil || holds {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, statement, args...)
@@ -1011,7 +1183,7 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 // turn; a kept tombstone would only be one more row to take a term later.
 func removeTurn(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
 	written := 0
-	for _, statement := range []string{deleteSessionStatement, deleteTombStatement} {
+	for _, statement := range []string{deleteSessionStatement, deleteTombStatement, turnServedStatement} {
 		res, err := tx.ExecContext(ctx, statement, handle, turn)
 		if err != nil {
 			return written, fmt.Errorf("executordomain: delete %s's turn %s at %s: %w",
@@ -1087,6 +1259,7 @@ func removeSeat(ctx context.Context, tx *sql.Tx, c applyContext, handle string) 
 		args []any
 	}{
 		{seatRowsStatement, []any{handle}},
+		{seatServedStatement, []any{handle}},
 		{removeSeatStatement, []any{handle, c.packed, c.at()}},
 	} {
 		res, execErr := tx.ExecContext(ctx, statement.sql, statement.args...)

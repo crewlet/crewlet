@@ -148,7 +148,8 @@ func refusedCapture(err error) bool {
 func (r executorRecords) End(ctx context.Context, e sandbox.EndRecord) (sandbox.LogAnswer, error) {
 	call := executordomain.Call{By: sandboxAuthor, OpID: executordomain.EndOpID(e.Minted, e.Handle, e.Turn)}
 	res, err := r.log.End(ctx, call, executordomain.NewEnd{Handle: e.Handle, Turn: e.Turn,
-		ConversationKey: e.ConversationKey, WorkKey: e.WorkKey, Ask: e.Ask, Ending: e.Ending})
+		ConversationKey: e.ConversationKey, WorkKey: e.WorkKey, Ask: e.Ask, Ending: e.Ending,
+		Served: e.Served})
 	switch {
 	case err == nil && res.Outcome == statelog.OutcomeApplied:
 		return sandbox.LogLanded, nil
