@@ -295,6 +295,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/TagWrites.tsx": "modal: a new tag's name, target and message, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
+  "routes/settings/integrations/AppStoreAnalytics.tsx":
+    "modal: a pasted Admin key, a credential and never a draft, and a key removal's confirmation, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":
     "modal: an SSH server's fields and host keys, in its Add a server and Edit dialog",
   "components/SettingEditor.tsx":

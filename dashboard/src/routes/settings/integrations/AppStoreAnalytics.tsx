@@ -23,7 +23,7 @@ import {
 } from "@crewlethq/ui";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { SetupAppStoreAnalyticsAnswer } from "~/contract/setup.ts";
 import { analyticsLine, type ConnectedKey } from "./appStoreAnalytics.ts";
 
@@ -202,7 +202,7 @@ export function AppStoreKeys({ keys }: { keys: readonly ConnectedKey[] }) {
     try {
       await rest.request(
         "DELETE",
-        `/setup/integrations/app_store_connect/keys/${encodeURIComponent(removing.connection)}/${encodeURIComponent(removing.slot)}`,
+        `/setup/integrations/app_store_connect/keys/${pathSegment(removing.connection)}/${pathSegment(removing.slot)}`,
       );
       setSaid(`${removing.label} removed. Revoke it in App Store Connect too.`);
       setRemoving(null);
