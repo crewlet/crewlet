@@ -731,7 +731,7 @@ coordination store, which any node files it on: its next launch's brief, a step
 where its harness takes notes ([Notes to a running
 run](code-sandbox.md#notes-to-a-running-run)), or the review that judges its work
 reads it, and an executor parked on a question reads it once the question is
-answered. The turn's own record says what became of it (`agent_turn_steered`:
+answered. The turn's own record says what became of it, the note redacted (`agent_turn_steered`:
 `delivered` where it was read — the round, or the kind of step inside the launch —
 and where a later launch's brief told it again after a step that took it never
 handed it over; `expired` when the turn ended first; `missed` where a step took

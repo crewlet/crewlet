@@ -1001,7 +1001,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		RevisionID:        target.RevisionID,
 		Status:            applyStatus(status),
 		AppliedSubsystems: applied,
-		Error:             events.ClipDiagnostic(message),
+		Error:             events.Diagnostic(message),
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.stamp()
 	// The NODE, not a seat: the payload deliberately leaves the reporter to

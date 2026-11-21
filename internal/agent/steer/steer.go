@@ -142,6 +142,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -390,13 +391,14 @@ func Expired() End { return End{outcome: types.SteerExpired} }
 //
 // THE ONE CONSTRUCTOR of the record, which every publisher calls — the runner,
 // the bridge's run inbox and an ending — so no two of them build it differently:
-// every outcome but an expiry says where, an expiry never names a step, and the
-// send time is always UTC.
+// every outcome but an expiry says where, an expiry never names a step, the
+// send time is always UTC, and the note is redacted ([redact.Secrets]): the
+// run's record holds it sealed, and this record is read in the clear.
 func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 	ev := types.AgentTurnSteered{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role,
 		TurnID: turn.TurnID, WorkKey: turn.WorkKey,
-		NoteID: note.ID, Outcome: types.SteerExpired, Note: note.Text,
+		NoteID: note.ID, Outcome: types.SteerExpired, Note: redact.Secrets(note.Text),
 		SteeredBy: note.By, SteeredByKind: string(note.ByKind), OperatorID: note.OperatorID,
 		SentAt: note.At,
 	}

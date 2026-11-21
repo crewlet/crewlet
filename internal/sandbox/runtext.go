@@ -214,14 +214,6 @@ func boundReason(why string, bound int) string {
 	return textcut.Within(opening, bound)
 }
 
-// clippedRedacted is text redacted whole, then clipped as a record's
-// diagnostic ([events.ClipDiagnostic]), keeping only as much of the redaction
-// as the clip reads ([redact.Prefix]).
-func clippedRedacted(text string) string {
-	opening, _ := redact.Prefix(text, events.MaxDiagnosticBytes+1)
-	return events.ClipDiagnostic(opening)
-}
-
 // MaxCondenseBytes is the most text one [Condenser] call reads: the engine
 // compactor's compact.MaxChunks pieces of compact.ChunkBytes, 2 MiB; past it
 // the compactor refuses before asking a model. Declared here because this
@@ -358,7 +350,7 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
 	// AND WHY THE PUSH RECORD WAS UNREAD, built from Gitlet's answer: redacted
 	// and held to a record's diagnostic bound.
-	result.PushedUnread = clippedRedacted(result.PushedUnread)
+	result.PushedUnread = events.Diagnostic(result.PushedUnread)
 	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
 	// that one is ([fitOpened]).
 	result.Opened = fitOpened(result.Opened)

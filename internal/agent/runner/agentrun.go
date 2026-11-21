@@ -1694,7 +1694,7 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 	for _, call := range bridged {
 		res.Executions = append(res.Executions, toolloop.Execution{
 			Round: runRound, Name: call.Name, Args: call.Args,
-			Output: call.Result, Failed: call.Failed,
+			Output: call.Result, OutputBytes: call.OutputBytes, Failed: call.Failed,
 			StartedAt: call.StartedAt, Duration: call.Duration,
 			Origin: call.Origin, Server: call.Server,
 			Source: call.Source, Refusal: call.Refusal,
