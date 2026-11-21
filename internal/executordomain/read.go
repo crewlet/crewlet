@@ -598,7 +598,7 @@ func endingsOf(ctx context.Context, tx *sql.Tx, handle, conversationKey, head st
 	if err != nil {
 		return nil, 0, err
 	}
-	all := append(own, srv...)
+	all := slices.Concat(own, srv)
 	slices.SortFunc(all, func(a, b Session) int {
 		return cmp.Compare(b.EndedAtPosition.Packed(), a.EndedAtPosition.Packed())
 	})

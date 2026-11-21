@@ -467,6 +467,11 @@ func checkServed(served []string, own string) error {
 	return nil
 }
 
+// servedValid reports whether served passes [checkServed]: a record the writer
+// would have refused applies as nothing, never as an error, which would stop
+// the applier on a record every node reads alike.
+func servedValid(served []string, own string) bool { return checkServed(served, own) == nil }
+
 // splitAbsorbs reads a row's absorbs column back: turn ids a comma apart,
 // which a canonical turn id never holds.
 func splitAbsorbs(column string) []string {
@@ -614,8 +619,7 @@ func baseStands(ctx context.Context, tx *sql.Tx, handle, conversationKey string,
 			return "the base turn is another conversation's, and no longer serves this one", servesErr
 		}
 	}
-	switch {
-	case !row.hasObject || row.object != object || row.objectHash != hash:
+	if !row.hasObject || row.object != object || row.objectHash != hash {
 		return "the base turn's row no longer names the session the read saw: the seat's " +
 			"budget or its turn's end released it", nil
 	}
@@ -879,7 +883,7 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		p.Served = nil
 	}
 	if !present(p.Handle) || !present(p.Turn) || !p.Ending.Within() ||
-		len(p.AskExcerpt) > AskExcerptMaxBytes || checkServed(p.Served, p.ConversationKey) != nil {
+		len(p.AskExcerpt) > AskExcerptMaxBytes || !servedValid(p.Served, p.ConversationKey) {
 		return 0, nil
 	}
 	if _, tombed, tombErr := readTomb(ctx, tx, p.Handle, p.Turn); tombErr != nil || tombed {
