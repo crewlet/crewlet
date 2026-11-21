@@ -118,7 +118,7 @@ export function useEvents() {
  * phase without its payload has no prompts, no response, no tool calls and no
  * decision. A screen merges these over the history its query answered at mount,
  * which is what lets a live phase become a finished one in place instead of
- * disappearing with the `live_call` the projection clears.
+ * disappearing with the live call the projection clears.
  */
 export function usePhaseEvents() {
   return useSlice(["phases"], (s) => s.phases);

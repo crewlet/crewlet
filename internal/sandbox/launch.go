@@ -161,12 +161,12 @@ type LaunchRequest struct {
 	Brief string
 
 	// Task is what the launching turn's work is read by, in a person's
-	// words (what it was asked, or the line a feed shows its trigger by),
-	// carried onto the row ([PendingRun.TaskDescription]) as what the run is
-	// listed under. Never the brief: a resume reads its brief off the
-	// turn's park, where somebody else's words in it are fenced as the
-	// model read them, and a person reading the row would read those fence
-	// lines.
+	// words, redacted (what it was asked, or the line a feed shows its
+	// trigger by), carried onto the row ([PendingRun.TaskDescription]) as
+	// what the run is listed under. Never the brief: a resume reads its
+	// brief off the turn's park, where somebody else's words in it are
+	// fenced as the model read them, and a person reading the row would
+	// read those fence lines.
 	Task string
 
 	// Label is what a person sees the run named by — on the running-runs
@@ -756,8 +756,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if c.framing(req.Turn.TurnID) {
 		from = StatusResumed
 	}
-	write := c.writingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle},
-		from, StatusLaunching)
+	// AND THE SEAT'S SLOT RESERVED IN THE SAME STEP, or nothing is written: a
+	// seat at its cap, or with the conversation worked by another of its runs,
+	// starts no run (seatcap.go). A relaunch of a run still held takes none.
+	write, err := c.reservingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
+		ConversationKey: req.Turn.ConversationKey}, from, StatusLaunching)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("sandbox: launching %s on %s: %w", req.Turn.TurnID, req.Turn.AgentHandle, err)
+	}
 	defer c.settleWrite(write)
 	opened, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,

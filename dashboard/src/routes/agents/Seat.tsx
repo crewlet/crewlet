@@ -117,7 +117,12 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
 import { useSeatMessage } from "~/lib/seatMessage.ts";
-import { SeatControlButtons, controlHeld, useSeatControls } from "~/components/seatControls.tsx";
+import {
+  SeatControlButtons,
+  controlHeld,
+  steerTargets,
+  useSeatControls,
+} from "~/components/seatControls.tsx";
 import { PAUSE_NOTE_WORDS, pauseNoteOf, useLiveOrg } from "~/lib/seatLive.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
@@ -326,17 +331,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(live.row?.turn
-            ? [
-                {
-                  key: "steer",
-                  label: "Steer its turn",
-                  icon: <CompassGlyph size="sm" />,
-                  onSelect: () => controls.steer(live),
-                  ...(steerHeld ? { disabled: true, description: steerHeld } : {}),
-                },
-              ]
-            : []),
+          ...steerTargets(live).map((t) => ({
+            key: `steer-${t.turnId}`,
+            label: `Steer its turn${t.which}`,
+            icon: <CompassGlyph size="sm" />,
+            onSelect: () => controls.steer(live, t.turnId),
+            ...(steerHeld ? { disabled: true, description: steerHeld } : {}),
+          })),
         ]
       : [];
   const placeEntries = seat

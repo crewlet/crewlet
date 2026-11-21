@@ -69,9 +69,10 @@ const (
 )
 
 // FrameMaxBytes is the largest frame the encoder writes and the decoder
-// reads: the per-turn frame log's whole byte budget, because a snapshot frame
-// carries a turn's messages, steps and cards at once. A frame past it is a
-// turn the orchestrator failed to bound, refused rather than cut.
+// reads: the per-turn frame log's whole byte budget. A snapshot frame, which
+// carries a turn's messages, steps and cards at once, is cut to it
+// ([SnapshotEvent.Cut]); any other frame past it is a turn the orchestrator
+// failed to bound, refused rather than cut.
 const FrameMaxBytes = 4 << 20
 
 // ActionContextInvalidate is the reserved [ActionEvent] name the server sends

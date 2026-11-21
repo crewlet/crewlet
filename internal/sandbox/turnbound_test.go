@@ -154,7 +154,7 @@ func TestAResumeHeldOnALimitEndsWhenItsDeadlinePasses(t *testing.T) {
 func TestACompletionTheGateRefusesPastItsDeadlineIsEnded(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	rig.coordinator.gate = func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+	rig.coordinator.gate = func(context.Context, string, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, weeklyLimit(rig.now.Add(time.Hour))
 	}
 	rig.launchUntil("t1", rig.now.Add(-time.Minute))
@@ -185,7 +185,7 @@ func TestACompletionTheGateRefusesPastItsDeadlineIsEnded(t *testing.T) {
 func TestACompletionRefusedBeforeItsDeadlineWaits(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	rig.coordinator.gate = func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+	rig.coordinator.gate = func(context.Context, string, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, weeklyLimit(rig.now.Add(time.Hour))
 	}
 	rig.launchUntil("t1", rig.now.Add(time.Hour))

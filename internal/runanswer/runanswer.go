@@ -24,6 +24,9 @@
 //   - A question: [authz.ActionExecutorAnswer], on the requester's own seat
 //     where the caller is the requester (the rule's self arm), and on the
 //     run's seat otherwise, where its lead and an administrator are admitted.
+//   - A fold-in, whether another writer's request joins a running job's work
+//     ([sandbox.FoldIn]): a question's verb and object, since the answer
+//     decides whose request the requester's apps serve (ADR-0109).
 //
 // It is a LEAF above authz, config and the sandbox's run row: the API's
 // approvals, the agent tools and the queries import it, and it imports none
@@ -100,6 +103,10 @@ func QuestionOf(seat uuid.UUID, handle, requester, caller string) Authority {
 	return Authority{Action: authz.ActionExecutorAnswer,
 		Object: authz.Object{Kind: authz.KindPerson, ID: seat.String(), Owner: owner}}
 }
+
+// FoldIn is who may answer a fold-in on run, as caller: [Question]'s rule.
+// [ErrUnreadableSeat] for a row with no seat id this build can read.
+func FoldIn(run sandbox.PendingRun, caller string) (Authority, error) { return Question(run, caller) }
 
 // Of is who may answer what run waits on now: its held call where it holds
 // one, its question otherwise.

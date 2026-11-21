@@ -1365,7 +1365,7 @@ export class LiveSocket {
   }
 
   /**
-   * Fetch, whole, each seat's live call this tab holds behind what a push
+   * Fetch, whole, the live calls of each seat whose call this tab holds behind what a push
    * described — asked by the seat's AGENT ID, the key the push named it by — the push that moved one of its heavy fields was dropped by the
    * server's queue (`mergeLiveCall`).
    *

@@ -269,6 +269,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// starting a session of its own on its fresh brief
 	// ([agentLauncher.continuedFloor]).
 	req, floor := l.continuedFloor(ctx, req, agent, inBox)
+	floor.beside = e.besideFloor(company, handle, l.turn.RunID)
 	if err = executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
@@ -474,9 +475,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// holds `ask_and_wait` and nothing tells it when to park on it.
 		Ask: askBrief(company.Org, l.seat),
 		// THE RUN AS A PERSON READS IT ([turnctx.Turn.Title]): what the
-		// turn was asked, in its trigger's own words. Never the brief's
-		// task, whose fence lines and escapes are a model's, and which a
-		// resume reads off the park ([resumeTask]) and never off the row.
+		// turn was asked, in its trigger's own words, redacted. Never the
+		// brief's task, whose fence lines and escapes are a model's, and
+		// which a resume reads off the park ([resumeTask]) and never off
+		// the row.
 		Task:  l.turn.Title,
 		Label: l.turn.Title,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
@@ -1204,7 +1206,7 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []
 // [sandbox.ErrResumeHeld]). An unreadable counter is retried by backoff.
 func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) (err error) {
 	defer origin.Stamp(&err)
-	if floor.tokens() <= 0 || remaining == nil {
+	if floor.needs() <= 0 || remaining == nil {
 		// No floor, or no counter anywhere in the epoch — a company with
 		// no token budget rather than a read that could not be made.
 		return nil
@@ -1214,7 +1216,7 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 		return fmt.Errorf("this seat's remaining token budget could not be read, and an "+
 			"executor run costs a box before it produces anything: %w", err)
 	}
-	if left < floor.tokens() {
+	if left < floor.needs() {
 		// THE FLOOR RIDES THE REFUSAL, so the hold that waits on it waits
 		// for room for this launch ([floorRefusal]).
 		return &floorRefusal{floor: floor, left: left}

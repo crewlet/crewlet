@@ -273,13 +273,13 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 const MaxPayloadBytes = 8 << 20
 
 // ConcurrentAnswers is how many requests an [EventQueue.Serve] registration
-// answers at once when what it answers is work it does NOW.
-// SIXTY-FOUR, twice the default `node.max_concurrent`: every turn can be in a
-// tool call asking a peer, so two nodes' full turns never queue behind each
-// other. It bounds goroutines and buffered payloads, not throughput: a request
-// past it waits for a slot ([EventQueue.Serve] says how far it is buffered).
-// Four answers can fill [MaxPayloadBytes] (eventfan's scatter, memread, the
-// sandbox host's box read, estate): 512 MiB at the ceiling, never reached.
+// answers at once when what it answers is work it does NOW. SIXTY-FOUR, twice
+// the default `node.max_concurrent`: two nodes' full turns, each asking a peer,
+// never queue behind each other, and a request past it waits for a slot
+// ([EventQueue.Serve] says how far it is buffered). It bounds the answers built
+// at once, not their bytes, which suits answers of a few KiB. A registration
+// whose answers carry payloads bounds each one's bytes where it reads it
+// (eventfan, memread, the chat pages).
 //
 // A REGISTRATION WHOSE ANSWERS WAIT (a push proposal behind its repository's
 // earlier pushes) passes its own queue's bound and is a registration of its

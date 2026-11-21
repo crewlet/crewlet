@@ -276,6 +276,10 @@ type wait struct {
 	wake string
 	seq  uint64
 	at   time.Time
+	// why is the line saying why the message waits, beside the seat's name,
+	// where the node running the seat said ([StatusDriver.Explain]); empty
+	// says it is queued behind the seat's work ([queuedLine]).
+	why string
 }
 
 // maxWaitAge is the longest a queued line stands for one message, the
@@ -302,6 +306,18 @@ func (s *session) firstWait() uint64 {
 		first = min(first, w.seq)
 	}
 	return first
+}
+
+// why is why this conversation's earliest waiting message waits, empty where
+// nobody said. Caller holds the driver's mutex and has checked there is one.
+func (s *session) why() string {
+	first := s.waits[0]
+	for _, w := range s.waits[1:] {
+		if w.seq < first.seq {
+			first = w
+		}
+	}
+	return first.why
 }
 
 // hold records turn as the newest holder: appended, or moved to the end if it
@@ -652,6 +668,22 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 // it is told, and a queued message is not being written, so there this raises
 // nothing.
 func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata map[string]string) bool {
+	return d.queue(ctx, handle, wake, metadata, "")
+}
+
+// Explain is [StatusDriver.Queue] saying why the message waits: why stands
+// beside the seat's name in place of how many tasks are ahead of it ("is
+// waiting for Ana to approve adding this to its running work"), on the wait
+// [StatusDriver.Queue] raised for it or on one raised here.
+func (d *StatusDriver) Explain(ctx context.Context, handle, wake string, metadata map[string]string,
+	why string) bool {
+	return why != "" && d.queue(ctx, handle, wake, metadata, why)
+}
+
+// queue raises or explains the wait of wake ([StatusDriver.Queue],
+// [StatusDriver.Explain]); why "" leaves a wait's reason as it is.
+func (d *StatusDriver) queue(ctx context.Context, handle, wake string, metadata map[string]string,
+	why string) bool {
 	if d.mode == StatusOff || handle == "" || wake == "" || !d.poster.SupportsStatusText() {
 		return false
 	}
@@ -672,8 +704,11 @@ func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata 
 	d.queuedSeq++
 	now := d.now()
 	if s, live := d.sessions[key]; live {
-		if !slices.ContainsFunc(s.waits, func(w wait) bool { return w.wake == wake }) {
-			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq, at: now})
+		switch at := slices.IndexFunc(s.waits, func(w wait) bool { return w.wake == wake }); {
+		case at < 0:
+			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq, at: now, why: why})
+		case why != "":
+			s.waits[at].why = why
 		}
 		queued := s.queued()
 		d.mu.Unlock()
@@ -683,7 +718,7 @@ func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata 
 		return true
 	}
 	s := &session{
-		key: key, waits: []wait{{wake: wake, seq: d.queuedSeq, at: now}},
+		key: key, waits: []wait{{wake: wake, seq: d.queuedSeq, at: now, why: why}},
 		seed: wake,
 		poke: make(chan struct{}, 1),
 		stop: make(chan struct{}), done: make(chan struct{}),
@@ -950,9 +985,12 @@ func (d *StatusDriver) repost(ctx context.Context, s *session) {
 	d.mu.Lock()
 	queued := s.queued()
 	var text string
-	if queued {
+	switch {
+	case queued && s.why() != "":
+		text = s.why()
+	case queued:
 		text = queuedLine(d.queuedAhead(s))
-	} else {
+	default:
 		text = d.phrases.Pick(s.phase, s.seed, s.rotation)
 	}
 	turn := s.newest()

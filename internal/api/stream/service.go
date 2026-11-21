@@ -136,10 +136,10 @@ type Service struct {
 	tokensDirty atomic.Bool
 
 	// pushMu orders the `agents` pushes, and pushed is what the last of them
-	// said about each seat's live call, by agent id: which call, and the version of each
-	// heavy field it described. See pushAgents.
+	// said about each seat's live calls, by agent id then turn id: which
+	// call, and the version of each heavy field it described. See pushAgents.
 	pushMu sync.Mutex
-	pushed map[string]pushedCall
+	pushed map[string]map[string]pushedCall
 
 	mu      sync.Mutex
 	ticking bool
@@ -304,7 +304,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
-		pushed:    map[string]pushedCall{},
+		pushed:    map[string]map[string]pushedCall{},
 		rooms:     opts.Rooms,
 		metrics:   opts.Metrics,
 		judge:     opts.Objectives,
@@ -451,33 +451,42 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	s.hub.Broadcast(Push(KindAgents, AgentRows(rows), now))
 }
 
-// pushedCall is what an `agents` push said about one seat's live call.
+// pushedCall is what an `agents` push said about one turn's live call.
 type pushedCall struct {
 	key      livestate.CallKey
 	versions livestate.CallVersions
 }
 
-// leaveOutWhatIsHeld replaces a row's live call with the copy a push carries:
-// without the heavy fields the last push for the same call already carried at
-// the same version. A call the last push did not describe — a new phase, a
-// seat's first — goes whole.
+// leaveOutWhatIsHeld replaces a row's live calls with the copies a push
+// carries: each without the heavy fields the last push for the same call
+// already carried at the same version. A call the last push did not describe
+// — a new phase, a turn's first — goes whole.
 //
 // Called under pushMu.
 func (s *Service) leaveOutWhatIsHeld(row map[string]any) {
 	// KEYED ON THE SEAT'S AGENT ID, which is what names a row: a role is
 	// prose two seats may share, and two seats' calls held under one key
-	// would each leave out what the other's push carried.
+	// would each leave out what the other's push carried. Within the seat,
+	// by TURN: a seat runs several turns at once, one call each.
 	seat, _ := row["agent_id"].(string)
-	call, _ := row["live_call"].(*livestate.LiveCall)
-	if call == nil {
+	calls, _ := row["live_calls"].([]*livestate.LiveCall)
+	if len(calls) == 0 {
 		delete(s.pushed, seat)
 		return
 	}
-	last, ok := s.pushed[seat]
-	s.pushed[seat] = pushedCall{key: call.Key(), versions: call.Versions}
-	if ok && last.key == call.Key() {
-		row["live_call"] = call.Without(last.versions)
+	last := s.pushed[seat]
+	now := make(map[string]pushedCall, len(calls))
+	out := make([]any, 0, len(calls))
+	for _, call := range calls {
+		now[call.TurnID] = pushedCall{key: call.Key(), versions: call.Versions}
+		if held, ok := last[call.TurnID]; ok && held.key == call.Key() {
+			out = append(out, call.Without(held.versions))
+			continue
+		}
+		out = append(out, call)
 	}
+	s.pushed[seat] = now
+	row["live_calls"] = out
 }
 
 // RefreshPlacement reads the seat leases onto the projection and pushes the

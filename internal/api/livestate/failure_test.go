@@ -85,7 +85,7 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 	if got.Activity != livestate.ActivityWorking {
 		t.Errorf("activity = %q, want the working seat left alone", got.Activity)
 	}
-	if got.LiveCall == nil {
+	if soleCall(t, got.LiveCalls) == nil {
 		t.Error("a spawn wiped a working seat's live call")
 	}
 }
@@ -103,11 +103,11 @@ func TestASpawnAfterATurnTakesItsCallWithIt(t *testing.T) {
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.Activity != livestate.ActivityIdle || got.Turn != nil {
-		t.Errorf("activity = %q, turn = %+v, want idle on no turn", got.Activity, got.Turn)
+	if got.Activity != livestate.ActivityIdle || soleTurn(t, got.Turns) != nil {
+		t.Errorf("activity = %q, turn = %+v, want idle on no turn", got.Activity, soleTurn(t, got.Turns))
 	}
-	if got.LiveCall != nil {
-		t.Errorf("live call = %+v: a dead turn's call stayed on an idle seat", got.LiveCall)
+	if soleCall(t, got.LiveCalls) != nil {
+		t.Errorf("live call = %+v: a dead turn's call stayed on an idle seat", soleCall(t, got.LiveCalls))
 	}
 }
 
@@ -200,8 +200,8 @@ func TestACleanPhaseClearsTheCallAsBefore(t *testing.T) {
 	s.Apply(env("agent_phase_completed", planCall(), at("2026-06-14T12:00:05Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.LiveCall != nil {
-		t.Errorf("call = %+v, want cleared", got.LiveCall)
+	if soleCall(t, got.LiveCalls) != nil {
+		t.Errorf("call = %+v, want cleared", soleCall(t, got.LiveCalls))
 	}
 	if got.LastError != nil {
 		t.Errorf("a clean phase recorded an error: %+v", got.LastError)
@@ -251,9 +251,13 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	}, at("2026-06-14T12:00:01Z"), id("e2")))
 
 	frozen := overlayOf(t, s, "CEO")
-	if frozen.LiveCall == nil || !frozen.LiveCall.Failed {
-		t.Fatalf("the failed attempt did not freeze its call: %+v", frozen.LiveCall)
+	if soleCall(t, frozen.LiveCalls) == nil || !soleCall(t, frozen.LiveCalls).Failed {
+		t.Fatalf("the failed attempt did not freeze its call: %+v", soleCall(t, frozen.LiveCalls))
 	}
+
+	s.Apply(env("agent_turn_completed", map[string]any{
+		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1", "failed": true,
+	}, at("2026-06-14T12:00:02Z"), id("e2b")))
 
 	// Attempt two: the broker redelivered the trigger, so the SAME work key
 	// runs again — under a run id of its own.
@@ -263,18 +267,18 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	}, at("2026-06-14T12:02:00Z"), id("e3")))
 
 	got := overlayOf(t, s, "CEO")
-	if got.LiveCall == nil {
+	if soleCall(t, got.LiveCalls) == nil {
 		t.Fatal("the retry opened no live call at all")
 	}
-	if got.LiveCall.TurnID != "run-2" {
+	if soleCall(t, got.LiveCalls).TurnID != "run-2" {
 		t.Errorf("the live call is %q, want the retry's own run — the reader watches "+
-			"the dead attempt while the real one runs", got.LiveCall.TurnID)
+			"the dead attempt while the real one runs", soleCall(t, got.LiveCalls).TurnID)
 	}
-	if got.LiveCall.Failed {
+	if soleCall(t, got.LiveCalls).Failed {
 		t.Error("the retry's call inherited the previous attempt's failure")
 	}
-	if got.LiveCall.WorkKey != "wk-1" {
-		t.Errorf("work key = %q, want the trigger both attempts share", got.LiveCall.WorkKey)
+	if soleCall(t, got.LiveCalls).WorkKey != "wk-1" {
+		t.Errorf("work key = %q, want the trigger both attempts share", soleCall(t, got.LiveCalls).WorkKey)
 	}
 }
 
@@ -295,8 +299,8 @@ func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
 	}, at("2026-06-14T12:00:02Z"), id("e2"), streamOnly))
 
 	got := overlayOf(t, s, "CEO")
-	if got.LiveCall == nil || got.LiveCall.WorkKey != "wk-1" {
-		t.Errorf("work key = %+v, want the round's own", got.LiveCall)
+	if soleCall(t, got.LiveCalls) == nil || soleCall(t, got.LiveCalls).WorkKey != "wk-1" {
+		t.Errorf("work key = %+v, want the round's own", soleCall(t, got.LiveCalls))
 	}
 }
 

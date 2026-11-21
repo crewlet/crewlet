@@ -1064,9 +1064,9 @@ type PendingRun struct {
 	OwnerEpoch int64  `json:"owner_epoch"`
 
 	// TaskDescription is what a person reads the run by, in the launching turn's
-	// own words and unfenced: what the turn was asked, or the line a feed shows
-	// its trigger by ([LaunchRequest.Task]). A resume reads its brief off the
-	// turn's park, never this.
+	// own words, redacted and unfenced: what the turn was asked, or the line a
+	// feed shows its trigger by ([LaunchRequest.Task]). A resume reads its brief
+	// off the turn's park, never this.
 	//
 	// HELD TO [MaxRunTitleBytes] by the write creating the row, keeping its
 	// opening with the cut said: a trigger's words are bounded by nothing below
@@ -1583,6 +1583,13 @@ type PendingRun struct {
 	// ([RunSteer], notes.go). Kept by every reset: the TURN's, and a relaunch is
 	// the same turn.
 	Steer RunSteer `json:"steer,omitzero"`
+
+	// FoldIns are the questions the job's running work asked of the people who
+	// may let another writer's request join it ([FoldIn], foldin.go), at most
+	// [MaxJobFoldIns]. The JOB's: cleared when the next job opens
+	// ([PendingStore.BeginLaunch]), so no answer reaches work it was not
+	// asked for.
+	FoldIns []FoldIn `json:"fold_ins,omitempty"`
 
 	// BriefNotes is TRANSIENT, an instruction to [PendingStore.BeginLaunch] like
 	// [PendingRun.Continues]: the notes the job's brief carries, which the write
@@ -2573,6 +2580,21 @@ type PendingStore interface {
 	// [MaxWakeItemBytes] is [ErrWakeTooLarge]. A retry of a wake held answers
 	// its item. No fence. See the package doc, "A wake joins a running run".
 	FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error)
+
+	// AskFoldIn records fold-in f on the run's row for its job ([FoldIn]):
+	// only while the row holds that job in [ItemStatuses] and no ending is
+	// decided, else [ErrFoldInClosed]; once per job and wake, a repeat
+	// answering the one recorded; within [MaxJobFoldIns] for the job, else
+	// [ErrFoldInsSpent]; and [ErrFoldInTooLarge] past [MaxFoldInBytes]. The
+	// store stamps its AskedAt.
+	AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error)
+
+	// AnswerFoldIn records the answer to fold-in id: only while the row holds
+	// its job in [ItemStatuses], else [ErrFoldInClosed]; the first answer
+	// alone, a later one refused [ErrFoldInAnswered] with the fold-in naming
+	// the first; never its asker's ([ErrFoldInAsker]). The store stamps its
+	// AnsweredAt.
+	AnswerFoldIn(ctx context.Context, turnID, id string, a FoldInAnswered) (FoldIn, error)
 
 	// TakeNotes records the notes a take names read, where its Read says, and answers
 	// the ones THIS CALL recorded, each with its read. Pinned ([NoteTake]): a failed

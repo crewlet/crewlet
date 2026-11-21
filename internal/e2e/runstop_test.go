@@ -72,7 +72,7 @@ func TestAStopEndsTheRunningExecutorAndClosesItsTurnAsStopped(t *testing.T) {
 		lastEnd, lastStopped     bool
 	)
 	waitFor(t, "the turn's stop on the record", func() bool {
-		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), running.TurnID, time.Now())
+		evs, _, err := n.engine.Backends().Store.Events().Turn(t.Context(), running.TurnID, 0, time.Now())
 		if err != nil {
 			t.Fatalf("the turn's events: %v", err)
 		}

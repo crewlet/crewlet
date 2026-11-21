@@ -240,14 +240,15 @@ type Turn struct {
 	Reply string
 
 	// Title is what a person reads this turn's work by: what the turn was
-	// asked, in its trigger's own words and with no fence (the turn's
-	// record of it, [types.TurnCompleted.Ask]), or where the trigger stated
-	// no ask, the line a feed shows the trigger by ([types.Trigger.Summary]).
-	// The executor the turn launches is listed under it (the run's
-	// description and its label), on the dashboard and in its announcement
-	// alike, where [Turn.Task], the model's brief, would show a person the
-	// fence lines and the escapes that are written for a model alone. A
-	// resumed segment carries the line its run is already listed under.
+	// asked, in its trigger's own words, redacted and with no fence (the
+	// turn's record of it, [types.TurnCompleted.Ask]), or where the trigger
+	// stated no ask, the line a feed shows the trigger by
+	// ([types.Trigger.Summary]). No model reads it. The executor the turn
+	// launches is listed under it (the run's description and its label), on
+	// the dashboard and in its announcement alike, where [Turn.Task], the
+	// model's brief, would show a person the fence lines and the escapes
+	// that are written for a model alone. A resumed segment carries the line
+	// its run is already listed under.
 	Title string
 
 	// Requester is the handle of the seat whose message, notice or ask woke

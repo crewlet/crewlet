@@ -191,12 +191,12 @@ func headlines() map[Class]headlineFunc {
 			return fmt.Sprintf("Schedule %s ran %d times this week and moved work in %d.", who, n("fires"), n("moved"))
 		},
 		ClassAddSeat: func(_ Finding, who string, n func(string) int64) string {
-			return fmt.Sprintf("%s waited %d item-hours for %s's %s, busy %d%% of their available time.",
+			return fmt.Sprintf("%s waited %d item-hours for %s's %s, busy %d%% of their capacity.",
 				countSaid(int(n("items")), "item", "items"), n("wait_minutes")/60, who,
 				countSaid(int(n("seats")), "seat", "seats"), n("busy_percent"))
 		},
 		ClassRemoveSeat: func(_ Finding, who string, n func(string) int64) string {
-			return fmt.Sprintf("%s's %s sat idle %d%% of their available time this week.", who,
+			return fmt.Sprintf("%s's %s sat idle %d%% of their capacity this week.", who,
 				countSaid(int(n("seats")), "seat", "seats"), n("idle_percent"))
 		},
 		ClassSandboxUnstartable: paused,

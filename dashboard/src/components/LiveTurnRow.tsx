@@ -49,6 +49,7 @@ import { pathOf } from "~/app/frame/objects.ts";
 import { fmtElapsed, fmtUptime, possessive } from "~/lib/format.ts";
 import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { callOf, turnOf } from "~/lib/seatturn.ts";
 import { turnIdOf } from "~/lib/turns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
@@ -60,8 +61,8 @@ export function quietMark(
   row: AgentRow,
   now: number,
 ): { tone: "warning" | "danger"; text: string } | null {
-  const call = row.live_call;
-  const mark = staleness(call?.updated_at, now, row.turn?.stage);
+  const call = callOf(row);
+  const mark = staleness(call?.updated_at, now, turnOf(row)?.stage);
   if (!mark) return null;
   // THE SAME INSTANT `staleness` measured, read the same way: the push's
   // stamp may arrive without its zone, and it is UTC.
@@ -99,7 +100,7 @@ export function liveDoing(row: AgentRow, now: number, seat: Seat | null): string
  */
 function liveTrigger(row: AgentRow): { summary: string; refs: NamedRef[] | undefined } | null {
   if (turnItemKey(row)) return null;
-  const trigger = row.live_call?.trigger;
+  const trigger = callOf(row)?.trigger;
   const summary = trigger?.["summary"];
   if (typeof summary !== "string" || !summary.trim()) return null;
   const refs = trigger?.["refs"];
@@ -110,11 +111,11 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   const handle = row.handle ?? "";
   const seat = index.byHandle.get(handle) ?? null;
   const name = seat?.name ?? row.role;
-  const call = row.live_call;
+  const call = callOf(row);
   // FROM THE TURN'S OWN START, which `agent_turn_started` stamps before any
   // phase has run — so the clock starts when the turn does, not at its first
   // model call, and a turn still gathering its context is already timed.
-  const started = Date.parse(row.turn?.started_at ?? call?.started_at ?? "");
+  const started = Date.parse(turnOf(row)?.started_at ?? call?.started_at ?? "");
   // THE ONE READING of which turn a seat is on (`turnIdOf`): a turn record
   // whose id is still "" falls through to the call's, where `??` stopped at
   // the empty string and drew a seat the sidebar linked as an unlinked row.

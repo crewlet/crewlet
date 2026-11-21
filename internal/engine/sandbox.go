@@ -2832,10 +2832,16 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// turn's end, so its next turn continues the session the turn kept.
 		// See wakeitem.go.
 		Served: e.runSteers.served,
+		// AND A SEAT HOLDS UP TO ITS CAP OF RUNS, one per conversation
+		// (ADR-0169).
+		SeatCap: e.seatRunCap,
 		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
 		// wake from the run's requester about its work handed to it. See
 		// wakerouter.go.
 		Busy: e.seatRunsMoved,
+		// AND A FOLD-IN A PERSON ANSWERED is read by the seat's router at
+		// once. See foldin.go.
+		FoldInAnswered: e.nudgeRouter,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -3128,14 +3134,34 @@ func (e *Engine) stopSandbox() {
 }
 
 // sandboxSeatRuns is the inbox screening's two sandbox answers for a seat, read
-// off the runtime live: no to both where there is none, which is right for a
-// node that has never run code — a seat on it cannot be in either state.
-func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
+// off the runtime live: whether its runs hold every slot of its cap, and
+// whether one waits for an answer, in one read; no to both where there is no
+// runtime, which is right for a node that has never run code.
+func (e *Engine) sandboxSeatRuns(handle string) (atCap, awaitsAnswer bool) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return false, false
 	}
-	return rt.coordinator.SeatRuns(handle)
+	count := rt.coordinator.SeatCount(handle)
+	return count.AtCap(), count.Awaiting > 0
+}
+
+// sandboxConversationBusy is the dispatcher's [Dispatcher.ConversationBusy]:
+// whether one of the seat's runs works conversation, through the coordinator
+// current when the delivery arrives; none where there is no runtime.
+func (e *Engine) sandboxConversationBusy(ctx context.Context, handle, conversation string) (bool, error) {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return false, nil
+	}
+	return rt.coordinator.ConversationBusy(ctx, handle, conversation)
+}
+
+// holdSandboxConversation is the dispatcher's [Dispatcher.HoldConversation].
+func (e *Engine) holdSandboxConversation(ctx context.Context, handle, conversation string) {
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.HoldForConversation(ctx, handle, conversation)
+	}
 }
 
 // answerParkedRun offers a delivery to a parked executor, through the
@@ -3241,12 +3267,12 @@ const (
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
 
-	// waitSeatBusy: another of the seat's turns is running on this node, and
-	// a seat runs one at a time ([node.ErrSeatBusy]). Signalled the moment
-	// that turn is released ([node.Config.SeatTurnEnded]), so the answer is
-	// resumed as the seat's next turn, ahead of its mail, which its owed hold
-	// keeps waiting.
-	waitSeatBusy sandbox.Condition = "seat_busy"
+	// waitSeatTurns: the seat runs as many turns on this node as its cap, or
+	// one of the answer's conversation ([node.ErrSeatFull],
+	// [node.ErrConversationBusy]). Signalled the moment one of them is
+	// released ([node.Config.SeatTurnEnded]), so the answer is resumed as the
+	// seat's next turn, ahead of its mail, which its owed hold keeps waiting.
+	waitSeatTurns sandbox.Condition = "seat_turns"
 
 	// waitProvider: every model of the seat's chain is at a usage limit it
 	// already reported, or this node holds the seat parked on one. Signalled
@@ -3282,11 +3308,11 @@ func (e *Engine) turnGate() sandbox.TurnGate {
 // (only a hand-built one lacks it). The node is asked HERE, not where the gate
 // is built ([Engine.turnGate]): boot builds the coordinator before assigning
 // the node, so choosing then would leave every node ungated.
-func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+func (e *Engine) admitResume(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 	if e.node == nil {
 		return ctx, func() {}, nil
 	}
-	ctx, release, err := e.node.AdmitTurn(ctx, handle)
+	ctx, release, err := e.node.AdmitTurn(ctx, handle, conversation)
 	switch {
 	case err == nil:
 		if refusal, refused := e.seatCannotRun(ctx, handle, route); refused {
@@ -3297,9 +3323,9 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: sandbox.Draining, Reason: err.Error()}}
-	case errors.Is(err, node.ErrSeatBusy):
+	case errors.Is(err, node.ErrSeatFull), errors.Is(err, node.ErrConversationBusy):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
-			Condition: waitSeatBusy, Reason: err.Error()}}
+			Condition: waitSeatTurns, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatNotOwned):
 		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
 		// does not find owned, for the same edges.
@@ -3309,6 +3335,31 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 	default:
 		return nil, nil, err
 	}
+}
+
+// seatRunCap is how many of handle's runs hold its seat at once, and how many
+// of its turns a node admits ([node.Config.SeatTurns], [sandbox.CoordinatorOptions.SeatCap]):
+// the seat's sandbox.max_concurrent_runs in the current epoch, the default for
+// a seat the epoch does not resolve (ADR-0169).
+func (e *Engine) seatRunCap(handle string) int {
+	var box *org.RoleSandbox
+	if role := e.seatRole(handle); role != nil {
+		box = role.Sandbox
+	}
+	return box.ConcurrentRuns()
+}
+
+// besideFloor is what handle's other runs holding its seat are counted to
+// spend before their collections charge it ([launchFloor.beside]): the static
+// floor for each run held besides turn's own, which a relaunch of it already
+// holds. The static floor, because a running run's spend so far is nowhere
+// until its collection, and its first request is at least that.
+func (e *Engine) besideFloor(c *Company, handle, turn string) int {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return 0
+	}
+	return rt.coordinator.HeldBeside(handle, turn) * staticFloor(c).static
 }
 
 // seatCannotRun reports whether the turn route resumes on handle's seat would
@@ -3522,8 +3573,8 @@ func resumeRefusal(err error) (sandbox.Refusal, bool) {
 // THE SCREENING'S OWN CONDITIONS, as a delivery reads them: a retry runs outside
 // any delivery and must not start a turn on a seat whose lease is stale, that a
 // person paused, that has no model, or whose node refuses new work. Budget and
-// model limit are the turn gate's ([Engine.seatCannotRun]); another executor
-// holding the seat is the coordinator's count ([sandbox.SeatCoding]).
+// model limit are the turn gate's ([Engine.seatCannotRun]); the seat's cap is
+// the coordinator's count ([sandbox.SeatFull], [sandbox.ConversationBusy]).
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
 // polling ([sandbox.Coordinator.Readmit]). Ownership is an event
@@ -3999,6 +4050,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// costs seconds, not a client timeout per seat: the driver detaches and
 	// bounds each request itself ([notify.StatusDriver.ClearFor]).
 	e.Status().ClearFor(ctx, handle)
+	e.waitsTold.forgetSeat(handle)
 
 	// REFLECTION FIRST, so nothing new writes the seat's memory here after
 	// the flush below.
@@ -4045,8 +4097,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	}
 }
 
-// SeatHeldBySandbox reports whether a detached executor HOLDS a seat, so it
-// starts no new turn until the run settles.
+// SeatHeldBySandbox reports whether detached executors hold every slot of a
+// seat's cap, so it starts no new turn until one settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
 // it internally through the dispatcher's conditions, but "is this seat busy on

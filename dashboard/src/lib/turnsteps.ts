@@ -15,6 +15,7 @@
 
 import type { StepperStep } from "@crewlethq/ui";
 import { roundOf } from "./seats.ts";
+import { callOf, turnOf } from "./seatturn.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** The steps a turn walks, in order. */
@@ -41,8 +42,8 @@ export function turnSteps(
   row: AgentRow,
   { inLabel = true }: { inLabel?: boolean } = {},
 ): { steps: StepperStep[]; current: TurnStep; detail: string } {
-  const call = row.live_call;
-  const parked = row.turn?.stage === "parked";
+  const call = callOf(row);
+  const parked = turnOf(row)?.stage === "parked";
   const phase = parked ? "execute" : (call?.phase ?? row.current_phase ?? "context");
   const current: TurnStep =
     phase === "review" ? "review" : phase === "execute" ? "execute" : "context";
@@ -171,7 +172,7 @@ export function callWords(args: unknown): string {
  * or nothing while no call is out.
  */
 export function lastCallLine(row: AgentRow): string {
-  const call = row.live_call;
+  const call = callOf(row);
   if (!call) return "";
   const [first, ...rest] = call.running_calls ?? [];
   if (first) {
