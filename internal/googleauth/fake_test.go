@@ -102,6 +102,8 @@ type fakeGoogle struct {
 	limited int
 	// echo is what the product endpoint quotes in a 403.
 	echo string
+	// seen is the headers of each product call, as Google read them.
+	seen []http.Header
 }
 
 func newFake(t *testing.T) (*fakeGoogle, *googleauth.Connection) {
@@ -243,6 +245,7 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request) {
 // product is one product API: it serves a token carrying the analytics scope,
 // answers its first limited calls 429, and quotes echo in a refusal.
 func (f *fakeGoogle) product(w http.ResponseWriter, r *http.Request) {
+	f.seen = append(f.seen, r.Header.Clone())
 	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	switch {
 	case f.limited > 0:
