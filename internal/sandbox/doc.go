@@ -257,14 +257,9 @@
 //
 // # A node's collections
 //
-// Every read of its runs' boxes a node makes (a completion's, a stop's, a
-// loss's) holds one of [CoordinatorOptions.Collections], its turns. The gate
-// is not that bound: a completion past its turn's deadline is ended with no
-// turn, and a stop's or a loss's read starts none, so the gate alone leaves
-// them to the seats the node holds, past what internal/sandbox/executor's base
-// tier counts.
-// Taken before the claim, so a wait its context ends leaves the run unclaimed
-// and the completion comes back; an ending's wait keeps the ending.
+// A read of a run's box made on this node holds one of its turns for the read
+// alone ([Coordinator.collectionSlot]), since the gate does not admit them all:
+// a completion ended at its deadline and an ending start no turn.
 //
 // # Box host failures
 //

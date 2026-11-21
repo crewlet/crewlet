@@ -526,12 +526,12 @@ type CoordinatorOptions struct {
 	// budget holds it then ([ErrResumeHeld]).
 	Gate TurnGate
 
-	// Collections is how many of its runs' boxes this node reads at once
-	// ([Coordinator.collectionSlot]): its turns, node.max_concurrent as its gate
-	// resolves it, so the reads the gate does not admit (a completion ended at
-	// its turn's deadline, a stop's, a loss's) stay within them. Zero bounds
-	// none, as a nil Gate admits every turn. See the package doc, "A node's
-	// collections".
+	// Collections is how many reads of its runs' boxes this node makes itself
+	// at once ([Coordinator.collectionSlot]): its turns, node.max_concurrent as
+	// its gate resolves it, so the reads the gate does not admit (a completion
+	// ended at its turn's deadline, a stop's, a loss's) stay within them. Zero
+	// bounds none, as a nil Gate admits every turn. See the package doc, "A
+	// node's collections".
 	Collections int
 
 	// Lease is the seat lease this node holds a seat under, stamped on the row by
@@ -761,8 +761,10 @@ type Coordinator struct {
 	now     func() time.Time
 
 	// collections is [CoordinatorOptions.Collections] as a semaphore, nil for
-	// none ([Coordinator.collectionSlot]).
-	collections chan struct{}
+	// none, and collectionsWaiting how many reads wait for one
+	// ([Coordinator.collectionSlot]).
+	collections        chan struct{}
+	collectionsWaiting atomic.Int32
 
 	// saves is this node's part in saving its runs' sessions as they work
 	// (save.go).
@@ -1216,25 +1218,47 @@ func (c *Coordinator) packSlot(ctx context.Context, run PendingRun) (give func()
 
 // collectionSlot waits on ctx for one of this node's collections
 // ([CoordinatorOptions.Collections]) and returns what gives it back, once
-// however often it is called. Taken before the claim it reads a box for, so a
-// wait its context ends leaves the run as it was, its error the context's
-// ([queue.NodeFault]). See the package doc, "A node's collections".
+// however often it is called. Held around a read of a run's box made on this
+// node and nothing else ([Coordinator.boxResult], [Coordinator.readLostHere]):
+// internal/sandbox/executor's base tier counts those reads at the node's turns,
+// and a read asked of another node's host is bounded by that host's slots. A
+// wait its context ends reads nothing ([errReadUnstarted]); a read that cannot
+// start at once says so (`sandbox_collection_waits`).
 func (c *Coordinator) collectionSlot(ctx context.Context, turnID string) (func(), error) {
 	if c.collections == nil {
 		return func() {}, nil
 	}
+	give := sync.OnceFunc(func() { <-c.collections })
 	select {
 	case c.collections <- struct{}{}:
-		return sync.OnceFunc(func() { <-c.collections }), nil
+		return give, nil
+	default:
+	}
+	waiting := c.collectionsWaiting.Add(1)
+	defer c.collectionsWaiting.Add(-1)
+	log.InfoContext(ctx, "sandbox_collection_waits", "turn_id", turnID,
+		"collections", cap(c.collections), "waiting", waiting,
+		"detail", "this node is making as many reads of its runs' boxes as it runs turns, so this "+
+			"read waits for one of them to end")
+	select {
+	case c.collections <- struct{}{}:
+		return give, nil
 	case <-ctx.Done():
 		log.InfoContext(ctx, "sandbox_collection_unstarted", "turn_id", turnID,
 			"collections", cap(c.collections), "error", ctx.Err().Error(),
-			"detail", "this node was reading as many of its runs' boxes as it runs turns until this read's "+
-				"wait ended; nothing of the run was claimed, and its read is asked again")
-		return nil, fmt.Errorf("sandbox: waiting for one of this node's %d collections to read %s: %w",
-			cap(c.collections), turnID, ctx.Err())
+			"detail", "this read's wait for one of the node's collections ended before it started; the "+
+				"box was not read, and the read is asked again")
+		return nil, fmt.Errorf("%w: waiting for one of this node's %d collections to read %s: %w",
+			errReadUnstarted, cap(c.collections), turnID, ctx.Err())
 	}
 }
+
+// errReadUnstarted is a read of a run's box on this node whose wait for one of
+// the node's collections its context ended ([Coordinator.collectionSlot]). The
+// box was not asked, so it says nothing of the box: a collection hands its
+// claim back uncounted ([Coordinator.collectFailedAt]), and a stop or a loss
+// keeps its ending for the retry.
+var errReadUnstarted = errors.New("sandbox: the read of the run's box did not start")
 
 // SeatRuns is what this node knows about one seat's detached runs: whether one
 // HOLDS the seat, and whether one is waiting for a person's answer.
@@ -1555,14 +1579,6 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence, seen map[signal]uint64,
 ) error {
 	ctx := adm.ctx
-	// ONE OF THE NODE'S COLLECTIONS, before the claim and given back before the
-	// resume: the reads its gate does not admit take them too, so its turns
-	// alone would not bound its reads ([Coordinator.collectionSlot]).
-	collecting, err := c.collectionSlot(ctx, ev.TurnID)
-	if err != nil {
-		return err
-	}
-	defer collecting()
 	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
 	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
 	// made again, would give back a claim taken now. The completion comes back on
@@ -1614,14 +1630,12 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	if lost {
 		var carry *lostCarry
 		carry, err = c.carryOnLost(ctx, run)
-		collecting()
 		if err != nil || carry == nil {
 			return err
 		}
 		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome, seen)
 		return err
 	}
-	collecting()
 
 	if run.asked() {
 		return c.park(ctx, run, result)
@@ -1762,8 +1776,9 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // completion is NAK'd. The bound is the waiter's ([MinConnectFailures]
 // consecutive attempts spanning [ConnectGiveUp]), counted on the job's record; a
 // read that answered ends the run of failures. A gone box ([ErrBoxGone]) is
-// settled at once; a collection this node cancelled and a step the store did not
-// answer ([ErrStoreSilent]) are handed back uncounted; a hand-back the store
+// settled at once; a collection this node cancelled or whose read never
+// started ([errReadUnstarted]) and a step the store did not answer
+// ([ErrStoreSilent]) are handed back uncounted; a hand-back the store
 // does not answer is kept, never an ending. One verdict per failure
 // ([collectVerdict]). See the package doc, "Collection failures".
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
@@ -1783,7 +1798,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// records how the job's harness ended ([Release.HarnessEnd]).
 		run.BoxAnswered, run.BoxHarnessEnd = true, answered.end
 	}
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(cause, errReadUnstarted) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+

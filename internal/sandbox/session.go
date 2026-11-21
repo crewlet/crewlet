@@ -2186,25 +2186,18 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 // is not woken. Made by the ending's own retry ([Coordinator.finishEnding]).
 //
 // A STEP THE STORE DID NOT ANSWER ([ErrStoreSilent]) is returned and the
-// ending kept; only the host's alone (another node's host, rowRead answered)
-// is given up as a stop's is ([Coordinator.hostGivenUp]), the loss then ending
-// with its notes unconfirmed. Every other failure is logged and answers nil.
+// ending kept, as is a read here that never started ([errReadUnstarted]); only
+// the store's silence to another node's host, rowRead answered, is given up as
+// a stop's is ([Coordinator.hostGivenUp]), the loss then ending with its notes
+// unconfirmed. Every other failure is logged and answers nil.
 func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRead bool) error {
 	if !c.capturesLoss(run) {
 		return nil
 	}
-	// ONE OF THE NODE'S COLLECTIONS, as a completion's read holds
-	// ([Coordinator.collectionSlot]); a wait it cannot finish keeps the ending.
-	collecting, err := c.collectionSlot(ctx, run.TurnID)
-	if err != nil {
-		return err
-	}
-	defer collecting()
 	asked, local := c.now(), c.hosts(run)
+	var err error
 	if local {
-		var spooled *spooledCapture
-		spooled, _, err = c.readLost(ctx, run)
-		c.keepLater(ctx, spooled)
+		err = c.readLostHere(ctx, run)
 	} else {
 		if c.boxes == nil {
 			return nil
@@ -2219,6 +2212,8 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, errReadUnstarted):
+		return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
 	case !errors.Is(err, ErrStoreSilent):
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 			"node", run.LaunchNode, "error", err.Error(),
@@ -2233,6 +2228,20 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 		return nil
 	}
 	return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
+}
+
+// readLostHere is keepLostSession's read of a box this node reaches itself
+// ([Coordinator.hosts]), holding one of the node's collections for the read
+// alone ([Coordinator.collectionSlot]), its session kept later.
+func (c *Coordinator) readLostHere(ctx context.Context, run PendingRun) error {
+	collecting, err := c.collectionSlot(ctx, run.TurnID)
+	if err != nil {
+		return err
+	}
+	defer collecting()
+	spooled, _, err := c.readLost(ctx, run)
+	c.keepLater(ctx, spooled)
+	return err
 }
 
 // readLost is the read of a lost run's box on this node's host, for this
