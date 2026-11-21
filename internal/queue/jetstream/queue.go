@@ -111,6 +111,14 @@ type Config struct {
 	// store directory — because each of them is a way of holding something.
 	LeafURLs []string
 
+	// LeafURLsInOrder has each of a leaf's links dial LeafURLs in the order
+	// given, the first first, where nats-server shuffles each link's copy. For
+	// a case that must know which member a link lands on before it moves
+	// (jetstreamtest's lease link off a cut-off member), which the shuffle
+	// leaves to a coin; the engine never sets it, so leaves spread across the
+	// members.
+	LeafURLsInOrder bool
+
 	// LeafPort opens a leaf LISTENER on this member, which is where the
 	// fleet's leaves dial in. Zero opens none, and a fleet with no member
 	// listening has nowhere for a stateless node to join. [AnyPort] binds

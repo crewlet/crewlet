@@ -540,7 +540,7 @@ func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, err
 		opts.JetStreamDomain = jsapi.Domain
 	}
 	if leaf {
-		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed())
+		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed(), cfg.LeafURLsInOrder)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1286,8 +1286,9 @@ func (e *embeddedServer) presentedKey() string {
 // addLeafNodeConnection, v2.15.3: same leaf, cluster and remote account). An
 // nkey, never a credential in the URL (Tier A refuses one): CONNECT signs the
 // member's nonce, where a userinfo would cross in clear. The member's first
-// INFO is waited for [leafHandshakeTerm].
-func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
+// INFO is waited for [leafHandshakeTerm]. inOrder dials the URLs as given,
+// unshuffled ([Config.LeafURLsInOrder]).
+func leafRemotes(urls []string, seed string, inOrder bool) ([]*server.RemoteLeafOpts, error) {
 	parsed := func() ([]*url.URL, error) {
 		out := make([]*url.URL, 0, len(urls))
 		for i, raw := range urls {
@@ -1310,12 +1311,12 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 		return nil, err
 	}
 	return []*server.RemoteLeafOpts{
-		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm},
+		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, NoRandomize: inOrder},
 		// PAST THE TUNNEL, so it dials for itself: given the tunnel's term
 		// ([tunnelDial]), since nats-server's one second leaves a lease link
 		// that dropped unable to dial again behind a deep queue.
 		{URLs: leases, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, DialTimeout: tunnelDial,
-			LocalAccount: LeaseAccount, RequestIsolation: true},
+			LocalAccount: LeaseAccount, RequestIsolation: true, NoRandomize: inOrder},
 	}, nil
 }
 
