@@ -139,9 +139,9 @@ func TestALeaseLinkOnACutOffMemberIsMoved(t *testing.T) {
 	eventually(t, 2*time.Minute, "the lease link to move to a member the fleet answers on", func() bool {
 		return ask(onLeases) == nil
 	})
-	if err := ask(onData); err == nil {
-		t.Errorf("the data connection hears the fleet answer: member 0 was never cut off, or " +
-			"its data link moved too")
+	if err := ask(onData); !answering(err) {
+		t.Errorf("the data connection hears %v, want member 0's own \"not available\": its data "+
+			"link moved too, or never landed there", err)
 	}
 	eventually(t, time.Minute, "the moved lease link to read proven", func() bool {
 		return q.LeaseLink() == nil
