@@ -263,37 +263,27 @@ func readWhole(held sandbox.HeldCall) bool {
 	return held.Fixed && held.Approvers == sandbox.HeldApproversSSH
 }
 
-// openHeld is the arguments run's held call would send and their digest,
-// answering a refusal itself where they do not open here.
-func (s *Service) openHeld(w http.ResponseWriter, run sandbox.PendingRun) (map[string]any, string, bool) {
-	var args map[string]any
-	err := errNoSeal
-	if s.heldCalls != nil {
-		args, err = s.heldCalls.OpenRawArguments(run.TurnID, *run.HeldCall)
-	}
-	digest := ""
-	if err == nil {
-		digest, err = sandbox.HeldArgumentsDigest(args)
-	}
-	if err != nil {
-		log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
-			httpjson.Detail{"detail": "the held call's arguments do not open on this node, so they can be " +
-				"neither shown nor approved here; ask through a node that serves the dashboard"})
-		return nil, "", false
-	}
-	return args, digest, true
+// refuseUnopened answers a held call whose arguments do not open on this
+// node: they can be neither shown nor approved here.
+func refuseUnopened(w http.ResponseWriter, run sandbox.PendingRun, err error) {
+	log.Warn("mcp_approval_arguments_unopened", "approval", run.HeldCall.ID, "error", err.Error())
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
+		httpjson.Detail{"detail": "the held call's arguments do not open on this node, so they can be " +
+			"neither shown nor approved here; ask through a node that serves the dashboard"})
 }
-
-// errNoSeal is a node holding no seal for held calls' arguments.
-var errNoSeal = errors.New("mcpapi: this node holds no seal for held calls' arguments")
 
 // readAll is whether digest names the whole of run's held call as GET
 // /mcp-approvals/{id} answered it, answering the refusal itself where not:
 // Allow once is never given from a surface that did not show all of it.
 func (s *Service) readAll(w http.ResponseWriter, run sandbox.PendingRun, digest string) bool {
-	_, want, ok := s.openHeld(w, run)
-	if !ok {
+	// THE APPROVER ANSWERING, whose digest is compared and never served.
+	args, err := s.heldCalls.OpenRawArguments(run.TurnID, *run.HeldCall)
+	var want string
+	if err == nil {
+		want, err = sandbox.HeldArgumentsDigest(args)
+	}
+	if err != nil {
+		refuseUnopened(w, run, err)
 		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(digest), []byte(want)) != 1 {
@@ -307,7 +297,8 @@ func (s *Service) readAll(w http.ResponseWriter, run sandbox.PendingRun, digest 
 }
 
 // HeldAnswer is GET /mcp-approvals/{id}: the held call, its question, and the
-// whole of what it would send, for whoever may approve it.
+// whole of what it would send, for whoever may approve it while it waits;
+// redacted, with no digest, once it is answered or its run has moved on.
 type HeldAnswer struct {
 	ID              string         `json:"id"`
 	Server          string         `json:"server"`
@@ -321,8 +312,9 @@ type HeldAnswer struct {
 	ArgumentsSHA256 string         `json:"arguments_sha256"`
 }
 
-// serveHeld answers the held call its path names, whole, to whoever may answer
-// it: an SSH operate command's approvers read every byte of its stdin here,
+// serveHeld answers the held call its path names to whoever may answer it, by
+// [sandbox.CallSeal.OpenArgumentsFor]'s rule ([HeldAnswer]): an SSH operate
+// command's approvers read every byte of its stdin here while it waits,
 // whether or not they read the seat's runs.
 func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -343,11 +335,16 @@ func (s *Service) serveHeld(w http.ResponseWriter, r *http.Request) {
 				"or the id names none"})
 		return
 	}
-	if !authz.Admit(w, r, s.guard, s.approverPolicy(run)) {
+	// WHO READS HERE MAY ANSWER: the route admits only a reader the answer's
+	// own authority allows ([runanswer.HeldCall], which [runanswer.May]
+	// decides for the lists), at the answer's own proof.
+	mayAnswer := authz.Admit(w, r, s.guard, s.approverPolicy(run))
+	if !mayAnswer {
 		return
 	}
-	args, digest, ok := s.openHeld(w, run)
-	if !ok {
+	args, digest, err := s.heldCalls.OpenArgumentsFor(run, mayAnswer)
+	if err != nil {
+		refuseUnopened(w, run, err)
 		return
 	}
 	held := *run.HeldCall

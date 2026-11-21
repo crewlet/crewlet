@@ -8469,6 +8469,8 @@ The held call `{id}` whole, for whoever may answer it: `{"id", "server",
 "tool", "seat", "turn_id", "launch_id", "question", "context", "arguments",
 "arguments_sha256"}`, `arguments` opened from their seal and
 `arguments_sha256` the SHA-256, in hex, of them as JSON with sorted keys.
+Once the call is answered or its run has moved on, `arguments` are redacted
+and `arguments_sha256` is empty: nothing is answered from them.
 Decided as the answer is (`tools.approve`, or `ssh.operate.approve` for an SSH
 operate command), so a person
 `integrations.ssh.approvers` names reads every byte of an operate command's
