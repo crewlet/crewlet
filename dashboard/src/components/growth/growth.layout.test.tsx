@@ -31,7 +31,7 @@ vi.mock("~/lib/store-hooks.ts", async (original) => ({
 }));
 vi.mock("~/lib/seats.ts", async (original) => ({
   ...(await original<typeof import("~/lib/seats.ts")>()),
-  indexOrg: () => ({
+  useOrgIndex: () => ({
     byHandle: new Map([
       ["growth", { name: "Growth Lead for the whole northern hemisphere's stores" }],
     ]),
@@ -44,6 +44,7 @@ const ACCOUNT =
     100,
     "x",
   );
+const LONG_ID = "customers/1234567890/campaignBudgets/" + "9".repeat(128 - 37);
 const REPLY = "Thank you for the review. ".repeat(14).slice(0, 349) + ".";
 
 function spend(currency: string, micros: (units: number) => string): GrowthCard {
@@ -254,8 +255,9 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
         held: n % 2 === 0,
         product: "google_ads",
         connection: "main",
-        account: "123-456-7890",
-        target: CAMPAIGN,
+        account: LONG_ID.slice(0, 64),
+        // A vendor's ID has no space to wrap at: the longest the log keeps, beside a long name.
+        target: n % 2 === 0 ? LONG_ID : CAMPAIGN,
         tool: "google_ads_budget",
         class: "spend",
         step: n % 3 === 0 ? "failed" : n % 3 === 1 ? "allowed" : "applied",
@@ -289,12 +291,14 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
       await mount(
         width,
         theme,
-        <RecentChanges product="google_ads" accounts={new Map([["123-456-7890", "KWD"]])} />,
+        <RecentChanges product="google_ads" accounts={new Map([[LONG_ID.slice(0, 64), "KWD"]])} />,
       );
       expect(overflowing(host!, width)).toEqual([]);
       const targets = [...host!.querySelectorAll<HTMLElement>(".growth-change__what")];
       expect(targets).toHaveLength(20);
-      for (const target of targets) expect(target.textContent).toBe(CAMPAIGN);
+      targets.forEach((target, n) =>
+        expect(target.textContent).toBe(n % 2 === 0 ? LONG_ID : CAMPAIGN),
+      );
       for (const money of host!.querySelectorAll<HTMLElement>(".crewlet-money")) {
         expect(money.getClientRects().length, money.textContent ?? "").toBe(1);
       }

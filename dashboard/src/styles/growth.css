@@ -243,8 +243,10 @@
   list-style: none;
 }
 
+/* One column that may shrink below its content: a vendor ID has no space to wrap at. */
 .growth-change {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--spacing-1);
   padding: var(--spacing-2) 0;
   min-width: 0;
@@ -263,7 +265,7 @@
 
 .growth-change__what {
   font-weight: var(--font-weight-medium);
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 
@@ -276,11 +278,12 @@
 .growth-change__where {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
 }
 
 .growth-change__fields {
   margin: 0;
   padding-inline-start: var(--spacing-5);
   font-size: var(--font-size-xs);
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }

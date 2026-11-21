@@ -254,14 +254,14 @@ export interface GrowthChangeRow {
   product: string;
   connection: string;
   account: string;
-  /** What the act targeted, as the vendor names it: somebody's words. */
+  /** The vendor's ID of what the act targeted (a campaign, a review), up to 128 characters with no space. */
   target: string;
   tool: string;
   class: GrowthClass;
   step: GrowthStep;
   /** Who answered a held act: a person, or the engine's lapse. */
   answered_by: string;
-  /** The person who answered, by name. */
+  /** The human seat that allowed or denied a held act, by handle; empty for any other step. */
   answerer: string;
   operation: string;
   before: string;
@@ -274,6 +274,8 @@ export interface GrowthChangeRow {
 /** `growth_changes`: the agents' growth acts, newest first, an administrator's read, paged by `next`. */
 export interface GrowthChangesAnswer {
   rows: GrowthChangeRow[];
+  /** The cursor of the next older page; empty at the end of the list. */
   next: string;
+  /** Whether this node could read every record the page covers: false where some may be missing, never the list's end. */
   complete: boolean;
 }
