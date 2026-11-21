@@ -42,7 +42,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -4495,10 +4494,9 @@ func refusedSaid(in resumeInput) string {
 	return refusedMessage(in.Ended)
 }
 
-// refusedMessage is what the provider said of a refused request, redacted whole
-// and clipped as a diagnostic, keeping only the opening of the redaction the
-// clip reads ([redact.Prefix]): the run's error, else its text, else that it
-// said nothing.
+// refusedMessage is what the provider said of a refused request, as a
+// diagnostic holds it ([events.Diagnostic]): the run's error, else its text,
+// else that it said nothing.
 func refusedMessage(ended sandbox.RunEnding) string {
 	said := strings.TrimSpace(ended.Error)
 	if said == "" {
@@ -4507,8 +4505,7 @@ func refusedMessage(ended sandbox.RunEnding) string {
 	if said == "" {
 		return "the provider gave no message"
 	}
-	opening, _ := redact.Prefix(said, events.MaxDiagnosticBytes+1)
-	return events.ClipDiagnostic(opening)
+	return events.Diagnostic(said)
 }
 
 // signInReplaced decides whether a collected run is carried on because a

@@ -1,27 +1,23 @@
 # Architecture
 
 Crewlet is one Go binary. Start it and a company is running: an HTTP surface,
-an event stream, a database, a runtime that holds seats and executes turns —
-with no broker to operate, no database to provision, and nothing to install
-beside it.
+an event stream, a database, a runtime that holds seats and executes turns,
+with no broker to operate, no database to provision, nothing to install beside it.
 
-This page draws that binary at six zoom levels, from what sits outside its
-boundary down to the path a single trigger takes through it. It is a **map**:
-every box belongs to a page that goes deeper, and [the last
+This page draws that binary at six zoom levels, from its outside boundary down
+to the path of a single trigger. It is a **map**: every box belongs to a page
+that goes deeper, and [the last
 section](#which-page-owns-which-box) says which. The [Overview](overview.md)
-carries the one-diagram version; everything past that is here.
+carries the one-diagram version.
 
 ---
 
 ## 1. The boundary
 
 Everything Crewlet needs to *run* is inside the process. Everything it needs to
-be *useful* is outside it — the surfaces your company already works on, the
-models that think, and the tool servers that act.
-
-Two things about that outside half are easy to miss and are the whole design, so
-it takes two pictures. The first is the round trip — work arrives on those
-surfaces, and it is delivered back to the same ones.
+be *useful* is outside: the surfaces your company works on, the models, and the
+tool servers. Two pictures: the round trip (work arrives on surfaces and is
+delivered back to the same ones), then the supply.
 
 ```mermaid
 flowchart TB
@@ -45,19 +41,18 @@ flowchart TB
     MCPS -->|"the agent's own credentials"| SURF
 ```
 
-**The engine never calls a third-party app's API on its own account.** It calls MCP
-servers, and each seat's server carries *that seat's* credentials
-(`role.mcp_env`), so a comment on an issue is written by the agent, not by a
-service account fronting for it. The engine's own integration packages exist for the
-*inbound* half — verifying a delivery, parsing it, deciding whose it is — plus
-provisioning and the two calls a chat transport makes on the seat's own bot
-token: the working indicator it raises while the seat thinks, and the thread it
-reads back at the start of a turn woken in one. See [Tool
+**The engine never calls a third-party app's API on its own account.** It calls
+MCP servers, and each seat's server carries *that seat's* credentials
+(`role.mcp_env`), so a comment on an issue is written by the agent, not a
+service account. The engine's integration packages cover only the *inbound*
+half (verifying a delivery, parsing it, deciding whose it is), provisioning,
+and two calls a chat transport makes on the seat's own bot token: the working
+indicator raised while the seat thinks, and reading back the thread at the
+start of a turn woken in one. See [Tool
 capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
 
-The second picture is the supply — what a node reaches out to while a turn runs.
-Its MCP servers are the ones above; the two dashed edges are the process-level
-connections a deployment may never make at all.
+The second picture is what a node reaches while a turn runs. The two dashed
+edges are connections a deployment may never make.
 
 ```mermaid
 flowchart LR
@@ -81,36 +76,34 @@ flowchart LR
     NODE -.->|"stream + coordination"| NATS
 ```
 
-**Nothing outside the boundary is a hard dependency except a model, and a cell
-for its executor runs** — which the `local:` backend provides on the engine
-host itself. No embeddings means no similarity search — the diary's candidate
-pool falls back to recency and the "similar prior work" block renders nothing,
-both first-class states rather than failures. No sandbox is valid only for a
-company with no agent seat, or no model yet. No chat,
-tracker or code host means an agent has fewer surfaces to be reached on and to
-act through, and every other one still routes end to end.
+**The only hard dependencies are a model and a cell for its executor runs**
+(the `local:` backend provides one on the engine host). No embeddings means no
+similarity search: the diary's candidate pool falls back to recency and the
+"similar prior work" block renders nothing, both first-class states, not
+failures. No sandbox is valid only for a company with no agent seat or no model
+yet. No chat, tracker or code host means fewer surfaces to be reached on and
+act through; every other one still routes end to end.
 
 | Outside the boundary | Required? | What it is for | Without it |
 |---|---|---|---|
 | An LLM provider | **Yes** | Every phase of every turn | Nothing runs |
-| MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
-| Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
+| MCP servers | In practice | The agents' hands: chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
+| Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
 | Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its harness's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
-| OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
-| External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
+| OTLP collector | No | Exported traces | Trace ids are still minted and stored on every event row |
+| External NATS | No | The stream for a fleet that will not embed it | The process embeds its own (the default) |
 
 ---
 
 ## 2. Inside one node
 
-`crewlet run` is *the* node, and what it does is a config value:
-`node.roles` picks from `data`, `gitlet`, `ingress`, `seats` and `workers`.
-Declaring none means all five, which is the single-process company — one
-process holding the company's records, serving the API and the dashboard,
-serving its git repositories where it hosts them, running every agent, and
-performing the company-wide duties. A node without `data` holds no copy of the
-replicated estate and answers its seats' tools through a node that does; see
+`crewlet run` is *the* node; what it does is a config value. `node.roles` picks
+from `data`, `gitlet`, `ingress`, `seats` and `workers`; declaring none means
+all five, the single-process company: it holds the records, serves the API,
+the dashboard and its hosted git repositories, runs every agent, and performs
+the company-wide duties. A node without `data` holds no copy of the replicated
+estate and answers its seats' tools through a node that does; see
 [Scaling Out](scaling.md#a-node-that-holds-no-data).
 
 ```mermaid
@@ -138,69 +131,63 @@ flowchart TB
     GIT -->|"code log reads · pushes to a committer"| STREAM
 ```
 
-That is one `crewlet run` process. `node.roles` picks from `data`, `gitlet`,
-`ingress`, `seats` and `workers` — declare none and you get all five — and the
-always-on set runs on every node whatever it says. `gitlet` serves anything only
-for a company that sets [`code.backend: gitlet`](gitlet.md), and only beside
-`ingress`, whose listener its routes are on. The three backends are opened together
-and closed together; on a node without `data` the store is scratch and holds
-the node estate alone.
+The always-on set runs on every node whatever `node.roles` says. `gitlet`
+serves anything only for a company that sets [`code.backend: gitlet`](gitlet.md),
+and only beside `ingress`, whose listener its routes are on. The three backends
+open and close together; on a node without `data` the store is scratch and
+holds the node estate alone.
 
-Four of those five groups are **inventories, not pipelines**: no box inside
+Four of the five groups are **inventories, not pipelines**: no box inside
 `ingress`, `gitlet`, `workers` or the always-on set hands work to another box in
-the same group. They are named here rather than drawn.
+the same group.
 
-**What a node holds before it serves anything.** The boot order is not a detail
-of the implementation; two of its steps exist because of what happens if they
-are the other way round.
+**What a node holds before it serves anything.** The boot order matters; two
+steps exist because of what happens if they swap.
 
-1. The **backends** — the stream, coordination and the store file — opened together (below).
-2. The **core runtime**, on a node that holds `data`: the state log (every registered domain's stream provisioned and its applier started), with the node gate over every identity-claiming log and the [identity estate](identity-and-access.md). On a data node this is unconditional, **with a company or without one**: a node nobody has configured yet is the one a Tier A token's session signs in on to create its company, and the one its first person is invited to and signs in on once that company declares the human seat they will hold, and `ingress` requires `data`, so the node anybody signs in on always has it. A node without `data` runs no core: it applies no log, and reaches the estate, the identity directory and the executor log included, through a node that holds it. It is every domain rather than the one a companyless node can use, because a join replaces the whole replicated file, a snapshot names every registered domain, and the trim counts nodes per log. What waits for a company is only **Worklet's, Doclet's and Chatlet's halves** (their writers and readers, their lexical index and chat's own, their feeds, the embedding duty and chat's message horizon), started here when the node boots on a company that keeps them, or by the first apply that hands it one; on a node without `data` they are the router's remote halves.
-3. The **tool catalogue**, equipped onto the company before anything is published — a turn can start the instant the epoch is current, and one that found an empty registry would run a seat with no tools at all.
-4. The **epoch**, built from the revision this node boots on — the last one its engine applied, or an offline change it has not published yet ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — its organization included, and published. Every reader from here on is a single atomic load. A node that boots on no revision starts unconfigured: the engine never boots on a Tier B file, so a `-company` bootstrap or an `-import-company` file comes in by its import once the node is up. The reconciler then converges the node on the revision the fleet's pointer names.
-5. The **node**, its seats, its duties and its inbound edge.
+1. The **backends** (stream, coordination, store file), opened together (below).
+2. The **core runtime**, on a node that holds `data`: the state log (every registered domain's stream provisioned and its applier started), with the node gate over every identity-claiming log and the [identity estate](identity-and-access.md). On a data node this is unconditional, **with a company or without one**: an unconfigured node is where a Tier A token's session signs in to create its company, and where its first person is invited once the company declares the human seat they will hold; `ingress` requires `data`, so the node anybody signs in on always has it. A node without `data` runs no core: it applies no log, and reaches the estate, identity directory and executor log through a node that holds it. It runs every domain, not just the one a companyless node can use, because a join replaces the whole replicated file, a snapshot names every registered domain, and the trim counts nodes per log. Only **Worklet's, Doclet's and Chatlet's halves** wait for a company (their writers and readers, their lexical index and chat's own, their feeds, the embedding duty, chat's message horizon): started here when the node boots on a company that keeps them, or by the first apply that hands it one. On a node without `data` they are the router's remote halves.
+3. The **tool catalogue**, equipped onto the company before anything is published: a turn can start the instant the epoch is current, and one that found an empty registry would run a seat with no tools.
+4. The **epoch**, built from the revision this node boots on (the last one its engine applied, or an offline change not yet published; [Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)), organization included, and published. Every reader from here on is a single atomic load. A node that boots on no revision starts unconfigured: the engine never boots on a Tier B file, so a `-company` bootstrap or an `-import-company` file comes in by its import once the node is up. The reconciler then converges the node on the revision the fleet's pointer names.
+5. The **node**: its seats, duties and inbound edge.
 
 **Two slots and a file.** The stream and coordination are the two *chosen*
-backends, validated together — a multi-node fleet cannot coordinate locally, and
-a two-member fleet has no quorum. The store is not a third choice: it is this
-node's own file, opened with them because everything that writes to it is driven
-by them. A node holding one without the others could hear work it may not do,
-hold seats it cannot serve, or run turns it cannot record.
+backends, validated together: a multi-node fleet cannot coordinate locally, and
+a two-member fleet has no quorum. The store is this node's own file, opened with
+them because everything writing to it is driven by them; a node holding one
+without the others could hear work it may not do, hold seats it cannot serve, or
+run turns it cannot record.
 
-**Coordination lives on the stream's broker.** Never a second estate, and never
-the store file — see [Coordination](coordination.md) for the line between the
+**Coordination lives on the stream's broker**, never a second estate and never
+the store file; see [Coordination](coordination.md) for the line between the
 two estates and [section 5](#5-where-state-lives) for which fact lives where. On
 an external broker it rides the queue's own connection; on the embedded one it
 holds a second connection to the same in-process server, shared with the
-seat-memory replay and the backup's stream copies so that neither sits on the
-read loop every mailbox consumes through. Two connections can fail
-independently, so both are watched: the NATS client closing either one for good
-stops the node, and a node holding leases over one connection while the one
-carrying its inbox is gone lasts no longer than a reconnect. Only the *lease* half follows `coordination.type`: on a
-single node it falls back to an in-process store, while the shared
-buckets — the activation pointer, the ledgers, the counters, the company's
-secrets — are opened on every topology, because a lone node still has to read
-back what it wrote.
+seat-memory replay and the backup's stream copies so none sits on the read loop
+every mailbox consumes through. The two connections can fail independently, so
+both are watched: the NATS client closing either for good stops the node, since one holding leases while its inbox connection is gone lasts no longer than a reconnect. Only
+the *lease* half follows `coordination.type`: on a single node it falls back to
+an in-process store, while the shared buckets (activation pointer, ledgers,
+counters, the company's secrets) are opened on every topology, because a lone
+node still reads back what it wrote.
 
 **The routes `ingress` terminates.**
 
 | Route | What it is |
 |---|---|
-| `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/github/HANDLE` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/confluence/EVENT` · `/webhooks/datadog` · `/webhooks/forge` · `/webhooks/slack-oauth` · `/webhooks/github-app` · `/webhooks/mcp-oauth` · `/webhooks/mcp-oauth/client-metadata.json` | The webhook routes. A delivery is verified, then claimed once per fleet, then handed to the notification service. The last four are Slack's OAuth landing, the GitHub App return, the MCP server sign-in's callback and the engine's OAuth client metadata document. |
-| `/auth` · `/iam` · `/config` · `/secrets` · `/llm` · `/setup` · `/worklet` · `/doclet/pages` · `/chatlet` · `/artifacts` · `/artifact-folders` · `/brand` · `/assistant` · `/agents` · `/org` · `/tools` · `/stream/snapshot` · `/query` · `/events` · `/turns` · `/feed` · `/budgets` · `/containers` · `/integrations` · `/link-hosts` · `/mcp-servers` · `/mcp-catalogue` · `/mcp-checks` · `/mcp-probe` · `/mcp-approvals` · `/mcp-sign-ins` · `/executors` · `/delegated-decisions` · `/schedules` · `/tokens` · `/viewer` · `/fleet` · `/feeds` · `/objects` · `/backup` · `/backups` · `/diagnostics` · `/advisor` · `/inbox` · `/gitlet` · `/atlas` · `/research` | The REST plane: signing in, the identity directory, the configuration (the org chart included), the company's credentials and its models (Settings › Models: a credential tested and sealed, a check, a retry, a device sign-in), the human write surface over Worklet, Doclet and Chatlet, a person's inbox, what delegates decided ([delegated decisions](../guides/delegated-decisions.md)), [Gitlet](gitlet.md)'s reads (its repositories, changes, reviews, pushes and a repository's verification), the [atlas](atlas.md)'s reads, the artifacts (their folders, brand and datastores), Ask Crewlet and the web pages it reads from hosts the company lists, the fleet's backups and broker membership, the wake feeds' dead letters, and the reads no socket question answers. It writes through the state logs and the coordination KV, and reads the store directly. |
-| `/` · `/dashboard` · `/static/` · `/favicon.ico` | The dashboard's page and the assets it loads, served without a credential: the page that asks for one cannot itself require one, and it ships no data, since everything it shows comes from an authenticated fetch over the REST plane or the socket. `/` redirects to `/dashboard`. |
-| `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
-| `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge and chat tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login, and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
-| `/git/{repo}` | A person's git over HTTPS on [Gitlet](gitlet.md): a fetch or a push, authenticated by the token bound to them ([Persons and their tokens](gitlet.md#persons-and-their-tokens)), and, beside it, a file's bytes and a commit's files as a ZIP, served inert to the person or token asking (`/git/{repo}/-/raw`, `/git/{repo}/-/archive.zip`). Answered from a Gitlet node's cache, which the node a request reaches relays to. |
-| `/box/git/{repo}` · `/box/gitlet/{repo}` | An executor's git and its code reads, from inside its box: the run's own token, minted per launch and held to the repositories its run was granted. |
+| `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/github/HANDLE` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/confluence/EVENT` · `/webhooks/datadog` · `/webhooks/forge` · `/webhooks/slack-oauth` · `/webhooks/github-app` · `/webhooks/mcp-oauth` · `/webhooks/mcp-oauth/client-metadata.json` | The webhook routes. A delivery is verified, claimed once per fleet, then handed to the notification service. The last four are Slack's OAuth landing, the GitHub App return, the MCP server sign-in's callback and the engine's OAuth client metadata document. |
+| `/auth` · `/iam` · `/config` · `/secrets` · `/llm` · `/setup` · `/worklet` · `/doclet/pages` · `/chatlet` · `/artifacts` · `/artifact-folders` · `/brand` · `/assistant` · `/agents` · `/org` · `/tools` · `/stream/snapshot` · `/query` · `/events` · `/turns` · `/feed` · `/budgets` · `/containers` · `/integrations` · `/link-hosts` · `/mcp-servers` · `/mcp-catalogue` · `/mcp-checks` · `/mcp-probe` · `/mcp-approvals` · `/mcp-sign-ins` · `/executors` · `/delegated-decisions` · `/schedules` · `/tokens` · `/viewer` · `/fleet` · `/feeds` · `/objects` · `/backup` · `/backups` · `/diagnostics` · `/advisor` · `/inbox` · `/gitlet` · `/atlas` · `/research` | The REST plane: signing in, the identity directory, configuration (org chart included), the company's credentials and models (Settings › Models: a credential tested and sealed, a check, a retry, a device sign-in), the human write surface over Worklet, Doclet and Chatlet, a person's inbox, what delegates decided ([delegated decisions](../guides/delegated-decisions.md)), [Gitlet](gitlet.md)'s reads (repositories, changes, reviews, pushes, a repository's verification), the [atlas](atlas.md)'s reads, the artifacts (folders, brand, datastores), Ask Crewlet and the web pages it reads from hosts the company lists, the fleet's backups and broker membership, the wake feeds' dead letters, and reads no socket question answers. It writes through the state logs and the coordination KV, and reads the store directly. |
+| `/` · `/dashboard` · `/static/` · `/favicon.ico` | The dashboard's page and assets, served without a credential: the page that asks for one cannot require one, and it ships no data (everything comes from an authenticated fetch over REST or the socket). `/` redirects to `/dashboard`. |
+| `/ws/stream` | The dashboard's only read channel: live pushes (from the observability edge's projector) plus a query channel. It carries no write. |
+| `/operator/mcp` · `/operator/act` | The operator catalogue (the tracker, knowledge and chat tools a seat holds), served to a person's own assistant over MCP and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, as does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
+| `/git/{repo}` | A person's git over HTTPS on [Gitlet](gitlet.md): a fetch or push, authenticated by the token bound to them ([Persons and their tokens](gitlet.md#persons-and-their-tokens)), plus a file's bytes and a commit's files as a ZIP, served inert (`/git/{repo}/-/raw`, `/git/{repo}/-/archive.zip`). Answered from a Gitlet node's cache, which the node a request reaches relays to. |
+| `/box/git/{repo}` · `/box/gitlet/{repo}` | An executor's git and code reads from inside its box: the run's own token, minted per launch and held to the repositories its run was granted. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
-| `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
+| `/health` · `/ready` | The two probes; [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` runs the company-wide singletons, each held on its own
 `worker:DUTY` lease.** A `workers` node holds data too, because the duties read
 and write this node's own copy of the replicated estate.
-
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
@@ -225,13 +212,13 @@ and write this node's own copy of the replicated estate.
 | Always on | What it does |
 |---|---|
 | Notification service | One fleet-wide group, `notify-inbound`: parse → resolve → valve → wake, publishing the wake to the seat's inbox on the stream. |
-| Config reconciler | Polls the activation pointer, applies an epoch, and reports in the KV what it attempted and the revision it serves; once an apply succeeds, that revision is what this node boots on. |
+| Config reconciler | Polls the activation pointer, applies an epoch, reports in the KV what it attempted and the revision it serves; once an apply succeeds, that revision is what the node boots on. |
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
 | Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
-| Chat hub | Chatlet's live half, attached to the engine on every node whatever its roles: hands each committed message to this node's sockets whose reader may see that room, puts a socket in a room's presence on the node's presence hub once the room's visibility admits its reader — who is looking at a room, who is typing, and which seat is working in it, told between nodes in sealed frames (ADR-0038) — and, on a node serving sockets, pushes a person's read state to their own tabs from a watch of the coordination record every node keeps. It raises its seats' working indicators from the moment the node is up, whether or not this node serves the API, because a seat raises its working indicator wherever its turn runs. |
-| Usage publisher (data nodes) | This node's own days — what its seats, its schedules and the people its auxiliary model spent for spent, ran and read — derived from the rows its own event log **keeps** and republished to `CREWLET_USAGE_LOG` whenever they move: today and yesterday on every tick, any older day a custody batch settled as kept has changed (back to the event log's 30-day read floor), every day it still owed when it stopped, from its watermark, at boot, and today and yesterday once more as it stops in an orderly way. Not a duty: a node's event log holds only what its own seats did, and the batches [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) gave it from nodes holding no data, so it is the only thing that can derive its day — a node without `data` keeps no event log, and its spend is counted in the day of the data node that keeps its events. |
+| Chat hub | Chatlet's live half, on every node whatever its roles. Hands each committed message to this node's sockets whose reader may see that room; puts a socket in a room's presence on the node's presence hub once the room's visibility admits its reader (who is looking, who is typing, which seat is working; told between nodes in sealed frames, ADR-0038); on a node serving sockets, pushes a person's read state to their own tabs from a watch of the coordination record every node keeps. Raises its seats' working indicators from node start, whether or not the node serves the API, because a seat raises its indicator wherever its turn runs. |
+| Usage publisher (data nodes) | Derives this node's own days (what its seats, schedules and the people its auxiliary model spent for spent, ran and read) from the rows its own event log **keeps**, and republishes them to `CREWLET_USAGE_LOG` whenever they move: today and yesterday on every tick; any older day a custody batch settled as kept has changed (back to the event log's 30-day read floor); every day still owed when it stopped, from its watermark, at boot; today and yesterday once more on an orderly stop. Not a duty: a node's event log holds only what its own seats did plus the batches [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) gave it from nodes without data, so only it can derive its day. A node without `data` keeps no event log; its spend counts in the day of the data node that keeps its events. |
 
-`seats` is the exception — the one group whose boxes hand work to each other.
+`seats` is the exception, the one group whose boxes hand work to each other.
 This is what a wake becomes after the stream delivers it:
 
 ```mermaid
@@ -259,112 +246,96 @@ flowchart TB
     CLAIM --> KV
 ```
 
-**Two MCP lifetimes, and the difference is a security boundary.** A
+**Two MCP lifetimes; the difference is a security boundary.** A
 `shared: true` server is one company-wide child bound to the **config epoch**.
-A `shared: false` server is a *template*, and each seat it is granted to gets its
-own child bound to that **seat's lease** — spawned before its mailbox opens, killed when the
-lease goes. The credentials in one of those children *are* that seat's identity,
-and two children of one template publish identical tool names: in a single
-registry one would shadow the other and every seat would call whichever won,
-acting in the tracker or the chat backend as somebody else. So a claimed seat
-gets its own cloned registry and its own bridge.
+A `shared: false` server is a *template*: each seat it is granted to gets its
+own child bound to that **seat's lease**, spawned before its mailbox opens and killed when the
+lease goes. That child's credentials *are* the seat's identity, and two children of one template publish identical tool names. In one shared registry one would shadow the other, and seats would act in the tracker or chat backend as somebody else. So a claimed seat gets its own cloned registry and its own bridge.
 
-**One model call has two layers of failure handling, each owning exactly one
-decision.** The backend *classifies* and does nothing else — it never retries.
-The one thing it holds of its own is a spent plan: a harness that reported its
-vendor's rate limit, in its own structured status or the vendor's words, is
-`rate_limit`, and the entry then sits out on this node until the reset the
-vendor named (never more than an hour away), or, where it named none, for a
-window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
-refuses, so every round of every seat on it does not start a process to hear
-the same sentence again. The fallback chain decides
+**One model call has two layers of failure handling, each owning one
+decision.** The backend *classifies* and never retries. The one thing it holds is a spent plan: a harness that reported its
+vendor's rate limit (in its structured status or the vendor's words) is
+`rate_limit`, and the entry sits out on this node until the reset the
+vendor named (never more than an hour away), or, where none was named, for 1, 2, 5, then 15 minutes, stepping up with each probe the limit
+refuses. The sit-out is node-local, not shared with the fleet: an
+entry holds one login, every other node learns the same from its own
+calls once per window, and a coordination read before every model call
+would put the store under every turn. The fallback chain decides
 whether the **model** is worth abandoning and moves to the next one in the
-role's chain, publishing a `provider_fallback` event for each hand-off —
-addressed to the turn, the phase and the iteration it happened in, so a chain
-that only flaps under load is visible on the turn that paid for it rather than
-only in aggregate. Exhausting the chain publishes `llm_unavailable` and fails
-the turn. The sit-out is the node's own and is not shared with the fleet: an
-entry holds one login, every other node learns the same thing from its own
-calls once per window, and a coordination read in front of every model call
-would put the store under every turn. What a classified failure *says* — in a log line,
-`llm_unavailable`, a turn's error — is the backend's own line: how the harness
-exited and the tail of what it printed, or the vendor's own sentence for a
+role's chain, publishing a `provider_fallback` event per hand-off,
+addressed to the turn, phase and iteration, so a chain that flaps under load is visible on the turn that paid for it. Exhausting the chain publishes `llm_unavailable` and fails
+the turn. What a classified failure *says* (log line,
+`llm_unavailable`, a turn's error) is the backend's own line: how the harness
+exited and the tail of what it printed, or the vendor's sentence for a
 spent plan or an expired login.
 
-**The observability edge is two routes, not one, and the split is deliberate.**
-A published event forks. It is written to this node's `crewlet_events` **inline,
+**The observability edge is two routes, deliberately.**
+A published event forks:
+- It is written to this node's `crewlet_events` **inline,
 in the publishing goroutine**, through a publish listener with no consumer
-group — so no two nodes can ever write one row. (A node without the `data`
-role has no log to write, so its listener batches its events onto the custody
-topic instead, and exactly one data node keeps each batch — see
-[custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data).) And it is read back off the
-broker by an **ephemeral broadcast** subscription on `crewlet.events.>` that
-feeds the live projection — so a dashboard tab attached to node B shows turns
-that ran on node A. Swap either mechanism for the other and you lose the
-guarantee the other one was providing.
+group, so no two nodes can write one row. A node without the `data`
+role has no log, so its listener batches events onto the custody
+topic and exactly one data node keeps each batch ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
+- It is read back off the
+broker by an **ephemeral broadcast** subscription on `crewlet.events.>` feeding the live projection, so a dashboard tab on node B shows turns
+that ran on node A.
 
-The two sets are not identical, and each exception carries its reason in
-`internal/events`: a few types are live-only — a per-round progress signal, a
-snapshot of the shared token counter, because persisting them would fill the log with
-intermediate states of rows it already holds finished, or replay a reading
-of a counter that has moved on as though it were current. What the
-projection shows and what the store keeps are two questions with two answers.
+Swap either mechanism for the other and you lose the other's guarantee.
+
+The two sets differ; each exception's reason is in
+`internal/events`. A few types are live-only (a per-round progress signal, a
+snapshot of the shared token counter): persisting them would fill the log with
+intermediate states of rows it already holds finished, or replay a stale counter
+as current. What the projection shows and what the store keeps are separate questions.
 
 **The API is served inside the engine's process, and only there.** `crewlet run`
-builds it over the engine's own store, broker and coordination plane; a node
+builds it over the engine's own store, broker and coordination plane. A node
 without the `ingress` role serves the network only its two
 [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
-`api.port` — and its own boxes, beside them, the tool bridge and the telemetry
-receiver to its own host's loopback alone — and a node with `api.port: 0`
-serves nothing at all. `node.roles` changes what the engine
+`api.port`, plus, to its own host's loopback alone, its boxes' tool bridge and telemetry
+receiver. A node with `api.port: 0`
+serves nothing. `node.roles` changes what the engine
 *does*, never whether there is one, so every API answers its node's in-flight
-count, seats, posture and applied epoch rather than reporting them as
-unknowable.
+count, seats, posture and applied epoch.
 
 **The listener binds before the boot, and the HTTP surface serves before the
 engine starts.** `crewlet run` binds `api.port` (and `api.public` and
-`api.artifacts`, where the node serves them) as soon as it has checked its
-Tier A, and until the node serves, that socket answers what
-a starting node answers: `/health` `503` while the node recovers what it holds
-— its store, its broker, its copy of the estate, which only the deployment can
-bound — and `200` from then on, while what the company configures comes up;
+`api.artifacts`, where served) once it has checked its
+Tier A. Until the node serves, that socket answers as a starting node does:
+`/health` `503` while the node recovers its store, broker and copy of the estate (which only the deployment can
+bound), `200` from then on while the company's configuration comes up;
 `/ready` `503 starting`; every route it will serve `503 starting` with a
 `Retry-After`
 ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
-The line between the two halves is the engine's own: `engine.Options.Recovered`
-is called once, at the boundary, and a startup probe sized for the store (and,
-on a data node of a fleet, for its join) is never held by a tool server the
+`engine.Options.Recovered`
+is called once, at that boundary, so a startup probe sized for the store (and,
+on a fleet's data node, its join) is never held by a tool server the
 company declared.
 
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
-children are up — one subprocess per server per seat, each a spawn, a handshake
-and a `tools/list` — and the example company declares no server at all, since
-its chat, tracker, wiki and code are builtin tools, while the same seven seats
-with a vendor's chat, tracker, wiki and code host wired in run three children
-each — chat's, the Atlassian server the tracker and the wiki share, and the
-code host's — 21 in all. Serving first means the dashboard,
-the REST API and every webhook route answer during that window, and `/health`
-says honestly that this node holds no seats yet: its `seats` list is the seats
-claimed so far, which is none. `/ready` carries no seats at all. Webhooks
-arriving in the window are retained rather than dropped, because a seat's
+children are up (one subprocess per server per seat: spawn, handshake, `tools/list`). The example company declares no server, its chat, tracker, wiki and code being builtin tools; the same seven seats
+with a vendor's chat, tracker, wiki and code host run three children
+each (chat's, the Atlassian server the tracker and wiki share, the
+code host's), 21 in all. Serving first means the dashboard,
+REST API and every webhook route answer in that window, and `/health`
+says honestly that the node holds no seats yet: its `seats` list is the seats
+claimed so far, which is none. `/ready` carries no seats. Webhooks
+arriving in the window are retained, because a seat's
 mailbox is created before any claiming.
 
 ---
 
 ## 3. The path a trigger takes
 
-A person mentions an agent in a Slack thread. Here is every hop between that
-message and the agent's reply — across a fleet, where the node that *receives*
+A person mentions an agent in a Slack thread. Every hop from that
+message to the agent's reply, across a fleet, where the node that *receives*
 the delivery is rarely the node that *runs* the seat.
 
-It is drawn in three legs, one per process that touches the delivery: on a
-fleet those are usually three different processes, and on one node they are
-three parts of the same one. Each leg ends by publishing to a subject and the next
-begins by consuming from it — the seam between the pictures is the seam in the
-architecture, and no hop is hiding in it. The coordination store and the event
-stream appear in more than one leg; there is one of each, company-wide, not one
-per picture. The step numbers run 1–17 straight through.
+Three legs, one per process that touches the delivery (on a
+fleet usually three processes; on one node, three parts of one). Each leg ends by publishing to a subject and the next
+begins by consuming it; no hop hides in the seam. The coordination store and event
+stream appear in more than one leg; there is one of each, company-wide. Step numbers run 1–17 straight through.
 
 **Leg 1 — the node that took the delivery.** Verify it, claim it, publish it,
 and answer the third-party app only once it is on the stream.
@@ -426,67 +397,60 @@ sequenceDiagram
     O->>S: ack the delivery
 ```
 
-Five properties of that path are worth stating on their own, because each one
-is why a step exists at all.
+Five properties of that path, each the reason a step exists.
 
 **The delivery is claimed before it is published.** Two concurrent retries must
-not both wake a seat, and a third-party app retrying reaches whichever node a load
-balancer picks — so the claim lives in the fleet's coordination store, not in
-the receiving node's memory. Publishing then comes *before* the store row and
-the live push, because the publish is the only step that has to happen: a
-delivery that reached the stream will be worked even if the receiving process
-dies in the next instruction. A publish that fails releases the claim and
-answers 503, so the third-party app's retry finds the delivery unclaimed.
+not both wake a seat, and a retrying third-party app reaches whichever node a load
+balancer picks, so the claim lives in the fleet's coordination store, not the
+receiving node's memory. Publishing comes *before* the store row and
+the live push, because the publish is the only step that must happen: a
+delivery that reached the stream is worked even if the receiving process
+dies next instruction. A failed publish releases the claim and
+answers 503, so the app's retry finds the delivery unclaimed.
 
 **Routing is a publish, never a call.** The inbound consumer group is
 fleet-wide, so the node that wins a delivery is usually *not* the node running
-the recipient. Every resolution goes through the org-derived registry — seat
+the recipient. Every resolution goes through the org-derived registry (seat
 ids are a UUIDv5 over `(org name, handle)`, so every node computes the same
-answer with no database and no running instance — and every wake is a publish to
-the seat's inbox subject. A service that resolved against local state would drop
+answer with no database and no running instance), and every wake is a publish to
+the seat's inbox subject. Resolving against local state would drop
 most of a fleet's mail.
 
 **The mailbox exists whether or not the seat is running.** A seat's inbox is a
-durable consumer created with nothing attached, and it retains what is
-published while no node holds the seat. That is what turns three otherwise
-alarming moments — a rolling upgrade, a seat moving between nodes, a node that
-has not finished booting — into non-events rather than lost messages. It is
-also why every node creates a mailbox for *every* seat in the company rather
-than for its own share: the mailbox streams use interest retention, so a
-publish to a subject no durable consumer covers is dropped in silence.
+durable consumer created with nothing attached; it retains what is
+published while no node holds the seat. So a rolling upgrade, a seat moving between nodes and a node still booting lose nothing. Every node creates a mailbox for *every* seat in the company, not its own share: the mailbox streams use interest retention, so a
+publish to a subject no durable consumer covers is dropped silently.
 
 **One trace covers the whole path.** The webhook edge starts the span, the wake
 event carries `trace_id` and `parent_span_id` forward, and every event the turn
-publishes hangs beneath it — so a delivery and the turn it woke are one story at
-the collector, and the same ids are columns on the event rows whether or not a
+publishes hangs beneath it, so a delivery and the turn it woke are one story at
+the collector. The same ids are columns on the event rows whether or not a
 collector exists.
 
-**There are two inbound edges, not one.** Six third-party apps plus Atlassian's Forge
-relay arrive as verified HTTP on `/webhooks/*` and take every step above — five
-of them verified by an HMAC over the body, and Datadog by a constant-time
+**There are two inbound edges.** Six third-party apps plus Atlassian's Forge
+relay arrive as verified HTTP on `/webhooks/*` and take every step above. Five
+are verified by an HMAC over the body; Datadog by a constant-time
 comparison of a shared token, because its provider attaches only fixed-value
-headers and so has nothing varying with the payload to sign.
-Mattermost does not: every node holds **one websocket per seat**, outbound,
-so it needs no public URL and no signing secret — and it joins the picture only
-at the republish onto `crewlet.notifications.inbound`, after the same kind of
-fleet-wide claim the webhook edge takes, because every node reads every seat's
+headers, with nothing varying with the payload to sign.
+Mattermost holds **one websocket per seat** on every node, outbound,
+so it needs no public URL and no signing secret. It joins only
+at the republish onto `crewlet.notifications.inbound`, after a
+fleet-wide claim like the webhook edge's, because every node reads every seat's
 socket and only one may deliver each post
 ([Running on a fleet](../integrations/mattermost.md#running-on-a-fleet)).
-Both edges record each delivery as an `inbound_delivery` event. Everything
-from that subject onward is identical for both.
+Both edges record each delivery as an `inbound_delivery` event. From that subject onward everything is identical.
 
-A schedule firing, an `a2a_ask` from a colleague and an executor's launch completing
-enter further down still: they publish straight to
+A schedule firing, an `a2a_ask` from a colleague and a completed executor launch
+enter further down: they publish straight to
 `crewlet.agent.SEAT-ID.inbox` (or `.control`), and everything from the mailbox
-onward is identical again.
+onward is identical.
 
 ---
 
 ## 4. The path a turn takes
 
-Every trigger that reaches a seat runs the same two-stage turn — a batch of
-triggers for one conversation is one turn. What varies is how many rounds it
-takes and how long its executor's run works; every turn parks on that run, so
+Every trigger that reaches a seat runs the same two-stage turn; a batch of
+triggers for one conversation is one turn. What varies is the number of rounds and how long the executor's run works. Every turn parks on that run, so
 every turn can outlive the process that started it.
 
 ```mermaid
@@ -526,69 +490,63 @@ flowchart TB
     linkStyle 10 stroke:#ef4444,color:#ef4444
 ```
 
-**Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
+**Two nested loops.** The outer loop is the turn: executor → reviewer,
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
-is the model↔tool round trip *inside each phase*, bounded by its own cap
-(the executor's harness run by `role.sandbox.max_turns`, else
-`providers.sandbox.default_max_turns`, and by nothing where neither sets a
-cap; a constant for the reviewer, which holds one submission tool). A turn is
-therefore up to `max_iterations × (executor rounds + review rounds)` priced
-model calls, which is the number to reason about when sizing a budget — not
-"one call per turn" — and on the executor's side it is as many rounds as its
-harness takes, unless a cap is set. What holds an uncapped run's spend is the
+is the model↔tool round trip *inside each phase*, with its own cap:
+the executor's harness run by `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`, and unbounded where neither sets
+one; a constant for the reviewer, which holds one submission tool. A turn is
+up to `max_iterations × (executor rounds + review rounds)` priced
+model calls, the number to size a budget by, not
+"one call per turn". An uncapped run's spend is held by the
 seat's and the company's [token budget](../getting-started/configuration.md#token-budgets):
 a launch below its floor waits for the window to turn over, and every run is
-charged in full when it is collected.
+charged in full when collected.
 
-**One loop where there were two, and that is the point.** The engine used to
-plan in one conversation and act in another; the actor lost everything the
-planner had read, and the planner had to name its tools in advance against a
-catalogue it was never shown. The executor decides and acts in one place, so it
-carries the whole picture — identity, policies, the team roster, and the
-**turn-start prefetch**. That prefetch is six blocks rendered concurrently
+**One loop where there were two.** The executor decides and acts in one place, so it
+carries the whole picture: identity, policies, the team roster, and the
+**turn-start prefetch**, six blocks rendered concurrently
 *before the turn starts*: the chat thread the turn was woken in, personal
 memory, relevant knowledge, similar prior work, known counterparty and
-synthesized skills. A first turn's onboarding is not one of them: it is a
-pass of its own that runs before the executor. The reviewer's question is narrower and its
-prompt is smaller: is this round's work right, given the record. A frontier model can do the work while a cheap one
+synthesized skills. A first turn's onboarding is not one of them; it is a
+separate pass before the executor. The reviewer's question is narrower and its
+prompt smaller: is this round's work right, given the record. A frontier model can do the work while a cheap one
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are held, not enumerated.** A role with 50–150 MCP tools would send
 15–25 KB of tool definitions with every model request. The executor holds every
-one of them from its launch anyway, and no prompt lists them: the tool bridge
+tool from launch and no prompt lists them: the tool bridge
 serves the engine's own tools as one MCP server, `crewlet`, and each of the seat's
 MCP servers under its own name, and the harness keeps a large server's tools out
-of the requests that do not need them itself — Claude Code's tool search,
-OpenCode's Code Mode — as it does for a person ([The tool
+of requests that do not need them (Claude Code's tool search,
+OpenCode's Code Mode), as it does for a person ([The tool
 bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). The
-phases on this host that reach their MCP tools by discovery walk
+phases on this host that reach MCP tools by discovery walk
 `list_mcp_server_tools` → `activate_tool` instead. Either way a builtin and an
-MCP tool are the same thing to the engine: every call is decided and recorded as
+MCP tool are the same to the engine: every call is decided and recorded as
 the seat's ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
-**A parked turn is the reason there is no parked goroutine anywhere.** Every
+**A parked turn is why no goroutine is parked anywhere.** Every
 executor launch parks its turn: the run is detached in its box, and the turn's
-state — its bookkeeping and no conversation, since there is no engine loop to
-re-enter — is written to the run's record rather than held in memory. The run
-outlives the process: its turn may be resumed after a restart, on a different
+state (bookkeeping, no conversation, since no engine loop re-enters) is written to the run's record, not held in memory. The run
+outlives the process; its turn may resume after a restart, on a different
 node, days later once a person answers the agent's question. The record carries
-an explicit version, and a build that does not know it refuses loudly and
-leaves the row untouched; a reader for an older version is kept only once a
+an explicit version; a build that does not know it refuses loudly and
+leaves the row untouched. A reader for an older version is kept only once a
 tag has shipped it.
 
 **Whether anything was DELIVERED is the engine's judgement, not a model's.**
 Who is waiting comes from the trigger's own type before the turn starts; what
-actually ran is the tool loop's own record. The two are checked three times, in
+ran is the tool loop's own record. They are checked three times, in
 increasing cost: a delivery claim is refused at decode time where one bounced
 tool call fixes it; a claim the record refutes loops the round back without
-spending a review call; and a reviewer's `done` on a turn that answered in text
-where a tool was owed is overturned. The two failure modes this exists for are
-a seat that composed a reply and never posted it, and a seat that posted it
+a review call; and a reviewer's `done` on a turn that answered in text
+where a tool was owed is overturned. This guards against a seat that composed a reply and never posted it, and one that posted it
 twice.
 
 **Nothing about a turn's shape is ambient.** The configuration a turn reads is
 taken by value at the top of the turn from one immutable epoch, so a config
-apply landing mid-turn cannot change the round cap between the executor and the
+apply mid-turn cannot change the round cap between executor and
 reviewer. A turn holds the company it started under until it ends.
 
 ---
@@ -825,10 +783,10 @@ for the same subsystem.
 
 ## 6. One node, or a fleet
 
-One node is the design's degenerate case, not a lesser path: it runs the API,
-every seat and every duty, with an embedded stream and local coordination.
-Nothing about the code path changes when a second node appears — what changes is
-that ownership starts being contested, and there is already a lease for that.
+One node is the degenerate case, not a lesser path: it runs the API, every seat
+and every duty, with an embedded stream and local coordination. The code path
+does not change when a second node appears; ownership starts being contested,
+and a lease already settles that.
 
 ```mermaid
 flowchart TB
@@ -861,104 +819,97 @@ flowchart TB
 ```
 
 **The presence lease is the membership service.** Every node claims `node:{ID}`
-on the same heartbeat as its seats, carrying its roles, its labels and its
-status. Reading `node:*` back is the whole of fleet discovery — no gossip, no
-coordinator, no registry to configure — which is why adding a node is starting
-a process and removing one is stopping it. Dropping that row is the first thing
-a drain does.
+on the same heartbeat as its seats, carrying its roles, labels and status.
+Reading `node:*` back is all of fleet discovery (no gossip, coordinator or
+registry), so adding a node is starting a process and removing one is stopping
+it. A drain's first act is dropping that row.
 
 **Placement is deliberately dumb.** Every node greedily claims up to a fair
-share — `ceil(seats / live nodes)`, live nodes being the presence leases of
-nodes that run seats and have not withdrawn from placement because they cannot
-serve them, and computed **per placement group** rather than once fleet-wide,
-because one global ratio strands the seats that are pinned somewhere. Each
-group's share bounds that group alone — a node may not spend room it has in one
-group on another's seats, or unpinned seats crowd out the pinned one only it
-can run — and a seat whose teardown failed is charged against the least
-constrained groups first. Every node computes the same numbers from the same
-table and stops there; two nodes racing for the last seat is settled by the
-lease, not by the arithmetic. It converges in **both** directions, because
-claiming alone only converges for a fleet that shrinks. A `preferred` hint
-*orders* the attempt and never gates it, so a rolling deploy tends to land
-seats back where their MCP children are already warm — and a seat whose
-preferred node is gone is still taken by somebody.
+share, `ceil(seats / live nodes)`. Live nodes are the presence leases of nodes
+that run seats and have not withdrawn from placement because they cannot serve
+them. The share is computed **per placement group**, not fleet-wide, because one
+global ratio strands pinned seats. Each group's share bounds that group alone (a
+node may not spend room in one group on another's seats, or unpinned seats crowd
+out a pinned one only it can run), and a seat whose teardown failed is charged
+against the least constrained groups first. Every node computes the same numbers
+from the same table and stops there; the lease, not the arithmetic, settles two
+nodes racing for the last seat. It converges in **both** directions, because
+claiming alone only converges for a shrinking fleet. A `preferred` hint
+*orders* the attempt and never gates it, so a rolling deploy tends to land seats
+where their MCP children are warm, and a seat whose preferred node is gone is
+still taken.
 
-**Acquire, equip, then attach — and release in reverse.** A seat is not
-serving until its instance is spawned, its budget loaded, its MCP children are
-up and its executor recovered. Only then is the mailbox attached. The
-release order is the mirror, so a seat is never left consuming work it no longer
-owns. That ordering is the one behaviour none of the composed packages can
-express alone, and it is why [`internal/node`](seat-ownership.md) exists.
+**Acquire, equip, then attach, and release in reverse.** A seat is not serving
+until its instance is spawned, its budget loaded, its MCP children up and its
+executor recovered. Only then is the mailbox attached. Release is the mirror, so
+a seat never consumes work it no longer owns. No composed package can express
+that ordering alone, which is why [`internal/node`](seat-ownership.md) exists.
 
-**Every ownership question is three-valued.** Held, definitively not held, and
-**unknown** — and treating unknown as loss tears a healthy company down over a
-two-second store blip. Unknown is bounded rather than trusted, on two different
-clocks: a seat stops *admitting* work once its last successful renew is older
-than the heartbeat interval, and is only given up once that renew is older than
-the lease TTL. Stop taking new work early, hand the seat over late. See
+**Every ownership question is three-valued:** held, definitively not held, and
+**unknown**. Treating unknown as loss tears a healthy company down over a
+two-second store blip, so unknown is bounded on two clocks: a seat stops
+*admitting* work once its last successful renew is older than the heartbeat
+interval, and is given up only once that renew is older than the lease TTL. Stop
+taking work early, hand the seat over late. See
 [Coordination](coordination.md#the-three-valued-answer).
 
 **`/health` and `/ready` answer different questions.** `/health` stays 200
-through a drain — an orchestrator that killed a node for reporting unhealthy
-mid-drain would destroy the turns the drain exists to finish — and it is where
-the posture is visible. `/ready` steers traffic, and fails on `shed` and `stuck`
-**only**: `wait` and `isolated` stay ready on purpose, because failing readiness
-on ordinary rollout lag makes the fastest node the cause of a fleet-wide outage,
-and stepping out of rotation when *no* peer has the epoch is not shedding, it is
-stopping.
+through a drain (killing a node for reporting unhealthy mid-drain would destroy
+the turns the drain exists to finish) and is where the posture is visible.
+`/ready` steers traffic and fails on `shed` and `stuck` **only**. `wait` and
+`isolated` stay ready: failing on ordinary rollout lag makes the fastest node
+the cause of a fleet-wide outage, and leaving rotation when *no* peer has the
+epoch is stopping, not shedding.
 
 **History is read from every data node, not copied to every node.** Each data
-node's event store holds only what it published and what it keeps in custody
-for a node without `data`, so a fleet has no one store of its turns. A history
-read — the event log, a turn, a trace, the list of turns — is scattered to every
-live data node at query time over the broker's ephemeral request/reply and
-merged by the node serving it, and every such answer carries a `coverage`
-naming any node that did not answer inside the two-second fleet read budget
-(ADR-0021). Replicating the detail would put every prompt and response on every
-data node's disk to answer a question asked a few times a minute; the price is
-stated rather than hidden — a node that leaves takes its detail with it, while
-the aggregates survive it in the replicated `usage` domain. See
-[Reading the fleet's history](event-system.md#reading-the-fleets-history).
+node's event store holds only what it published plus what it keeps in custody
+for a node without `data`, so a fleet has no single store of its turns. A
+history read (the event log, a turn, a trace, the list of turns) is scattered to
+every live data node at query time over the broker's ephemeral request/reply and
+merged by the serving node. Every answer carries a `coverage` naming any node
+that did not answer inside the two-second fleet read budget (ADR-0021).
+Replicating the detail would put every prompt and response on every data node's
+disk for a question asked a few times a minute. The price: a node that leaves
+takes its detail with it, while the aggregates survive in the replicated `usage`
+domain. See [Reading the fleet's history](event-system.md#reading-the-fleets-history).
 
 **A draining node keeps answering both.** Its listener stays up until the drain
-has completed, because the probes are what an orchestrator reads while the turns
-finish. The door it closes instead is the one to new work: every webhook and
-every write is refused with `503` from the drain's first moment. See
-[Graceful shutdown](agent-runtime.md#graceful-shutdown).
+completes, because orchestrators read the probes while turns finish. It closes
+the door to new work instead: every webhook and write is refused with `503` from
+the drain's first moment. See [Graceful shutdown](agent-runtime.md#graceful-shutdown).
 
 **A starting node answers both before it serves.** Its listener is bound before
-the boot, `/health` answers `503` while it recovers what it holds and `200`
-once it has, and `/ready` answers `503 starting` until the node serves — so the
-startup probe bounds exactly the part only the deployment can size — the
-recovery of the node's own store and, on a data node of a fleet, the snapshot
-it may have to fetch when the logs can no longer bring its rows level, which
-`rejoin_window` budgets — and nothing the company configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
+the boot. `/health` answers `503` while it recovers what it holds and `200`
+after; `/ready` answers `503 starting` until the node serves. The startup probe
+thus bounds only what the deployment can size: recovery of the node's own store
+and, on a fleet's data node, the snapshot it may fetch when the logs can no
+longer level its rows, which `rejoin_window` budgets. Nothing the company
+configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
-append-only pointer whose own revision *is* the epoch: it lands only while the
-pointer still names the revision it was built on, so of two operators editing
-the same revision at once one lands and the other is refused
-`revision_advanced` rather than overwriting it, `412` where it named that
-revision in `If-Match` and `409` where it named none. The
-pointer **is** the company — `GET /config` answers it on every node. Each node
-polls it, applies, and writes its own status, naming the epoch it last applied,
-the revision it serves and the one it would come back on;
-while it runs, what it boots on moves only once an apply has succeeded, so a node that refuses
-a revision goes on serving the one before it, and would restart on that one too
-unless a write to its boot row is still being retried, or its own database is
-discarded at every start (`store.scratch`, every node without `data`), which
-restarts on nothing — that write is local and
-best effort, so the status names what it boots on as a fact of its own rather
-than leaving a reader to infer it from what it runs. A node that
-is behind picks
-a posture — `serve`, `wait`, `shed`, `isolated` or `stuck` — from what it can see
-of the pointer and of its peers. A shedding node refuses at *trigger
-admission*: the delivery goes straight back to the broker and this node stops
-consuming, on a seat's inbox and on the ingress topic alike, so the work moves
-to a peer that has the epoch rather than being run against a company this node
-is no longer sure of. **Lag alone never sheds** — every rollout produces lag,
-and shedding on it would make the first node to apply the cause of a fleet-wide
-outage. See [Control plane](control-plane.md).
+append-only pointer whose revision *is* the epoch. It lands only while the
+pointer still names the revision it was built on; of two operators editing the
+same revision, one lands and the other is refused `revision_advanced`: `412`
+where it named that revision in `If-Match`, `409` where it named none. The
+pointer **is** the company; `GET /config` answers it on every node.
+
+Each node polls the pointer, applies, and writes its own status: the epoch it
+last applied, the revision it serves and the one it would come back on. While
+running, a node's boot revision moves only after a successful apply, so a node
+that refuses a revision goes on serving, and would restart on, the previous one.
+Exceptions: a write to its boot row still being retried, or a database discarded
+at every start (`store.scratch`, every node without `data`), which restarts on
+nothing. That write is local and best effort, so the status names what the node
+boots on as its own fact rather than leaving a reader to infer it.
+
+A node that is behind picks a posture, `serve`, `wait`, `shed`, `isolated` or
+`stuck`, from what it sees of the pointer and its peers. A shedding node refuses
+at *trigger admission*: the delivery goes straight back to the broker and the
+node stops consuming, on a seat's inbox and the ingress topic alike, so a peer
+that has the epoch takes the work. **Lag alone never sheds**: every rollout
+produces lag, and shedding on it would make the first node to apply the cause of
+a fleet-wide outage. See [Control plane](control-plane.md).
+
 
 ---
 
@@ -976,7 +927,7 @@ here.
 | Webhook routes, verification, parsers | `internal/api/webhooks`, `internal/whsec` | [Jira](../integrations/jira.md) · [Confluence](../integrations/confluence.md) · [GitHub](../integrations/github.md) · [GitLab](../integrations/gitlab.md) · [Slack](../integrations/slack.md) · [Mattermost](../integrations/mattermost.md) |
 | Routing a delivery to a seat | `internal/notify` | [Event system](event-system.md) |
 | Subjects, streams, delivery semantics | `internal/queue`, `internal/events` | [Event system](event-system.md) |
-| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge, and where BOTH keys — the inbox partition and the durable conversation identity — are defined), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
+| Inbox batching and coalescing | `internal/queue` (drain, partition), `internal/agent/inbox` (guard order), `internal/notify` (merge; defines both keys, inbox partition and conversation identity), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |

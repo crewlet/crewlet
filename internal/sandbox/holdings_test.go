@@ -220,6 +220,29 @@ func TestALoggedOutputKeepsTheOpeningAHoldingCompares(t *testing.T) {
 	}
 }
 
+// A LOGGED OUTPUT'S CUT READS BACK AS ITS OPENING: what the log keeps of an
+// output past its bound gives back, with the size it records, exactly the
+// output's own first bytes it kept, for a record that redacts only those
+// (internal/agent/runner's); an output kept whole reads back as no cut.
+//
+// Mutation: read the opening off another record's marker, and none reads back.
+func TestALoggedOutputsCutReadsBackAsItsOpening(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{MaxBridgeOutputBytes + 1, 64 << 10} {
+		output := strings.Repeat("line of output\n", size/15+1)[:size]
+		kept := keptCall(BridgeCall{Output: output}, MaxBridgeArgsBytes)
+		opening, ok := OutputOpening(kept.Output, kept.OutputBytes)
+		if !ok || opening == "" || !strings.HasPrefix(output, opening) {
+			t.Errorf("an output of %d bytes kept as %q reads back as %q (%v), want its own opening", size,
+				kept.Output[max(0, len(kept.Output)-60):], opening[:min(len(opening), 40)], ok)
+		}
+	}
+	whole := keptCall(BridgeCall{Output: "done"}, MaxBridgeArgsBytes)
+	if _, ok := OutputOpening(whole.Output, whole.OutputBytes); ok {
+		t.Error("an output kept whole reads back as a cut")
+	}
+}
+
 // holdingsSpy is a runner that reads what a session holds as a case plays it:
 // whether it restores an archive, every archive it was asked to read, and
 // what the opener it was handed streamed of each.
