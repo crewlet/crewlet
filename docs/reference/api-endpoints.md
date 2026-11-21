@@ -8463,8 +8463,9 @@ The held call `{id}` whole, for whoever may answer it: `{"id", "server",
 "tool", "seat", "turn_id", "launch_id", "question", "context", "arguments",
 "arguments_sha256"}`, `arguments` opened from their seal and
 `arguments_sha256` the SHA-256, in hex, of them as JSON with sorted keys.
-Decided as the answer is (`tools.approve`, or `ssh.operate.approve` for an SSH
-operate command), so a person
+Decided as the answer is (`tools.approve`, `ssh.operate.approve` for an SSH
+operate command, or `growth.spend.approve`, `growth.public.approve` and
+`growth.admin.approve` for a growth integration's act), so a person
 `integrations.ssh.approvers` names reads every byte of an operate command's
 standard input here, whether or not they read the seat's runs. Never Ask
 Crewlet's.
@@ -8483,15 +8484,23 @@ the run's [executors board](#get-executors) row name it.
 ```
 `answer` is `once` (make the call), `always` (make it, and set the tool to
 `allow` on its server's entry from now on) or `deny` (do not make it; the run
-is told the call was refused as `forbidden`). `once` on an SSH operate command
-also names the `arguments_sha256` that [`GET /mcp-approvals/{id}`](#get-mcp-approvalsid)
+is told the call was refused as `forbidden`). An optional `note`, at most
+2,000 characters, is what the person says to the agent with it, which the
+resumed run reads beside the verdict. `once` on an SSH operate command
+or a growth act also names the `arguments_sha256` that [`GET /mcp-approvals/{id}`](#get-mcp-approvalsid)
 answered beside the arguments it showed, so it is given only from a surface
 that read all of it; without it, or naming another, it is `409 conflict` and
 nothing is answered. `always` takes an optional `_summary` for the revision it
 writes (default: the tool allowed in answer to the held call).
 
 Decided as `tools.approve`: an administrator, or a lead of the seat whose run
-made the call; a person, never an agent seat or Ask Crewlet. The route admits
+made the call; a person, never an agent seat or Ask Crewlet. A growth
+integration's spend, public or admin act (`approvers` `admin`, ADR-0171) is
+decided as `growth.spend.approve`, `growth.public.approve` or
+`growth.admin.approve`: an administrator alone, present (never a machine
+token or a credential acting as itself), at a recent step-up. It offers
+`once` and `deny` alone, and one unanswered a day after it was held
+(`held_call.lapses_at`) is denied by the engine. The route admits
 on the caller's own record and decides again on the run's seat once the call is
 read. `always` is also a configuration write, decided as `config.write` at a
 recent step-up (`403 step_up_required` otherwise), written as
@@ -8989,7 +8998,9 @@ question always was, and answered with [`answer_executor`](#answering-a-parked-e
 (`choice` names one of `decision.options`).
 
 A run whose question is a call held for approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
-also carries `held_call`, `{id, server, tool, raw, digest, held_at}`, sent with
+also carries `held_call`, `{id, server, tool, raw, digest, held_at, fixed,
+approvers, act, delegation, lapses_at}` (`lapses_at` set for a growth act
+alone, a day after `held_at`), sent with
 the question to the people it is put to, and `held_arguments`, what the call
 would send, opened from its seal under this node's fleet keyring (`null` where
 it does not open here), sent only to whom the run's body goes (an

@@ -449,6 +449,14 @@ const (
 	// person `integrations.ssh.approvers` names, at the step-up window; never
 	// a lead's, an agent's or the assistant's.
 	ActionSSHOperateApprove Action = "ssh.operate.approve"
+	// ActionGrowthSpendApprove, ActionGrowthPublicApprove and
+	// ActionGrowthAdminApprove answer a growth integration's held spend,
+	// public or admin act (`POST /mcp-approvals/{id}`, ADR-0171): an
+	// administrator alone, present, at the step-up window; never a lead, a
+	// named person, a delegate, a machine token or the assistant.
+	ActionGrowthSpendApprove  Action = "growth.spend.approve"
+	ActionGrowthPublicApprove Action = "growth.public.approve"
+	ActionGrowthAdminApprove  Action = "growth.admin.approve"
 	// ActionSSHRead runs an allowlisted read command on one of the agent's SSH
 	// hosts (the server's gate holds the allowlist); an agent's alone by its
 	// SSH grant, in its own run.
@@ -487,6 +495,10 @@ const (
 	// agent holding an SSH grant: anybody of the company who may act, a
 	// colleague seat among them, and nobody outside it.
 	ActionSSHRequester Action = "ssh.requester.read"
+	// ActionGrowthRequester is a growth vendor reached FOR whoever woke the
+	// turn of an agent holding a growth lane: anybody of the company who may
+	// act, a colleague seat among them, and nobody outside it.
+	ActionGrowthRequester Action = "growth.requester.read"
 	// ActionToolsRead is reading Settings › MCP & tools: one server whole
 	// (`GET /mcp-servers/{name}`) and the curated catalogue. EVERYBODY'S, IN
 	// TWO READINGS: whoever [ActionConfigRead] admits also reads launch lines,
@@ -736,11 +748,15 @@ const (
 	// arm: about the caller's own record a token acts as its owner, about
 	// anybody else it does not.
 	PresenceRequiredForOthers Presence = "required_for_others"
+	// PresencePerson needs a person on every arm, and refuses a credential
+	// acting as itself as well as a token: a deployment's or a pipeline's
+	// admin credential is nobody at a keyboard either.
+	PresencePerson Presence = "person"
 )
 
-// Presences are the three, in declaration order.
+// Presences are the four, in declaration order.
 var Presences = []Presence{
-	PresenceOptional, PresenceRequired, PresenceRequiredForOthers,
+	PresenceOptional, PresenceRequired, PresenceRequiredForOthers, PresencePerson,
 }
 
 // Valid reports whether a presence is one this build knows.
@@ -1623,6 +1639,15 @@ var rules = map[Action]rule{
 	// administrator, never a lead by position in the chart.
 	ActionSSHOperateApprove: {class: ClassNamed, humanOnly: true, recency: iam.RecencyStepUp,
 		assist: AssistApprove},
+	// MONEY, WHAT CUSTOMERS SEE AND A VENDOR ACCOUNT'S OWN ACCESS are decided
+	// by an administrator in person at a step-up, and never by a delegate: a
+	// list the document names only routes the question (ADR-0171).
+	ActionGrowthSpendApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionGrowthPublicApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionGrowthAdminApprove: {class: ClassAdmin, humanOnly: true, presence: PresencePerson,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 	// A SERVER IS REACHED BY AN AGENT ITS ROLE GRANTS IT TO (SSH on with a host
 	// for a read, at operate for a command a person approves). The tools answer
 	// only an agent's own run; a person reaches a server with their own key.
@@ -1652,7 +1677,8 @@ var rules = map[Action]rule{
 	ActionDelegatedRead: {class: ClassNamed, humanOnly: true, recency: iam.RecencyAny, assist: AssistRead},
 	// AND REACHED FOR ANYBODY OF THE COMPANY WHO MAY ACT, as the health tools
 	// read ([ActionFleetHealthRead]): the grant decides what, this row for whom.
-	ActionSSHRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSSHRequester:    {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionGrowthRequester: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// THE COMPANY-WIDE TRAIL (events, turns, phases, agent-to-agent channels,
 	// the identity estate's audit) is admin's; one seat's trail is its lead's
 	// too ([ActionSeatTrailRead]).
@@ -2105,6 +2131,13 @@ var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 			"and the assistant deciding it would be a model approving a model's call", tellApproval},
 		ActionSSHOperateApprove: {"an agent's command on a production server runs only as a person " +
 			"approved it, and the assistant approving it would be a model approving a model's command", tellApproval},
+		ActionGrowthSpendApprove: {"ad spend an agent asked for starts only as an administrator approved " +
+			"it, and the assistant approving it would be a model approving a model's spend", tellApproval},
+		ActionGrowthPublicApprove: {"what an agent asked to publish goes out only as an administrator " +
+			"approved it, and the assistant approving it would be a model approving a model's words", tellApproval},
+		ActionGrowthAdminApprove: {"an agent's change to a vendor account's users, keys, billing or policies " +
+			"happens only as an administrator approved it, and the assistant approving it would be a model " +
+			"approving a model's change", tellApproval},
 		ActionReleaseApprove: {"a merge or a deploy an agent asked for goes ahead only as a person or a " +
 			"delegate approved it, and the assistant approving it would be a model approving a model's request",
 			tellApproval},
