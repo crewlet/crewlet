@@ -7245,8 +7245,9 @@ common, how many ended `done`, counted from the members, and what varied);
 
 **A listed episode carries only the openings of its two long texts**, so a page
 of fifty stays within the transport. `ask` and `plan_summary` are each at most
-their first 600 bytes, cut between characters (the figure a seat is shown of a
-past turn's words, `learning.EpisodeAccountBytes`); `ask_bytes` and
+their first 600 bytes, cut between characters and never inside a redaction
+marker (the figure a seat is shown of a past turn's words,
+`learning.EpisodeAccountBytes`); `ask_bytes` and
 `plan_summary_bytes` are the whole texts' sizes: a text is whole exactly when its
 size is its length. The whole row is
 [`GET /agents/{id}/memory/episodes/{episode}`](#get-agentsidmemoryepisodesepisode).

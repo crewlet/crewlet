@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 // A LISTING READS THE ROW RECENT READS, BUT FOR ITS TWO OPENINGS AND ITS VECTOR.
@@ -78,5 +80,59 @@ func TestAListingReadsTheRowButForItsOpeningsAndItsVector(t *testing.T) {
 	}
 	if _, found, err := store.Get(t.Context(), "ceo", "e1"); err != nil || found {
 		t.Fatalf("another seat's read of e1 found it (%v, %v)", found, err)
+	}
+}
+
+// A LISTED OPENING NEVER ENDS INSIDE A MARKER. An episode's ask and account are
+// redacted on the turn's completed record, so a stored text holds markers, and
+// an opening cut inside one shows its head as the turn's own words. With a key's
+// marker and a bearer token's run of markers in the text and the opening at
+// every offset of it, each opening is the text up to the opening, moved back to
+// where the markers it fell inside begin, and its whole size is the text's.
+//
+// Mutation: cut at the opening alone, or read the text only the opening deep,
+// and a cut inside a marker keeps it in part.
+func TestAListedOpeningNeverEndsInsideAMarker(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	text := redact.Secrets("deploy key " + sample["anthropic-key"] + " then Authorization: Bearer " +
+		sample["jwt"] + " and the words after it")
+	if strings.Count(text, redact.Marker) < 2 {
+		t.Fatalf("the redacted text %q holds fewer than two markers", text)
+	}
+	store := episodes(t)
+	e := ep("e1", "cto", base)
+	e.Ask, e.PlanSummary = text, text
+	if _, err := store.Append(t.Context(), e); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	for opening := 1; opening <= len(text); opening++ {
+		want := text[:opening]
+		if begin, _, inside := redact.MarkersAround(text, opening); inside {
+			want = text[:begin]
+		}
+		listed, err := store.Listing(t.Context(), "cto", 1, opening)
+		if err != nil || len(listed) != 1 {
+			t.Fatalf("Listing at %d = %d rows, %v; want one", opening, len(listed), err)
+		}
+		got := listed[0]
+		for name, shown := range map[string]string{"ask": got.Ask, "account": got.PlanSummary} {
+			if shown != want {
+				t.Errorf("an opening of %d lists the %s as %q, want %q", opening, name, shown, want)
+			}
+			for _, words := range redact.OwnWords(shown) {
+				if strings.Contains(words, "REDACTED") {
+					t.Errorf("an opening of %d lists the %s with a marker in part: %q", opening, name, shown)
+					break
+				}
+			}
+		}
+		if got.AskBytes != len(text) || got.PlanSummaryBytes != len(text) {
+			t.Errorf("an opening of %d names %d and %d bytes, want the stored %d", opening,
+				got.AskBytes, got.PlanSummaryBytes, len(text))
+		}
 	}
 }
