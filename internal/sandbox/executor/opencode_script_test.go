@@ -1403,7 +1403,7 @@ func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 			t.Errorf("the usage was not asked of the run's own session %q:\n%s",
 				session, strings.Join(run.calls, "\n"))
 		}
-		res := executor.OpenCode{}.Parse(run.stdout)
+		res := executor.OpenCode{}.Parse([]byte(run.stdout))
 		if res.InputTokens != 51 || res.OutputTokens != 5 || res.CostUSD != 0.5 || res.SessionID != session {
 			t.Errorf("result = %+v, want the session's report read: in 51 out 5 cost 0.5 session %s",
 				res, session)

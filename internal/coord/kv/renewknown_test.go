@@ -37,7 +37,7 @@ func peerOf(t *testing.T, ns *server.Server, s *Store) *Store {
 		t.Fatalf("connect the peer: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	peer, err := Open(context.Background(), jsOf(nc), Config{TTL: s.TTL(), Reach: InProcess,
+	peer, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{TTL: s.TTL(), Reach: InProcess,
 		BucketPrefix: strings.TrimSuffix(s.leases.kv.Bucket(), leasesSuffix)})
 	if err != nil {
 		t.Fatalf("open the peer's store: %v", err)

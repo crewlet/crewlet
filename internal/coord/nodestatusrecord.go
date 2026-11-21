@@ -20,9 +20,9 @@ import (
 // infra, read by the whole fleet (company-wide, current value only: a model's
 // sit-out on one node decides another node's retry).
 //
-// Not on the presence lease, which is rewritten every beat and must stay a few
-// hundred bytes (crewlet#1035); these rows grow with the configuration. A loop
-// of its own writes them on change and at least every [ReconcileInterval].
+// Not on the presence lease, which is rewritten every beat and held to
+// [MaxLeaseMetaBytes]; these rows grow with the configuration. A loop of its
+// own writes them on change and at least every [ReconcileInterval].
 //
 // The bucket's age is [StatusFreshness], four reconciles, so a dead node's
 // record ages out with no sweep (ADR-0142). It counts only while its writer

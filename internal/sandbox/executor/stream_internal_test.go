@@ -37,7 +37,7 @@ func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 		"a single line kept by its end":     {"the harness exited with status 1"},
 		"a key name meeting the next piece": {"the harness exited with status 1", "the harness could not read pwd"},
 	} {
-		got := failureDetail(sentences, oneLine, unread, bound)
+		got := failureDetail(sentences, oneLine, unread, bound, redact.Secrets)
 		if len(got) > bound {
 			t.Errorf("%s: the failure is %d bytes, %d past its bound", name, len(got), len(got)-bound)
 		}
