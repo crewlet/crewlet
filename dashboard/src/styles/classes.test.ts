@@ -1076,6 +1076,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
     importer: "routes/gitlet/syntax.tsx",
     owns: /\.code-syn-[a-z]+(?![\w-])/,
   },
+  "growth.css": {
+    importer: "components/growth/SetupSteps.tsx",
+    owns: /\.growth-[a-z_-]+\b/,
+  },
 };
 
 test("every stylesheet is imported by the entry point, or by the screen it belongs to", () => {

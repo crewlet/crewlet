@@ -78,6 +78,7 @@ import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
+import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { SERVICE_NAMES } from "~/lib/services.ts";
 import { useWaiting } from "~/lib/waiting.ts";
@@ -254,6 +255,7 @@ export function FieldHelp({
 
 /** The kit's input for a requirement's kind: a toggle is a two-way choice. */
 export function valueKind(kind: SetupRequirementKind): ValueFieldKind {
+  if (kind === "add_identity") return "text";
   return kind === "toggle" ? "choice" : kind;
 }
 
@@ -854,6 +856,8 @@ export function SetupForm({
   const editable = useCallback(
     (section: SetupSection, r: SetupRequirement) => {
       const own = shownBy.get(sectionKey(section)) ?? [];
+      // AN IDENTITY STEP IS DONE AT THE VENDOR: the form shows it and holds no value for it.
+      if (r.kind === "add_identity") return false;
       return publicView(r) === undefined && shownField(r, answeredIn(section, own));
     },
     [shownBy, answeredIn],
@@ -967,6 +971,7 @@ export function SetupForm({
     const send: Record<string, string> = {};
     const generate: string[] = [];
     for (const r of reqs) {
+      if (r.kind === "add_identity") continue;
       if (r.kind === "secret" && r.mintable) {
         // ONLY WHERE THERE IS NOTHING YET. A mintable credential this
         // company already holds is left alone: regenerating one is a
@@ -1508,7 +1513,9 @@ export function SetupForm({
     const help = <FieldHelp r={r} fill={fill} link={fieldLink(section, r)} />;
     return (
       <div key={key} className="col gap-1">
-        {shown ? (
+        {r.kind === "add_identity" && r.identity ? (
+          <AddIdentity step={r.identity} product={section.name} why={r.hint} />
+        ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
           <FormField as="fieldset" label={r.label} helper={help}>

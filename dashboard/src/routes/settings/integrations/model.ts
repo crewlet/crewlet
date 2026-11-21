@@ -195,6 +195,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Save to create Crewlet's certificate authority, then add each server, compare its host key with the server's console, and run the server setup Crewlet gives you as root.",
   },
+  google_analytics: {
+    does: [
+      "Read traffic, engagement, key events and revenue reports for the properties you choose",
+      "Change settings, key events, custom definitions and audiences where you allow operate",
+      "Ask you before any account, access, link or irreversible change, every time",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to the property at the role it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in Admin, Property access management.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

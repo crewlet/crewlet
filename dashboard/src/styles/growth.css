@@ -1,0 +1,41 @@
+/*
+ * The growth integrations' setup steps. An identity's email is never cut:
+ * it is what a person copies to the vendor.
+ */
+
+.growth-step {
+  display: grid;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.growth-step__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.growth-step__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: 0;
+}
+
+.growth-step__facts dt {
+  color: var(--color-text-tertiary);
+}
+
+.growth-step__facts dd {
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
+.growth-step__role {
+  font-weight: var(--font-weight-medium);
+}
