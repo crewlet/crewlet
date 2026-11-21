@@ -51,25 +51,18 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 	}
 }
 
-// A TRANSCRIPT LINE STAYS JSON, AND LOSES EVERY SECRET IN IT. A value the engine
-// named; a key's lines inside one string, which only the decoded string has as
-// lines; a string or a number under a credential's own key; and a cloud
-// session a run obtained by itself, as a tool's result holds it — its key id
-// by its shape, its secret and its token by their keys, whether the result
-// names them as members or a command printed them as text, and a Google
-// access token by its shape — all gone, the line still one JSON value. A line
-// that is not JSON — a torn last line — is scrubbed and redacted as text, the
-// engine's value taken out in the form a JSON string escapes it in, which is
-// the only form a torn line holds it in.
+// A transcript line stays JSON and loses every secret in it: a value the engine
+// named, a key's lines inside one string (only the decoded string has them as
+// lines), a string or number under a credential's key, and a cloud session a
+// run obtained itself (key id by shape, secret and token by key, as members or
+// printed text; a Google access token by shape). A torn, non-JSON last line is
+// scrubbed as text, the engine's value taken out in its JSON-escaped form.
+// A key is a string like any other: a tool's result can name a member by a
+// secret.
 //
-// Mutation: redact the raw line alone, the strings alone, write a key as it
-// came, keep a number under a credential's key, take out only a value's raw
-// form, rewrite a line of two values as one, drop a session token's words
-// from a credential's, or a session's keys from redact's, and a case here goes
-// red.
-//
-// AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
-// member by anything, a secret included.
+// Mutation: redact the raw line or the strings alone, keep a key as it came or
+// a number under a credential's key, take out only a raw form, merge a line of
+// two values, or drop session words from redact, and a case goes red.
 func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 	t.Parallel()
 	pem := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat("MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4\n", 6) +
@@ -206,37 +199,18 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL'S KEY IS READ HOWEVER ITS WORDS ARE JOINED, AND A TRANSCRIPT'S
-// OWN KEYS ARE NO CREDENTIAL'S. A cloud session's token sits under a key of its
-// own wherever it is written — `SessionToken` in what STS answers,
-// `sessionToken` in what Roles Anywhere does, `aws_session_token` in AWS's
-// credentials file, and `X-Amz-Security-Token`, AWS's own name for it, as a
-// request's header — and each spelling is a credential's key, as an API key's
-// and a token's are under a header's hyphens: `x-api-key`, `X-Auth-Token`,
-// GitLab's `PRIVATE-TOKEN`. So are the other names a credential carries: the
-// token that refreshes a login, the authorization a request carries, a
-// client's credentials, an API token, a bearer token, and an OpenID Connect ID
-// token under its own words, however they are joined; and what a Docker config
-// holds for a registry, its `auth` (the user and password, encoded), its
-// identity token and its registry token.
+// A credential's key is read however its words are joined (`SessionToken`,
+// `aws_session_token`, `X-Amz-Security-Token`, `x-api-key`, `PRIVATE-TOKEN`,
+// refresh, authorization, client credentials, API, bearer and ID tokens, and a
+// Docker config's `auth`, identity and registry tokens), and a transcript's own
+// keys are no credential's.
 //
-// A harness counts its tokens and names its sessions under keys of its own,
-// an access key's id names no secret, a cache's key no credential, and a
-// session's expiry is no secret: none of those is one. Nor is a count whose
-// name spells `idtoken` by chance (`paid_tokens`), since an ID token's `id` is
-// a word of its own, nor a commit's author or a server's OAuth settings, since
-// only the whole key is read as `auth`.
+// Not credentials: token counts, session names, an access key's id, a cache's
+// key, a session's expiry, `paid_tokens` (an ID token's `id` is a word of its
+// own), and a commit's author or OAuth settings (only the whole key is `auth`).
 //
-// Mutation: drop any one name from the list — the session's, the refresh
-// token's, the authorization's, the credential's, the API token's, the auth
-// token's, the private token's, the bearer token's — and its rows are no
-// credential's; read the words in the key with its separators kept, and the
-// headers' and the credentials file's are not; read `token` or `key` anywhere
-// in a key, and every transcript's usage counts, an access key's id and a
-// cache's key are; read an ID token's `id` anywhere, and the paid tokens are,
-// and as no word at all, the ID tokens are not; drop `auth`, or Docker's
-// identity or registry token, and a Docker config's rows are no credential's,
-// and read `auth` anywhere in a key, and the author and the OAuth settings are.
+// Mutation: drop any name from the list, keep separators, or read `token`,
+// `key`, `id` or `auth` anywhere in a key, and a case goes red.
 func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
 	t.Parallel()
 	for key, want := range map[string]bool{
@@ -759,16 +733,12 @@ func ltAnnounced(definitions ...string) string {
 		`],"nameOnlyAnnouncements":["mcp__seat__later"]},"type":"attachment"`, 1)
 }
 
-// A LOADED TOOL DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE AS WRITTEN:
-// the definition goes with the comma that joined it to its list, and every
-// other byte of the line stays where it was, the record's keys in the order
-// written above all: a line that began `{"parentUuid":` (the bytes Claude
-// Code's prune of a session file past 5 MiB finds a record by) still does, and
-// a subagent's `"isSidechain":true` stays in its line's first 256 bytes (where
-// 2.1.310's reading of such a file looks for it). Over each shape the record
-// is written in (a main thread's and a subagent's, as 2.1.310 and 2.1.322
-// write them; one with the names announced alone after the list; and the
-// shape the scrub's first case held), with the renamed definition first,
+// A loaded tool definition the scrub renamed is cut out of its line as written:
+// the definition goes with its joining comma and every other byte stays, key
+// order above all: a line that began `{"parentUuid":` (where Claude Code's
+// prune of a session file past 5 MiB finds a record) still does, and a
+// subagent's `"isSidechain":true` stays in the first 256 bytes (where 2.1.310
+// looks for it). Over each record shape, with the renamed definition first,
 // between two kept, last, alone and twice.
 //
 // Mutation: write the record again from a map, drop nothing, cut the
@@ -840,18 +810,14 @@ func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	}
 }
 
-// A LINE THE CUT HAS NOTHING TO TAKE FROM IS HANDED ON AS IT CAME: a line
-// that holds no marker, which the rewrite renamed nothing in, even where its
-// writer named a definition outside the pattern; a record whose definitions
-// keep their names (a marker in a description renames nothing), an empty list
-// and a null one, and every line that is not the loaded tools' record as
-// JSON.parse reads it: a list that is an object, another attachment's list, a
-// record with no attachment or one that is a string, a torn line, a line of
-// two values, a list of records, and a record whose key is written twice,
-// which JSON.parse reads by its last value (a list or an attachment the
-// record reads past, a type that is another's). Where the list it reads is
-// written twice, only the one JSON.parse reads is cut, and the one it reads
-// past stays as written.
+// A line the cut has nothing to take from is handed on as it came: a line with
+// no marker (even where its writer named a definition outside the pattern), a
+// record whose definitions keep their names (a marker in a description renames
+// nothing), an empty or null list, and every line that is not the loaded
+// tools' record as JSON.parse reads it (another attachment's list, a list that
+// is an object, no attachment or a string one, a torn line, two values, a list
+// of records, a key written twice read by its last value). Where the list is
+// written twice, only the one JSON.parse reads is cut.
 //
 // Mutation: judge the definitions of a line that holds no marker, read a key
 // by its first value, or cut a line that is more than one object, and a case
@@ -936,23 +902,17 @@ func TestTheCutReadsEachKeyByItsExactName(t *testing.T) {
 	}
 }
 
-// A LOADED TOOL DEFINITION IS JUDGED BY THE NAME CLAUDE CODE SENDS IT UNDER:
-// its `name`, that key exactly and the last written of it, as JSON.parse
-// reads one, since 2.1.310 and 2.1.322 key each definition they send again by
-// it. A renamed `name` beside a sound `NAME` is cut, a renamed `Name` beside a
-// sound `name` is not, and a definition named only by a `Name` names nothing
-// Claude Code reads and is cut, as one with no name is; of a `name` written
-// twice, the last is the one judged, whatever the one before it holds, and a
-// last one that is no string (a number, an object, a null) names nothing the
-// provider takes, so the definition is cut whatever the `name` before it
-// said.
+// A loaded tool definition is judged by the name Claude Code sends it under:
+// its `name`, that key exactly and the last written of it, as JSON.parse reads
+// one (2.1.310 and 2.1.322 key each definition by it). A renamed `name` beside
+// a sound `NAME` is cut, a renamed `Name` beside a sound `name` is not, and a
+// definition with only a `Name` or no name is cut. Of a `name` written twice
+// the last is judged; one that is no string names nothing the provider takes,
+// so the definition is cut.
 //
-// Mutation: read the name with encoding/json's decode, which fills it from a
-// key in any case, and three cases go red; read it with any decode of the
-// definition into a name, which fails at a `name` that is no string, and a
-// number or an object before a sound name has the definition cut; pass a
-// `name` that is no string over, or judge the first `name`, and a sound name
-// followed by a number, an object or a renamed name is kept.
+// Mutation: read the name with encoding/json's case-folding decode, decode the
+// whole definition into a name, pass a non-string `name` over, or judge the
+// first `name`, and a case goes red.
 func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 	t.Parallel()
 	renamed := "mcp__" + scrubMarker + "__backup_list"
@@ -985,18 +945,15 @@ func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 	}
 }
 
-// THE SCRUB KEEPS EVERY RECORD WHERE CLAUDE CODE FINDS IT, whatever it takes
-// out of a session: each transcript keeps every line, and each line's record
-// its uuid, its parentUuid and its type as written and every key, at every
-// depth, in the order written, so a line that began `{"parentUuid":` still
-// does and a subagent's `"isSidechain":true` stays where 2.1.310 looks for it;
-// what a record loses is a loaded tool definition the scrub cut, its keys with
-// it. Over a line of every record kind the thread layer's cases shape as
-// 2.1.118, 2.1.310 and 2.1.322 write them, in a main thread and a subagent's,
-// beside the loaded-tools records the probes hold, through the scrub of a
-// whole archive: it takes the session's id out of every line, as a value the
-// launch handed the box would be, so that every line is rewritten, and a tool
-// server's name out of a definition and a call.
+// The scrub keeps every record where Claude Code finds it, whatever it takes
+// out of a session: every line, and each record's uuid, parentUuid, type and
+// every key at every depth in the order written, so a line that began
+// `{"parentUuid":` still does and a subagent's `"isSidechain":true` stays where
+// 2.1.310 looks for it; a record loses only a cut loaded tool definition. Over
+// a line of every record kind in 2.1.118, 2.1.310 and 2.1.322, main thread and
+// subagent, beside the probes' loaded-tools records, through the scrub of a
+// whole archive that takes the session's id out of every line (so every line
+// is rewritten) and a tool server's name out of a definition and a call.
 //
 // Mutation: write a loaded-tools record again from a map, or lose a line's
 // break, and a line here goes red.

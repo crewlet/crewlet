@@ -28,6 +28,11 @@
 // and confirmed after it, so a publish that fails is made again under the
 // same wake id and never a second time that day.
 //
+// A seat that takes no work (paused, stopped, spent) is skipped with nothing
+// written, unlike any other wake, which the inbox holds: a day's one wake is
+// not spent on mail read days later. The shared day counter is no bound: it
+// cannot be given back and cannot say what the seat was told.
+//
 // # A wake is a pointer
 //
 // The delivery carries the entry's id and kind and the change classes, all

@@ -201,7 +201,8 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 // actorWrites is why an actor named who, of kind, whose writes are for
 // writtenFor, may write nothing ([types.WrittenFor.For]): an agent's actor
-// that states nobody, or a carrier on any other kind's. Nil where it may write.
+// that states nobody, or a carrier on any other kind's (ADR-0109). Nil where it
+// may write.
 //
 // EVERY WRITE'S ACTOR IS HELD TO IT BEFORE IT IS ASKED ANYWHERE, this node's
 // own copy included, so every node answers alike: a tracker write's by
