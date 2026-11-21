@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE NEXT REQUEST'S FIXTURES, on the count's (resumed_internal_test.go): records
+// THE NEXT REQUEST'S FIXTURES, on the count's (claudecount_internal_test.go): records
 // whose uuids are canonical, as every record the harness writes is and as a
 // compaction's boundary names the records it kept.
 

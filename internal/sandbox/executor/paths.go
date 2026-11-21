@@ -1073,7 +1073,7 @@
 // after it, and past a compaction no request has followed it is the
 // compacted-away conversation's. So the floor reads the harness's OWN ESTIMATE
 // of the next request, by the rule Claude Code decides whether to compact by
-// (resumed.go's file comment), run forward over the thread:
+// (claudecount.go's preamble), run forward over the thread:
 //
 //   - THE ANCHOR, by the count's own rule ([countedReplyOf]): the last
 //     main-thread reply whose usage counts, at its input, cache writes, cache
@@ -1471,14 +1471,6 @@ const saveTagBytes = 16
 // box's.
 func (p Paths) SessionDigests() string { return p.WorkDir() + "/session-digests" }
 
-// ClaudeConfigDir is the directory a Claude Code run keeps its state in, which
-// the run pins as CLAUDE_CONFIG_DIR ([claudeSessionLayout]): the box home's
-// `.claude`, where the harness keeps it by default and where a local box is
-// seeded with the entry's login (`.claude/.credentials.json`). Named by the
-// box's own home, as every path the runner hands the box is, so no profile the
-// login shell sources can move it.
-func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
-
 // Brief is where the brief is written for a harness that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
@@ -1501,14 +1493,6 @@ func (p Paths) FreshBrief() string { return p.WorkDir() + "/brief-fresh.md" }
 // ARG_MAX. Under WorkDir, out of the checkout, so a `git clean` cannot remove
 // it from under a run and a commit cannot carry it into a repository.
 func (p Paths) System() string { return p.WorkDir() + "/system.md" }
-
-// ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
-// its standing instructions written a second time, with its harness's instruction
-// about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
-// script names in place of [Paths.System] on a release whose note hooks it
-// starts ([claudeNotesGate]), so the instruction reaches a run its notes can
-// reach and no other. Beside it, and a file for the reason it is.
-func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.md" }
 
 // CredentialDocument is where a box keeps the login a harness holds in a database
 // of its own: the harness's own export of it, which the engine seeds a local box
@@ -1587,123 +1571,6 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // the harness starts, so the box holds one token when its model can first read
 // a file. Beside mcp.json for the reason mcp.json is where it is.
 func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
-
-// ClaudeSettings is where every Claude Code run's own settings file is written
-// — the setting that holds the harness's own retention sweep off
-// ([claudeSettings]) — named on its command line with `--settings`, unless the
-// run is started with [Paths.ClaudeNotesSettings] in its place.
-//
-// BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
-// repository's, which the run edits and a commit carries, and a file there would
-// replace the repository's own project settings rather than sit above them.
-// `--settings` adds a layer the harness ranks above the repository's settings and
-// below a managed policy, so the repository keeps its own and the run's settings
-// are there whatever it holds. Under WorkDir, so a `git clean` in the brief
-// cannot remove it from under the run.
-func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
-
-// ClaudeNotesSettings is where a Claude Code run wired to its turn's notes has
-// its settings written a second time, with the hooks that hand its main agent a
-// person's notes between its steps ([claudeNotesSettings]): the file the run's
-// script names in place of [Paths.ClaudeSettings] on a release whose note hooks
-// it starts ([claudeNotesGate]). Beside it, and in the work directory for the
-// reason it is.
-func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
-
-// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
-// its settings written with hooks switched on ([claudeHooksOnSettings]), so
-// the plugin's hook that reports each load runs whatever the repository's own
-// settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
-// unless it starts the notes' hooks, whose own settings switch hooks on too
-// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
-func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
-
-// ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
-// settings with the compaction point and a resume's load pinned besides
-// ([claudeSettingsPin]), which the run's script names in that file's place on
-// a release that takes the pin ([claudePinGate]). Beside it, for its reason.
-func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-settings-pinned.json" }
-
-// ClaudeNotesSettingsPinned is [Paths.ClaudeNotesSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeNotesSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-notes-pinned.json"
-}
-
-// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeSkillsSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-skills-pinned.json"
-}
-
-// OpenCodeConfig is where an OpenCode run's own configuration is written
-// ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
-// content to the run's server alone as OPENCODE_CONFIG_CONTENT
-// ([OpenCode.Command]).
-//
-// BESIDE the run's other artefacts, never in the checkout: the checkout is the
-// repository's, and an opencode.json written there would replace the
-// repository's own file, where content handed to the server ranks above it and
-// leaves it in place. Under WorkDir, so a `git clean` in the brief cannot
-// remove it from under the run.
-func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
-
-// OpenCodeValues is the directory holding the values an OpenCode run's MCP
-// servers are configured with — each server's url, each header value, each
-// environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
-// `{file:<path>}` reference rather than carrying the value
-// ([openCodeValueFiles]). A directory of the run's own, removed whole before
-// every run ([Runner.ClearArtifacts]), so a run configured with fewer values
-// than the last keeps none of the last one's.
-func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
-
-// OpenCodeValuesFresh is the directory holding an OpenCode run's values as they
-// are under the job's other bridge token, for a session its script starts of
-// its own in place of the one it continues ([sandbox.RunRequest.FreshWiring]):
-// the same files by the same names, so the configuration's references name
-// either set, which the script moves over [Paths.OpenCodeValues] where it
-// starts one and removes where it continues — before the run's server starts,
-// which is what reads them.
-func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-values-fresh" }
-
-// OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
-// into, as index.js ([OpenCode.WriteConfig]), and named by the run's
-// configuration — the plugin that admits a person's notes to the run's turn into
-// its session at its next step (opencode_steer.js).
-//
-// A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
-// — a file named there is skipped with a warning — trying its `server` module
-// and then its `index`. Under WorkDir, beside the configuration that names it,
-// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
-// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
-// OpenCode watches a configured plugin's directory and reloads the plugin on any
-// change inside it, so nothing is written there once the run's server starts —
-// the plugin itself writes nothing at all.
-func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
-
-// ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
-// its own skills in ([sandbox.RunRequest.Skills], [ClaudeCode.WriteConfig]):
-// its manifest, a directory per skill, and the hook that reports each load to
-// the run's bridge — named on the run's command line with `--plugin-dir`, so
-// the skills are the run's alone, under the plugin's name. Under WorkDir, never
-// in the checkout or the box's `.claude/skills/`, where a commit could carry
-// them or the next run in the box would find them; and its own, removed whole
-// before every run ([Runner.ClearArtifacts]).
-func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
-
-// OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
-// ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
-// and named in the run's configuration's `skills`. Its own, under WorkDir, for
-// the reasons [Paths.ClaudeSkillsPlugin] gives; and written before the run's
-// server starts, which watches it.
-func (p Paths) OpenCodeSkills() string { return p.WorkDir() + "/opencode-skills" }
-
-// OpenCodeSkillsPlugin is the DIRECTORY of the plugin that reports each skill an
-// OpenCode run's model loads to the run's bridge (opencode_skills.js), written
-// and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and for the
-// same reasons a directory of its own.
-func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-skill-loads" }
 
 // CommitAttribution is the DIRECTORY holding a run's commit attribution
 // (attribution.go): the hook ([Paths.AttributionHook]) and the directory the

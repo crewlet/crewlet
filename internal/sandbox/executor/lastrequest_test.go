@@ -249,7 +249,7 @@ func openCodeRunStep(message string) string {
 // OPENCODE'S FIGURE IS ITS SESSION'S NEWEST SETTLED MESSAGE THAT MEASURED A PROMPT,
 // read off the message-list pages the run's script printed, newest first, one
 // message a page. Interrupted, refused, in-flight and unmeasured steps are
-// passed over, as an export's are (measure.go's measuredPrompt); the figure is
+// passed over, as an export's are (opencodemeasure.go's measuredPrompt); the figure is
 // the run's own where its stream named that step, else an earlier job's.
 //
 // Mutation: take the newest message whatever it holds, or one in flight, and a
