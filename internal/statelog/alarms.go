@@ -1831,9 +1831,10 @@ var table = []rule{
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
-			"keeps is fixed when it boots: first the executor's pools it runs " +
-			"(116 MiB of transcript reads, 1 980 MiB on a node running seats) " +
-			"and the store's page cache (a sixteenth of its memory), then of " +
+			"keeps is fixed when it boots: first the Go runtime's share for the " +
+			"executor's pools it runs (97 MiB of transcript reads, 1 650 MiB on " +
+			"a node running seats), the store's page cache (a sixteenth of its " +
+			"memory) and its read lane (128 MiB a core), then of " +
 			"the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
 			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
