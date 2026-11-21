@@ -1423,7 +1423,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// at the slowest pace allowed, and held to the request term alone it
 	// failed as an outage while the link was carrying it. For those minutes
 	// everything the node sends behind it on the data link waits too; its
-	// holds ride the lease link (ADR-0169).
+	// holds ride the lease link (ADR-0174).
 	// Classified on the CALLER's context, for the keep's reason
 	// ([Queue.KeepDeadLetter]).
 	if _, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {

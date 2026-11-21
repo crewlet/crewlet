@@ -50,7 +50,7 @@ func sentOn(nc *nats.Conn, call func()) uint64 {
 }
 
 // THE LEASE STORE RIDES THE LEASE CONNECTION: a claim and a renewal are sent
-// on it, and Get and a listing are not (ADR-0169).
+// on it, and Get and a listing are not (ADR-0174).
 //
 // Mutant: attachCoordination opens the lease store on the coordination client
 // — the claim and the renewal send nothing on the lease connection.

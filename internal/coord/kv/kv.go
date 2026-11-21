@@ -313,7 +313,7 @@
 //
 // # Two clients: what a hold rides and what a reader rides
 //
-// [Open] takes two clients (ADR-0169). The HOLD client carries what takes,
+// [Open] takes two clients (ADR-0174). The HOLD client carries what takes,
 // keeps or gives up a hold: a claim's reads, writes and epochs, a renewal, a
 // release. The READ client carries every read of the fleet's leases: Get, the
 // listings, the watches, the placement hints and the gate's view, so a

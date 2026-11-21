@@ -492,7 +492,7 @@ It is a full engine process with roles subtracted. Before choosing a host:
   which its mailboxes, publishes, transfers and reads ride, and its **lease
   link**, which only its holds ride (claims, renewals, releases, presence),
   each landing on whichever member answers
-  ([ADR-0169](../../adr/0169-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+  ([ADR-0174](../../adr/0174-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
   It takes or keeps a hold only while a probe of the fleet's JetStream over its
   data link answers (a request every five seconds, about 164 bytes a second):
   refused at once while the data link is down, five seconds after a probe goes

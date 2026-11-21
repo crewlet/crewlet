@@ -180,7 +180,7 @@ func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
 // gets nothing more. On an external broker the client checks no caller's
 // deadline behind the connection's lock or in the socket, so a write waits
 // behind each large one ahead on its connection (internal/queue/jetstream's
-// externalWriteDeadline each); a hold rides its own (ADR-0169).
+// externalWriteDeadline each); a hold rides its own (ADR-0174).
 // No create is budgeted: [createKey], via the settled Update, is the one create;
 // the client's Create conditions on a marker the sweep may remove and asks a
 // replica (TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient).

@@ -29,7 +29,7 @@ How many connections that is depends on the topology:
 
 - **On an external broker, two.** The coordination store rides the queue's own
   connection, and the node's holds a second dial of their own
-  (`jetstream.Queue.DialLeases`, [ADR-0169](0169-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+  (`jetstream.Queue.DialLeases`, [ADR-0174](0174-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
 - **On the embedded broker — the default — three.** The coordination store has a
   second connection to the in-process server
   (`jetstream.Queue.DialWatched`), and the seat-memory replay and the backup's

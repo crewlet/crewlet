@@ -1410,7 +1410,7 @@ const externalHandshake = jsapi.RequestTerm
 // floor (jsapi.Sending). The cost: a dead connection under a large Write is
 // given up only at this deadline, holding the connection's lock, so every
 // caller on the queue's connection waits behind each large Write ahead of it;
-// a renewal rides the lease connection, whose lock no bulk takes (ADR-0169).
+// a renewal rides the lease connection, whose lock no bulk takes (ADR-0174).
 var externalWriteDeadline = jsapi.Sending(
 	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
 

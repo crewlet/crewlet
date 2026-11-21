@@ -1,4 +1,4 @@
-# ADR-0169: A node's holds ride a connection nothing else rides
+# ADR-0174: A node's holds ride a connection nothing else rides
 
 - **Status:** accepted
 - **Authority:** `internal/coord/kv`

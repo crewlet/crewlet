@@ -10,7 +10,7 @@
 ## The decision
 
 **A node takes or keeps a hold only while its data path answers end to end.**
-Its leases ride a link of their own (ADR-0169), and the two links land on
+Its leases ride a link of their own (ADR-0174), and the two links land on
 members independently, so a lease link through one member says nothing of a
 data link through another, cut off from its peers. The queue
 (`internal/queue/jetstream`'s `Queue.DataPath`) probes the fleet's JetStream

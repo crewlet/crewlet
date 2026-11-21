@@ -104,7 +104,7 @@
 // # A node's leases ride a link of their own
 //
 // A renewal queued behind a large write crosses after it, at the floor past
-// every lease (ADR-0169). Queue.DialLeases opens a watched connection nothing
+// every lease (ADR-0174). Queue.DialLeases opens a watched connection nothing
 // else rides: on a leaf a second leaf link in LeaseAccount, past the tunnel and
 // ISOLATED from other leaves' interest; on an external broker a second dial
 // that gives a dead socket up within a heartbeat of the shortest lease; on a

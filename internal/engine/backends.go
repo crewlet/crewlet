@@ -101,7 +101,7 @@ type Backends struct {
 	coordination natsjs.JetStream
 
 	// leases is the LEASE CONNECTION ([jetstream.Queue.DialLeases]), which
-	// the lease store's holds ride and nothing else (ADR-0169): owned here,
+	// the lease store's holds ride and nothing else (ADR-0174): owned here,
 	// on every topology, and closed after the queue and before the
 	// coordination connection ([Backends.Close]).
 	leases *nats.Conn
@@ -889,7 +889,7 @@ func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
 
 // attachCoordination builds the fleet store and the lease slot for both
 // branches (a store forgotten on one is a later panic): buckets and fleet
-// reads over js, every hold over leases (ADR-0169), each KV hold gated on the
+// reads over js, every hold over leases (ADR-0174), each KV hold gated on the
 // node's data path (ADR-0173).
 //
 // THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot says; only
