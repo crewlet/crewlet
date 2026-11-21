@@ -21,6 +21,7 @@
  * then opens the next row.
  */
 
+import { GrowthDecision, isGrowthAct } from "~/components/growth/GrowthDecisionReview.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Button,
@@ -1708,7 +1709,16 @@ function HeldRunPane({
             {said.words}
           </ReadingPaneOutcome>
         )}
-        {said?.settled ? null : (
+        {said?.settled ? null : isGrowthAct(held.act) ? (
+          // A GROWTH DECISION is read and decided on its card, here in the pane.
+          <GrowthDecision
+            id={held.id}
+            onAnswered={(words, settled) => {
+              setSaid({ words, settled });
+              onSettled("Answered", undefined, !settled);
+            }}
+          />
+        ) : (
           <Inline gap={2}>
             <HeldCallButtons
               id={held.id}

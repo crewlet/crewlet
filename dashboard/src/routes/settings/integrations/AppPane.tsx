@@ -17,6 +17,8 @@
  * header say what the change left without anybody pressing Check now.
  */
 
+import { GrowthProductSection } from "~/components/growth/GrowthProduct.tsx";
+import { GROWTH_PRODUCTS } from "~/routes/growth/words.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
@@ -384,6 +386,14 @@ export function AppPane({
             <SettingsSummary tool={tool} />
             {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
             {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
+            {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
+            {GROWTH_PRODUCTS.has(tool.entry.key) && (
+              <GrowthProductSection
+                kind={tool.entry.key}
+                product={tool.entry.name}
+                row={model.rows.get(tool.entry.key)}
+              />
+            )}
             <Button
               size="small"
               variant="secondary"
