@@ -126,10 +126,22 @@ func TestTheTreeIsThreePackagesAndTheServerLoadsCoreAlone(t *testing.T) {
 // moduleTimer is a reading of time or a timer a module could make outside its
 // clock: a global setTimeout, setInterval, clearTimeout or clearInterval,
 // Date.now(), a new Date of now, performance.now(), AbortSignal.timeout(), or
-// a timeout option, with which an API such as execFile runs a timer of its
-// own.
+// a timeout or timeouts option, with which an API such as execFile runs a
+// timer of its own.
 var moduleTimer = regexp.MustCompile(`(^|[^.\w])(setTimeout|setInterval|clearTimeout|clearInterval)\s*\(|` +
-	`\bDate\.now\s*\(|\bnew Date\(\s*\)|\bperformance\.now\s*\(|\bAbortSignal\.timeout\s*\(|\btimeout\s*:`)
+	`\bDate\.now\s*\(|\bnew Date\(\s*\)|\bperformance\.now\s*\(|\bAbortSignal\.timeout\s*\(|\btimeouts?\s*:`)
+
+// moduleLine is one line of one of the helper's modules, trimmed.
+type moduleLine struct{ module, line string }
+
+// handedPlaywright is each line that hands Playwright a bound it runs itself:
+// a launch's, to launchPersistentContext, and Playwright MCP's action and
+// navigation bounds, in its config. Playwright alone can end a launch, an
+// action or a navigation under way, so the bound is its own timer.
+var handedPlaywright = []moduleLine{
+	{"supervise.mjs", "timeout: launch.launch_timeout_ms,"},
+	{"supervise.mjs", "timeouts: { action: launch.mcp.action_ms, navigation: launch.mcp.navigation_ms },"},
+}
 
 // THE HELPER'S TIMERS ARE ITS CLOCK'S: every module reads time and sets
 // timers through the clock it is handed, and only common.mjs's real clock
@@ -137,10 +149,12 @@ var moduleTimer = regexp.MustCompile(`(^|[^.\w])(setTimeout|setInterval|clearTim
 // own, drives every bound a module decides by; a timer a module set by itself,
 // or handed an API as its timeout option, would escape it, and a case of that
 // bound would wait on the wall clock. A program is asked its version through
-// common.mjs's askVersion, which kills it on the clock.
+// common.mjs's askVersion, which kills it on the clock; the bounds handed to
+// an API are the three Playwright runs itself (handedPlaywright).
 //
 // Mutations, each red: set install's bound with the global setTimeout; bound
-// npm's --version with execFile's timeout option.
+// npm's or a Chromium's --version with execFile's timeout option; hand
+// Playwright MCP a fourth bound under its timeouts key.
 func TestTheHelpersTimersAreItsClock(t *testing.T) {
 	t.Parallel()
 	for _, f := range boxhelper.Files() {
@@ -149,6 +163,9 @@ func TestTheHelpersTimersAreItsClock(t *testing.T) {
 				continue
 			}
 			if f.Name == "common.mjs" && regexp.MustCompile(`^  (now|setTimeout|clearTimeout): `).MatchString(line) {
+				continue
+			}
+			if slices.Contains(handedPlaywright, moduleLine{f.Name, strings.TrimSpace(line)}) {
 				continue
 			}
 			t.Errorf("%s:%d reads time or sets a timer outside its clock: %s", f.Name, i+1, strings.TrimSpace(line))

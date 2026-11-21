@@ -22,16 +22,17 @@ const (
 	lockFile     = "tree-package-lock.json"
 )
 
-// Write puts the helper into the box whose home is home, under [Folder]:
-// every module in [Files] order, then the lock's two files, then config.json,
-// which names the modules by [Version] and the lock by its digest, so a config
-// never names files not yet written beside it. config.json is rendered first,
-// so nothing is written for a build that cannot render it. Modes are the
-// box's to fix: a box's own upload service gives a file its own.
-func Write(ctx context.Context, w Writer, home string) error {
-	body, err := configJSON()
+// Write puts the helper into the box whose home is home, under [Folder], for
+// a launch's settings s: every module in [Files] order, then the lock's two
+// files, then config.json, which names the modules by [Version] and the lock
+// by its digest, so a config never names files not yet written beside it.
+// config.json is rendered first, so nothing is written for settings it
+// refuses. Modes are the box's to fix: a box's own upload service gives a
+// file its own.
+func Write(ctx context.Context, w Writer, home string, s Settings) error {
+	body, err := configJSON(s)
 	if err != nil {
-		return fmt.Errorf("boxhelper: rendering %s: %w", configFile, err)
+		return err
 	}
 	folder := Folder(home)
 	for _, f := range Files() {

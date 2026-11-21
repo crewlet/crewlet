@@ -23,13 +23,23 @@ import (
 )
 
 // fault is a file-system failure the probe stages: every call of method
-// after the first after throws the error Node gives for errno, a name, or,
-// with kill, the first such call kills the probe.
+// after the first after, or times of them where times is set, throws the
+// error Node gives for errno, a name; with kill the first such call kills the
+// probe; with uid it answers its stat with that owner; with kill holder it
+// kills the Chromium the link it reads names, as a browser that dies while
+// its launch is read; with kill reading it kills the browser whose command
+// line it reads, and answers that command line less --no-sandbox; with hold
+// it waits for the probe's release, then runs.
 type fault struct {
-	Method string `json:"method"`
-	Errno  string `json:"errno,omitempty"`
-	After  int    `json:"after"`
-	Kill   bool   `json:"kill,omitempty"`
+	Method      string `json:"method"`
+	Errno       string `json:"errno,omitempty"`
+	After       int    `json:"after"`
+	Times       int    `json:"times,omitempty"`
+	Kill        bool   `json:"kill,omitempty"`
+	UID         int    `json:"uid,omitempty"`
+	KillHolder  bool   `json:"kill_holder,omitempty"`
+	KillReading bool   `json:"kill_reading,omitempty"`
+	Hold        bool   `json:"hold,omitempty"`
 }
 
 // outcome is the probe's answer to install: where the tree is and whether
@@ -841,7 +851,12 @@ func identify(t *testing.T, probe *boxhelpertest.Probe, pid int) string {
 func plant(t *testing.T, box *boxhelpertest.Box, pid int, start string) string {
 	t.Helper()
 	c := box.Config(t)
-	name := fmt.Sprintf("%v-%v-l1.left", c["pin"], c["pin_digest"])
+	return plantAs(t, box, fmt.Sprintf("%v-%v-l1.left", c["pin"], c["pin_digest"]), pid, start)
+}
+
+// plantAs is plant into pw/'s directory name.
+func plantAs(t *testing.T, box *boxhelpertest.Box, name string, pid int, start string) string {
+	t.Helper()
 	dir := filepath.Join(box.Folder, "pw", name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -930,6 +945,48 @@ func TestAnInstallADeadHelperLeftRunningIsStopped(t *testing.T) {
 			}
 			nothingIn(t, box, tree.Name)
 		})
+	})
+}
+
+// THE SWEEP LEAVES AN INSTALL WHOSE NPM STILL RUNS: once the browser is up,
+// ensure's sweep removes every entry of pw/ but the tree, another release's
+// tree and what installs left among them, but not one whose record names an
+// npm the kernel still reports with the start recorded, as an npm the reap
+// could not kill (the kernel holds it) leaves its directory: npm is reaped
+// before its directory goes, so that one waits for the next reap. A record
+// naming a pid gone, or a pid now another process's, is swept.
+//
+// Mutation: sweep every entry but the tree (the running npm's directory goes).
+func TestTheSweepLeavesAnInstallWhoseNPMStillRuns(t *testing.T) {
+	t.Parallel()
+	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
+		t.Parallel()
+		box := boxhelpertest.Start(t, env, boxhelpertest.Options{})
+		probe := box.Probe(t)
+		tree := install(probe, box, nil)
+		ready(t, box, tree, true)
+		ended := exec.Command("true")
+		if err := ended.Run(); err != nil {
+			t.Fatal(err)
+		}
+		npm := sleeper(t)
+		running := plantAs(t, box, tree.Name+".running", npm, identify(t, probe, npm))
+		swept := []string{
+			plantAs(t, box, tree.Name+".gone", ended.Process.Pid, "a start of no process"),
+			plantAs(t, box, tree.Name+".recycled", npm, identify(t, probe, npm)+"0"),
+			"0.0.1-000000000000-l1",
+		}
+		if err := os.Mkdir(filepath.Join(box.Folder, "pw", swept[2]), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var got struct{ Removed []string }
+		probe.Do(map[string]any{"op": "sweep", "folder": box.Folder, "name": tree.Name}, &got)
+		slices.Sort(got.Removed)
+		slices.Sort(swept)
+		if !slices.Equal(got.Removed, swept) {
+			t.Errorf("the sweep removed %q, want %q", got.Removed, swept)
+		}
+		nothingIn(t, box, tree.Name, running)
 	})
 }
 

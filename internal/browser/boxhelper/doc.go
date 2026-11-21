@@ -1,28 +1,71 @@
 // Package boxhelper is the helper the engine writes into a seat's box to run
 // the seat's own browser ([Write]), and the Playwright tree the box installs
 // for it: @playwright/mcp at an exact release, locked in tree/ with the two
-// packages it pins, which the box's own npm installs. The helper runs in the
-// box under the box's Node, of [MinNodeMajor] or newer with an npm of
-// [MinNPMMajor] or newer; the engine writes it and links none of Playwright's
-// code.
+// packages it pins, which the box's own npm installs. Its ensure leaves one
+// supervisor in the box, holding Chromium through Playwright for the box's
+// life. The helper runs under the box's Node, of [MinNodeMajor] or newer with
+// an npm of [MinNPMMajor] or newer; the engine links none of Playwright's code.
 //
 // # The helper's files
 //
 // ECMAScript modules, js/*.mjs, on Node's built-ins and the installed tree
 // alone, embedded ([Files]) as the OpenCode plugins are, so a box runs the
-// helper this build's suite ran: tree.mjs, which installs and loads the tree,
-// and common.mjs, what the modules share. No build step stands between them
-// and the binary: [Write] puts each into the box's [Folder] whole, after every
-// module it imports; then the lock's two files, as tree-package.json and
+// helper this build's suite ran: helper.mjs, the entry, whose subcommands are
+// ensure (ensure.mjs) and supervise (supervise.mjs; serve.mjs, its socket),
+// beside chromium.mjs, tree.mjs and common.mjs. No build step stands between
+// them and the binary: [Write] puts each into the box's [Folder] whole, after
+// every module it imports; then the lock's two files, as tree-package.json and
 // tree-package-lock.json, names neither npm nor Node takes as the folder's
 // own; then config.json, the one document the engine and the helper agree
-// through, rendered from this build's constants: the helper's [Version], over
-// every module's name, length and bytes; the pin, the lock's digest and the
-// digest of its whole install; the npm floor; and every bound of an install,
-// which a case whose subject is a bound shortens in its own config. config.json
-// goes last, so it never names a file not yet beside it, and a box whose files
-// disagree with it is repaired by the next launch's write. Modes are the
-// box's to fix: an upload service gives a file its own.
+// through, rendered from this build's constants and a launch's [Settings]: the
+// helper's [Version], over every module's name, length and bytes; the pin and
+// both digests; the floors; the Chromium to look for; the cell's sandbox; the
+// switches; the supervisor's environment by name; and every bound, which a
+// case whose subject is a bound shortens in its own config. config.json goes
+// last, so it never names a file not yet beside it, and the next launch's
+// write repairs a box whose files disagree with it. Modes are the box's.
+//
+// # Ensure
+//
+// The one check the engine runs before a seat's harness starts
+// ([EnsureCommand]), in a login shell as a job's, so it finds a job's node. A
+// POSIX sh prelude answers node_missing and node_too_old (a major below
+// [MinNodeMajor], compared as a number, a prerelease allowed) before Node
+// loads the helper, and clears NODE_OPTIONS, which loads code into every node.
+// Ensure prints one line of at most 512 bytes, read by [ParseEnsure] into
+// internal/browser's closed values: ready, with what runs, or withheld, with
+// the first failed check's reason and cause, a pair of common.mjs's PRINTS,
+// which TestTheHelperPrintsTheReasonsTheEngineReads holds to that table.
+// Nothing else a box prints reaches a prompt.
+//
+// Its checks, in order: the folder, the box user's, held at 0700 and its files
+// at 0600 before any is read, short enough for its socket's path; ensure.lock,
+// made exclusively, so two launches never start two supervisors (a younger
+// holder is waited for, at each change in the folder and every second, which
+// alone wakes it where the kernel refuses a watch; one that is no ensure of
+// this helper, or past lock_takeover_ms, killed first, is taken over, one
+// ensure at a time under ensure.lock.takeover); the tree; the Chromium; the
+// supervisor. A write the folder refuses is folder_unusable, never a missing
+// line. Its own deadline, ensure_deadline_ms, comes five seconds before
+// [EnsureTimeout], as on the container cell the engine's bound ends only the
+// exec client: during the install, npm is killed at once and given a second to
+// be reaped (playwright_missing timeout); later, supervisor_failed timeout.
+//
+// A supervisor already running as this launch needs it is found: the kernel
+// reports it running this helper's supervise on this folder (a recycled pid is
+// none), ready or launching again, its socket taking a connection, of this
+// launch's digest, over the canonical JSON of the whole launch and its
+// environment, so a changed bound, tree or variable restarts it. Any other is
+// stopped, TERM then its group killed, and one started detached in a session of
+// its own, which writes ready or failed on fd 3 within supervisor_wait_ms. Then
+// every other entry of pw/ is swept, but one whose recorded npm still runs.
+//
+// The supervisor's environment is a list of what may pass:
+// hostbox.PassthroughEnv and hostbox.HostUserEnv's names, which config.json
+// carries, and Playwright's browsers directory on the channel route. Several
+// of the hundred variables Playwright reads change how the browser runs
+// (PWDEBUG makes it headed, DEBUG_FILE writes a page's words to a file), so
+// only the spawn keeps them out; one a Chromium needs belongs on that list.
 //
 // # The tree, installed by npm in the box
 //
@@ -31,7 +74,7 @@
 // configuration names (npm sends the lock's registry.npmjs.org addresses
 // there), or an npm cache. js/tree.mjs installs it at
 // pw/<release>-<digest>-l<layout>/, named by what decides its bytes. First an
-// install a dead helper left is reaped, its npm's group killed only while the
+// install a dead ensure left is reaped, its npm's group killed only while the
 // kernel still reports the pid with the start time its record names (a pid
 // handed out again is left alone). Then a tree published at the name is reused
 // with nothing more read, so a box that has one needs no npm. Otherwise the
@@ -63,6 +106,82 @@
 // reads. The tree is loaded, never run: @playwright/mcp from it, and
 // playwright-core through mcp's own resolver, so the helper and mcp's server
 // share one core.
+//
+// # The supervisor
+//
+// The browser's parent, one to a box, for the box's life: it launches Chromium
+// through playwright-core's launchPersistentContext on the folder's profile,
+// over a pipe, so no DevTools port opens. Before each launch it kills the
+// group of a Chromium still holding the profile, as one that died outright
+// leaves it: the one the profile's SingletonLock names, where that is this
+// host and a process on this profile; another host's lock is left alone, and
+// the launch says profile_held. A browser that ends while its launch is read
+// is a failed launch, never served; one gone without a stop is launched again,
+// at most relaunch.max times in any relaunch.window_ms, past which it has
+// crashed out until the next ensure, the model refused saying so. On TERM it
+// closes its socket and model connections, then the browser through
+// Playwright, so Chromium writes its profile, killing its group past
+// stop_grace_ms (a frozen browser never answers); a TERM as it launches waits
+// for the launch and serves nothing. Killed outright, it takes its browser
+// too: Chromium exits as its pipe closes.
+//
+// Before anything loads it installs its own policy: an unhandled rejection is
+// logged and it carries on, since Playwright MCP listens for one only while a
+// model is connected and Node's default would end the browser between jobs; an
+// uncaught exception records it failed and exits 70. Its umask is 077.
+// supervisor.json, written whole, a failed write costing only itself, is
+// ensure's source; supervisor.log, 1 MiB with one rotation, logs refusals by
+// kind and errors by message, never a page's words. Every timer runs on the
+// clock it is handed.
+//
+// # The launch
+//
+// New headless, the full browser (never chrome-headless-shell); Chromium's own
+// sandbox on unless the cell waives it, where Playwright's default is off; a
+// 1280×800 viewport; an artifacts directory in the folder, emptied each
+// launch; a launch bound under ensure's wait; Playwright's signal handlers
+// off. Its switches are Playwright's defaults less three that suit tests and
+// weaken a browser of untrusted pages, removed by exact string:
+// --disable-popup-blocking; --enable-unsafe-swiftshader, so WebGL needs a GPU;
+// and Playwright's --disable-features list, given again less HttpsUpgrades,
+// HttpsFirstBalancedModeAutoEnable and ThirdPartyStoragePartitioning.
+// TestChromiumRunsWithTheListedCommandLine holds the whole command line, as
+// the kernel holds it, to the list, so a pin that changes Playwright's
+// defaults fails there until somebody reads it, and, as Playwright refuses a
+// caller's pipe and profile switches but not a DevTools port, a port stays out.
+//
+// Under required, Playwright's switch proves nothing of a launcher on PATH,
+// which may add --no-sandbox (Debian's reads /etc/chromium.d): a browser whose
+// command line, read from the kernel by the pid its profile's lock names,
+// carries it is withheld as chromium_sandbox_unavailable launcher, and one
+// whose command line cannot be read as unknown. A failed launch says why.
+// Playwright's words for a sandbox that would not start, which discard
+// Chromium's, are chromium_sandbox_unavailable with the first cause the box
+// shows: root; Ubuntu's AppArmor restriction on user namespaces; user
+// namespaces off; a seccomp filter on the process; else unknown. The rest are
+// chromium_start_failed, by the markers Playwright's errors carry: a library
+// missing, a profile held, the bound passed, a browser that ended.
+//
+// # The Chromium it runs
+//
+// In the order a build is trusted (config.json's chromium.search): the build
+// the pinned Playwright expects, its revision wholly installed in a Playwright
+// browsers directory and answering the version expected, through the chromium
+// channel (build expected); a branded Chrome by the chrome channel; a Chromium
+// on PATH by name (never chromium-browser, Ubuntu's snap shim); any other
+// revision there, newest first, by its path (untested). A candidate's version
+// is the first four-number word of its answer; one silent for 10 s is passed
+// over. The order is data, so the suite searches a box's own layout and PATH
+// alone.
+//
+// # The box's claim, not a boundary
+//
+// The model holds a fully permissioned shell in its box, as the box's user, so
+// it can read and write all of this, run any npm, edit the tree, and be the
+// supervisor itself. The one supervisor, its allowlisted environment, npm's
+// command line and the check of what it installed hold the box's own
+// configuration to the lock and coordinate a cooperating model; none is a
+// boundary, and the engine decides nothing from what the box says.
 //
 // # The lock is the release somebody read
 //
@@ -135,7 +254,9 @@
 //
 // # The suite
 //
-// A case drives the modules as the engine writes them, in a box laid out on
-// disk, on each Node with its own npm, through boxhelper_probe.mjs:
-// boxhelpertest's package doc says how a box gets its npm, cache and registry.
+// A case runs ensure as the engine does, at each end of what a box may bring
+// (boxhelpertest.Each), or drives the modules through boxhelper_probe.mjs on a
+// clock of the probe's own, so a grace or ten minutes of relaunches pass at
+// once. boxhelpertest's package doc says how a box gets its npm, cache,
+// registry and Chromium, and how a host's sandbox is told.
 package boxhelper

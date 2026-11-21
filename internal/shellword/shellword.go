@@ -3,8 +3,9 @@
 //   - a box's: the harness's invocations and the paths of a run's files
 //     (internal/sandbox/executor), a repository's checkout and the backends'
 //     own commands (internal/sandbox), the engine's reads of a run's workspace
-//     and its removal of an artifact's earlier shots (internal/engine), and a
-//     repository's checks (internal/gitlet/checkrun);
+//     and its removal of an artifact's earlier shots (internal/engine), a
+//     repository's checks (internal/gitlet/checkrun), and the box helper's
+//     ensure (internal/browser/boxhelper);
 //   - git's: the hook every push's receive-pack runs (internal/gitlet/cache),
 //     and the credential helper `crewlet gitlet` hands a git that talks to a
 //     node (cmd/crewlet);

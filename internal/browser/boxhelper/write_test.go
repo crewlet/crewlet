@@ -11,7 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 )
 
@@ -43,15 +45,15 @@ func (r *recorder) WriteFile(_ context.Context, path string, content []byte) err
 // THE BOX IS WRITTEN THE EMBEDDED HELPER, THEN A CONFIG NAMING IT: Write puts
 // every module of Files into the box's .crewlet/browser-box in Files' order,
 // then the committed manifest and lock as tree-package.json and
-// tree-package-lock.json, each byte for byte, and config.json last, naming
-// the helper's Version, the manifest's release, the 12 digits of SHA-256 over
-// the two files' SHA-256s the tree's name carries, the committed digest of a
-// whole install, npm's floor, and bounds whose fetches end inside the
-// install's, each read here from the committed files.
+// tree-package-lock.json, byte for byte, and config.json last, naming the
+// helper's Version, the release, the lock's digest, the installed digest, the
+// floors, the launch's sandbox, and bounds that nest: npm's fetches in the
+// install's, a launch in the supervisor's wait, both in ensure's deadline, and
+// that under EnsureTimeout and a lock's takeover.
 //
-// Mutations, each red: write config.json first; the digest over the lock
-// alone; the lock written as tree-package.json; npm_floor from MinNodeMajor; a
-// fetch timeout of 30 s (two tries no longer fit in the install's 60).
+// Mutations, each red: config.json first; the digest over the lock alone; the
+// lock as tree-package.json; npm_floor from MinNodeMajor; a 30 s fetch
+// timeout; an ensure deadline of EnsureTimeout; the sandbox always required.
 func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	t.Parallel()
 	const home = "/home/user"
@@ -60,7 +62,7 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 		t.Fatalf("Folder(%q) is %q, want %q", home, got, folder)
 	}
 	box := &recorder{}
-	if err := boxhelper.Write(t.Context(), box, home); err != nil {
+	if err := boxhelper.Write(t.Context(), box, home, boxhelper.Settings{Sandbox: browser.SandboxWaived}); err != nil {
 		t.Fatal(err)
 	}
 	manifest, lock := committedTree(t)
@@ -97,7 +99,8 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	for key, want := range map[string]any{
 		"v": 1.0, "helper": boxhelper.Version(), "pin": pkg.Dependencies["@playwright/mcp"],
 		"pin_digest": hex.EncodeToString(digest[:])[:12], "installed_digest": committedInstalled(t),
-		"npm_floor": float64(boxhelper.MinNPMMajor),
+		"node_floor": float64(boxhelper.MinNodeMajor), "npm_floor": float64(boxhelper.MinNPMMajor),
+		"sandbox": "waived",
 	} {
 		if got := config[key]; got != want {
 			t.Errorf("config.json's %s is %v, want %v", key, got, want)
@@ -116,13 +119,29 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	install, _ := config["install"].(map[string]any)
 	timeout, fetch := count(install, "timeout_ms"), count(install, "fetch_timeout_ms")
 	retries, wait := count(install, "fetch_retries"), count(install, "fetch_retry_wait_ms")
-	if timeout == 0 || fetch == 0 || wait == 0 || count(config, "stop_grace_ms") == 0 {
-		t.Errorf("config.json's bounds are %v and stop_grace_ms %v: each is a time, above zero", install,
-			config["stop_grace_ms"])
+	grace, deadline := count(config, "stop_grace_ms"), count(config, "ensure_deadline_ms")
+	launch, supervisor := count(config, "launch_timeout_ms"), count(config, "supervisor_wait_ms")
+	if timeout == 0 || fetch == 0 || wait == 0 || grace == 0 || launch == 0 {
+		t.Errorf("config.json's bounds are %v, stop_grace_ms %d and launch_timeout_ms %d: each is a time, above "+
+			"zero", install, grace, launch)
 	}
 	if tries := (retries+1)*fetch + retries*wait; tries > timeout {
 		t.Errorf("npm's own tries of a silent registry take %d ms, past install.timeout_ms %d: it would read as "+
 			"timeout, never as the registry_unreachable npm says", tries, timeout)
+	}
+	if launch >= supervisor {
+		t.Errorf("launch_timeout_ms %d is not under supervisor_wait_ms %d: a hung launch would read as the "+
+			"supervisor's silence, not its own timeout", launch, supervisor)
+	}
+	if steps := timeout + grace + supervisor; steps > deadline {
+		t.Errorf("an install's bound, its grace and the supervisor's wait take %d ms, past ensure_deadline_ms %d",
+			steps, deadline)
+	}
+	engine := int(boxhelper.EnsureTimeout / time.Millisecond)
+	if takeover := count(config, "lock_takeover_ms"); deadline >= engine || takeover <= engine {
+		t.Errorf("ensure_deadline_ms %d and lock_takeover_ms %d, with EnsureTimeout %d ms: ensure answers before "+
+			"the engine's bound, and a lock is taken over only once a whole ensure is past it", deadline, takeover,
+			engine)
 	}
 }
 
@@ -136,19 +155,38 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 func TestAWriteTheBoxRefusesReachesTheCallerAsItself(t *testing.T) {
 	t.Parallel()
 	refusal := errors.New("the stand-in box refuses this path")
+	settings := boxhelper.Settings{Sandbox: browser.SandboxRequired}
 	whole := &recorder{}
-	if err := boxhelper.Write(t.Context(), whole, "/home/user"); err != nil ||
+	if err := boxhelper.Write(t.Context(), whole, "/home/user", settings); err != nil ||
 		len(whole.paths) != len(boxhelper.Files())+3 {
 		t.Fatalf("Write wrote %q (%v), want %d files", whole.paths, err, len(boxhelper.Files())+3)
 	}
 	for at, path := range whole.paths {
 		box := &recorder{refuseAt: at, refusal: refusal}
-		err := boxhelper.Write(t.Context(), box, "/home/user")
+		err := boxhelper.Write(t.Context(), box, "/home/user", settings)
 		if !errors.Is(err, refusal) || err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("Write refused at %s returned %v, want the refusal, wrapped, naming the path", path, err)
 		}
 		if !slices.Equal(box.paths, whole.paths[:at]) {
 			t.Errorf("Write refused at %s wrote %q, want %q and nothing after", path, box.paths, whole.paths[:at])
+		}
+	}
+}
+
+// A SANDBOX NOBODY RESOLVED IS REFUSED, NEVER READ AS EITHER: Write refuses
+// settings whose sandbox is unset or off the list, naming the setting, before
+// it writes a single file, so a launch that skipped resolving its cell's
+// chromium_sandbox never runs a box's browser on a guess.
+//
+// Mutation: read an unset sandbox as required (the zero row writes a box).
+func TestASandboxNobodyResolvedIsRefusedNeverReadAsEither(t *testing.T) {
+	t.Parallel()
+	for _, sandbox := range []browser.ChromiumSandbox{"", "off", "Required"} {
+		box := &recorder{}
+		err := boxhelper.Write(t.Context(), box, "/home/user", boxhelper.Settings{Sandbox: sandbox})
+		if err == nil || !strings.Contains(err.Error(), "chromium_sandbox") || len(box.paths) > 0 {
+			t.Errorf("Write with sandbox %q returned %v and wrote %q, want a refusal naming chromium_sandbox and "+
+				"nothing written", sandbox, err, box.paths)
 		}
 	}
 }

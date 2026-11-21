@@ -1,12 +1,14 @@
 // common.mjs: what the box helper's modules share. config.json, the document
 // the engine writes beside them; the modes the helper writes at; what the
-// helper prints and the answer a failed check gives; the cause a failed write
-// stands for; the clock every timer runs on, and a version asked on it; and
-// what the kernel says of a process, and which pid may be signalled. Node's
-// built-ins alone, in the oldest Node the helper supports.
-// internal/browser/boxhelper's package doc carries the argument.
+// helper prints, the answer a failed check gives and the line that says it;
+// the cause a failed write stands for; the clock every timer runs on, and a
+// version asked on it; canonical JSON; and what the kernel says of a process,
+// and which pid may be signalled. Node's built-ins alone, in the oldest Node
+// the helper supports. internal/browser/boxhelper's package doc carries the
+// argument.
 
 import { execFile, spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import fsp from "node:fs/promises"
 import { constants } from "node:os"
 import path from "node:path"
@@ -18,6 +20,9 @@ export const CONFIG_VERSION = 1
 // FILE_MODE and DIR_MODE are what the helper writes at: the box's user alone.
 export const FILE_MODE = 0o600
 export const DIR_MODE = 0o700
+
+// LINE_PREFIX starts ensure's one line, the engine's to parse.
+export const LINE_PREFIX = "crewlet-browser-ensure/1"
 
 // VERSION_PROBE_MS bounds one --version the helper asks a program: a build or
 // an npm answers in well under a second (npm in 0.13-0.18 s), so one silent
@@ -31,9 +36,13 @@ export function isObject(v) {
 }
 
 // PRINTS is every reason the helper prints, with the causes it prints each
-// with. A Withheld of a pair it lacks throws, so a misspelt cause fails where
-// it is printed rather than reaching the engine.
+// with: with the ensure prelude's two, exactly the box's part of
+// internal/browser's table, which TestTheHelperPrintsTheReasonsTheEngineReads
+// holds both ways. A Withheld of a pair it lacks throws, so a misspelt cause
+// fails where it is printed rather than reaching the engine.
 export const PRINTS = Object.freeze({
+  node_too_old: Object.freeze(["below_floor"]),
+  folder_unusable: Object.freeze(["not_directory", "not_owned", "mode", "path_too_long", "no_space", "unwritable"]),
   playwright_missing: Object.freeze([
     "digest_mismatch",
     "npm_missing",
@@ -46,14 +55,23 @@ export const PRINTS = Object.freeze({
     "unwritable",
     "install_failed",
   ]),
+  chromium_missing: Object.freeze(["not_found"]),
+  chromium_sandbox_unavailable: Object.freeze(["root", "seccomp", "userns", "apparmor", "launcher", "unknown"]),
+  chromium_start_failed: Object.freeze(["libraries", "profile_held", "exited", "timeout", "unknown"]),
+  supervisor_failed: Object.freeze(["exited", "timeout"]),
 })
+
+// prints is whether the helper prints reason with cause.
+export function prints(reason, cause) {
+  return Object.hasOwn(PRINTS, reason) && PRINTS[reason].includes(cause)
+}
 
 // Withheld is a check that failed: the reason and the cause the helper
 // prints, a pair of PRINTS, and a detail for its stderr, which the engine
 // never reads.
 export class Withheld extends Error {
   constructor(reason, cause, detail) {
-    if (!Object.hasOwn(PRINTS, reason) || !PRINTS[reason].includes(cause)) {
+    if (!prints(reason, cause)) {
       throw new TypeError(`the helper prints no ${reason} ${cause}: PRINTS lists every pair it may print`)
     }
     super(`${reason} ${cause}: ${detail}`)
@@ -61,6 +79,16 @@ export class Withheld extends Error {
     this.cause = cause
     this.detail = detail
   }
+}
+
+// ensureLine is ensure's answer: the verdict, then each field that has a
+// value, in fields' order.
+export function ensureLine(verdict, fields) {
+  const parts = [LINE_PREFIX, verdict]
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== "") parts.push(`${key}=${value}`)
+  }
+  return parts.join(" ")
 }
 
 // writeCause is the cause a failed write in the box stands for: a full disk
@@ -83,6 +111,22 @@ export const realClock = {
 // sleep resolves after ms on clock.
 export function sleep(clock, ms) {
   return new Promise((resolve) => clock.setTimeout(resolve, ms))
+}
+
+// canonical is value as JSON with every object's keys sorted and no space:
+// one text for one value, so a digest over it names the value.
+export function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (isObject(value)) {
+    const keys = Object.keys(value).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+// digest16 is the first 16 hex digits of SHA-256 over value's canonical JSON.
+export function digest16(value) {
+  return createHash("sha256").update(canonical(value)).digest("hex").slice(0, 16)
 }
 
 // writeWhole writes body to file whole: staged beside it at FILE_MODE and
@@ -110,6 +154,21 @@ const grammar = {
 }
 const PIN_MAX = 64
 
+// shapes is what each of config.json's lists and Chromium values must match:
+// a build's revision and four-number version; a Playwright browsers directory
+// (the one variable Playwright reads for it, an absolute path, or one under
+// the box's home); an absolute path; a program's name; a switch; a variable's
+// name.
+const shapes = {
+  revision: /^[0-9]{1,8}$/,
+  version: /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\.[0-9]{1,6}$/,
+  playwright: /^(\$PLAYWRIGHT_BROWSERS_PATH|\/.+|~\/.+)$/,
+  absolute: /^\/.+$/,
+  name: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+  switch: /^--[a-z0-9-]+(=[\x20-\x7e]+)?$/,
+  env: /^[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+}
+
 // BOUND_MAX is the longest bound config.json may carry, in milliseconds: an
 // hour, past every bound the helper keeps, so a longer one is no engine's.
 const BOUND_MAX = 3_600_000
@@ -122,6 +181,38 @@ const FLOOR_MAX = 999
 // RETRIES_MAX is the most fetch retries config.json may ask of npm: five times
 // npm's own two, where the engine asks one, so more is no engine's.
 const RETRIES_MAX = 10
+
+// PROTOCOL_MAX is the highest hello protocol config.json may name: the engine
+// writes 1 and moves it only for a change an older peer cannot read, so three
+// digits are past any it will write.
+const PROTOCOL_MAX = 999
+
+// VIEWPORT_MAX is the widest or tallest viewport config.json may ask, in CSS
+// pixels: twice an 8K display's 7,680, where the engine asks 1280 by 800, so a
+// larger one is no engine's.
+const VIEWPORT_MAX = 16_384
+
+// RELAUNCH_MAX is the most relaunches config.json may allow in a window, and
+// WINDOW_MAX the longest window, in milliseconds: the engine allows three in
+// ten minutes, and a hundred cold starts, or crashes a day apart counted as
+// one cause, are past any policy that still gives the box its browser back.
+const RELAUNCH_MAX = 100
+const WINDOW_MAX = 86_400_000
+
+// OUTPUT_MAX is the most bytes config.json may let the outputs a model leaves
+// unnamed take: a tebibyte, past any box's disk, where the engine allows 256
+// MiB, so a larger one is no engine's.
+const OUTPUT_MAX = 2 ** 40
+
+// BOUNDS is each of ensure's and the supervisor's bounds config.json carries.
+const BOUNDS = [
+  "ensure_deadline_ms",
+  "lock_takeover_ms",
+  "supervisor_wait_ms",
+  "launch_timeout_ms",
+  "stop_grace_ms",
+  "hello_ms",
+]
 
 // readConfig is folder's config.json, held to the shape this helper reads:
 // one it cannot read throws, naming what is wrong.
@@ -137,6 +228,7 @@ export async function readConfig(folder, io = fsp) {
     throw new Error(`${file} has ${key} ${JSON.stringify(config?.[key])}`)
   }
   const count = (v, max) => Number.isInteger(v) && v > 0 && v <= max
+  const list = (v, re) => Array.isArray(v) && v.every((s) => typeof s === "string" && re.test(s))
   if (!isObject(config)) throw new Error(`${file} is not an object`)
   if (!Number.isInteger(config.v) || config.v < 1) refuse("v")
   if (config.v > CONFIG_VERSION) {
@@ -147,6 +239,8 @@ export async function readConfig(folder, io = fsp) {
     if (typeof config[key] !== "string" || !re.test(config[key])) refuse(key)
   }
   if (config.pin.length > PIN_MAX) refuse("pin")
+  if (!count(config.protocol, PROTOCOL_MAX)) refuse("protocol")
+  if (!count(config.node_floor, FLOOR_MAX)) refuse("node_floor")
   if (!count(config.npm_floor, FLOOR_MAX)) refuse("npm_floor")
   const i = config.install
   if (
@@ -160,7 +254,41 @@ export async function readConfig(folder, io = fsp) {
   ) {
     refuse("install")
   }
-  if (!count(config.stop_grace_ms, BOUND_MAX)) refuse("stop_grace_ms")
+  const c = config.chromium
+  const g = shapes
+  if (
+    !isObject(c) ||
+    !g.revision.test(String(c.expected_revision)) ||
+    !g.version.test(String(c.expected_version)) ||
+    !isObject(c.search) ||
+    !list(c.search.playwright, g.playwright) ||
+    !list(c.search.chrome, g.absolute) ||
+    !list(c.search.path, g.name)
+  ) {
+    refuse("chromium")
+  }
+  if (config.sandbox !== "required" && config.sandbox !== "waived") refuse("sandbox")
+  const view = config.viewport
+  if (!isObject(view) || !count(view.width, VIEWPORT_MAX) || !count(view.height, VIEWPORT_MAX)) {
+    refuse("viewport")
+  }
+  const s = config.switches
+  if (!isObject(s) || !list(s.ignore_default_args, g.switch) || !list(s.args, g.switch)) refuse("switches")
+  if (!list(config.supervisor_env, g.env)) refuse("supervisor_env")
+  for (const key of BOUNDS) {
+    if (!count(config[key], BOUND_MAX)) refuse(key)
+  }
+  const r = config.relaunch
+  if (!isObject(r) || !count(r.max, RELAUNCH_MAX) || !count(r.window_ms, WINDOW_MAX)) refuse("relaunch")
+  const m = config.mcp
+  if (
+    !isObject(m) ||
+    !count(m.output_max_bytes, OUTPUT_MAX) ||
+    !count(m.action_ms, BOUND_MAX) ||
+    !count(m.navigation_ms, BOUND_MAX)
+  ) {
+    refuse("mcp")
+  }
   return config
 }
 
@@ -183,19 +311,19 @@ function linuxBoot() {
 // into one, as Chromium does in its new headless mode; and its start, which a
 // pid handed out again never shares: field 22 of its stat on Linux, with the
 // boot, and ps's lstart elsewhere. A pid it does not report, or will not
-// describe, is gone.
-export async function running(pid) {
+// describe, is gone. io is the file system /proc is read through.
+export async function running(pid, io = fsp) {
   if (!Number.isInteger(pid) || pid <= 0) return { alive: false }
   if (process.platform === "linux") {
     try {
-      const stat = await fsp.readFile(`/proc/${pid}/stat`, "utf8")
+      const stat = await io.readFile(`/proc/${pid}/stat`, "utf8")
       // The fields after the command, which may hold any byte but its last
       // ")": the state first, so field 22 is the twentieth.
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
       if (fields[0] === "Z" || fields[0] === "X") return { alive: false }
       const boot = await linuxBoot()
       const start = boot !== undefined && /^[0-9]+$/.test(fields[19] ?? "") ? `${boot}:${fields[19]}` : undefined
-      const argv = (await fsp.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").slice(0, -1)
+      const argv = (await io.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").slice(0, -1)
       if (argv.length === 1 && argv[0].includes(" ")) return { alive: true, command: argv[0], start }
       return { alive: true, argv, start }
     } catch {
@@ -212,6 +340,23 @@ export async function running(pid) {
   const m = /^\s*(\S+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/s.exec(out)
   if (m === null || m[1].startsWith("Z")) return { alive: false }
   return { alive: true, command: m[3], start: m[2].split(/\s+/).join(" ") }
+}
+
+// runs is whether proc, as running read it, was started with args after its
+// executable: exactly on Linux, and as the end of its command elsewhere,
+// which is exact for arguments that hold no space.
+export function runs(proc, args) {
+  if (!proc.alive) return false
+  if (proc.argv) return proc.argv.length === args.length + 1 && args.every((a, i) => proc.argv[i + 1] === a)
+  return proc.command.endsWith(` ${args.join(" ")}`)
+}
+
+// carries is whether proc, as running read it, holds arg among its
+// arguments: exactly on Linux, as one space-delimited word elsewhere.
+export function carries(proc, arg) {
+  if (!proc.alive) return false
+  if (proc.argv) return proc.argv.slice(1).includes(arg)
+  return ` ${proc.command} `.includes(` ${arg} `)
 }
 
 // signal sends sig to pid, or to the process group it leads with group, and

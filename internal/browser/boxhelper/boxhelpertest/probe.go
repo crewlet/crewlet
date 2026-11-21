@@ -19,8 +19,8 @@ import (
 var probeScript = filepath.Join("internal", "browser", "boxhelper", "boxhelper_probe.mjs")
 
 // probeTimeout bounds one wait on the probe: its longest command, an install
-// a case bounds or a failing registry ends, settles in a few seconds, so a
-// minute is a hang, never a slow machine.
+// a case bounds or a failing registry ends, or a supervisor's launches,
+// settles in a few seconds, so a minute is a hang, never a slow machine.
 const probeTimeout = time.Minute
 
 // probeLine is the longest answer the probe may give: far past any it gives.

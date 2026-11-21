@@ -854,6 +854,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
+      # CHROMIUM'S OWN SANDBOX. GitHub's Ubuntu runners keep AppArmor's
+      # restriction on unprivileged user namespaces, which Chromium's own
+      # sandbox needs, so a box helper case whose cell requires it would prove
+      # only that the browser is withheld (`chromium_sandbox_unavailable`).
+      # Lifted, for the whole shard, it proves the sandbox runs:
+      # internal/browser/boxhelper's TestChromiumRunsWithTheListedCommandLine
+      # reads the browser's command line under `required`, and its oracle
+      # (boxhelpertest.SandboxRuns) says which a host takes. The runner is
+      # discarded with the job.
+      - name: Chromium's own sandbox, allowed its user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # command CI runs" was therefore held by hand —

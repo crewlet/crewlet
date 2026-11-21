@@ -6,18 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper"
+	"github.com/crewlet/crewlet/internal/browser/chromiumtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// Env is what a case of the helper runs under: a Node and the npm it brings.
+// Env is what a case of the helper runs under: a Node, the npm it brings, and
+// the pinned Chromium the box's browser is.
 type Env struct {
 	// Node is the node the case runs the helper's modules under, the box's
 	// bin/node.
@@ -25,17 +32,57 @@ type Env struct {
 	// NPM is the npm the box brings, its bin/npm, run under the box's node as
 	// a box's own npm is.
 	NPM string
+	// Chrome is the pinned Chromium the box's browser is, "" for a case that
+	// drives none.
+	Chrome string
+}
+
+// Each runs f once under each end of what a box may bring, as the subtests
+// newest, the machine's node and npm with the newest pinned Chromium
+// ([Newest]), and floor, the floor's node and npm ([Floor], [FloorNPM]) with
+// the floor's Chromium: the oldest Node with the oldest Chromium, the worst
+// pairing the floors admit. The names are chromiumtest.Each's.
+func Each(t *testing.T, f func(t *testing.T, env Env)) {
+	t.Helper()
+	t.Run("newest", func(t *testing.T) { f(t, Newest(t)) })
+	t.Run("floor", func(t *testing.T) {
+		f(t, Env{Node: Floor(t), NPM: FloorNPM(t), Chrome: chromiumtest.Floor(t)})
+	})
 }
 
 // EachNode runs f once under each Node a box may bring, each with its own
-// npm, as the subtests newest, the machine's node and npm ([Node], [NPM]),
-// and floor, the floor's pinned build and the npm it bundles ([Floor],
-// [FloorNPM]): the names chromiumtest.Each gives its arms.
+// npm and no Chromium, as the subtests newest, the machine's node and npm
+// ([Node], [NPM]), and floor, the floor's pinned build and the npm it bundles
+// ([Floor], [FloorNPM]): for a case of the helper that drives no browser.
 func EachNode(t *testing.T, f func(t *testing.T, env Env)) {
 	t.Helper()
 	t.Run("newest", func(t *testing.T) { f(t, Env{Node: Node(t), NPM: NPM(t)}) })
 	t.Run("floor", func(t *testing.T) { f(t, Env{Node: Floor(t), NPM: FloorNPM(t)}) })
 }
+
+// Newest is the newest pair alone, the machine's node and npm with the newest
+// pinned Chromium, for a case whose doc says why the floor adds nothing to
+// its claim.
+func Newest(t testing.TB) Env {
+	t.Helper()
+	return Env{Node: Node(t), NPM: NPM(t), Chrome: chromiumtest.Newest(t)}
+}
+
+// Route is how a case lays its Chromium out in the box, for ensure to find.
+type Route int
+
+const (
+	// Expected lays the pin's build out as Playwright's installer lays the
+	// build it expects, in the box's own browsers directory, its version the
+	// one the case's config expects.
+	Expected Route = iota
+	// OnPath puts the pin's build on the box's PATH as chromium.
+	OnPath
+	// ExpectedAndOnPath does both.
+	ExpectedAndOnPath
+	// NoChromium lays out none.
+	NoChromium
+)
 
 // Cache is the npm cache a box starts with.
 type Cache int
@@ -51,6 +98,11 @@ const (
 
 // Options is how a case's box differs from what the engine writes.
 type Options struct {
+	// Sandbox is the cell's Chromium sandbox; unset, waived, so a case not
+	// about the sandbox passes on a host whose own will not start.
+	Sandbox browser.ChromiumSandbox
+	// Route is how the box's Chromium is laid out.
+	Route Route
 	// Cache is the npm cache the box starts with.
 	Cache Cache
 	// Config holds config.json's keys the case sets over the engine's values,
@@ -70,6 +122,9 @@ type Box struct {
 	// empty, so the machine's own never reaches the box: where a case writes
 	// what an image's global npmrc would say.
 	GlobalNPMRC string
+	// Workspace is the job's working directory in it, the root its hello
+	// names, as a harness runs there.
+	Workspace string
 
 	env  Env
 	opts Options
@@ -79,8 +134,12 @@ type Box struct {
 // sockets lie under its home and macOS bounds a socket's path.
 const homePrefix = "cb"
 
-// ownerFile is a home's record of the test binary that made it.
-const ownerFile = "owner"
+// ownerFile is a home's record of the test binary that made it, and
+// supervisorFile of the supervisor last started in it.
+const (
+	ownerFile      = "owner"
+	supervisorFile = "supervisor"
+)
 
 // globalRC is the name of the box's global npmrc in its home, and npmCalls of
 // where a stand-in npm records its command lines.
@@ -101,9 +160,11 @@ var self = sync.OnceValues(func() (procgroup.Leader, error) { return procgroup.I
 var swept = sync.OnceValue(func() error { return sweep(os.TempDir()) })
 
 // Start lays a box out on disk for a case run under env, as o says: a home of
-// its own holding the box's bin directory (env's node and npm), its npm cache
-// and an empty global npmrc, and the helper written into it ([Box.Write]).
-// The case's end removes it.
+// its own holding the box's bin directory (env's node and npm, and the pin's
+// build where o puts it on PATH), its Chromium laid out by o's route, its npm
+// cache and an empty global npmrc, and the helper written into it
+// ([Box.Write]). The case's end stops any supervisor the box runs, kills what
+// a failed case left running on it, and removes it.
 func Start(t testing.TB, env Env, o Options) *Box {
 	t.Helper()
 	if err := swept(); err != nil {
@@ -118,6 +179,15 @@ func Start(t testing.TB, env Env, o Options) *Box {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// After its supervisor's stop: what still runs on the box would write
+		// its home back, with no owner file for a later sweep to judge.
+		killed, err := stopWhatRuns(home)
+		if err != nil {
+			t.Errorf("stopping what the box still runs: %v", err)
+		}
+		for _, pid := range killed {
+			procgrouptest.AwaitGone(t, pid, goneWithin)
+		}
 		if err := os.RemoveAll(home); err != nil {
 			t.Errorf("removing the box's home: %v", err)
 		}
@@ -125,18 +195,27 @@ func Start(t testing.TB, env Env, o Options) *Box {
 	if err := os.WriteFile(filepath.Join(home, ownerFile), []byte(owner.String()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := &Box{Home: home, Folder: boxhelper.Folder(home), GlobalNPMRC: filepath.Join(home, globalRC), env: env, opts: o}
+	if o.Sandbox == "" {
+		o.Sandbox = browser.SandboxWaived
+	}
+	b := &Box{Home: home, Folder: boxhelper.Folder(home), GlobalNPMRC: filepath.Join(home, globalRC),
+		Workspace: filepath.Join(home, "workspace"), env: env, opts: o}
+	t.Cleanup(func() { b.Stop(t) })
 	b.layOut(t)
 	b.Write(t)
 	return b
 }
 
-// layOut makes the box's bin directory, linking its node and npm, its npm
-// cache, and its empty global npmrc.
+// layOut makes the box's bin directory, linking its node and npm, its
+// workspace, its npm cache, and its empty global npmrc, and lays its Chromium
+// out.
 func (b *Box) layOut(t testing.TB) {
 	t.Helper()
 	bin := filepath.Join(b.Home, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(b.Workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link(t, b.env.Node, filepath.Join(bin, "node"))
@@ -149,6 +228,23 @@ func (b *Box) layOut(t testing.TB) {
 	if err := os.WriteFile(b.GlobalNPMRC, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if b.env.Chrome == "" {
+		return
+	}
+	if r := b.opts.Route; r == Expected || r == ExpectedAndOnPath {
+		build := filepath.Join(b.Home, "ms-playwright", "chromium-"+browser.ExpectedChromiumRevision)
+		if err := os.MkdirAll(build, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(build, "INSTALLATION_COMPLETE"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		unpacked := chromiumtest.Unpacked(t, b.env.Chrome)
+		link(t, unpacked, filepath.Join(build, filepath.Base(unpacked)))
+	}
+	if r := b.opts.Route; r == OnPath || r == ExpectedAndOnPath {
+		link(t, b.env.Chrome, filepath.Join(bin, "chromium"))
+	}
 }
 
 // link links name to target, failing t.
@@ -160,17 +256,27 @@ func link(t testing.TB, target, name string) {
 }
 
 // Write writes the helper into the box through [disk], as the engine does on
-// every launch, then sets the case's config over the engine's.
+// every launch, for the case's sandbox, then sets over the engine's config
+// the case's own browsers directory alone to search, the version of the pin's
+// build as the one expected, the switch that holds the browser to loopback,
+// and the case's own keys.
 func (b *Box) Write(t testing.TB) {
 	t.Helper()
-	if err := boxhelper.Write(t.Context(), disk{}, b.Home); err != nil {
+	if err := boxhelper.Write(t.Context(), disk{}, b.Home, boxhelper.Settings{Sandbox: b.opts.Sandbox}); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.opts.Config) > 0 {
-		config := b.Config(t)
-		merge(config, b.opts.Config)
-		b.SetConfig(t, config)
+	config := b.Config(t)
+	chromium := config["chromium"].(map[string]any)
+	search := chromium["search"].(map[string]any)
+	search["playwright"] = []string{filepath.Join(b.Home, "ms-playwright")}
+	search["chrome"] = []string{}
+	if b.env.Chrome != "" {
+		chromium["expected_version"] = chromiumtest.Version(t, b.env.Chrome)
 	}
+	switches := config["switches"].(map[string]any)
+	switches["args"] = append(switches["args"].([]any), "--host-resolver-rules="+chromiumtest.LoopbackOnly)
+	merge(config, b.opts.Config)
+	b.SetConfig(t, config)
 }
 
 // merge sets over's keys in into, an object of one merged into an object of
@@ -245,6 +351,167 @@ func (b *Box) StandInNPM(t testing.TB, version, body string) {
 	}
 }
 
+// ensureWait bounds one ensure as the engine does, with a margin for the
+// shell it runs under: past it, ensure has hung, never been slow.
+const ensureWait = boxhelper.EnsureTimeout + 10*time.Second
+
+// Ensure runs the helper's ensure in the box under the box's environment and
+// extra, as `sh -c` and boxhelper.EnsureScript (never a login shell, whose
+// profile may rebuild PATH), and reads its line with the engine's own
+// parser. A supervisor it leaves running is recorded for the sweep.
+func (b *Box) Ensure(t testing.TB, extra ...string) boxhelper.Ensure {
+	t.Helper()
+	stdout, stderr := b.EnsureOutput(t, extra...)
+	e, err := boxhelper.ParseEnsure(stdout)
+	if err != nil {
+		t.Fatalf("ensure answered %q: %v; its stderr:\n%s", stdout, err, stderr)
+	}
+	if e.Verdict == browser.EnsureReady {
+		b.recordSupervisor(t)
+	}
+	return e
+}
+
+// EnsureOutput runs ensure as [Box.Ensure] does and answers what it printed.
+func (b *Box) EnsureOutput(t testing.TB, extra ...string) (stdout, stderr string) {
+	t.Helper()
+	stdout, stderr, err := b.RunEnsure(t.Context(), b.Home, extra...)
+	if err != nil {
+		t.Fatalf("ensure: %v; its stdout %q; its stderr:\n%s", err, stdout, stderr)
+	}
+	return stdout, stderr
+}
+
+// waitDelay bounds the wait for ensure's pipes to close once its shell has
+// exited: at once, unless a child it left holds them, past which its output
+// is cut rather than the case hung.
+const waitDelay = time.Second
+
+// RunEnsure runs ensure for the box whose home is home under the box's
+// environment and extra, failing nothing: for a case that runs several at
+// once, or one in a home it moved the box's folder to.
+func (b *Box) RunEnsure(ctx context.Context, home string, extra ...string) (stdout, stderr string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ensureWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", boxhelper.EnsureScript(home))
+	cmd.Env = append(b.Environ(), extra...)
+	cmd.Dir = b.Home
+	cmd.WaitDelay = waitDelay
+	var out, errOut strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	err = cmd.Run()
+	return out.String(), errOut.String(), err
+}
+
+// Supervisor is the box's supervisor as its supervisor.json records it.
+type Supervisor struct {
+	PID      int    `json:"pid"`
+	State    string `json:"state"`
+	Helper   string `json:"helper"`
+	Digest   string `json:"launch_digest"`
+	Chromium *struct {
+		PID     int    `json:"pid"`
+		Version string `json:"version"`
+		Build   string `json:"build"`
+		Sandbox string `json:"sandbox"`
+	} `json:"chromium"`
+	Relaunches []int64 `json:"relaunches_ms"`
+	Failure    *struct {
+		Reason string `json:"reason"`
+		Cause  string `json:"cause"`
+	} `json:"failure"`
+}
+
+// Supervisor reads the box's supervisor.json, failing t if there is none.
+func (b *Box) Supervisor(t testing.TB) Supervisor {
+	t.Helper()
+	s, ok := b.supervisor(t)
+	if !ok {
+		t.Fatalf("%s holds no supervisor.json", b.Folder)
+	}
+	return s
+}
+
+func (b *Box) supervisor(t testing.TB) (Supervisor, bool) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(b.Folder, "supervisor.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return Supervisor{}, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s Supervisor
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("%s's supervisor.json: %v", b.Folder, err)
+	}
+	return s, true
+}
+
+// recordSupervisor records the supervisor's identity in the home, for the
+// sweep of a test binary that dies before its cleanup: ensure detaches it, so
+// nothing else ties it to this binary.
+func (b *Box) recordSupervisor(t testing.TB) {
+	t.Helper()
+	leader, err := procgroup.Identify(b.Supervisor(t).PID)
+	if err != nil {
+		t.Fatalf("identifying the box's supervisor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(b.Home, supervisorFile), []byte(leader.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// goneWithin bounds a wait for a stopped process to go: past it, something
+// holds it, never a slow machine.
+const goneWithin = time.Minute
+
+// Stop stops the box's supervisor, if one runs, as a TERM does, and waits for
+// it and its Chromium to go. One that outlives its TERM fails t and is
+// killed with its group, so no case leaves a supervisor running.
+func (b *Box) Stop(t testing.TB) {
+	t.Helper()
+	s, ok := b.supervisor(t)
+	if !ok || !b.supervising(s.PID) {
+		return
+	}
+	if err := procgroup.Terminate(s.PID); err != nil && b.supervising(s.PID) {
+		t.Errorf("stopping the box's supervisor: %v", err)
+	}
+	if !procgrouptest.AwaitGone(t, s.PID, goneWithin) {
+		t.Errorf("the box's supervisor, pid %d, did not stop within %s of its TERM: killed", s.PID, goneWithin)
+		_ = procgroup.Kill(s.PID)
+		procgrouptest.AwaitGone(t, s.PID, goneWithin)
+	}
+	if s.Chromium != nil && s.Chromium.PID > 0 && !procgrouptest.AwaitGone(t, s.Chromium.PID, goneWithin) {
+		t.Errorf("the box's Chromium, pid %d, outlived its supervisor by %s", s.Chromium.PID, goneWithin)
+	}
+}
+
+// Browsers is the pid of every process running on the box's profile, as its
+// command line names it: none, once nothing holds the profile.
+func (b *Box) Browsers(t testing.TB) []int {
+	t.Helper()
+	pids, err := processesCarrying("--user-data-dir=" + filepath.Join(b.Folder, "profile"))
+	if err != nil {
+		t.Fatalf("listing the processes on the box's profile: %v", err)
+	}
+	return pids
+}
+
+// supervising is whether pid runs the helper's supervise on this box's launch.
+func (b *Box) supervising(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	args, err := commandLine(pid)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(strings.Join(args, " "),
+		" supervise --launch "+filepath.Join(b.Folder, "launch.json"))
+}
+
 // NPMCalls is each command line a stand-in npm was run with, in order, its
 // arguments after the executable.
 func (b *Box) NPMCalls(t testing.TB) [][]string {
@@ -296,8 +563,9 @@ func (disk) WriteFile(ctx context.Context, path string, content []byte) error {
 	return os.Rename(staged.Name(), path)
 }
 
-// sweep removes every home in dir whose test binary is gone, and reports the
-// homes it could not judge or remove.
+// sweep removes every home in dir whose test binary is gone, stopping what
+// still runs for it first, and reports the homes it could not judge or
+// remove.
 func sweep(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -309,7 +577,7 @@ func sweep(dir string) error {
 			continue
 		}
 		home := filepath.Join(dir, entry.Name())
-		owner, ok := ownerOf(home)
+		owner, ok := leaderIn(home, ownerFile)
 		if !ok {
 			continue
 		}
@@ -318,6 +586,10 @@ func sweep(dir string) error {
 		case err != nil:
 			errs = append(errs, fmt.Errorf("%s: %w", home, err))
 		case !running:
+			if _, err := stopWhatRuns(home); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", home, err))
+				continue
+			}
 			if err := os.RemoveAll(home); err != nil {
 				errs = append(errs, err)
 			}
@@ -326,23 +598,66 @@ func sweep(dir string) error {
 	return errors.Join(errs...)
 }
 
-// ownerBound is the longest owner file a home holds: a pid and a start time
-// take under 64 bytes, so a longer file is none Start wrote.
-const ownerBound = 256
+// stopWhatRuns kills what home's box still runs, and answers each pid it
+// killed: the process group of the supervisor the home records, while its
+// leader is still the one recorded, so a recycled pid costs no other group
+// its life; any other supervisor on the box's launch.json, which two ensures
+// that both started one leave unrecorded, with the group it leads; and every
+// process on its profile, a browser, which no other process names. A
+// supervisor killed outright leaves its browser in a group of its own until
+// its pipe closes, writing the profile as it goes.
+func stopWhatRuns(home string) ([]int, error) {
+	var killed []int
+	var errs []error
+	if s, ok := leaderIn(home, supervisorFile); ok {
+		current, err := s.Current()
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case current:
+			errs = append(errs, procgroup.Kill(s.PID))
+			killed = append(killed, s.PID)
+		}
+	}
+	folder := boxhelper.Folder(home)
+	supervisors, err := processesCarrying(filepath.Join(folder, "launch.json"))
+	errs = append(errs, err)
+	for _, pid := range supervisors {
+		if proc, found, inspectErr := procgroup.Inspect(pid); inspectErr == nil && found && proc.Group == pid {
+			_ = procgroup.Kill(pid)
+		} else if p, findErr := os.FindProcess(pid); findErr == nil {
+			_ = p.Kill()
+		}
+		killed = append(killed, pid)
+	}
+	browsers, err := processesCarrying("--user-data-dir=" + filepath.Join(folder, "profile"))
+	errs = append(errs, err)
+	for _, pid := range browsers {
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+		killed = append(killed, pid)
+	}
+	return killed, errors.Join(errs...)
+}
 
-// ownerOf is the test binary home's owner file names, where it names one.
-func ownerOf(home string) (procgroup.Leader, bool) {
-	file := filepath.Join(home, ownerFile)
+// leaderBound is the longest owner or supervisor file a home holds: a pid
+// and a start time take under 64 bytes, so a longer file is none Start wrote.
+const leaderBound = 256
+
+// leaderIn is the process home's file name names, where it names one.
+func leaderIn(home, name string) (procgroup.Leader, bool) {
+	file := filepath.Join(home, name)
 	info, err := os.Lstat(file)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > ownerBound {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > leaderBound {
 		return procgroup.Leader{}, false
 	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		return procgroup.Leader{}, false
 	}
-	owner, err := procgroup.ParseLeader(strings.TrimSpace(string(raw)))
-	return owner, err == nil
+	leader, err := procgroup.ParseLeader(strings.TrimSpace(string(raw)))
+	return leader, err == nil
 }
 
 // alive is whether the test binary owner names still runs: the kernel reports

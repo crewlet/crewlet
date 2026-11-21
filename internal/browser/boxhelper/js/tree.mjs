@@ -2,8 +2,9 @@
 // engine wrote beside it with the box's own npm, into a directory of its own,
 // checks what npm installed against the lock and the files a whole install
 // holds, publishes it by rename, stops what an install a dead helper left
-// still runs, and loads a published tree through @playwright/mcp's own
-// resolver. internal/browser/boxhelper's package doc carries the argument.
+// still runs, loads a published tree through @playwright/mcp's own resolver,
+// and sweeps every other entry of pw/ once nothing runs on one.
+// internal/browser/boxhelper's package doc carries the argument.
 
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -200,8 +201,37 @@ async function hold(pw, io) {
   await io.mkdir(pw, { mode: DIR_MODE })
 }
 
+// sweep removes every entry of folder's pw/ but the tree named name: trees of
+// another release, lock or layout, and whatever an install left. Its caller
+// holds that no browser runs on any of them, and the install's reap killed
+// every npm a record names; one that would not go (the kernel holds it) keeps
+// its directory, which the next reap removes once it has gone, since npm is
+// reaped before its directory goes. An entry that will not go stays for the
+// next sweep, since the browser it follows is up. It answers what it removed.
+export async function sweep(folder, name, io = fsp) {
+  const pw = path.join(folder, "pw")
+  let entries
+  try {
+    entries = await io.readdir(pw)
+  } catch {
+    return []
+  }
+  const removed = []
+  for (const entry of entries) {
+    if (entry === name) continue
+    if (await stillRuns(await readRecord(path.join(pw, entry), io))) continue
+    try {
+      await io.rm(path.join(pw, entry), { recursive: true, force: true })
+      removed.push(entry)
+    } catch {
+      // Left for the next sweep.
+    }
+  }
+  return removed
+}
+
 // discard removes what an install staged, if anything; one that will not go
-// stays in pw/ under a name no reuse reads as a tree.
+// stays in pw/, under a name no reuse reads as a tree, until the sweep.
 async function discard(staging, io) {
   if (staging !== undefined) await io.rm(staging, { recursive: true, force: true }).catch(() => {})
 }
@@ -553,7 +583,7 @@ async function entries(root, io) {
 // the record names, so a pid handed out again, whatever it runs, is left
 // alone; waits up to graceMs for it to go; then removes the directory. One
 // whose npm will not go is kept for a later reap, and one with no record is
-// left as it is. It answers the directories it removed.
+// the sweep's. It answers the directories it removed.
 export async function reapInstalls(pw, graceMs, { io = fsp, clock = realClock } = {}) {
   let names
   try {
@@ -569,16 +599,13 @@ export async function reapInstalls(pw, graceMs, { io = fsp, clock = realClock } 
     const dir = path.join(pw, entry)
     const record = await readRecord(dir, io)
     if (record === undefined) continue
-    if (record.pid !== undefined) {
-      const proc = await running(record.pid)
-      if (proc.alive && proc.start !== undefined && proc.start === record.start) {
-        try {
-          signal(record.pid, "SIGKILL", true)
-        } catch {
-          // Not this user's to stop: the wait below keeps its directory.
-        }
-        if (!(await gone(record.pid, graceMs, clock))) continue
+    if (await stillRuns(record)) {
+      try {
+        signal(record.pid, "SIGKILL", true)
+      } catch {
+        // Not this user's to stop: the wait below keeps its directory.
       }
+      if (!(await gone(record.pid, graceMs, clock))) continue
     }
     try {
       await io.rm(dir, { recursive: true, force: true })
@@ -588,6 +615,15 @@ export async function reapInstalls(pw, graceMs, { io = fsp, clock = realClock } 
     }
   }
   return removed
+}
+
+// stillRuns is whether the npm record names still runs: the kernel reports
+// its pid with the start the record names, so a pid handed out again, whatever
+// it runs, is none.
+async function stillRuns(record) {
+  if (record?.pid === undefined) return false
+  const proc = await running(record.pid)
+  return proc.alive && proc.start !== undefined && proc.start === record.start
 }
 
 // readRecord is the record of the npm an install started in dir: undefined

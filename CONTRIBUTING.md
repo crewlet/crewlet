@@ -165,10 +165,21 @@ moves), once per lock, publishing it only once it passes the box helper's own
 check of a box's install (npm's record is the lock, nothing is a link, and the
 files' digest is `tree/installed.sha256`), and names it in
 `CREWLET_TEST_PLAYWRIGHT_TREE` (the Makefile's `PLAYWRIGHT_TREE_ENV`). A
-one-package loop names it and the floor Node by hand, as three statements:
-`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" go test ./internal/browser/boxhelper/...`
+one-package loop of the box helper names it, the floor Node and both pinned
+Chromiums by hand, as five statements:
+`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && newest=$(scripts/chromium.sh newest) && cfloor=$(scripts/chromium.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$cfloor" go test ./internal/browser/boxhelper/...`
 A bare `go test` without them skips those cases, saying so, and runs the rest.
 `make check`'s `playwright-tree-test` is the recipe's own suite.
+
+**Chromium's own sandbox.** A box helper case whose cell requires Chromium's
+own sandbox proves the browser runs with it only on a host where an
+unprivileged process may make a user namespace, which Ubuntu restricts from
+23.10 (AppArmor's `kernel.apparmor_restrict_unprivileged_userns`). Where it
+cannot, the case proves the browser is withheld instead
+(`chromium_sandbox_unavailable`), so either passes: CI's race shards lift the
+restriction, so the gate proves the sandbox runs, and
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` does the same
+on your machine until it next boots.
 
 **A current Node** (npm ships with it) for the dashboard and the suite. The
 dashboard's build output is committed, so building and running the ENGINE needs
@@ -518,12 +529,17 @@ The prerequisites that legitimately vary by machine:
 
   `node` also runs the **box helper** the engine writes into a seat's box
   (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
-  on disk as the engine writes one and drives the helper's modules from it,
-  through `boxhelper_probe.mjs` beside its tests, under your node and the
-  floor's (*The floor Node*, above), and each box installs the Playwright tree
-  with that Node's own npm, offline, from the suite tree's npm cache or a
-  stand-in registry on 127.0.0.1, as `TestTheLockInstallsWithEachNodesOwnNpm`
-  installs it with each.
+  on disk as the engine writes one, runs its ensure and the supervisor that
+  holds a pinned Chromium through Playwright as a box would, and drives the
+  helper's modules from it through `boxhelper_probe.mjs` beside its tests. A
+  case runs at each end of what a box may bring (`boxhelpertest.Each`: your
+  node and npm with the newest Chromium pin, the floor Node and its npm with
+  the floor's; *The floor Node*, above), on each Node alone where it drives no
+  browser (`EachNode`), or the newest pair alone where its doc says why the
+  floor adds nothing (`Newest`). Each box installs the Playwright tree with
+  that Node's own npm, offline, from the suite tree's npm cache or a stand-in
+  registry on 127.0.0.1, as `TestTheLockInstallsWithEachNodesOwnNpm` installs
+  it with each.
 
 - **`npm`** builds and tests the dashboard. Vitest runs its assertions (the
   wire protocol, the router's history rules, the ordering comparators, the

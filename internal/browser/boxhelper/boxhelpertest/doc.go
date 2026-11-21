@@ -1,19 +1,25 @@
 // Package boxhelpertest stands a seat's box up on disk for a case of the box
 // helper: the helper written into it as the engine writes it, beside the bin
-// directory, npm cache and npm settings of the box's own ([Start]); the
-// helper's modules driven under the box's Node through the probe beside
-// boxhelper's tests ([Box.Probe]); a stand-in registry ([Registry]) and a
-// stand-in npm ([Box.StandInNPM]) for what a box's npm meets; and the
-// Playwright tree the suite installs from the committed lock ([Tree]). A case
-// runs on each Node a box may bring, each with its own npm ([EachNode]): the
-// machine's node and npm ([Node], [NPM]), at or above boxhelper.MinNodeMajor
-// and MinNPMMajor, and the floor's pinned build with the npm it bundles
-// ([Floor], [FloorNPM]), of those majors exactly, so what a case asserts
-// holds on the oldest Node and npm a box may carry as well as on current
-// ones (boxhelper's package doc says why the floor is pinned).
+// directory, npm cache and npm settings of the box's own and a pinned
+// Chromium laid out for ensure to find ([Start]); ensure run as the engine
+// runs it and read with the engine's parser ([Box.Ensure]), its supervisor
+// real and stopped at the case's end; the helper's modules driven under the
+// box's Node through the probe beside boxhelper's tests ([Box.Probe]); a
+// stand-in registry ([Registry]) and a stand-in npm ([Box.StandInNPM]) for
+// what a box's npm meets; and the Playwright tree the suite installs from the
+// committed lock ([Tree]). A case runs at each end of what a box may bring
+// ([Each]): the machine's node and npm ([Node], [NPM]), at or above
+// boxhelper.MinNodeMajor and MinNPMMajor, with the newest pinned Chromium, and
+// the floor's pinned build with the npm it bundles ([Floor], [FloorNPM]), of
+// those majors exactly, with the floor's Chromium, the worst pairing the
+// floors admit. A case that drives no browser runs on each Node alone
+// ([EachNode]), and one whose doc says why the floor adds nothing on the
+// newest pair alone ([Newest]). boxhelper's package doc says why the floor is
+// pinned.
 //
 // Test support (the name ends in `test`), so internal/fixedwait reads it as
-// test code: it holds no fixed wait, and every bound in it is a context's.
+// test code: no wait in it decides a claim, and every bound in it only ends a
+// wait.
 //
 // # Where each comes from
 //
@@ -62,13 +68,25 @@
 // file whole by a rename, as a box's own upload service does, and leaves the
 // loose modes such a service may (0644 files, 0755 directories), so a case
 // sees the helper hold them to its own. config.json is then the engine's with
-// the case's keys merged over it ([Options]): a bound shortened where a case's
-// subject is that bound. A case's end removes the home.
+// the case's overrides ([Options]): the cell's sandbox, waived unless a case
+// says otherwise, so a case not about the sandbox passes on a host whose own
+// will not start; the box's own browsers directory alone to search; the pin's
+// build as the version expected; chromiumtest.LoopbackOnly, which holds every
+// launch to loopback; and the case's keys merged over it, a bound shortened
+// where a case's subject is that bound.
 //
-// Its bin directory holds links to the case's node and npm, and its PATH is
-// that directory alone, so the box's npm runs under the box's node and no case
-// finds the machine's own programs however the machine's PATH reads. Its
-// ~/.npm is a copy of the suite tree's npm cache, unless the case wants it
+// Its bin directory holds links to the case's node and npm, and, where the
+// case puts it there, the pin's build as chromium ([OnPath]), or a case's
+// stand-in for one; its PATH is that directory alone, so the box's npm runs
+// under the box's node and no case finds the machine's own programs, Chrome
+// among them, however the machine's PATH reads. The pin's build is laid out
+// as Playwright's installer lays the build it expects ([Expected]): a
+// directory named for the expected revision, holding INSTALLATION_COMPLETE and
+// a link to the build's unpacked directory (chromiumtest.Unpacked), never the
+// whole cached build, beside which a launch writes, while scripts/chromium.sh
+// promises an intact build is never written into.
+//
+// Its ~/.npm is a copy of the suite tree's npm cache, unless the case wants it
 // empty, and its environment ([Box.Environ]) points npm at a registry on a
 // port nothing listens on, so every box installs for real and offline, a miss
 // failing in about 2.4 s, and names an empty global npmrc of the box's own, so
@@ -81,6 +99,16 @@
 // answers --version as the case says, and otherwise runs what the case gives
 // it, with the box's own npm at hand.
 //
+// Ensure runs as `sh -c`, never a login shell, whose profile may rebuild PATH:
+// the login shell is the engine's to prove in a box. A case's end stops the
+// box's supervisor, TERM as ensure would, waits for it and its browser to go,
+// kills what a failed case left on the box (a supervisor on its launch that no
+// record names, a process on its profile), and removes the home, which they
+// would otherwise write back. Whether Chromium's own sandbox can start is the
+// host's, told by [SandboxRuns], an oracle beside the helper: whether an
+// unprivileged process may make a user namespace and map itself root in it, as
+// Chromium's namespace sandbox does.
+//
 // # What a dead test binary leaves
 //
 // A home outlives a test binary that dies before its cases' cleanup runs,
@@ -92,5 +120,12 @@
 // reports it exited; one it cannot judge (no owner file, one it cannot read)
 // is left alone. The pid is never judged as a process group's leader, as
 // procgroup.Leader.Current would: a test binary leads no group, so a live one
-// would read as gone.
+// would read as gone. A supervisor is another matter: ensure starts it
+// detached, in a session of its own, so nothing ties it to the binary, and a
+// box records it in a file of its own beside owner, supervisor, once ensure
+// answers ready; the sweep kills its group while that recorded leader is still
+// the one running (it leads its session), so a recycled pid costs no other
+// group its life, any other supervisor on the home's launch, and every process
+// on the home's profile, its browser, which would otherwise write the profile
+// back into the home after its removal.
 package boxhelpertest
