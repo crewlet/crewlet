@@ -77,6 +77,62 @@ func TestSharedContractOnACluster(t *testing.T) {
 	})
 }
 
+// THE BROWSER CONTROL SUITE WITH ITS HANDLES ON NO COPY OF THE DUTY BUCKET,
+// where the class lives, for TestSharedContractOnACluster's reason: every
+// answer a take, a renewal, an end or a read gives must be the leader's. The
+// members are chosen by the duty bucket's holders, which say nothing of where
+// the lease bucket's are.
+func TestBrowserControlContractOnACluster(t *testing.T) {
+	t.Parallel()
+	c := jetstreamtest.StartCluster(t, 5, js.Config{})
+	client := func(t *testing.T, i int) jetstream.JetStream {
+		t.Helper()
+		nc, err := c.Servers[i].Conn()
+		if err != nil {
+			t.Fatalf("member %d: connect: %v", i, err)
+		}
+		t.Cleanup(nc.Close)
+		client, err := jsapi.Embedded().Client(nc)
+		if err != nil {
+			t.Fatalf("member %d: client: %v", i, err)
+		}
+		return client
+	}
+	coordtest.RunBrowserControls(t, func(t *testing.T) []coordtest.BrowserControlStore {
+		cfg := Config{
+			TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("s%d", bucketSeq.Add(1)),
+			Clustered: true, Replicas: 3, Reach: InProcess,
+		}
+		first, err := Open(t.Context(), client(t, 0), cfg)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		info := streamOf(t.Context(), t, first.js, first.duties.stream)
+		holders := []string{info.Cluster.Leader}
+		for _, peer := range info.Cluster.Replicas {
+			holders = append(holders, peer.Name)
+		}
+		var out []coordtest.BrowserControlStore
+		for i, member := range c.Configs {
+			if slices.Contains(holders, member.ServerName) {
+				continue
+			}
+			s, err := Open(t.Context(), client(t, i), cfg)
+			if err != nil {
+				t.Fatalf("member %d: Open: %v", i, err)
+			}
+			out = append(out, s)
+		}
+		// THE PREMISE, as the shared case's: a handle on a member holding a
+		// copy reads locally, and this certifies the easy position.
+		if len(out) != len(c.Configs)-cfg.Replicas {
+			t.Fatalf("the duty bucket is held by %v, leaving %d member(s) with no copy, want %d",
+				holders, len(out), len(c.Configs)-cfg.Replicas)
+		}
+		return out
+	})
+}
+
 // A READ A CALLER ACTS ON IS NEVER ANSWERED BY A COPY THAT IS BEHIND — a lease
 // or a fleet record the quorum holds is unknown through a member cut off from
 // it, never absent. Its own direct get answers "not found" for the majority's

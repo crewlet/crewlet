@@ -1,3 +1,4 @@
+
 # API Endpoints
 
 Any node with the `ingress` role (`api.port > 0` in Tier A) serves the Crewlet API. A node has every role by default and runs it beside the agents in one process; a node with `-roles data,ingress` serves only these routes and reaches the rest of the fleet over the event stream. The routes are identical either way.
@@ -4026,7 +4027,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
 | `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session or that read its conversation, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. Each row says which launch would continue it (`continued_by`: `relaunch` while its turn is live, `next_turn` once it has ended, `next_fire` once a fire of a schedule has), whether it would (`continuable`, `null` where that cannot be said now), where (`continues_in`: `any_box` or `parked_box`) and where not, why (`not_continuable`), the session its turn's first launch was handed (`base_turn`), whether it is in progress (`in_progress`: its turn has not ended and its row names a kept session, with the engine's sentence for one, `in_progress_note`) and the engine's note on a session its turn went on past (`kept_note`: kept up to a session its turn went on past, or of a turn that was lost). See [the route](#get-agentsidsessions) |
-| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `late_call`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a launch would continue the session, and a later page leaves `continuable` null. A turn the seat keeps no row of is `not_found`: it recorded none, or its row went with the end of a later turn of its conversation that was handed it, past the retention, or with the seat. A session released while it is read is said as released, from its row read again: `not_found`, or `state: none`, each saying nothing more of it can be read. See [the route](#get-agentsidsessionsturn_id) |
+| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `late_call`, `wake`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. Its first page says of the row whether a launch would continue the session, and a later page leaves `continuable` null. A turn the seat keeps no row of is `not_found`: it recorded none, or its row went with the end of a later turn of its conversation that was handed it, past the retention, or with the seat. A session released while it is read is said as released, from its row read again: `not_found`, or `state: none`, each saying nothing more of it can be read. See [the route](#get-agentsidsessionsturn_id) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload, and `node`, the node that published it (every stored event carries it, not only this answer's) |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `executor_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on its executor in its box: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, an executor it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -4157,23 +4158,79 @@ REST route calls, so the two surfaces cannot diverge:
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
 | `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Settings › Configuration, whose write half is `PUT /config/{kind}/{id}` *(needs `admin`)* |
 
-**Every Worklet answer carries how far this node had got.** `read_level` is the level the read was ACTUALLY served at, never the one asked for: a level never silently downgrades, so the two differ only by a refusal you can see. `log_seq` is this node's committed position and `applied_through` the prefix whose consequences it holds; both are needed, because a node applying nothing while its position advances looks like a caught-up one from either alone. `log_lag` is **absent** rather than zero when the broker could not be reached, because "not behind at all" from an unreachable broker is the confident wrong answer.
+**Every Worklet answer carries how far this node had got, and both halves
+matter.** `read_level` is the level the read was ACTUALLY served at, never the
+one asked for — a level never silently downgrades, so the two can differ only
+by a refusal you can see. `log_seq` is this node's committed position and
+`applied_through` the prefix whose consequences it actually holds; they are two
+numbers because a node applying nothing while its position advances looks
+identical to a caught-up one from either alone. `log_lag` is **absent** rather
+than zero when the broker could not be reached, because a read asks how far
+behind an answer may be and an unreachable broker answering "not at all" is the
+confident wrong answer. A caller that will not accept an answer of any age says
+so with `max_lag_seconds` and/or `max_lag_seq` beside `read_level=stale`, and
+the read refuses `too_stale` past whichever is reached first — the two are
+readings of ONE distance rather than two, the record count being what the
+broker actually answers and the duration being derived from it through this
+node's own drain rate. Both are refused at every other level, because they are
+a staleness bound and nothing else is. **`min_position` is the read-your-writes
+half**: a log position — `<stream>@<generation>:<sequence>`, the form every
+write's answer carries as `position` and every wake carries — and the answer
+is served from no earlier than it, at whatever level. At `stale` it turns
+"whatever this node holds" into "whatever this node holds, from here on", still
+labelled with its lag; a node that has not reached it within the read budget
+refuses `behind` rather than serving rows from before the write, and a position
+on a log the answer is not read from is refused `400 bad_params` rather than
+waited for — the caller's mistake, which every node answers the same, so it is
+never an `unavailable` telling a client to ask another node. **It repeats, once
+per log**: `min_position=<tracker position>&min_position=<pages position>`, or
+an array of the tokens in a socket frame's params, at most one per log and
+four in all (two on one log, or a fifth, are `400 bad_params`). A question read
+from one log waits on its log's floor and refuses one on any other; a question
+read from several — `company_feed` reads the tracker's log and the knowledge
+base's — holds each half to its own log's floor, reads a half whose log a
+`session` ask named no floor on at `stale`, and reports the weakest level any
+half was read at ([One floor per log](../guides/consistency.md#one-floor-per-log)). It is
+also what makes `read_level=session` an honest ask here: a session read waits
+for the caller's own last write, so it is accepted **only beside a
+`min_position`** and refused without one, the refusal naming the key and the
+two other asks a caller who typed `session` might have meant — `linearizable`,
+or `stale` with `max_lag_seq`. Absent, the level resolves to **this surface's**
+default, which is `stale`; a seat's own tools resolve theirs to `linearizable`
+and cannot be asked for anything else. See [Read consistency](../guides/consistency.md).
 
-A caller that will not accept an answer of any age sends `max_lag_seconds` and/or `max_lag_seq` beside `read_level=stale`; the read refuses `too_stale` past whichever is reached first. They are readings of ONE distance: the record count is what the broker answers, the duration is derived from it through this node's own drain rate. Both are refused at every other level.
+**`read_level`, `max_lag_seconds`, `max_lag_seq` and `min_position` work on
+every question that carries a read level**, not only on `/worklet/items`:
+`/worklet/items/{id}`, `/worklet/views`, `/worklet/catalogue`,
+`/worklet/people/{handle}`, `/worklet/projects`, `/worklet/projects/{key}`,
+`/worklet/activity`, `/worklet/my-work`, `/doclet/pages`, `/doclet/pages/{id}`,
+`/containers` and every `/chatlet/` read all resolve them the same way. They did not until recently:
+each of those wrote a hardcoded `stale` into its read and never looked at the
+keys, so a caller asking for a stronger answer was served this node's rows and
+told, in the answer's own `read_level`, that it came back at the level asked
+for, and the two single-object reads, `/worklet/{id}` and `/doclet/pages/{id}`,
+then took the level and dropped the bounds beside it, on the claim that a bound
+is enforced against a set's coverage and one row has no set. It is not: a bound
+is about **this node's lag**, checked before any row is read, and one row is
+exactly as far behind as a board on the same node. And `complete: false` — with `incomplete` naming the
+count, the lowest position among the records (`from`, as `{stream, generation,
+seq}` — the object form every position in an answer takes, `seen_through` and a
+listing's `position` included; a position in a *parameter* is the token
+`<stream>@<generation>:<sequence>`) and the record version — says rows may be missing,
+rows that should have gone may still be present, and the totals were computed
+over the incomplete set. That is a different fact from staleness, and a client
+that renders `read_level` and swallows `complete` looks confidently right.
 
-**`min_position` is the read-your-writes half**: a log position, `<stream>@<generation>:<sequence>` (the form every write's answer carries as `position` and every wake carries). The answer is served from no earlier than it, at whatever level. At `stale` it means "whatever this node holds, from here on", still labelled with its lag. A node that has not reached it within the read budget refuses `behind` rather than serve rows from before the write. A position on a log the answer is not read from is refused `400 bad_params`, not waited for: it is the caller's mistake, which every node answers the same, so it is never an `unavailable` telling a client to ask another node.
-
-**It repeats, once per log**: `min_position=<tracker position>&min_position=<pages position>`, or an array of tokens in a socket frame's params; at most one per log and four in all (two on one log, or a fifth, are `400 bad_params`). A question read from one log waits on its log's floor and refuses one on any other. A question read from several (`company_feed` reads the tracker's log and the knowledge base's) holds each half to its own log's floor, reads a half whose log a `session` ask named no floor on at `stale`, and reports the weakest level any half was read at ([One floor per log](../guides/consistency.md#one-floor-per-log)).
-
-`read_level=session` waits for the caller's own last write, so it is accepted **only beside a `min_position`**; without one it is refused, the refusal naming the key and the two other asks a caller who typed `session` might have meant: `linearizable`, or `stale` with `max_lag_seq`. Absent, the level resolves to **this surface's** default, `stale`; a seat's own tools resolve theirs to `linearizable` and cannot be asked for anything else. See [Read consistency](../guides/consistency.md).
-
-**`read_level`, `max_lag_seconds`, `max_lag_seq` and `min_position` work on every question that carries a read level**, not only `/worklet/items`: `/worklet/items/{id}`, `/worklet/views`, `/worklet/catalogue`, `/worklet/people/{handle}`, `/worklet/projects`, `/worklet/projects/{key}`, `/worklet/activity`, `/worklet/my-work`, `/doclet/pages`, `/doclet/pages/{id}`, `/containers` and every `/chatlet/` read resolve them the same way. The single-object reads `/worklet/{id}` and `/doclet/pages/{id}` enforce the bounds too: a bound is about **this node's lag**, checked before any row is read, and one row is as far behind as a board on the same node.
-
-`complete: false`, with `incomplete` naming the count, the lowest position among the records (`from`, as `{stream, generation,
-seq}` — the object form every position in an answer takes, `seen_through` and a listing's `position` included; a position in a *parameter* is the token
-`<stream>@<generation>:<sequence>`) and the record version, says rows may be missing, rows that should have gone may still be present, and totals were computed over the incomplete set. That is a different fact from staleness; a client that renders `read_level` and swallows `complete` looks confidently right.
-
-**A read no data node could answer is `unavailable`, never a list.** Worklet, Doclet, Chatlet and the usage history behind the spend, activity and readers screens are answered by a data node whose copy of that domain serves (this node's own where it holds one, another's otherwise). A read nobody answered is refused `unavailable` (REST: `503` with a `Retry-After`), not answered as an empty list, which would say the company has nothing in it. `knowledge` is the one exception, because a search is best effort: a search no data node ran answers no hits with `served_mode` empty and `coverage.complete` false, which a screen renders as "could not be searched" rather than "nothing matched".
+**A read no data node could answer is `unavailable`, never a list.** Worklet,
+Doclet, Chatlet and the usage history behind the spend, activity and readers
+screens are answered by a data node whose copy of that domain serves (this
+node's own where it holds one, another data node's otherwise), and a
+read nobody answered is refused `unavailable` (REST: `503` with a
+`Retry-After`) rather than answered as an empty list, which would say the
+company has nothing in it. `knowledge` is the one exception, because a search is
+best effort: a search no data node ran answers no hits with `served_mode`
+empty and `coverage.complete` false, which a screen renders as "could not be
+searched" rather than "nothing matched".
 
 ### Whose record a personal question answers for
 
@@ -7523,10 +7580,11 @@ A `cursor` that is not a page's position (a positive whole number) is
 
 One turn's session and a page of its **transcript**, `?cursor=` the
 `next_cursor` an earlier page of it handed out. Also served as the
-`executor_session` query, which takes `{handle, turn_id, cursor}`. The first page
-(no `cursor`) says which launch would continue the session and whether, as
-`GET /agents/{id}/sessions` does, on the head of its conversation the row's own
-read names; a later page leaves `continuable` `null`.
+`executor_session` query, which takes `{handle, turn_id, cursor}`. The
+first page (no `cursor`) says of its row which launch would continue the
+session and whether, as a page of `GET /agents/{id}/sessions` says it, on the
+head of its conversation the row's own read names; a later page leaves
+`continuable` `null`, saying it is the first page's to say.
 
 ```json
 {
@@ -7551,135 +7609,150 @@ read names; a later page leaves `continuable` `null`.
 }
 ```
 
-**The archive is read as its harness recorded it**: Claude Code's transcript and
-each subagent's own (its sidecar, every entry of which names the subagent in
-`thread`, after the run's own), and OpenCode's session export, each message by
-the kind OpenCode 2 gives it (its `type`). Each entry is one of:
+**The archive is read as its harness recorded it**, through the runner's own
+knowledge of the format it packs: Claude Code's transcript and each subagent's
+own (its sidecar, every entry of which names the subagent in `thread`, after
+the run's own), and OpenCode's session export, each message by the kind
+OpenCode 2 gives it (its `type`). Each entry is one of:
 
 | `kind` | What it is |
 |---|---|
-| `brief` | What the run was handed: the engine's brief, a later launch's on the same session, or, in a subagent's `thread`, the brief the run's own model wrote it |
-| `note` | A note a person sent the run while it worked, as its harness handed it to the model: the engine's heading naming who sent it, then their words. Found by that heading, which starts its line or follows only the harness's framing (so a tool's quoted words never head one), wherever the harness filed it (OpenCode as a person's message, Claude Code as a hook's context in a record of its own); and the line the run's own hook printed as it handed notes over (the live output's `[steer]` line), saying whose reached the run |
-| `late_call` | A call of this work that finished after the run that made it had stopped waiting for it (its harness gave up, or the run was cut off or replaced), as the engine handed it to the run: the engine's heading, its words, the call's outcome and the call. Found by its heading, as a note is; and the line the run's hook printed as it handed over such calls and no note |
+| `brief` | What the run was handed: the engine's brief, a later launch's on the same session, or — in a subagent's `thread` — the brief the run's own model wrote it |
+| `note` | A note a person sent the run while it worked, as its harness handed it to the model: the engine's heading naming who sent it, then their words. Read wherever the harness filed it — OpenCode as a person's message, Claude Code as a hook's context in a record of its own — by the heading every note opens with, which starts its line or follows only the harness's framing, so a tool's words quoted on a line never head one; and the line the run's own hook printed as it handed notes over, late calls beside them or not (the live output's `[steer]` line), saying whose reached the run |
+| `late_call` | A call of this work that finished after the run that made it had stopped waiting for it (its harness gave up on it, or the run was cut off or replaced), as the engine handed it to the run while it worked: the engine's heading, its words, the call's outcome and the call. Read as a note is, by the heading the engine opens it with; and the line the run's own hook printed as it handed over such calls and no note |
+| `wake` | A message somebody wrote about this work while the run worked, as the engine handed it to the run: the engine's heading naming its writer, a line saying where it was written and whether it asks for an answer, then the writer's words inside their fence, where a heading counts for nothing. Read as a note is, by the heading the engine opens it with; and the line the run's own hook printed as it handed over such messages and no note |
 | `model` | What the model wrote |
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read (a line that is no record, a record or message of no known shape or kind, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, a record past the lines and elements one read reads (`bounds.read_lines`)), said where it was, so a gap never reads as continuity |
+| `unread` | A part of the record the read could not read — a line that is no record, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result written out of order past the value bound, a record past the lines and elements one read reads (`bounds.read_lines`) — said where it was, so a gap never reads as continuity |
 
-Not entries: the harness's bookkeeping (a session's title, a snapshot of edited
-files, its system notices), the model's thinking, a tool result Claude Code
-spilled to a file, and the messages OpenCode writes for itself (its notices in
-the person's turn: a background job's ending, a reminder, a loaded instruction
-file; an update of the run's instructions; a skill or shell command a person ran
-in the session; the end of an execution; a switch of the session's agent, model
-or directory; a compaction that handed the model no summary). `at` is when the
-harness recorded the entry, absent where its record says no time or one outside
-the years 0 to 9999 (a box's own agent can write any instant into what its run
-packs).
+The harness's bookkeeping (a session's title, a snapshot of the files it
+edited, its system notices), the model's thinking and a tool result Claude Code
+spilled to a file are no entry. Nor are the messages OpenCode writes for itself:
+its notices in the person's turn (a background job's ending, a reminder, an
+instruction file it loaded), an update of the run's instructions, a skill or a
+shell command a person ran in the session, the end of an execution, a switch of
+the session's agent, model or directory, and a compaction that handed the model
+no summary. `at` is when the harness recorded the entry,
+absent where its record says no time, or one outside the years 0 to 9999 —
+all RFC 3339 can spell, and a box's own agent can write any instant into what
+its run packs.
 
-**Redacted at this read, whatever the capture did.** Every entry's text goes
-through the engine's one redaction pass (`redact.Secrets`) **before it is cut**,
-and is always **an opening of what its whole text redacts to**. What can reach
-the entry's bound, plus the longest a credential can run past it (a private key's
-block), is redacted inside as much again, so a credential beginning inside the
-bound is recognised whole (a key cut in half by a bound would not be). A
-credential running across the end of what can reach the bound is not handed out
-at all: the entry is cut where it begins. The rest of a long text is not scanned
-only to be dropped.
+**Redacted at this read, whatever the capture did.** Every entry's text is
+passed through the engine's one redaction pass (`redact.Secrets`) **before it is
+cut**, and is always **an opening of what its whole text redacts to**.
+Everything that can reach the entry's bound, and the longest a credential the
+redaction knows can run past it (a private key's block), is redacted inside as
+much again, so a credential that begins inside the bound is recognised whole —
+a key cut in half by a bound is one the redaction no longer recognises — and
+nothing the read could not settle is handed out, however much the redaction
+shrinks what comes before it (a key's block becomes one short marker): a
+credential that runs across the end of what can reach the bound is not handed
+out at all, and the entry is cut where it begins. The rest of a long text is not
+scanned only to be dropped.
 
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
-`bounds.entry_bytes` (16 KiB), cut on a character and marked `cut: true`. An
-entry's `bytes` is the size of what its whole text redacts to, **never the size
-as recorded**, which beside a text shown whole says how long each value its
-redaction took out was. A value in a record line (a text, a name, a call's input)
-is held to 2 MiB and past it streamed through the redaction into its entry. One
-read frames at most `bounds.read_lines` (2^20) lines of the record and the blocks
-and parts in them, and takes at most `bounds.read_bytes` (256 MiB) of the archive
-as it inflates and, apart, as many bytes as a tar's members hand out (a sparse
-member can make up bytes the archive does not hold). `cut` is why the page ends
-before the transcript does:
+`bounds.entry_bytes` (16 KiB), cut on a character and marked, with
+`cut: true`. Every entry's text is redacted whole before it is cut, and its
+`bytes` is always the size of what its whole text redacts to, the text it would
+show whole. **Never the size as recorded**, which beside a text shown whole
+says how long each value its redaction took out was. A line of the
+record is read however long it runs: a value in it (a text, a name, a call's
+input) is held to 2 MiB and past it streamed through the redaction into its
+entry, never held. One read frames at most `bounds.read_lines` (2^20) lines of
+the record and the blocks and parts in them, and takes at most
+`bounds.read_bytes` (256 MiB) of the archive as it inflates — and, apart, at
+most as many bytes as a tar's members hand out, which a sparse member can make
+up without the archive holding them. `cut` is why the page ends before the
+transcript does:
 
 | `cut` | Meaning |
 |---|---|
 | absent | The transcript ends on this page; `next_cursor` is absent |
 | `entries`, `bytes` | The page holds all it may; `next_cursor` is the cursor the rest is read from |
-| `read` | The read stopped where no later page can go further: the archive's bytes run past `bounds.read_bytes`, or the record more lines and elements than `bounds.read_lines`. The entries shown are all that can be |
+| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or the record more lines and elements than `bounds.read_lines`. The entries shown are all that can be |
 
-Every page is read again from the archive's start. **The cursor names the object
-it was read from, and how this build counts a transcript's entries**: a live
-turn's session moves to a newer object with every capture, and a rolling upgrade
-can answer a page on a build that counts otherwise. So a cursor of an object the
-row has since replaced with a newer capture, or of another count, is
-`400 bad_params` (read the transcript again from its start). The refusal says
-why in the row's words: of a turn that has not ended (`in_progress`), that its
-runs have kept its session again since the cursor was handed out; of an ended
-turn, that its session was captured again. A cursor of a row that names no object
-any more is answered as its first page would be, `state: none` with the engine's
-sentence: the seat's session budget released the object, or the turn's end did,
-its newest capture not kept (an ended turn is never captured again).
+Every page is read again from the archive's start, so a page costs what the
+archive does rather than what is behind it. **The cursor names the object it
+was read from, and how this build counts a transcript's entries**: a live
+turn's session moves to a newer object with every capture, and a rolling
+upgrade can answer one page on a build that counts entries otherwise, so a
+cursor of an object the row has since replaced with a newer capture, or of
+another count, is `400 bad_params` — read the transcript again from its start —
+rather than a page continued in another archive, or at an ordinal that names
+another entry. The refusal says why in the row's words: of a turn that has not
+ended (`in_progress`), that its runs have kept its session again since the
+cursor was handed out, which is true whichever capture moved it; of an ended
+turn, that its session was captured again. A cursor of a row that names no
+object any more is answered as
+its first page would be, `state: none` with the engine's sentence: the seat's
+session budget released the object, or the turn's end did, its newest capture
+not kept — each only of a turn that ended — and an ended turn is never captured
+again.
 
 **Two transcripts at a time on each node.** One read holds at most 29 MiB
-measured (heap peaking at about 58 MiB at Go's default `GOGC`) and takes up to
-about 49 seconds for a person (58 for a seat's words) at the worst of what
-harnesses and ordinary tools write: one value of `password:` lines streamed
-through its redaction to `bounds.read_bytes`, beside a second read. So a node
-decodes at most two transcripts at once, 58 MiB live at their worst (about
-116 MiB at their peak), whichever socket question or REST request asks. A
-request past them waits for a slot, its session's object not yet opened, for as
-long as its caller waits; a slot frees within one such read, so an answer comes
-within 110 seconds (that read with a tenth to spare, and one slot's wait), which
-the dashboard waits. Nothing in the answer says it waited, and a caller that
-gives up first is answered nothing. A value written at a far greater density (a
-password's value every few bytes the whole budget long) takes 98 seconds or more
-and fails closed past that wait: a socket question's `wait_ms` ends its read,
-answered nothing, and the dashboard says the transcript could not be read in
-time. A seat reading its own sessions waits two minutes, so its read of such a
-session, or one queued behind other reads at their bounds, is answered
-unavailable.
+measured (its heap peaking at about 58 MiB at Go's default `GOGC`), and of what
+harnesses and ordinary tools write takes up to about 49 seconds for a person (58
+for a seat's words): one value of `password:` lines streamed through its
+redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
+most two transcripts at once, 58 MiB live at their worst (about 116 MiB at their
+peak), whichever socket
+question or REST request asks for them. A request past them waits for a slot,
+its session's object not yet opened, for as long as its caller waits, and a
+slot frees within one such read, so an answer comes within 110 seconds (that
+read with a tenth to spare, and one slot's wait), which the dashboard waits;
+nothing in the answer says it waited, and a caller that gives up first is
+answered nothing. A value none writes at that density, a password's value every
+few bytes the whole budget long, takes 98 seconds or more and fails closed once
+it runs past that wait: a socket question's `wait_ms` ends its read, answered
+nothing, and the
+dashboard says the transcript could not be read in time. A seat reading its own
+sessions waits two minutes, so its read of such a session, or one queued behind
+other reads at their bounds, is answered unavailable.
 
-**An object that cannot be read is an answer, never a 500.** The row is still the
-turn's account of how it ended, so `state` says why no entries are shown and
-`why` says it in the engine's own words, never in anything the archive held:
+**An object that cannot be read is an answer, never a 500.** The row is still
+the turn's account of how it ended, so `state` says why no entries are shown
+and `why` says it in the engine's own words — never in anything the archive
+held:
 
 | `state` | Meaning |
 |---|---|
 | `read` | The entries are the transcript's |
-| `none` | The row names no object: its turn captured nothing (yet, while it runs), its newest capture was not kept, a run ran out of context in its session (which retired it), or the seat's budget released it |
+| `none` | The row names no object: its turn captured nothing (yet, while it runs), its newest capture was not kept, a run ran out of context in its session, which retired it, or the seat's budget released it |
 | `missing` | The object store no longer holds the object, which the turn's row, read again, still names |
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
-| `malformed` | It opened, and is not an archive of its harness's format; `why` says which of six ways: not gzip-compressed, corrupt compressed bytes, ends part way through, holds no tar of its harness's files, holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
+| `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
 | `unsupported` | It is of a harness or an archive format this build does not read |
 
-A store that did not answer is `503 unavailable` with a `Retry-After`. A turn the
-seat keeps no row of is `404 not_found`, saying how a row goes: its turn recorded
-none, or its row went with the end of a later turn of its conversation that was
-handed it, past the retention, or with the seat. Absent on a node with no
-object store, where the rows are still listed.
+A store that did not answer is `503 unavailable` with a `Retry-After`, and a
+turn the seat keeps no row of is `404 not_found`, saying how a row goes: its
+turn recorded none, or its row went with the end of a later turn of its
+conversation that was handed it, past the retention, or with the seat. Absent
+on a node with no object store, where the rows are still listed.
 
-**A session released while it is read is said as released.** Reading holds
-nothing, so between the read of the row and the end of its object's stream a later
-turn's end can absorb the session, the seat's budget release it, the end of a turn
-that ran out of context in it retire it, the retention delete it, or its turn
-capture it again, and the collector take the object once no row names it. A
-collected object reads as `missing`; one taken while it streams has bytes that do
-not open. So a read whose object fails, as it opens or streams, reads the turn's
-row once more, at `linearizable` whatever the request asked, and answers what the
-row says now:
-- no row: `404 not_found`, saying its row went while it was read and nothing more
-  of it can be read;
-- a row naming no object: `state: none` with its reason and the same;
-- a row naming a newer capture: read from that capture on a first page; a later
-  page's cursor is refused as one captured again (`400 bad_params`).
-
-`read_level`, `position` and `session` are then that read's. Only where the row
-still names the object is the failure the store's or the archive's own
-(`missing`, `unreadable`, or `503 unavailable`), and the row is read again once,
-a newer capture that fails too said as it fails. A row that cannot be read again
-leaves the failure unknown, a release as much as a loss: `503 unavailable`. A
-later page whose row went, or names no object, before it is read is answered the
-same way; pages already read stand.
+**A session released while it is read is said as released.** Reading a
+session holds nothing, so between the read of its row and the end of its
+object's stream a later turn's end can absorb it, the seat's budget release it,
+the end of a turn that ran out of context in it retire it, the retention delete
+it or its turn capture it again — and the collector take the object once no row
+names it. Read alone, a collected object is `missing`,
+and one taken while it streams one whose bytes do not open, so a read whose
+object fails, as it opens or as it streams, reads the turn's row once more, at
+`linearizable` whatever the request asked, and answers what the row says now:
+no row is `404 not_found`, saying its row went while it was read and that
+nothing more of it can be read; a row naming no object is `state: none` with
+its reason and the same; and a row naming a newer capture is read from that
+capture on a first page, and refuses a later page's cursor as one captured
+again (`400 bad_params`). `read_level`, `position` and `session` are then that
+read's. Only where the row still names the object is the failure the store's or
+the archive's own — `missing`, `unreadable`, or `503 unavailable` — and the row
+is read again once, a newer capture that fails too said as it fails. A row that
+cannot be read again leaves the failure unknown, a release as much as a loss,
+and is `503 unavailable`. A later page whose row went, or names no object,
+before it is read is answered the same way; the pages already read stand as
+they were.
 
 ---
 
@@ -8844,13 +8917,33 @@ All of it is the header the feed kept the entry under, read without the entry's 
 
 ### `GET /executors`
 
-Every seat's [executor run](../concepts/code-sandbox.md) the engine still holds, oldest first: `launching`, `running`, `awaiting_clarification`, `reseed`, `answered` and `resumed` run records. An `answered` run has a person's reply recorded as its answer (or, where `answer_refused` is set, a reply too large to take, recorded as the question's refusal with none of its words) and is owed the resume that record drives. It no longer waits on anybody, so `audience=` lists only runs still waiting (`awaiting_clarification` or `reseed`).
+Every seat's [executor run](../concepts/code-sandbox.md) the engine still
+holds, oldest first — `launching`, `running`, `awaiting_clarification`,
+`reseed`, `answered` and `resumed` run records. An `answered` run has a
+person's reply recorded as the answer to its question — or, where
+`answer_refused` is set, a reply too large to take recorded as the question's
+refusal, with none of its words — and is owed the resume that record drives; it is no longer waiting on anybody, so `audience=` — what
+is waiting on one person — lists only runs still waiting (`awaiting_clarification`
+or `reseed`).
 
-A settled run (finished, lost or stopped by a person) is not listed: its record is deleted once its box is reclaimed. How it ended is on the event stream: the resumed turn's events, an `executor_failed` event naming the reason, or an `executor_stopped` event naming who stopped it.
+A run that has settled, whether its turn finished, it was lost or a person
+stopped it, is not listed because it has no record: its record is deleted once
+its box is reclaimed. How it ended is on the event stream, in the resumed
+turn's own events, an `executor_failed` event naming the reason, or a
+`executor_stopped` event naming who stopped it.
 
-A `launching` executor's launch has started while its turn is still unwinding, so the parked turn state is not on the row yet. It is listed but never polled, because a row nobody lists is a box nobody reclaims.
+A `launching` executor is one whose launch has started while the turn that
+started it is still unwinding, so the parked turn state its collection reads
+is not on the row yet; it is listed but never polled, because a row nobody
+lists is a box nobody reclaims.
 
-This query reads the durable row directly. The live projection's panel is reconciled against the same record every 30 seconds but carries only what a running-runs panel draws; this board needs the row's own facts (branch, placement, pause TTL, whether a box exists, the bridge's call log) and lists `resumed` runs, which the panel drops. A `reseed` run (pause expired, box reclaimed, work preserved on a pushed branch) is listed on both.
+This query reads the durable row directly. The live projection's panel is
+reconciled against the same record every 30 seconds, but it carries only what
+a running-runs panel draws. This board needs the row's own facts: the branch,
+the placement, the pause TTL, whether a box still exists, and the bridge's
+call log. It also lists `resumed` runs, which the panel drops because their
+turn has already taken back the result. A `reseed` run (pause expired, box
+reclaimed, work preserved on a pushed branch) is listed on both.
 
 ```json
 {
@@ -8886,58 +8979,218 @@ This query reads the durable row directly. The live projection's panel is reconc
 }
 ```
 
-`question` is what a parked run asked, in one sentence; `question_context` is its Markdown context, empty when none; `decision` is the choice it asks for, shaped like a [work item's decision](../guides/worklet.md#asking-for-a-decision) (never with `inform`), or `null` for an open question answered in words. All three are the run's body, sent to the people the question is put to, and answered with [`answer_executor`](#answering-a-parked-executor) (`choice` names one of `decision.options`).
+`question` is what a parked run asked, in one sentence; `question_context` is
+its context in Markdown, empty when it gave none; and `decision` is the choice
+it asks for, in the shape a [work item's decision](../guides/worklet.md#asking-for-a-decision)
+has (never with `inform`), or `null` for an open question answered in words.
+All three are the run's body, sent to the people its question is put to as the
+question always was, and answered with [`answer_executor`](#answering-a-parked-executor)
+(`choice` names one of `decision.options`).
 
-A run whose question is a call held for approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs)) also carries `held_call`, `{id, server, tool, raw, digest, held_at}`, sent with the question, and `held_arguments`, what the call would send, opened from its seal under this node's fleet keyring (`null` where it does not open here) and sent only to whom the run's body goes (an administrator and the seat's lead, who may approve it). Both are absent on any other run. Its `decision` offers `once`, `always` and `deny`, and it is answered only with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid): `answer_executor` refuses it.
+A run whose question is a call held for approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+also carries `held_call`, `{id, server, tool, raw, digest, held_at}`, sent with
+the question to the people it is put to, and `held_arguments`, what the call
+would send, opened from its seal under this node's fleet keyring (`null` where
+it does not open here), sent only to whom the run's body goes (an
+administrator and the seat's lead, who are who may approve it). Both are
+absent on any other run. Its `decision` offers `once`, `always` and `deny`,
+and it is answered only with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid):
+`answer_executor` refuses it.
 
-`declined_answers` names the answers the question let go of, by the id of the delivery each arrived in (`answer_executor`'s `answer_id`). A declined answer was not used: the run could not be resumed with it and waits on its question again, so the person is asked to answer again.
+`declined_answers` names the answers the run's question let go of, by the id
+of the delivery each arrived in, which `answer_executor` answers as `answer_id`. An
+answer named there was not used: the run could not be resumed with it and
+waits on its question again, so the person who gave it is asked to answer
+again rather than left looking at a question that never moves.
 
-`answer_ids`, `answered_by` and `answered_at` name the recorded answer: its deliveries, who gave it (as its seal opens on this node) and when, never what it said. `answer_refused` is set where the record is a **refusal** ([ADR-0114](../../adr/0114-a-reply-too-large-for-its-run-is-its-questions-refusal.md)): a conversation reply too large for the run to take, which closed the question with none of it reaching the run. The run is owed a resume telling it the reply did not reach it, so it asks again or carries on. A refusal let go of before any turn told the run (every resume attempt failed, or its seal does not open) leaves the run waiting again, with `answer_refused` null and the reply's id among `declined_answers`. It carries `{messages, bytes, max_bytes}` (the reply's message count, its size as the run's record would hold it, and what an answer may be), never the reply's words, and is `null` on every other row.
+`answer_ids`, `answered_by` and `answered_at` name the answer recorded on the
+run, by the deliveries it arrived in, who gave it (as its seal opens on this
+node) and when — never what it said. `answer_refused` is set where that record
+is a **refusal** ([ADR-0114](../../adr/0114-a-reply-too-large-for-its-run-is-its-questions-refusal.md)):
+a reply in the conversation too large for the run to take as its answer, which
+closed the question with none of it reaching the run: the run is owed a resume
+that tells it the reply did not reach it, so it asks again or carries on. A
+refusal let go of before any turn told the run (every attempt at that resume
+failed, or its seal does not open) leaves the run waiting on its question
+again, with `answer_refused` null and the reply's id among
+`declined_answers`. It carries `{messages, bytes, max_bytes}` — how many
+messages the reply was, what it came to as the run's record would hold it, and
+what an answer may — and never the reply's words, which no record of the run
+keeps; it is `null` on every other row.
 
-`launch_id` names the job the row holds now. A turn can launch more than one (a reviewer sending work back, or a person's answer carrying a parked run on, relaunches the executor under the same row), and `executor_tail` is asked by it, so a run's page polls the job it shows. `provider_key` and `model` name the member of the seat's executor chain the job launched on (a fallback at launch makes it other than the head). `provider_key` is company configuration and goes to an admin alone; every other reader, a seat's lead included, gets the model only.
+`launch_id` names the job the row holds now. A turn can launch more than
+one — a reviewer that sends the work back, or a person's answer carrying a
+parked run on, relaunches the executor under the same row — and
+`executor_tail` is asked by it, so a run's page polls the live
+output of the job it shows rather than of whichever replaced it.
+`provider_key` and `model` name the member of the seat's executor chain the
+job was launched on, which a fallback at launch makes other than the chain's
+head. `provider_key` is the company's configuration and is sent to an admin
+alone; every other reader, a seat's lead included, is told the model the job
+runs under and not the entry. `bridge_calls` is always an array on a row the
+store answered — every run's tools reach it over the bridge, so an empty one is
+a run that has called nothing yet — and absent only where the run's body is
+withheld from the reader. A call a person approved once the run asked for it
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+is among them, marked `approved: true`, with no `args` and no `output`: the
+run's resume made it with the arguments the run held sealed, and handed its
+result to the job that carries the work on sealed too. The call the run held
+for that approval comes before it, marked `held: true`, with no `args`, which
+ride the run's row sealed beside its question, and with `failed: true`, since
+nothing it asked for happened: it is the run's question, not a failure, and
+the executors board draws it so.
 
-`bridge_calls` is always an array on a row the store answered (an empty one is a run that has called nothing yet), and absent only where the run's body is withheld from the reader.
-
-- A call a person approved once the run asked ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs)) is marked `approved: true`, with no `args` and no `output`: the resume made it with the arguments the run held sealed and handed the result on sealed.
-- The call held for that approval comes before it, marked `held: true`, with no `args` (sealed beside the question) and `failed: true`, since nothing it asked for happened. It is the run's question, not a failure, and the board draws it so.
-
-A call's `args` and `output` are what the run's log keeps, held to the call's share of the log ([what a run's record and its log keep](../concepts/code-sandbox.md#what-a-runs-record-and-its-log-keep)). Past it, the arguments keep their shape with their largest values replaced by a string marker such as `(1.0 MiB not kept on the run's record, digest
+A call's `args` and `output` are what the run's log keeps of them, which is
+held to the call's share of the log ([what a run's record and its log
+keep](../concepts/code-sandbox.md#what-a-runs-record-and-its-log-keep)): past it, the
+arguments keep their shape with their largest values left out, each replaced
+by a string marker such as `(1.0 MiB not kept on the run's record, digest
 1a2b3c4d)`, and the output keeps its opening followed by `…` and how much more
-was not kept. `args_bytes` and `output_bytes` are set only on such a call, to the size in bytes of the whole arguments and output: decide "partly kept" by them, never by reading a marker.
+was not kept. `args_bytes` and `output_bytes` are set only on such a call, to
+the size in bytes of the whole arguments and the whole output, and absent where
+the log keeps the call whole: decide "partly kept" by them, never by
+reading a marker. `digest` is the call's identity, the SHA-256 of its whole
+arguments as the run counts its calls, absent on a call no tool admitted (one
+refused after the run's tools closed, or whose arguments did not parse) and on
+a `held` or `approved` call, whose arguments ride the record sealed and are
+never digested in the clear. `args_unparsed: true` marks a call whose
+arguments did not parse: the bridge answered it unrun, with `failed: true`,
+holding no object of what the model wrote, so it has no `args`, as a call made
+with none has none. It is a call made with arguments that are not known, and
+the executors board says so rather than drawing it as one made with none;
+absent on every other call and on a call an older engine recorded. `call_id` is the id the run's harness gave the
+call, as its box sent it: Claude Code's `tool_use` id, the id its own session
+names the call by: a relaunch that continues a cut-off Claude Code session asks
+a reading of its archive which calls it holds by this id, and tells the session
+only the rest. It is absent where the harness sent none (OpenCode), on an
+`approved` call, on a skill load a harness's hook reported, on a call an older
+engine recorded, and where the id was longer than 64 bytes or held anything but
+letters, digits, `-` and `_`, which is never cut. It is the box's word, not the
+call's identity: two calls may carry one, and neither is then asked about. `appended` is the call's place, from
+1, in the order the round's log took its calls, which is not the order the run
+made them in when it made several at once: a continued session is told every call
+appended after its save, but, of a session cut off, those a reading of its
+archive finds it holding ([A relaunch continues the turn's
+session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
+It is absent on a call an older engine appended. `late: true` marks a call the
+round's log took only after the job that made it was replaced by a relaunch
+that carried the round on — one still running as the relaunch was readied,
+which no brief of the round told: the job working on the round is handed it as
+an item, and a continued session is told it whatever its save point but where
+its session took it as that item; it is never the round's submission, and what
+it cost is charged to no job. The call a person approved is never marked. `abandoned: true` marks a
+call nobody waited for by the time it returned — its harness had given up on
+it and cancelled the request, or the job's session on the bridge ended while it
+ran and answered it as still running: it ran and its effect happened, while the
+session that made it holds it with no outcome, as timed out or as still
+running, so its job is handed it as an item while it works, and a continued
+session is told it whatever its save point but where its session took it as
+that item. Both are absent on every other call.
+`bridge_calls_elided` counts the calls of the round the log does not list —
+dropped from the middle of a long run's log; a call whose own append reached
+the log only with a later one is listed, once, as the call it is — and
+`bridge_elided_calls` says what
+they were: one entry per tool and argument digest, `{name, digest, calls,
+failed}`, sent to whom the run's body is sent and always an array beside
+`bridge_calls`. An entry with no `digest` counts calls to its tool whose
+arguments' identity was not kept, and one with no `name` calls whose tool was
+not kept either — which is also how calls an older engine dropped, keeping a
+count and no entries, are served. `bridge_calls_told` names the `late` and
+`abandoned` calls of the log that the job working as each landed took into its
+own session, one `{appended, launch}` each: the call's `appended` place and the
+job whose session took it, never a word of the call. A continuation of that
+session is not told such a call again; the executors board tags it "told to its
+run while it worked". It lists only calls of the log's own round, is sent to
+every reader beside `launch_id`, and is always an array, empty for a reader the
+run's body is withheld from, who is sent no calls to name.
 
-Other per-call fields, each absent where not stated as set:
+`box_exists` and `paused_at` stand in for the sandbox id: a board wants to
+know that a box exists and that it is currently paused (and being billed
+for as a snapshot), not which box it is. `paused_at` is the answer the
+[pause reaper](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)
+acts on rather than the raw stamp, so a run parked on a question whose pause
+instant never reached its row still reads as held: that box is being paid for,
+and a board drawing the stamp alone showed it as a live one. Both read as no
+box, and `paused_at` empty, once the run's ending is decided to reclaim it.
 
-- `digest`: the SHA-256 of the whole arguments as the run counts its calls. Absent on a call no tool admitted (refused after the run's tools closed, or unparsed arguments) and on a `held` or `approved` call, whose arguments ride the record sealed.
-- `args_unparsed: true`: the arguments did not parse, so the bridge answered the call unrun with `failed: true`, and it has no `args`. The board says so rather than drawing a call made with none. Absent on a call an older engine recorded.
-- `call_id`: the id the harness gave the call (Claude Code's `tool_use` id). A relaunch continuing a cut-off Claude Code session asks a reading of its archive which calls it holds by this id, and tells the session only the rest. Absent where the harness sent none (OpenCode), on an `approved` call, on a skill load a harness's hook reported, on a call an older engine recorded, and where the id was over 64 bytes or held anything but letters, digits, `-` and `_` (never cut). It is the box's word, not the call's identity: two calls may carry one, and neither is then asked about.
-- `appended`: the call's place, from 1, in the order the round's log took its calls (not the order the run made them in when it made several at once). A continued session is told every call appended after its save but, of a session cut off, only those its archive holds ([A relaunch continues the turn's session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)). Absent on a call an older engine appended.
-- `late: true`: the round's log took the call only after the job that made it was replaced by a relaunch that carried the round on. The job working on the round is handed it as an item, and a continued session is told it whatever its save point unless its session took it as that item. It is never the round's submission, and its cost is charged to no job. A call a person approved is never marked.
-- `abandoned: true`: nobody waited for the call by the time it returned (its harness gave up and cancelled, or the job's bridge session ended while it ran and answered it as still running). It ran and its effect happened, while the session holds it with no outcome, so its job is handed it as an item, and a continued session is told it whatever its save point unless its session took it as that item.
+`ending` is `null` on a run nobody has ended, and `{at, reason, stopped_by}`
+on one whose ending is decided and not yet finished: when it was decided, the
+reason it announces (empty for a run whose turn came back, which announces
+nothing; `executor_failed` carries why a lost run was lost) and who stopped
+it, for a person's stop. Such a run is over, and its `status` is the one it
+was ended in: its record waits only for the ending's last steps, which on an
+engine that records every turn's end include [recording that
+end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
+turn's captures have settled, and can take minutes, and up to about four
+hours and thirty-seven and a half minutes from the moment the end first sees a read standing
+by for one of them, where a store answers each change of a run's record at
+the slowest pace a link is allowed. The seat's next work
+waits behind it. `answerable_in_chat` is `false`
+for a run whose turn was triggered by something other than an inbound
+message — a schedule's fire, a task assignment, an A2A wake — because the
+resume path matches an inbound message's conversation identity against
+the one the run was parked with. A task assignment's and an A2A wake's runs
+stored **no conversation at all**: their trigger names neither key, so neither
+is stamped and neither reaches the row. A fire's run stored its schedule's
+conversation (`schedule/…`), which every fire of the schedule carries and no
+inbound message does, so no delivery on it is offered to a parked run: the
+schedule's next fire is never taken for the answer to its last fire's
+question. Telling somebody to "reply in the thread" would send them to a
+thread that does not exist. Such a run is still answerable:
+[`answer_executor`](#answering-a-parked-executor) names it by its `turn_id` instead.
 
-`bridge_calls_elided` counts the round's calls the log does not list (dropped from the middle of a long run's log; a call whose append reached the log only with a later one is listed, once). `bridge_elided_calls` says what they were: one entry per tool and argument digest, `{name, digest, calls, failed}`, sent to whom the run's body is sent and always an array beside `bridge_calls`. An entry with no `digest` counts calls whose arguments' identity was not kept; one with no `name` also lost the tool, which is how calls an older engine dropped (a count, no entries) are served. `bridge_calls_told` names the `late` and `abandoned` calls the job working as each landed took into its own session, one `{appended, launch}` each: the call's `appended` place and the job whose session took it, never a word of the call. A continuation is not told such a call again; the board tags it "told to its run while it worked". It lists only calls of the log's own round, goes to every reader beside `launch_id`, and is always an array, empty for a reader the run's body is withheld from.
+`audience` is the harness's own label for who should answer —
+`requester`, `manager`, `team`, or a name it typed. `audience_handles` is
+that label resolved against the org chart **when the run parked**: the seat
+whose message or ask woke the turn, the seat's manager, its unit's lead and the
+people in that unit, or the one colleague an exact match names.
+`audience_fallback` is `true` when the label named nobody the chart has and the
+question was put to the seat's lead chain instead (its managers, or the leads
+of the units above it). Both are empty on a run that is not parked. See
+[who is asked](../concepts/code-sandbox.md#who-a-question-is-put-to).
 
-`box_exists` and `paused_at` stand in for the sandbox id: a board wants to know that a box exists and is paused (billed as a snapshot), not which. `paused_at` is the answer the [pause reaper](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait) acts on rather than the raw stamp, so a run parked on a question whose pause instant never reached its row still reads as held. Both read as no box, `paused_at` empty, once the run's ending is decided to reclaim it.
+Every row also says where the run stands for **the caller**, so no screen
+decides it for itself: `put_to` is who it waits on now, by handle (its
+delegates while a delegated call waits on them, else `audience_handles`);
+`put_to_you` is whether it is put to the caller's own record; `may_answer` is
+whether the caller may answer it, decided by the authority the answer itself
+is (`release.approve`, `ssh.operate.approve` or `tools.approve` for a held
+call, `answer_executor` for a question), at the read's proof, so a lapsed
+step-up still shows what the caller may answer; and `needs_you` is whether it
+waits on them: put to them, or theirs to answer and escalated by its delegates
+or past their 15-minute deadline. All four are empty or `false` on a run that
+waits on nobody.
 
-`ending` is `null` on a run nobody has ended, and `{at, reason, stopped_by}` on one whose ending is decided and not finished: when it was decided, the reason it announces (empty for a run whose turn came back; `executor_failed` carries why a lost run was lost) and who stopped it, for a person's stop. Such a run is over and its `status` is the one it was ended in; its record waits only for the ending's last steps. On an engine that records every turn's end these include [recording that end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the turn's captures have settled, which can take minutes, and up to about four hours and seventeen minutes from the moment the end first sees a read standing by for one of them, where a store answers each change of a run's record at the slowest pace a link is allowed. The seat's next work waits behind it.
+`?audience=<name>` narrows the board to the runs whose question is put to
+one person and still waits for them (a run parked on it, its ending not
+decided), the name resolved as [a personal
+question's](#whose-record-a-personal-question-answers-for) is: absent or either
+of your own names is your own record, somebody's **login** is the seat the
+identity directory binds them to — never read as a seat's handle, and asked of
+the directory only once the caller may look — and any other name is the seat
+it addresses, matched on its handle. A login that holds no seat
+is put nothing, and answers an empty board. It is a filter over the board and
+not a personal read, so it has no scope rule beyond that: the unfiltered board
+already names every run's audience. A run whose question resolved to nobody —
+the label named no one the chart has and the seat has no lead chain, or the
+node held no company when it parked — matches no one.
 
-`answerable_in_chat` is `false` for a run whose turn was triggered by something other than an inbound message (a schedule's fire, a task assignment, an A2A wake), because the resume path matches an inbound message's conversation identity against the one the run was parked with. A task assignment's and an A2A wake's runs stored **no conversation at all**. A fire's run stored its schedule's conversation (`schedule/…`), which every fire carries and no inbound message does, so no delivery on it is offered to a parked run: the next fire is never taken for the answer to the last fire's question. Such a run is still answerable: [`answer_executor`](#answering-a-parked-executor) names it by its `turn_id`, so nobody is told to "reply in the thread" of a thread that does not exist.
+The parked turn's frozen state — the context the run's turn re-enters with,
+kept on the run's record — is deliberately not returned: it is the largest
+thing the record holds, and every prompt in it is already reachable through
+the event store. `bridge_calls` is not on the record at all: it comes from the
+run's bridged tool log, kept beside the record under a key of its own, and is
+read only for a reader shown the run's body — one read of the log from the
+coordination store's leader for each run that reader is shown, a run with no
+calls included, and none for a run whose body is withheld.
 
-`audience` is the harness's own label for who should answer: `requester`, `manager`, `team`, or a name it typed. `audience_handles` is that label resolved against the org chart **when the run parked**: the seat whose message or ask woke the turn, the seat's manager, its unit's lead and the people in that unit, or the one colleague an exact match names. `audience_fallback` is `true` when the label named nobody the chart has and the question went to the seat's lead chain instead (its managers, or the leads of the units above it). Both are empty on a run that is not parked. See [who is asked](../concepts/code-sandbox.md#who-a-question-is-put-to).
-
-Every row also says where the run stands for **the caller**:
-
-- `put_to`: who it waits on now, by handle (its delegates while a delegated call waits on them, else `audience_handles`).
-- `put_to_you`: whether it is put to the caller's own record.
-- `may_answer`: whether the caller may answer it, by the authority the answer itself is (`release.approve`, `ssh.operate.approve` or `tools.approve` for a held call, `answer_executor` for a question), at the read's proof, so a lapsed step-up still shows what the caller may answer.
-- `needs_you`: whether it waits on them: put to them, or theirs to answer and escalated by its delegates or past their 15-minute deadline.
-
-All four are empty or `false` on a run that waits on nobody.
-
-`?audience=<name>` narrows the board to the runs whose question is put to one person and still waits for them (a run parked on it, its ending not decided). The name resolves as [a personal question's](#whose-record-a-personal-question-answers-for) does: absent or either of your own names is your own record; somebody's **login** is the seat the identity directory binds them to (never read as a seat's handle, asked of the directory only once the caller may look); any other name is the seat it addresses, matched on its handle. A login that holds no seat is put nothing and answers an empty board. It is a filter, not a personal read, so it has no further scope rule: the unfiltered board already names every run's audience. A run whose question resolved to nobody (the label named no one the chart has and the seat has no lead chain, or the node held no company when it parked) matches no one.
-
-The parked turn's frozen state is deliberately not returned: it is the largest thing the record holds, and its prompts are reachable through the event store. `bridge_calls` is not on the record: it comes from the run's bridged tool log, kept beside it under its own key, and is read only for a reader shown the run's body, one read from the coordination store's leader per run shown (a run with no calls included), none for a run whose body is withheld.
-
-The run record lives in the coordination store every node opens, so every node answers with the fleet's runs. A company with no sandbox configured does not register the question, so the route answers `404` with `unknown_query` rather than an empty board. A record, or a run's `bridge_calls`, that could not be read answers `503` with a `Retry-After`, because "no run is parked" and "a run did nothing" are claims a store blip is not evidence for.
+The run record lives in the fleet's coordination store, which every node
+opens, so every node answers with the fleet's runs. A company with no sandbox
+configured does not register the question at all, so the route answers `404`
+with `unknown_query` rather than an empty board; a record, or a run's
+`bridge_calls`, that could not be read answers `503` with a `Retry-After`,
+because "no run is parked" is a claim — and a run drawn with no calls one
+that it did nothing — and a store blip is not evidence for either.
 
 ### `GET /budgets`
 

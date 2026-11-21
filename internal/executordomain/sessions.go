@@ -312,46 +312,6 @@ func (s *SessionStore) Open(ctx context.Context, session Session) (io.ReadCloser
 	return &openSession{session: session, plain: plain, body: body}, nil
 }
 
-// Fetch copies the sealed object a row names into dst as stored, checked
-// against the row by the object store, and answers once all of it is in dst:
-// a restore spools a session SEALED, as a capture does before its upload
-// ([SessionStore.Seal]), then opens it ([SessionStore.OpenSpooled]).
-//
-// TWO HALVES so a restore learns a session is unreadable BEFORE it writes a
-// byte into a box: streaming [SessionStore.Open]'s provisional output would
-// find a cut or forged object mid-write, the run's brief already chosen for a
-// session that never arrives. Its errors are Open's: [ErrUnreadable], or a
-// store that did not answer, for the caller to retry.
-func (s *SessionStore) Fetch(ctx context.Context, session Session, dst io.Writer) error {
-	if !session.HasObject() {
-		return fmt.Errorf("%w: %s's turn %s names no session", ErrUnreadable,
-			session.Handle, session.Turn)
-	}
-	body, err := s.objects.Open(ctx, session.Object)
-	if err != nil {
-		return unreadable(session, err)
-	}
-	defer func() { _ = body.Close() }()
-	if _, err = io.Copy(dst, body); err != nil {
-		return unreadable(session, err)
-	}
-	return nil
-}
-
-// OpenSpooled opens a copy [SessionStore.Fetch] spooled against the [AAD] of
-// the row it was fetched for, so a spool of another seat's or turn's session,
-// or of an object its row does not name, does not open; every chunk is
-// authenticated before it is handed out. A seal that does not open is
-// [ErrUnreadable], at the call or from the Read that reaches it; the caller
-// owns sealed and closes it.
-func (s *SessionStore) OpenSpooled(session Session, sealed io.Reader) (io.Reader, error) {
-	plain, err := s.sealer.Open(sealed, AAD(session.Handle, session.Turn, session.Object.Key))
-	if err != nil {
-		return nil, unreadable(session, err)
-	}
-	return &openSession{session: session, plain: plain, body: io.NopCloser(sealed)}, nil
-}
-
 // unreadable is a failure to read a session's object, in this package's words
 // where it is one a restorer reads as no session: the object gone, its bytes
 // not the ones stored, or a seal this keyring cannot open. Any other error (a

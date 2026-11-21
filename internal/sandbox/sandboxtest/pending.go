@@ -227,6 +227,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
 	cases = append(cases, lateItemCases...)
+	cases = append(cases, wakeItemCases...)
 	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
@@ -1446,7 +1447,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 		prior := opened.Prior
 		since := prior.Since
 		prior.Since = time.Time{}
-		if prior != want || !since.Equal(attached) {
+		if !reflect.DeepEqual(prior, want) || !since.Equal(attached) {
 			t.Errorf("the relaunch was handed %+v, dated %v, as the box it found, want %+v dated %v",
 				prior, since, want, attached)
 		}

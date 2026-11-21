@@ -127,7 +127,7 @@ func TestASparseMemberHandsOutWhatItsMapSays(t *testing.T) {
 	archive := sparseTar(t, sparseMember(name, 4096, sparseSegment{0, "first\n"}, sparseSegment{4095, "\n"}))
 	var got []byte
 	var names []string
-	if err := eachMember(bytes.NewReader(archive), boundsFor(1<<20), func(h *tar.Header, member io.Reader) error {
+	if err := eachMember(bytes.NewReader(archive), plainBounds(8<<20), func(h *tar.Header, member io.Reader) error {
 		names = append(names, h.Name)
 		var err error
 		got, err = io.ReadAll(member)

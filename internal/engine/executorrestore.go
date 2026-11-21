@@ -71,27 +71,10 @@ func restoreRow(row executordomain.Session, err error) (executorkeep.TurnRow, er
 	return row.Kept(), nil
 }
 
-// Fetch copies the sealed object row names into dst.
-func (r executorRestore) Fetch(ctx context.Context, row executorkeep.TurnRow, dst io.Writer) error {
-	store, err := r.engine.executorSessionStore()
-	if err != nil {
-		return err
-	}
-	return store.Fetch(ctx, storedSession(row), dst)
-}
-
-// OpenSpooled opens a spool Fetch wrote.
-func (r executorRestore) OpenSpooled(row executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
-	store, err := r.engine.executorSessionStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.OpenSpooled(storedSession(row), sealed)
-}
-
 // Open streams the object row names out of the session store, opened against
-// the row as it streams ([executordomain.SessionStore.Open]): what a reading of
-// what the session holds reads, spooling nothing on this node's disk.
+// the row as it streams ([executordomain.SessionStore.Open]): what a restore
+// and a reading of what the session holds read, spooling nothing on this
+// node's disk.
 func (r executorRestore) Open(ctx context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
 	store, err := r.engine.executorSessionStore()
 	if err != nil {
