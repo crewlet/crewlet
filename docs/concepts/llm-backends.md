@@ -97,7 +97,7 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
-`claude-code` and `opencode` only, each listed by its built-in profile's
+`claude-code`, `opencode` and `copilot` only, each listed by its built-in profile's
 `executor` block, which no `overrides` can set. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
@@ -173,7 +173,7 @@ no `Authorization` header; measured on 0.153.4 and 0.164.0). A key kept under
 Codex runs with its shell off and its own `--sandbox read-only`, so its one local
 tool, `apply_patch`, writes nothing — see [Tool calls on
 this host](#tool-calls-on-this-host). It has no harness runner, so a Codex entry
-cannot run an executor: a seat's `llm` points at a `claude-code` or `opencode`
+cannot run an executor: a seat's `llm` points at a `claude-code`, `opencode` or `copilot`
 entry, and Codex serves its reviewer, workers or side passes.
 
 ### Open models, OpenRouter and local servers: OpenCode
@@ -906,7 +906,7 @@ Where the loop runs, what else it may touch and how long it lives are the
 | How it reaches the seat's tools | over HTTP, the [MCP bridge](#the-tool-bridge) | a stdio relay into a unix socket this process serves for the run alone ([below](#the-seats-tools-as-one-mcp-server)); no listener |
 | Who decides each call | the bridge: grant, skill guard, fence, order and the run's end, per call; the rounds are the harness's alone | the phase's tool loop: grant, skill guard, fence, budget, round cap, terminator, a person's note ([every gate](#every-call-passes-the-phases-gates)) |
 | Lifetime | **detached** — outlives the turn, resumes it later | the turn's own: the phase starts a run, ends it when needed, and starts the next |
-| Needs | a sign-in *plus* a harness runner for the harness (`claude-code` or `opencode`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
+| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `opencode` or `copilot`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
 
 **The executor is the vendor's whole harness**: a real shell, editor and
 checkout. **Every other phase is the turn's own**: every call passes the phase's
@@ -918,7 +918,7 @@ So one entry serves both: a seat whose `llm` names a `claude-code` entry runs
 its executor as Claude Code in a box and its reviewer, workers and side passes
 as Claude Code on this host. A harness with no harness runner serves the second
 column alone — a launch passes over it — and a seat whose executor chain holds
-no `claude-code` or `opencode` entry is refused on the write.
+no `claude-code`, `opencode` or `copilot` entry is refused on the write.
 
 ### The executor's run in a box
 
@@ -1094,8 +1094,8 @@ opened by a corrective naming its tool, up to twice (see
 instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
-harness's own on both runners — Claude Code's `--max-turns`, OpenCode's agent
-`steps`.
+harness's own on every runner — Claude Code's `--max-turns`, OpenCode's agent
+`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)).
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -1228,7 +1228,7 @@ run's resume would pay for it as its own. How such a call is listed:
   refused session's), and dropped where the next run starts a new round ([A call
   that ends after its job's
   relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)).
-- One its harness cancelled (Claude Code and OpenCode cancel a call at its
+- One its harness cancelled (Claude Code, OpenCode and Copilot cancel a call at its
   server's timeout, which the box is handed as the bridge's own bound, and the
   model reads it as timed out) or hung up on (which the next progress notification
   finds) is listed as its run's own, marked as one nobody waited for. Its job is
@@ -3175,7 +3175,7 @@ executor      : seats: swe, qa
 
 The **seats** line is which agent seats' executor chains hold this entry, resolved as the launch
 resolves them. The **runner** line is whether this build can drive that harness as a harness: there
-are two runners, `claude-code` and `opencode`, and a member naming any other harness is skipped at
+are three runners, `claude-code`, `opencode` and `copilot`, and a member naming any other harness is skipped at
 launch rather than faulted (it still serves that seat's text calls). The **tool bridge** line is
 where the run's box dials the seat's tools, which turns on the entry's cell: a `direct` box dials
 the node's own listener on loopback where the node binds `api.port`, whatever its roles, and
@@ -3320,7 +3320,7 @@ skips all three and says so on each line.
   `crewlet llm doctor` checks all of it ([Operating it](#operating-it)).
 - **Code work is the executor's run.** A seat's [code sandbox](code-sandbox.md) work is its
   executor's own run, on the entry the launch picks from its `llm` chain, running *that entry's own
-  harness*, so only a `claude-code` or `opencode` entry can do it. On any backend including remote
+  harness*, so only a `claude-code`, `opencode` or `copilot` entry can do it. On any backend including remote
   E2B, what travels into the box is the entry's `env` (a gateway's address, a cloud provider's
   switch, `opencode`'s [provider key](#6-a-provider-key-in-env-opencode-hermes-pi)) and what signs
   the harness in: a headless token (`crewlet llm login <key>
@@ -3332,7 +3332,7 @@ skips all three and says so on each line.
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local` plus `run_in: direct` or
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code` or `opencode`
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `opencode` or `copilot`
   entry; any other harness (Codex, Gemini CLI, Kimi Code, `hermes`, `pi`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
