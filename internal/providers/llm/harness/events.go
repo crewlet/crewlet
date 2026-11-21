@@ -16,16 +16,15 @@ import (
 
 // classifyEvents finds the harness's own structured report of how the run
 // ended: a limit ([harnessprofile.LimitEvent]) or, in a run reported failed, a
-// refused sign-in ([harnessprofile.AuthEvent]). Read before every sentinel,
-// because a status code survives the rewording that retires one.
+// refused sign-in ([harnessprofile.AuthEvent]), read before every sentinel
+// because a status code survives a rewording. Stdout's events come first, then
+// the record's ([harnessprofile.EventsInRecord]), its account of the run's end.
 //
 // THE LAST REPORT WINS: Claude Code retries a 401 in `api_retry` events, so a
 // run refreshed and then spent ended on the plan; read auth first, it set a
-// refused-sign-in verdict on every entry on the account.
-//
-// A refusal counts only in a failed run: one that answered was signed in. Every
-// line is decoded, none searched as text ([classifyFailureEvents]): a model
-// writes inside an event's strings.
+// refused-sign-in verdict on every entry on the account. A refusal counts only
+// in a failed run. Every line is decoded, none searched as text
+// ([classifyFailureEvents]): a model writes inside an event's strings.
 func classifyEvents(p harnessprofile.Profile, out harnessOutput) (markerHit, bool) {
 	if len(p.LimitEvents) == 0 && (len(p.AuthEvents) == 0 || !out.failed) {
 		return markerHit{}, false
@@ -34,31 +33,35 @@ func classifyEvents(p harnessprofile.Profile, out harnessOutput) (markerHit, boo
 		last  markerHit
 		found bool
 	)
-	for line := range strings.SplitSeq(out.stdout, "\n") {
-		line = strings.TrimSpace(line)
-		doc, ok := decodeObject(line)
-		if !ok {
-			continue
-		}
-		if hit, matched := limitEventHit(p, doc, line, out); matched {
-			last, found = hit, true
-			continue
-		}
-		if !out.failed {
-			continue
-		}
-		for _, event := range p.AuthEvents {
-			if !matches(doc, event.Match) {
+	scan := func(text string, in harnessprofile.EventSource) {
+		for line := range strings.SplitSeq(text, "\n") {
+			line = strings.TrimSpace(line)
+			doc, ok := decodeObject(line)
+			if !ok {
 				continue
 			}
-			said := line
-			if text, ok := textAt(doc, event.SaidPath); ok {
-				said = text
+			if hit, matched := limitEventHit(p, in, doc, line, out); matched {
+				last, found = hit, true
+				continue
 			}
-			last, found = markerHit{Kind: llm.KindAuth, Said: said, Source: sourceEvent}, true
-			break
+			if !out.failed {
+				continue
+			}
+			for _, event := range p.AuthEvents {
+				if event.In != in || !matches(doc, event.Match) {
+					continue
+				}
+				said := line
+				if text, ok := textAt(doc, event.SaidPath); ok {
+					said = text
+				}
+				last, found = markerHit{Kind: llm.KindAuth, Said: said, Source: sourceEvent}, true
+				break
+			}
 		}
 	}
+	scan(out.stdout, harnessprofile.EventsInStdout)
+	scan(out.record, harnessprofile.EventsInRecord)
 	return last, found
 }
 

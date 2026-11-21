@@ -653,8 +653,15 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			return &llm.Completion{Model: p.model}, nil
 		}
 	}
+	// A TEXT FUNCTION'S RECORD, followed for the reports its profile reads
+	// there ([harnessprofile.EventsInRecord]); a run with tools follows its own.
+	endRecord := func() string { return "" }
+	if tools == nil {
+		endRecord = followRecordEvents(p.profile, checkout, session)
+	}
 	started := time.Now()
 	res, err := run(runCtx, in)
+	record := endRecord()
 	if err != nil {
 		// NO HARNESS RAN, which is all run's error ever says: the binary is
 		// missing or not executable here, the host would not give it output
@@ -675,7 +682,9 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		tools.ran(ctx, res)
 		connected = tools.finish()
 		reportOffered(ctx, tools.reader.offeredTools())
+		record = tools.events.text()
 	}
+	res.record = record
 
 	// READ BEFORE THE CHECKOUT IS RELEASED, which removes the directory.
 	// A missing or unreadable report is not an error: the vendor writes it
@@ -890,7 +899,8 @@ func (p *Provider) completion(
 	// sentinel may stand ([classifyMarkers]).
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, harnessOutput{
-		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed, at: p.now(), zone: p.zone,
+		said: said, stdout: res.stdout, stderr: res.stderr, record: res.record, failed: failed,
+		at: p.now(), zone: p.zone,
 	}); ok {
 		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(said, res.stderr)))
 	}
@@ -1097,6 +1107,10 @@ type harnessOutput struct {
 	// events is a run with tools' own failure events, by the profile's
 	// fields, one a line ([harnessprofile.MCP.FailureEvents]).
 	events string
+	// record is the harness's record's reports of how the run ended, one a
+	// line ([rawResult.record]): read only as decoded events, by the limit and
+	// sign-in events looked for there.
+	record string
 	// failed is the harness's own word that the run failed: a non-zero exit, or
 	// the flag at the profile's error_paths.
 	failed bool

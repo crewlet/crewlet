@@ -244,6 +244,34 @@ type LimitEvent struct {
 
 	// Reset reads the instant out of the sentence at SaidPath.
 	Reset ResetReading `yaml:",inline"`
+
+	// In is where the report is looked for ([EventSource]): stdout by default.
+	In EventSource `yaml:"in,omitempty"`
+}
+
+// EventSource is where a [LimitEvent] or an [AuthEvent] is looked for.
+type EventSource string
+
+const (
+	// EventsInStdout is the run's stdout, decoded a line at a time: the default.
+	EventsInStdout EventSource = ""
+	// EventsInRecord is the record the harness keeps of its session
+	// ([Profile.Requests] with source file), followed for every run, a text
+	// function's included. For a harness whose stdout and stderr no longer say
+	// how a run ended: Kimi Code 2.7 prints a failed run's class only on its
+	// session's `turn.ended` line. As on stdout, the harness writes the record's
+	// keys and types, and the model only strings inside them.
+	EventsInRecord EventSource = "record"
+)
+
+// Valid reports whether s is a source this package reads.
+func (s EventSource) Valid() bool { return s == EventsInStdout || s == EventsInRecord }
+
+// ReadsRecordEvents reports whether a limit or sign-in event is looked for in
+// the harness's record ([EventsInRecord]), which every run then follows.
+func (p *Profile) ReadsRecordEvents() bool {
+	return slices.ContainsFunc(p.LimitEvents, func(e LimitEvent) bool { return e.In == EventsInRecord }) ||
+		slices.ContainsFunc(p.AuthEvents, func(e AuthEvent) bool { return e.In == EventsInRecord })
 }
 
 // MarkerScope says WHERE a harness's failure prose can appear, and therefore
@@ -2381,20 +2409,19 @@ func (r ResetReading) validate(what string, add func(string, ...any)) {
 // model cannot write it: a JSON event stream with a discriminator, matched on
 // that discriminator and on at least one field beside it.
 func (p *Profile) validateLimitEvents(add func(string, ...any)) {
-	if len(p.LimitEvents) == 0 {
-		return
-	}
-	if p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0 {
+	onStdout := slices.ContainsFunc(p.LimitEvents, func(e LimitEvent) bool { return e.In == EventsInStdout })
+	if onStdout && (p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0) {
 		add("limit_events needs output: %s and an event_type_path: on any other "+
 			"output a line of the model's answer is a line of stdout, and it could spell "+
 			"the report out", OutputJSONL)
 	}
 	for i, e := range p.LimitEvents {
 		what := fmt.Sprintf("limit_events[%d]", i)
-		discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
+		if e.In != EventsInStdout {
+			p.validateRecordEvent(what, e.In, e.Match, add)
+		} else if discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
 			return slices.Equal(m.Path, p.EventTypePath)
-		})
-		if !discriminated || len(e.Match) < 2 {
+		}); !discriminated || len(e.Match) < 2 {
 			add("%s.match must name the event type at event_type_path and at least one "+
 				"field the harness writes beside it, e.g. an error flag or a status code", what)
 		}
@@ -2403,6 +2430,25 @@ func (p *Profile) validateLimitEvents(add func(string, ...any)) {
 				"the sentence at said_path", what)
 		}
 		e.Reset.validate(what, add)
+	}
+}
+
+// validateRecordEvent holds a limit or sign-in event looked for in the
+// harness's record ([EventsInRecord]) to a record there is: a file the harness
+// keeps, read by [Profile.Requests]. The record names no discriminator, so the
+// match carries its own: at least two fields, the event's type and its class.
+func (p *Profile) validateRecordEvent(what string, in EventSource, match []Match, add func(string, ...any)) {
+	if !in.Valid() {
+		add("%s.in %q (want %q, or nothing for stdout)", what, in, EventsInRecord)
+		return
+	}
+	if p.Requests == nil || p.Requests.Source != SourceFile {
+		add("%s.in is %s, but requests names no file the harness keeps its record in "+
+			"(requests: source: %s)", what, in, SourceFile)
+	}
+	if len(match) < 2 {
+		add("%s.match must name the record's event type and at least one field the "+
+			"harness writes beside it, e.g. an error code", what)
 	}
 }
 

@@ -3309,7 +3309,7 @@ kimi-code:
   # off real 401 and 429 responses to 0.42.0. What is NOT measured is a spent
   # Kimi subscription, which no profile here can produce on demand. The tool
   # route (mcp, requests) is measured on 2.3.2 — see there.
-  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0, 2.3.1 and 2.3.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  written_for: "Kimi Code CLI 2.3.x to 2.7.x, measured on 0.42.0, 2.3.1 and 2.3.2, and how a run fails on 2.7.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -3762,6 +3762,32 @@ kimi-code:
     - sentinel: "provider.auth_error"
     - sentinel: "Invalid Authentication"
     - sentinel: "appears to be invalid or may have expired"
+  # FROM 2.7 A FAILED RUN'S CLASS IS IN ITS RECORD ALONE. Measured on 2.7.2
+  # against a stub answering 429, 401 and 500: every failure exits 1 with stderr
+  # saying only `error: failed to run prompt: Prompt turn ended with reason:
+  # failed` (print mode formats the turn's end without its error); a 401 prints
+  # nothing on stdout; and each retry of a 429 prints a `turn.step.retrying` line
+  # naming `rate_limit` there, also on a run whose next attempt answered. So
+  # neither stream says how a run ended, and the markers above go unmatched. The
+  # session's wire log does, on every run: `turn.ended`, with `reason: failed`
+  # and the harness's own class at `error.code` (`provider.rate_limit`,
+  # `provider.auth_error`, `provider.api_error`), the one 2.3.x prints on
+  # stderr. The limit and the refused sign-in are read there (`in: record`: the
+  # file `requests` names, owned by the call's directory), and the markers above
+  # stay for 2.3.x. A 429 retried to an answer ends `completed`, and one whose
+  # last attempt met a 500 ends `provider.api_error`: neither benches the entry.
+  limit_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "turn.ended"}
+        - {path: ["error", "code"], equals: "provider.rate_limit"}
+      said_path: ["error", "message"]
+  auth_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "turn.ended"}
+        - {path: ["error", "code"], equals: "provider.auth_error"}
+      said_path: ["error", "message"]
 
 hermes:
   binary: hermes
