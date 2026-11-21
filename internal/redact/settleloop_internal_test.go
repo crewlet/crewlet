@@ -2,7 +2,6 @@ package redact
 
 import (
 	"cmp"
-	"fmt"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -100,9 +99,9 @@ func (h heldLines) settledByLoop() int {
 // THE SWEEP SETTLES AT THE LARGEST LINE START NO BAR STANDS OVER, an unread
 // hold's bar counted at the rewritable point of that line start (the package
 // doc's "Settled in one pass"), and the claims' pairs are exactly the blocks
-// ending on a claim's key's line before the key: over random lines, bars,
-// pairs, spans and claims, each against a reading of every line start, and a
-// bar's hi at a line start, where the rewritable point stands, half the time.
+// ending on a claim's key's line before the key: each against a reading of
+// every line start, over every configuration of up to three bars and a pair
+// on three lines, and over random lines, bars, pairs, spans and claims.
 //
 // Mutation: wake no unread bar passed before a pair lowered the rewritable
 // point, or wake one only once the point falls below its hi, or take a block
@@ -138,6 +137,38 @@ func TestTheSweepSettlesWhereNoBarStandsAtItsRewritablePoint(t *testing.T) {
 	check("an unread bar's hi at the lowered point", heldLines{whole: strings.Repeat("xxx\n", 5)},
 		[]bar{{lo: 13, hi: 20}, {lo: 1, hi: 16, unread: true}, {lo: 9, hi: 14}}, []bar{{lo: 16, hi: 10}}, 20)
 
+	// Every bar and pair at every byte of three lines, at each rewritable
+	// point: the boundaries where a hi meets a point line up here, where
+	// random draws over longer texts all but never line up three of them.
+	small := heldLines{whole: "x\nx\nx\n"}
+	var each []bar
+	for lo := range 7 {
+		for hi := lo; hi < 7; hi++ {
+			each = append(each, bar{lo: lo, hi: hi}, bar{lo: lo, hi: hi, unread: true})
+		}
+	}
+	n := len(each)
+	for i := range n + 1 {
+		for j := i; j <= n; j++ {
+			for k := j; k <= n; k++ {
+				for p := -1; p < 4*7; p++ {
+					for r0 := 0; r0 < 7; r0 += 2 {
+						var bars, pairs []bar
+						for _, x := range [3]int{i, j, k} {
+							if x < n {
+								bars = append(bars, each[x])
+							}
+						}
+						if p >= 0 {
+							pairs = []bar{{lo: 2 * (p / 7), hi: p % 7}}
+						}
+						check("three lines", small, bars, pairs, r0)
+					}
+				}
+			}
+		}
+	}
+
 	r := rand.New(rand.NewPCG(1666, 5))
 	for trial := range 20000 {
 		var b strings.Builder
@@ -167,7 +198,7 @@ func TestTheSweepSettlesWhereNoBarStandsAtItsRewritablePoint(t *testing.T) {
 		if r.IntN(3) == 0 {
 			r0 = end
 		}
-		check(fmt.Sprintf("trial %d", trial), h, bars, pairs, r0)
+		check("random lines", h, bars, pairs, r0)
 
 		h.spans = nil
 		for s := 0; s < end; {
