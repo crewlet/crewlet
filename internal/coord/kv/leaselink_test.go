@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,17 +122,11 @@ func (f overSharedLink) carried(way linktest.Way) int64 {
 	return f.link.Count(f.dataAccount, way).Carried
 }
 
-// answer has the far side answer a request on subject with reply, and an
-// empty one with nothing, once the data connection reaches it.
-func (f overSharedLink) answer(t *testing.T, subject string, reply []byte) {
+// answer has the far side answer every request on subject with nothing, once
+// the data connection reaches it.
+func (f overSharedLink) answer(t *testing.T, subject string) {
 	t.Helper()
-	sub, err := f.local.Subscribe(subject, func(m *nats.Msg) {
-		if len(m.Data) == 0 {
-			_ = m.Respond(nil)
-			return
-		}
-		_ = m.Respond(reply)
-	})
+	sub, err := f.local.Subscribe(subject, func(m *nats.Msg) { _ = m.Respond(nil) })
 	if err != nil {
 		t.Fatalf("answer on %s: %v", subject, err)
 	}
@@ -145,17 +140,14 @@ func (f overSharedLink) answer(t *testing.T, subject string, reply []byte) {
 	})
 }
 
-// bulk sends request on the data connection and answers on the channel it
-// returns once its reply is back, after waiting until the link carries the
+// bulk runs send, a request on the data connection, and answers on the
+// channel it returns once send has, after waiting until the link carries the
 // first sixteen kibibytes of the bulk way.
-func (f overSharedLink) bulk(t *testing.T, subject string, request []byte, way linktest.Way) <-chan error {
+func (f overSharedLink) bulk(t *testing.T, way linktest.Way, send func() error) <-chan error {
 	t.Helper()
 	before := f.carried(way)
 	done := make(chan error, 1)
-	go func() {
-		_, err := f.data.Request(subject, request, time.Minute)
-		done <- err
-	}()
+	go func() { done <- send() }()
 	pollUntil(t, "the bulk on the data link", func() bool { return f.carried(way) > before+16<<10 })
 	return done
 }
@@ -164,17 +156,43 @@ func (f overSharedLink) bulk(t *testing.T, subject string, request []byte, way l
 // ([overSharedLink.bulk]).
 func (f overSharedLink) upload(t *testing.T, subject string) <-chan error {
 	t.Helper()
-	f.answer(t, subject, nil)
-	return f.bulk(t, subject, randomBytes(t, uploadBytes), linktest.ToBroker)
+	f.answer(t, subject)
+	body := randomBytes(t, uploadBytes)
+	return f.bulk(t, linktest.ToBroker, func() error {
+		_, err := f.data.Request(subject, body, time.Minute)
+		return err
+	})
 }
 
-// download has the far side send uploadBytes to the data connection, as the
-// reply to its request ([overSharedLink.bulk]): what a leader read of a large
-// record carries back.
-func (f overSharedLink) download(t *testing.T, subject string) <-chan error {
+// leaderRead has the data connection read a record of uploadBytes from its
+// stream's leader on the far side, as the fleet store reads a record by key
+// ([leaderReader]): a `STREAM.MSG.GET` whose reply, the record base64-encoded
+// in JSON, crosses the link toward the node ([overSharedLink.bulk]). Half the
+// spec's mebibyte, so each of a case's two reads crosses in some eleven
+// seconds; the renewals it holds are answered in a few quanta whatever its size.
+func (f overSharedLink) leaderRead(t *testing.T, subject string) <-chan error {
 	t.Helper()
-	f.answer(t, subject, randomBytes(t, uploadBytes))
-	return f.bulk(t, subject, []byte("send"), linktest.ToNode)
+	ctx := t.Context()
+	stream := strings.ReplaceAll(subject, ".", "_")
+	far := f.client(t, f.local)
+	if _, err := far.CreateStream(ctx, jetstream.StreamConfig{Name: stream, Subjects: []string{subject},
+		Storage: jetstream.FileStorage, MaxBytes: 2 * uploadBytes}); err != nil {
+		t.Fatalf("create the record's stream on the far side: %v", err)
+	}
+	if _, err := far.Publish(ctx, subject, randomBytes(t, uploadBytes)); err != nil {
+		t.Fatalf("write the record on the far side: %v", err)
+	}
+	leader, err := jsapi.NewLeader(f.client(t, f.data), stream)
+	if err != nil {
+		t.Fatalf("address the record's leader from the data connection: %v", err)
+	}
+	// Given the reply's arrival across the link, as the fleet store's reader
+	// of a large record is, or it is asked again mid-crossing.
+	leader = leader.Carrying(uploadBytes, time.Duration((1<<20)/sharedLinkRate)*time.Second)
+	return f.bulk(t, linktest.ToNode, func() error {
+		_, err := leader.Last(ctx, subject)
+		return err
+	})
 }
 
 // randomBytes is n random bytes, which the link's compression leaves whole.
@@ -219,17 +237,17 @@ func TestARenewalCrossesALeafsLinkAheadOfAnUploadOnIt(t *testing.T) {
 	renewalsCrossAhead(t, f, f.upload, linktest.ToBroker)
 }
 
-// A RENEWAL CROSSES A LEAF'S LINK AHEAD OF A LARGE REPLY ON IT: the bulk is
-// half a mebibyte the member sends the leaf, as a leader read of a large
-// record does, so what the renewal's acknowledgement queues behind on the one
-// link is the reply's bytes crossing hub to leaf.
+// A RENEWAL CROSSES A LEAF'S LINK AHEAD OF A LEADER READ ON IT: the bulk is
+// the leaf's leader read of a large record on the member, so what the
+// renewal's acknowledgement queues behind on the one link is the read's reply
+// crossing hub to leaf.
 //
 // Mutant: the lease store opened over the data client — its acknowledgements
 // wait for the reply, as the control's does.
-func TestARenewalCrossesALeafsLinkAheadOfALargeReplyOnIt(t *testing.T) {
+func TestARenewalCrossesALeafsLinkAheadOfALeaderReadOnIt(t *testing.T) {
 	t.Parallel()
 	f := newLeafOverSharedLink(t)
-	renewalsCrossAhead(t, f, f.download, linktest.ToNode)
+	renewalsCrossAhead(t, f, f.leaderRead, linktest.ToNode)
 }
 
 // A RENEWAL CROSSES AN EXTERNAL LINK AHEAD OF AN UPLOAD (M3): on `stream.type:
@@ -247,8 +265,9 @@ func TestARenewalCrossesAnExternalLinkAheadOfAnUpload(t *testing.T) {
 
 // renewalsCrossAhead renews a seat over f's lease connection three times while
 // bulk crosses the data connection way, and holds each to being answered
-// before the bulk has crossed; then, the control, renews one over the data
-// connection behind a second bulk, which is answered only once that has.
+// before the bulk has crossed and within a second of the link (the spec's
+// bound: a few quanta and the leader); then, the control, renews one over the
+// data connection behind a second bulk, which is answered only once that has.
 func renewalsCrossAhead(t *testing.T, f overSharedLink,
 	bulk func(*testing.T, string) <-chan error, way linktest.Way) {
 
@@ -279,12 +298,19 @@ func renewalsCrossAhead(t *testing.T, f overSharedLink,
 	start := f.carried(way)
 	done := bulk(t, "kv.bulk.leases")
 	for i := range 3 {
+		before := f.carried(way)
 		if ok, err := leases.Renew(ctx, knownSeat(0), owner, onLeases.Epoch, knownTTL); err != nil || !ok {
 			t.Fatalf("renewal %d over the lease connection = (%v, %v)", i+1, ok, err)
 		}
-		if got := f.carried(way) - start; got >= uploadBytes {
+		at := f.carried(way)
+		if got := at - start; got >= uploadBytes {
 			t.Errorf("renewal %d over the lease connection was answered once the data link had "+
 				"carried %d bytes, the whole bulk's %d: it waited behind it", i+1, got, uploadBytes)
+		}
+		if during := at - before; during >= sharedLinkRate {
+			t.Errorf("renewal %d over the lease connection was answered after the data link carried "+
+				"%d bytes of the bulk, a second of the link or more: it queued behind part of it", i+1,
+				during)
 		}
 	}
 	if err := <-done; err != nil {
@@ -311,9 +337,11 @@ func renewalsCrossAhead(t *testing.T, f overSharedLink,
 }
 
 // lockedBytes is the publish that holds the queue client's lock: seven
-// mebibytes, three past the most a Linux sender's kernel buffers for a socket
-// (tcp_wmem's default ceiling, 4 MiB), so nats.go's write of it, made under
-// the connection's lock, returns only once the link has carried that much.
+// mebibytes, past all that can leave nats.go's write before the link carries
+// it — a Linux sender's socket buffer (tcp_wmem's default ceiling, 4 MiB), the
+// relay's pinned receive buffer (linktest.SocketBuffer, doubled by the kernel)
+// and the link's inflight — so the write, made under the connection's lock,
+// returns only once the link has carried some three mebibytes.
 const lockedBytes = 7 << 20
 
 // lockedRate is the case's first-in, first-out link: a mebibyte a second, so
@@ -395,8 +423,14 @@ func TestARenewalIsNotHeldByTheQueueClientsLock(t *testing.T) {
 
 	returned := publish("kv.locked.leases")
 	for i := range 3 {
+		before := carried()
 		if ok, err := leases.Renew(ctx, knownSeat(0), owner, onLeases.Epoch, knownTTL); err != nil || !ok {
 			t.Fatalf("renewal %d over the lease connection = (%v, %v)", i+1, ok, err)
+		}
+		if during := carried() - before; during >= lockedRate {
+			t.Errorf("renewal %d over the lease connection was answered after the link carried %d "+
+				"bytes of the publish, a second of it or more: it queued behind more than the "+
+				"publish's inflight", i+1, during)
 		}
 		select {
 		case <-returned:
