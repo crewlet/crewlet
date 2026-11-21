@@ -123,18 +123,10 @@ func recordedOutput(out string, outBytes int) string {
 }
 
 // recordedCut is the answer of an executor run's call whose log kept only its
-// opening, raw ([sandbox.OutputOpening]), of whole bytes: the redaction of the
-// opening's SETTLED lines alone ([redact.Settled]), which is the opening of
-// the whole's redaction, since a credential the log's cut ran across left a
-// head no rule knows. The cut it states leaves out the bytes the log measured
-// past those lines, unread and so unredacted. A text the log's marker does
-// not read back off is settled as it stands.
+// opening, raw, of whole bytes: what of it a reader may show
+// ([sandbox.RedactedOpening]), held to a row's share, its cut stating the
+// size that opening is of.
 func recordedCut(out string, whole int) string {
-	opening, ok := sandbox.OutputOpening(out, whole)
-	if !ok {
-		opening = out
-	}
-	settled := opening[:redact.Settled(opening)]
-	shown := redact.Secrets(settled)
-	return keptOpening(shown, len(shown)+max(whole-len(settled), 1), sandbox.MaxBridgeOutputBytes)
+	shown, of := sandbox.RedactedOpening(out, whole)
+	return keptOpening(shown, of, sandbox.MaxBridgeOutputBytes)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -538,6 +539,24 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 // redacts it reads only as far as its redaction settles.
 func OutputOpening(output string, outputBytes int) (opening string, ok bool) {
 	return rowRecord.Opening(output, outputBytes)
+}
+
+// RedactedOpening is what a reader may show of a call's output the log cut
+// (output and outputBytes, as [OutputOpening] reads them): the redaction of
+// the opening's SETTLED lines alone ([redact.Settled]), which is the opening
+// of the whole's redaction, since a credential the log's cut ran across left
+// a head no rule knows. whole is the size it is the opening of: its own bytes
+// and the bytes the log measured past those lines, unread and so unredacted,
+// at least one. A text the log's marker does not read back off is settled as
+// it stands.
+func RedactedOpening(output string, outputBytes int) (shown string, whole int) {
+	opening, ok := OutputOpening(output, outputBytes)
+	if !ok {
+		opening = output
+	}
+	settled := opening[:redact.Settled(opening)]
+	shown = redact.Secrets(settled)
+	return shown, len(shown) + max(outputBytes-len(settled), 1)
 }
 
 // ValidCallID reports whether id is one the log keeps as the id a call's
