@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -88,7 +89,7 @@ func (r *Runner) ReadOpenCodePoint(ctx context.Context, box sandbox.Sandbox,
 	env := make(map[string]string, len(ask.Env))
 	maps.Copy(env, ask.Env)
 	delete(env, "OPENCODE_CONFIG_CONTENT")
-	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(openCodePointScript(paths, dir, ask)),
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(openCodePointScript(paths, dir, ask)),
 		sandbox.ExecOptions{Env: env, TimeoutSec: openCodePointWait.Seconds()})
 	defer clearPointAnswers(ctx, box, dir)
 	if err != nil {
@@ -128,7 +129,7 @@ var _ sandbox.PointReader = (*Runner)(nil)
 // the instruction files OpenCode may hand it. Every line it prints is the
 // read's: `status`, `cwd`, `dir`, `plugin`, `walk`, `instr`.
 func openCodePointScript(paths Paths, dir string, ask sandbox.PointAsk) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	doc := q(paths.CredentialDocument())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -182,7 +183,7 @@ func pointAnswer(ctx context.Context, box sandbox.Sandbox, file string) ([]byte,
 // teardown, so on a context of its own ([context.WithoutCancel]); a removal
 // that fails leaves them to the next read's, which starts by removing them.
 func clearPointAnswers(ctx context.Context, box sandbox.Sandbox, dir string) {
-	_, _ = box.Exec(context.WithoutCancel(ctx), "rm -rf "+sandbox.ShellQuote(dir),
+	_, _ = box.Exec(context.WithoutCancel(ctx), "rm -rf "+shellword.Quote(dir),
 		sandbox.ExecOptions{TimeoutSec: openCodePointCleanupWait.Seconds()})
 }
 

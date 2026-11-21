@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 var log = logging.Get("sandbox.executor")
@@ -483,7 +484,7 @@ func (r *Runner) noteInstruction() string {
 // the manager applies after this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
-	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "mkdir -p "+shellword.Quote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: preparing %s: %w", paths.BinDir(), err)
 	}
 	return nil
@@ -526,8 +527,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
 			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
-		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + saveFiles +
+		"; rm -rf " + shellword.Quote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -538,7 +539,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 func shellQuoteAll(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = sandbox.ShellQuote(path)
+		quoted[i] = shellword.Quote(path)
 	}
 	return strings.Join(quoted, " ")
 }
@@ -678,7 +679,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// is on PATH only after a profile a login shell sources. So PATH inside is
 	// the profile's, which is why the box's bin directory is prepended inside
 	// the script ([withBoxBin]): an export around it would be replaced.
-	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+shellword.Quote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
@@ -830,7 +831,7 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
-		stdin = sandbox.ShellQuote(paths.Brief())
+		stdin = shellword.Quote(paths.Brief())
 	}
 	var b strings.Builder
 	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
@@ -857,15 +858,15 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	// THE JOB'S MEMORY DOMAIN EITHER SIDE OF ITS HARNESS, so a kill the kernel
 	// made for memory meanwhile is told from any other end ([Paths.MemoryBefore]).
 	fmt.Fprintf(&b, "%s\ncrewlet_memory > %s 2>/dev/null; ", sandbox.MemoryDomainScript,
-		sandbox.ShellQuote(paths.MemoryBefore()))
+		shellword.Quote(paths.MemoryBefore()))
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; crewlet_memory > %s 2>/dev/null; ",
-		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()),
-		sandbox.ShellQuote(paths.MemoryAfter()))
+		inner, stdin, shellword.Quote(out.Stdout), shellword.Quote(paths.Err()),
+		shellword.Quote(paths.MemoryAfter()))
 	if out.Result != "" && out.Result != out.Stdout {
-		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
+		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellword.Quote(out.Stdout), shellword.Quote(out.Result))
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
-		sandbox.ShellQuote(paths.ExitCode()), sandbox.ShellQuote(paths.Done()))
+		shellword.Quote(paths.ExitCode()), shellword.Quote(paths.Done()))
 	return b.String(), nil
 }
 
@@ -900,7 +901,7 @@ func withNoteInstruction(system, instruction string) string {
 // one command, so an executable a setup step installed there resolves ahead of
 // the image's.
 func withBoxBin(cmd string, paths Paths) string {
-	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
+	return "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
 // Poll reports what is known of the detached job ([sandbox.JobState]) from two

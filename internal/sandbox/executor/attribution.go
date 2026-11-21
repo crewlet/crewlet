@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Commit attribution: what a run asked to credit Crewlet on its commits
@@ -167,7 +168,7 @@ func trailerValue(s string) string {
 func attributionHook(trailers []attributionTrailer) []byte {
 	args := make([]string, len(trailers))
 	for i, trailer := range trailers {
-		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + sandbox.ShellQuote(trailer.line)
+		args[i] = "--if-exists " + trailer.ifExists + " --trailer " + shellword.Quote(trailer.line)
 	}
 	return []byte(strings.Replace(attributionHookScript, attributionTrailersMark, strings.Join(args, " "), 1))
 }
@@ -192,7 +193,7 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 	// commit. A copy by an exited process is held open by nobody. The links are
 	// relative and made in the box: a host-made link names a host path a
 	// container lacks.
-	link := "cd " + sandbox.ShellQuote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
+	link := "cd " + shellword.Quote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
 		"chmod 700 hook && mkdir -p hooks && " +
 		"for hook in " + strings.Join(gitHooks, " ") + `; do ln -sf ../hook "hooks/$hook" || exit; done`
 	res, err := box.Exec(ctx, link, sandbox.ExecOptions{})
@@ -220,6 +221,6 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 // better than overwriting the run's own first entry would.
 func attributionExports(hooks string) string {
 	return `_crewlet_n=${GIT_CONFIG_COUNT:-0}; case $_crewlet_n in *[!0-9]*) ;; *) ` +
-		`export "GIT_CONFIG_KEY_$_crewlet_n=core.hooksPath" "GIT_CONFIG_VALUE_$_crewlet_n="` + sandbox.ShellQuote(hooks) +
+		`export "GIT_CONFIG_KEY_$_crewlet_n=core.hooksPath" "GIT_CONFIG_VALUE_$_crewlet_n="` + shellword.Quote(hooks) +
 		` "GIT_CONFIG_COUNT=$((_crewlet_n + 1))" ;; esac; `
 }

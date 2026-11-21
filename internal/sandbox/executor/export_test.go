@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Bounded holds r's failure — the error stream it reads from the end, and the
@@ -82,7 +83,7 @@ type OpenCodeTimes struct {
 // must not wait, at lengths a test can tell apart.
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
 	run := openCodeRunTimes()
-	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
+	return "sh -c " + shellword.Quote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, run.listen), mcp: cmp.Or(times.MCP, run.mcp),
 		sync: cmp.Or(times.Sync, run.sync), stop: cmp.Or(times.Stop, run.stop),
 		call: cmp.Or(times.Call, run.call), sessionCall: cmp.Or(times.SessionCall, run.sessionCall),
@@ -123,7 +124,7 @@ func OpenCodeEndCallTags() []string {
 // out.
 func ClaudeCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, configPath string,
 	stop time.Duration) string {
-	return "sh -c " + sandbox.ShellQuote(claudeScript(req, session, paths, configPath, stop))
+	return "sh -c " + shellword.Quote(claudeScript(req, session, paths, configPath, stop))
 }
 
 // ClaudeProjectDir is the project directory every Claude Code run in a box

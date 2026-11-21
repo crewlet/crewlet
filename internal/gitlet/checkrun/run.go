@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -275,7 +276,7 @@ func (a *attempt) nameBox(ctx context.Context, box string) bool {
 // poll that finds the status finds every report. A previous run's files are
 // removed first, so nothing read is another attempt's.
 func (a *attempt) wrapped() string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	run := "sh -c " + q(a.c.Def.Run)
 	if !a.c.Def.Checkout.None {
 		run = "cd " + q(a.c.Repo) + " && " + run
@@ -613,7 +614,7 @@ func (a *attempt) lines(ctx context.Context, box sandbox.Sandbox, t outputTail) 
 // lineCount is the box's command counting the newlines in the first size bytes of file: those
 // the tail read ends at, so a command still writing past them is not counted.
 func lineCount(file string, size int64) string {
-	return "head -c " + strconv.FormatInt(size, 10) + " < " + sandbox.ShellQuote(file) + " | wc -l"
+	return "head -c " + strconv.FormatInt(size, 10) + " < " + shellword.Quote(file) + " | wc -l"
 }
 
 // summaryOf is s REDACTED WHOLE, THEN CUT to CheckSummaryBytes at a

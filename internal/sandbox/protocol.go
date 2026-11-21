@@ -185,7 +185,7 @@ const MaxConePaths = 64
 // shell argument, and Linux refuses one past 128 KiB (MAX_ARG_STRLEN) before
 // the shell starts, with a failure naming nothing the run asked for.
 // [MaxConePaths] paths quoted at their worst (all single quotes: four times
-// the length, plus two quotes and a space, per [ShellQuote]) are at most
+// the length, plus two quotes and a space, per `shellword.Quote`) are at most
 // 64 × 1 023 = 65 472 bytes; TestTheWorstCloneStepIsOneShellArgument holds the
 // step under the limit. It also bounds what grants add to a run's row, which
 // every node's completion poll reads whole: about 128 KiB at most.

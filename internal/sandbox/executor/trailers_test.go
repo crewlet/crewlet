@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -108,7 +109,7 @@ func installed(t *testing.T, run boxRun) string {
 		t.Fatalf("AttributionHook: %v", err)
 	}
 	dir := t.TempDir()
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf '%s' "+sandbox.ShellQuote(string(hook))+
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf '%s' "+shellword.Quote(string(hook))+
 		" > hook && chmod 700 hook && mkdir hooks && ln -s ../hook hooks/prepare-commit-msg")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -473,7 +474,7 @@ func TestNoTrailerValueCanInject(t *testing.T) {
 	}
 	hook, err := executor.AttributionHook(sandbox.CommitAttribution{Seat: "swe",
 		WorkItem: &types.WorkItem{Backend: types.WorkWorklet}})
-	if want := sandbox.ShellQuote(executor.WorkItemTrailer + ": native"); err != nil ||
+	if want := shellword.Quote(executor.WorkItemTrailer + ": native"); err != nil ||
 		!strings.Contains(string(hook), "--trailer "+want+" ") {
 		t.Errorf("an item with no key is not named by its backend alone (%v):\n%s", err, hook)
 	}

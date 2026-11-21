@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A run's OWN SKILLS ([sandbox.RunRequest.Skills]): how each harness is handed
@@ -186,8 +187,8 @@ func claudeSkillsGate(plugin, settings string, required bool) string {
 			`that reports loading a skill, and this run's company requires a skill before some of its ` +
 			`tools; upgrade Claude Code in the box image" >&2; exit 1`
 	}
-	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + sandbox.ShellQuote(plugin) +
-		"; cs=" + sandbox.ShellQuote(settings) + "; else " + older + "; fi\n"
+	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + shellword.Quote(plugin) +
+		"; cs=" + shellword.Quote(settings) + "; else " + older + "; fi\n"
 }
 
 // anyRequired reports whether any of skills is required.

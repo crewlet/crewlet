@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A run's session, TAKEN out of its box to be kept (sandbox.SessionTaker).
@@ -674,8 +675,8 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 	if err != nil {
 		return sessionRecord{}, false, err
 	}
-	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
-	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(script),
+	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {
 		return sessionRecord{}, false, fmt.Errorf("executor: packing %s's session %s: %w",
@@ -743,7 +744,7 @@ const (
 // A digest kept for an archive then not moved is harmless. A box without cksum
 // or grep packs nothing.
 func packDigest(paths Paths, session, staged string) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	return fmt.Sprintf(`{ d=$(cksum < %[1]s 2> /dev/null) && %[2]s || { printf '%%s\n' %[3]s > %[4]s 2> /dev/null; false; }; }`,
 		q(staged+"/capture"), recordDigest(paths, session, "d"), q(digestUnrecorded), q(staged+"/error"))
 }
@@ -759,7 +760,7 @@ func packDigest(paths Paths, session, staged string) string {
 // [openCodeSessionGate]).
 func recordDigest(paths Paths, session, digest string) string {
 	return fmt.Sprintf(`[ -n "$%[2]s" ] && { printf '%%s %%s\n' "$%[1]s" "$%[2]s" >> %[3]s; } 2> /dev/null && grep -qxF "$%[1]s $%[2]s" %[3]s 2> /dev/null`,
-		session, digest, sandbox.ShellQuote(paths.SessionDigests()))
+		session, digest, shellword.Quote(paths.SessionDigests()))
 }
 
 // digestUnrecorded is why a pack whose digest the box did not record failed
@@ -784,8 +785,8 @@ func keepDigest(ctx context.Context, box sandbox.Sandbox, paths Paths, session, 
 	if !sandbox.ValidSessionID(session) {
 		return fmt.Errorf("executor: %q is not a session id a digest may be kept under", session)
 	}
-	res, err := box.Exec(ctx, "printf '%s\\n' "+sandbox.ShellQuote(session+" "+digest)+" >> "+
-		sandbox.ShellQuote(paths.SessionDigests()), sandbox.ExecOptions{})
+	res, err := box.Exec(ctx, "printf '%s\\n' "+shellword.Quote(session+" "+digest)+" >> "+
+		shellword.Quote(paths.SessionDigests()), sandbox.ExecOptions{})
 	switch {
 	case err != nil:
 		return fmt.Errorf("executor: recording the kept archive's digest in the box: %w", err)

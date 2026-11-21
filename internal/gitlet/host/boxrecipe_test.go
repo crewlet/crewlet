@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // THE BOX RECIPES CLONE FROM GITLET on the pinned git, as the floors'
@@ -331,7 +332,7 @@ func runGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	words := make([]string, len(args))
 	for i, arg := range args {
-		words[i] = sandbox.ShellQuote(arg)
+		words[i] = shellword.Quote(arg)
 	}
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "git "+strings.Join(words, " "))
 	cmd.Dir, cmd.Env = dir, env

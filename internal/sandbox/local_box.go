@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // hostCommand is one command to run on the engine host.
@@ -236,7 +237,7 @@ func inWorkdir(rel, cmd string) string {
 	if rel == "" || rel == "." {
 		return cmd
 	}
-	return "cd -- '" + strings.ReplaceAll(rel, "'", `'\''`) + "' || exit 1\n" + cmd
+	return "cd -- " + shellword.Quote(rel) + " || exit 1\n" + cmd
 }
 
 func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {

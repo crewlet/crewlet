@@ -1,4 +1,4 @@
-package sandbox_test
+package shellword_test
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A QUOTED WORD IS READ BACK AS IT WAS WRITTEN, whatever it holds: a POSIX
@@ -34,7 +34,7 @@ func TestAShellWordIsReadBackLiterally(t *testing.T) {
 		"tab\there",
 		"ü and ☃",
 	} {
-		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf %s "+sandbox.ShellQuote(value))
+		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "printf %s "+shellword.Quote(value))
 		cmd.Dir = dir
 		out, err := cmd.Output()
 		if err != nil {

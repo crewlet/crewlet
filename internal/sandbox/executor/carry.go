@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A run's harness session, carried between boxes: see the package doc's
@@ -274,9 +275,9 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 	if !ok {
 		return sandbox.CarryCheck{Why: r.harness.Name() + " carries no session between boxes"}, nil
 	}
-	ask := "PATH=" + sandbox.ShellQuote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
+	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
 		carries.VersionCommand() + " < /dev/null"
-	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
 	if err != nil {
 		return sandbox.CarryCheck{}, fmt.Errorf("executor: asking the box's %s for its release: %w",
 			r.harness.Name(), err)
