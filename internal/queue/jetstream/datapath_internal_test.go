@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -341,47 +342,50 @@ func signalled[T any](t *testing.T, c chan T, what string) T {
 // Mutant: the next ask restarts the age — the path reads proven, still silent.
 func TestADroppedProbeIsAskedAgainPastItsBound(t *testing.T) {
 	t.Parallel()
-	const bound = 100 * time.Millisecond
-	type retry struct {
-		asked   time.Time
-		verdict error
-	}
-	var calls atomic.Int32
-	self := make(chan *dataPath, 1)
-	dropped, retried := make(chan time.Time, 1), make(chan retry, 1)
-	answered := make(chan struct{})
-	d := startPath(t, dataPathTiming{every: 10 * time.Millisecond, bound: bound,
-		notAvailable: time.Hour, cap: time.Hour,
-		probe: func(ctx context.Context) error {
-			switch calls.Add(1) {
-			case 1:
-				<-ctx.Done()
-				dropped <- time.Now()
-				return ctx.Err()
-			case 2:
-				d := <-self
-				d.mu.Lock()
-				asked := d.asked
-				d.mu.Unlock()
-				retried <- retry{asked, d.verdict(time.Now())}
-			case 3:
-				close(answered)
-			}
-			return nil
-		}})
-	self <- d
-	let := signalled(t, dropped, "the dropped probe to be let go")
-	r := signalled(t, retried, "the probe asked again")
-	if age := let.Sub(r.asked); age < bound {
-		t.Errorf("the dropped probe was let go %v after it was asked, under its %v bound", age, bound)
-	}
-	if !errors.Is(r.verdict, ErrDataPathUnproven) || !strings.Contains(r.verdict.Error(), "carried nothing") {
-		t.Errorf("asked again past its bound with nothing heard, the path read %v, want its silence", r.verdict)
-	}
-	signalled(t, answered, "the probe asked again to be answered")
-	if err := d.verdict(time.Now()); err != nil {
-		t.Errorf("once the probe asked again was answered, the path read %v", err)
-	}
+	// In a bubble, the drop and the ask read one clock, so the age is exact.
+	synctest.Test(t, func(t *testing.T) {
+		const bound = 100 * time.Millisecond
+		type retry struct {
+			asked   time.Time
+			verdict error
+		}
+		var calls atomic.Int32
+		self := make(chan *dataPath, 1)
+		dropped, retried := make(chan time.Time, 1), make(chan retry, 1)
+		answered := make(chan struct{})
+		d := startPath(t, dataPathTiming{every: 10 * time.Millisecond, bound: bound,
+			notAvailable: time.Hour, cap: time.Hour,
+			probe: func(ctx context.Context) error {
+				switch calls.Add(1) {
+				case 1:
+					<-ctx.Done()
+					dropped <- time.Now()
+					return ctx.Err()
+				case 2:
+					d := <-self
+					d.mu.Lock()
+					asked := d.asked
+					d.mu.Unlock()
+					retried <- retry{asked, d.verdict(time.Now())}
+				case 3:
+					close(answered)
+				}
+				return nil
+			}})
+		self <- d
+		let := signalled(t, dropped, "the dropped probe to be let go")
+		r := signalled(t, retried, "the probe asked again")
+		if age := let.Sub(r.asked); age < bound {
+			t.Errorf("the dropped probe was let go %v after it was asked, under its %v bound", age, bound)
+		}
+		if !errors.Is(r.verdict, ErrDataPathUnproven) || !strings.Contains(r.verdict.Error(), "carried nothing") {
+			t.Errorf("asked again past its bound with nothing heard, the path read %v, want its silence", r.verdict)
+		}
+		signalled(t, answered, "the probe asked again to be answered")
+		if err := d.verdict(time.Now()); err != nil {
+			t.Errorf("once the probe asked again was answered, the path read %v", err)
+		}
+	})
 }
 
 // "NOT AVAILABLE" REFUSES THE PATH ONLY PAST ITS BUDGET with no success: a
