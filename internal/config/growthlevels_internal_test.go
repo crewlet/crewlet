@@ -12,7 +12,9 @@ import (
 )
 
 func init() {
-	growth.Register(growth.Catalog{Kind: "seatads", API: "Seat Ads API", Version: "v1"})
+	growth.Register("seatads", func() growth.Catalog {
+		return growth.Catalog{Kind: "seatads", API: "Seat Ads API", Version: "v1"}
+	})
 }
 
 // fakeSeat is a growth seat block as a product's would be, written under a

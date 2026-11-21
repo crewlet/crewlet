@@ -328,41 +328,69 @@ func Permits(op Operation, roles []string) bool {
 
 var (
 	catalogsMu sync.Mutex
-	catalogs   = map[string]Catalog{}
+	builders   = map[string]func() Catalog{}
+	resolved   []Catalog
+	built      bool
 )
 
-// Register adds a product's catalog, from its package's init: an invalid
-// catalog, a second one for a kind, or a tool another catalog lists is a
-// build fault, and panics.
-func Register(c Catalog) {
-	if err := c.Validate(); err != nil {
-		panic(err)
-	}
+// Register adds kind's catalog, from its package's init, built at the
+// registry's first use rather than at start: a product's catalog is large,
+// and a command that never reaches a growth tool pays nothing for it. A
+// second catalog for a kind, or one registered after first use, panics.
+func Register(kind string, build func() Catalog) {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
-	if _, dup := catalogs[c.Kind]; dup {
-		panic("growth: a second catalog for " + c.Kind)
+	switch {
+	case built:
+		panic("growth: " + kind + " registered after the catalogs were first read")
+	case builders[kind] != nil:
+		panic("growth: a second catalog for " + kind)
 	}
-	for _, other := range catalogs {
-		for _, t := range c.Tools {
-			if _, listed := other.Tool(t.Name); listed {
-				panic("growth: " + c.Kind + " lists tool " + t.Name + ", which " + other.Kind + " lists")
-			}
-		}
-	}
-	catalogs[c.Kind] = c
+	builders[kind] = build
 }
 
-// Catalogs is every registered catalog, by kind.
+// Catalogs is every registered catalog, by kind. The first read builds them
+// all, and an invalid catalog, one built for another kind, or a tool two
+// catalogs list is a build fault, and panics ([check]).
 func Catalogs() []Catalog {
 	catalogsMu.Lock()
 	defer catalogsMu.Unlock()
-	out := make([]Catalog, 0, len(catalogs))
-	for _, c := range catalogs {
-		out = append(out, c)
+	if !built {
+		out := make([]Catalog, 0, len(builders))
+		for kind, build := range builders {
+			c := build()
+			if c.Kind != kind {
+				panic("growth: the catalog registered for " + kind + " is " + c.Kind + "'s")
+			}
+			out = append(out, c)
+		}
+		if err := check(out); err != nil {
+			panic(err)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+		resolved, built = out, true
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
-	return out
+	return slices.Clone(resolved)
+}
+
+// check holds every catalog to its rules, and each tool name to one catalog:
+// one kind may begin another's, so a name's prefix alone does not keep two
+// products' tools apart.
+func check(catalogs []Catalog) error {
+	var errs []error
+	lister := map[string]string{}
+	for _, c := range catalogs {
+		if err := c.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+		for _, t := range c.Tools {
+			if other, listed := lister[t.Name]; listed {
+				errs = append(errs, fmt.Errorf("growth: %s lists tool %s, which %s lists", c.Kind, t.Name, other))
+			}
+			lister[t.Name] = c.Kind
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // KindOfTool is the kind whose catalog lists tool name, false for none.
@@ -377,8 +405,10 @@ func KindOfTool(name string) (string, bool) {
 
 // CatalogOf is kind's catalog, false for a kind that registered none.
 func CatalogOf(kind string) (Catalog, bool) {
-	catalogsMu.Lock()
-	defer catalogsMu.Unlock()
-	c, ok := catalogs[kind]
-	return c, ok
+	for _, c := range Catalogs() {
+		if c.Kind == kind {
+			return c, true
+		}
+	}
+	return Catalog{}, false
 }

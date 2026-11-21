@@ -132,7 +132,7 @@ func levelScopes() map[string][]string {
 }
 
 func init() {
-	growth.Register(catalog())
+	growth.Register(string(Kind), catalog)
 	googleauth.Register(googleauth.Product{
 		Kind: Kind, Name: "Google Analytics",
 		APIs:         []string{"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com"},
