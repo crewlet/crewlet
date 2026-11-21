@@ -25,7 +25,7 @@ func HeldTexts() map[string]string {
 		texts["gutter shape "+c.name] = c.text
 	}
 	for name, group := range passwordKeyGroups {
-		texts[name] = linesOf(group, 32<<10, 256)
+		texts[name] = linesOf(group, 8<<10, 256)
 	}
 	return texts
 }

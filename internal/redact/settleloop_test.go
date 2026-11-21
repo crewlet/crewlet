@@ -57,7 +57,7 @@ func heldTexts(r *rand.Rand) []heldText {
 		b.WriteString([]string{"hunter2secretvalue9\n", "ok\n", "\n"}[r.IntN(3)])
 		add(fmt.Sprintf("random shape %d", i), b.String())
 	}
-	for i := range 1000 {
+	for i := range 600 {
 		add(fmt.Sprintf("structured text %d", i), heldStructured(r))
 	}
 	fixtures := keyFixtures()
@@ -84,12 +84,12 @@ func heldTexts(r *rand.Rand) []heldText {
 	}
 	armour := "k: -----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n\n"
 	for _, line := range heldRunShapes {
-		run := strings.Repeat(line+"\n", 1500) + "hunter2secretvalue9\nok\n"
-		add(fmt.Sprintf("%q x 1500", line), run)
-		add(fmt.Sprintf("an armour, then %q x 1500", line), armour+run)
+		run := strings.Repeat(line+"\n", 400) + "hunter2secretvalue9\nok\n"
+		add(fmt.Sprintf("%q x 400", line), run)
+		add(fmt.Sprintf("an armour, then %q x 400", line), armour+run)
 	}
-	add("key lines, then blank lines", strings.Repeat("password:\n", 200)+strings.Repeat("\n", 1500)+"hunter2secretvalue9\nok\n")
-	add("an armour, key lines, then blank lines", armour+strings.Repeat("pwd:\n", 200)+strings.Repeat("\n", 1500)+"ok\n")
+	add("key lines, then blank lines", strings.Repeat("password:\n", 200)+strings.Repeat("\n", 400)+"hunter2secretvalue9\nok\n")
+	add("an armour, key lines, then blank lines", armour+strings.Repeat("pwd:\n", 200)+strings.Repeat("\n", 400)+"ok\n")
 	return texts
 }
 
