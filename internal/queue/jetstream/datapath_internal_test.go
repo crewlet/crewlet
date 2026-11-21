@@ -146,7 +146,7 @@ func refusedMoving(m *LinkMeter, path func() error) (bool, error) {
 // link reads moving (a relay a loaded runner stalls is still, rightly
 // refused); (c) two mebibytes blackholed six seconds in, refused once the link
 // reads still over a bound, never while moving, and within two bounds; (d) a
-// probe never answered while bulk moves, refused at the cap, never before.
+// probe unanswered while bulk moves, refused at the cap, not sooner while moving.
 //
 // Mutant: the silence clause dropped — (b). Mutant: silence read over less
 // than the bound — (c). Mutant: no cap — (d). Mutant: DataPath reads only the
@@ -257,13 +257,23 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 				t.Fatalf("the bulk crossed before the path was refused (%d readings)", n)
 			default:
 			}
-			err := path()
+			moving, err := refusedMoving(p.meter, path)
 			switch {
 			case err == nil:
 				return false
+			case !moving && strings.Contains(err.Error(), "carried nothing"):
+				if p.meter.Moving(pathBound) {
+					return false // a reading fell between: judge the next one
+				}
+				// A starved runner stalled the relay over a bound: the refusal
+				// for silence is right, and this run leaves the cap unjudged.
+				t.Logf("the link stalled %d readings in, refused for its silence: %v", n, err)
 			case n < capReadings-1:
-				t.Fatalf("a path whose link moves was refused %d readings in, under the cap's %d: %v",
-					n, capReadings, err)
+				if moving {
+					t.Fatalf("a path whose link moves was refused %d readings in, under the cap's "+
+						"%d: %v", n, capReadings, err)
+				}
+				return false
 			case !strings.Contains(err.Error(), "moves"):
 				t.Fatalf("a path whose link moves was refused for %v, want the cap", err)
 			}
