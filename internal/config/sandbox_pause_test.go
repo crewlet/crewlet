@@ -233,10 +233,10 @@ providers:
 	}
 }
 
-// A SEAT THAT NAMES NO RUN CAP HOLDS ONE RUN AT A TIME, and one that names a
-// cap below one is refused naming the field: a seat that could hold no run
-// could take no turn, and reading 0 as "the default" would hide the mistake.
-func TestASeatsRunCapDefaultsToOneAndRefusesLessThanOne(t *testing.T) {
+// A SEAT THAT NAMES NO RUN CAP HOLDS TWO RUNS AT ONCE, and one that names a cap
+// below one is refused naming the field: a seat that could hold no run could
+// take no turn, and reading 0 as "the default" would hide the mistake.
+func TestASeatsRunCapDefaultsToTwoAndRefusesLessThanOne(t *testing.T) {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 roles:
@@ -247,11 +247,11 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := cfg.Roles[0].Seat().Sandbox.ConcurrentRuns(); got != 1 {
-		t.Fatalf("an unset cap reads %d runs at once, want 1", got)
+	if got := cfg.Roles[0].Seat().Sandbox.ConcurrentRuns(); got != 2 {
+		t.Fatalf("an unset cap reads %d runs at once, want 2", got)
 	}
-	if got := (*org.RoleSandbox)(nil).ConcurrentRuns(); got != 1 {
-		t.Fatalf("a seat with no sandbox block reads %d runs at once, want 1", got)
+	if got := (*org.RoleSandbox)(nil).ConcurrentRuns(); got != 2 {
+		t.Fatalf("a seat with no sandbox block reads %d runs at once, want 2", got)
 	}
 	for _, bad := range []string{"0", "-1"} {
 		_, err := config.ParseCompany([]byte(`

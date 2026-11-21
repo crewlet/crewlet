@@ -228,6 +228,16 @@ type attachment struct {
 	// knows where to keep the message without asking the broker.
 	failures   map[uint64]*failureRecord
 	failuresMu sync.Mutex
+
+	// aside is what this attachment holds aside ([queue.OutcomeAside]),
+	// readmitted what a Readmit handed back for the next drain, readmits the
+	// keys readmitted since the running dispatch began, and keeperRunning
+	// whether [attachment.keepAside] runs (aside.go).
+	asideMu       sync.Mutex
+	aside         []asideDelivery
+	readmitted    []delivery
+	readmits      map[string]struct{}
+	keeperRunning bool
 }
 
 // failureRecord is what one attachment knows of one message's failures
@@ -758,6 +768,9 @@ func (a *attachment) run(ctx context.Context, loop func(context.Context, *attach
 	defer a.abandon()
 	// Forgotten by [Queue.Loops] before done closes, however it ends.
 	defer a.q.loopEnded(a)
+	// What it held aside goes back first, before the loop is forgotten and a
+	// stop closes the connection under it.
+	defer a.handBackAside(ctx)
 	loop(ctx, a)
 }
 
@@ -831,13 +844,21 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
-			// THE LANE FIRST, one message at a time like the rest: a
-			// message it held is this round's delivery, and the topic is
-			// read only when the lane had nothing.
+			// A READMITTED DELIVERY FIRST ([queue.OutcomeAside]): it was
+			// fetched before anything waiting now. Then THE LANE, one
+			// message at a time like the rest: a message it held is this
+			// round's delivery, and the topic is read only when the lane
+			// had nothing.
 			took := false
+			if a.readmittedOne(func(msg jetstream.Msg) {
+				took = true
+				a.dispatchOne(ctx, msg, true, h)
+			}); took {
+				continue
+			}
 			if err := a.fetchLane(1, func(msg jetstream.Msg) {
 				took = true
-				a.dispatchOne(ctx, msg, h)
+				a.dispatchOne(ctx, msg, false, h)
 			}); err != nil {
 				a.logLaneFetchErr(ctx, err)
 			}
@@ -846,7 +867,7 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 			}
 			//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
 			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
-				a.dispatchOne(ctx, msg, h)
+				a.dispatchOne(ctx, msg, false, h)
 			}); err != nil {
 				a.logFetchErr(ctx, err)
 			}
@@ -902,12 +923,15 @@ func (a *attachment) logFetchErr(ctx context.Context, err error) {
 	_ = sleep(ctx, a.q.fetchWait())
 }
 
-// dispatchOne runs a handler for one message and applies its outcome.
-func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue.Handler) {
-	ev, ok := a.decode(msg)
+// dispatchOne runs a handler for one message and applies its outcome;
+// readmitted says a Readmit handed it back ([queue.OutcomeAside]).
+func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, readmitted bool, h queue.Handler) {
+	held, ok := a.toDelivery(msg)
 	if !ok {
 		return
 	}
+	held.readmitted = readmitted
+	ev := held.ev
 	// A hold taken while this message was in flight must still stop it.
 	// The engine pauses a seat's inbox precisely to keep a fresh turn from
 	// starting, and a message already fetched is exactly what would start
@@ -919,16 +943,14 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	// crosses a link at its bytes' pace, and a drain that did not count it
 	// stopped the queue under the keep ([queue.EventQueue.WaitForHandlers]).
 	if a.blocked() {
-		a.q.beginHandler()
-		a.handBack(ctx, msg, ev, a.blockedBy())
-		a.q.endHandler()
+		a.setBack(ctx, []delivery{held}, a.blockedBy())
 		return
 	}
 	a.q.beginHandler()
-	held := delivery{msg: msg, ev: ev}
 	done := a.runningOn(ev)
-	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
-	a.apply(ctx, msg, ev, res)
+	a.beginDispatch()
+	res := runHandler(a.withDelivery(ctx, held), a.log, ev, h)
+	a.apply(ctx, held, res)
 	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, not only until
 	// it returned: settling a return that spends the budget is a dead
 	// letter's keep, a write that waits as long as its bytes take to cross
@@ -984,6 +1006,13 @@ func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.C
 		})
 	}
 	return queue.WithHeadroom(ctx, perMessage)
+}
+
+// withDelivery is ctx as a handler of ds is handed it: each message's headroom,
+// how to keep them from timing out, and how many more the attachment takes
+// aside ([queue.AsideRoom]).
+func (a *attachment) withDelivery(ctx context.Context, ds ...delivery) context.Context {
+	return queue.WithAsideRoom(a.withProgress(a.withHeadroom(ctx, ds...), ds...), a.asideRoom())
 }
 
 // withProgress states how the handler keeps the messages it holds from timing
@@ -1046,7 +1075,8 @@ func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event,
 }
 
 // apply turns a handler outcome into broker operations.
-func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Event, res queue.Result) {
+func (a *attachment) apply(ctx context.Context, held delivery, res queue.Result) {
+	msg, ev := held.msg, held.ev
 	queue.LogResult(ctx, a.log, a.key.topic, a.key.group, ev, res)
 	switch res.Outcome {
 	case queue.OutcomeAck:
@@ -1087,6 +1117,9 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// Neither a failure nor a deferral, and the attachment goes on
 		// taking mail: see [attachment.pass].
 		a.pass(ctx, msg, ev, res.Reason)
+
+	case queue.OutcomeAside:
+		a.setAside(ctx, []delivery{held}, res.Key)
 	}
 }
 

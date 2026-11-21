@@ -348,7 +348,7 @@ type RoleSandbox struct {
 	// [org.DefaultMaxConcurrentRuns]; 0 or less is refused, since a seat that
 	// can hold no run could take no turn. A pointer so a seat that names the
 	// default and one that says nothing stay apart on a round trip.
-	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty" js:"min=1" desc:"How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 1."`
+	MaxConcurrentRuns *int `yaml:"max_concurrent_runs,omitempty" json:"max_concurrent_runs,omitempty" js:"min=1" desc:"How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2."`
 
 	// MCP names which of the seat's MCP servers run in its box rather than
 	// reach it over the seat's tool bridge, which every executor box is
@@ -416,7 +416,7 @@ func (s *RoleSandbox) validate(path Path) error {
 	if s.MaxConcurrentRuns != nil && *s.MaxConcurrentRuns < 1 {
 		p.add(at(path, "max_concurrent_runs"), ErrOutOfRange,
 			"%d (a seat holding no run could take no turn; omit the field for "+
-				"one run at a time, or set a count of 1 or more)", *s.MaxConcurrentRuns)
+				"the default of two, or set a count of 1 or more)", *s.MaxConcurrentRuns)
 	}
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))

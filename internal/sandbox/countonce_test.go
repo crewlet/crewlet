@@ -47,7 +47,7 @@ func (c *Coordinator) countRun(handle, status string) {
 	c.mu.Lock()
 	was, runs := c.adjustLocked(handle, holding, awaiting)
 	c.mu.Unlock()
-	c.seatFreed(handle, was, runs)
+	c.seatFreed(c.life, handle, was, runs)
 	c.reconcileHold(c.life, handle)
 }
 
