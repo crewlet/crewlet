@@ -2512,7 +2512,8 @@ type PendingStore interface {
 	// delegates (ADR-0125) and answers the held call as written. ONLY WHILE THE CALL
 	// WAITS ON ITS DELEGATES: run awaiting on launch, ending undecided, held call
 	// heldID not escalated, v.By one of its delegates with no answer yet. Otherwise
-	// false and nothing written; an answer past its bounds is an error.
+	// false and nothing written; an answer past its bounds is an error. Its
+	// reason and findings are recorded redacted ([HeldVerdict.Redacted]).
 	GiveDelegateVerdict(ctx context.Context, turnID, launch, heldID string, v HeldVerdict) (HeldCall, bool, error)
 
 	// EscalateHeld puts a held call waiting on its delegates to people, on the terms

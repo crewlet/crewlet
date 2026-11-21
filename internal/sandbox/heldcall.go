@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -376,6 +377,22 @@ type HeldVerdict struct {
 	Reason     string    `json:"reason"`
 	Findings   []string  `json:"findings,omitempty"`
 	At         time.Time `json:"at"`
+}
+
+// Redacted is the answer with a secret its reason or findings carry replaced
+// by its marker, a copy: redacted where it is recorded, since every reader of
+// the row reads them. Who gave it, the verdict and the confidence are closed
+// words or a seat's name.
+func (v HeldVerdict) Redacted() HeldVerdict {
+	v.Reason = redact.Secrets(v.Reason)
+	if v.Findings != nil {
+		findings := make([]string, len(v.Findings))
+		for i, f := range v.Findings {
+			findings[i] = redact.Secrets(f)
+		}
+		v.Findings = findings
+	}
+	return v
 }
 
 // HeldEscalation is why a delegated call went to people: the engine's closed

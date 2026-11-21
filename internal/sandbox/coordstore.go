@@ -1385,6 +1385,9 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 	if err := v.validate(); err != nil {
 		return HeldCall{}, false, fmt.Errorf("sandbox: a verdict on held call %s of run %s: %w", heldID, turnID, err)
 	}
+	// REDACTED AFTER THE BOUNDS, which are the verdict tool's own and count
+	// what the delegate wrote.
+	given := v.Redacted()
 	var held HeldCall
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if !waitsOnDelegates(*run, launch, heldID) {
@@ -1395,8 +1398,6 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 			slices.ContainsFunc(d.Given, func(g HeldVerdict) bool { return g.By == v.By }) {
 			return false
 		}
-		given := v
-		given.Findings = slices.Clone(v.Findings)
 		d.Given = append(slices.Clone(d.Given), given)
 		held = *run.HeldCall
 		held.Delegation = &d
