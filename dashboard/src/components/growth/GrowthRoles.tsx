@@ -18,7 +18,8 @@ const LEVEL_WORDS: Readonly<Record<GrowthLevel, string>> = {
 /** What Crewlet offers a seat through a role, in a few words. */
 export function levelsWords(levels: readonly GrowthLevel[]): string {
   if (levels.length === 0) return "Not used by Crewlet";
-  return levels.map((level) => LEVEL_WORDS[level]).join(", ");
+  // A LEVEL THIS BUILD DOES NOT KNOW is said as sent, never left blank.
+  return levels.map((level) => LEVEL_WORDS[level] ?? level).join(", ");
 }
 
 export function GrowthRoles({

@@ -10,7 +10,7 @@
  * request to spend, and the table says so rather than leave a gap.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   Button,
   Callout,
@@ -21,6 +21,7 @@ import {
   MoneyField,
   parseMoney,
   Stack,
+  Tag,
   Text,
 } from "@crewlethq/ui";
 import { PlusGlyph, XGlyph } from "@crewlethq/icons/glyphs";
@@ -30,7 +31,15 @@ import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import type { GrowthSpend } from "~/contract/growth.ts";
 import { getConfig } from "~/protocol/configWrite.ts";
 import { AccountList } from "./AccountList.tsx";
-import { capsPlan, checkRows, rowsOf, spendOf, type CapAccount, type CapRow } from "./caps.ts";
+import {
+  capsPlan,
+  checkRows,
+  liveCurrency,
+  rowsOf,
+  spendOf,
+  type CapAccount,
+  type CapRow,
+} from "./caps.ts";
 
 /** An account as a person tells it apart: its name, else its ID, and the ID too where another has the same name. */
 function nameOf(account: CapAccount, among: readonly CapAccount[]): string {
@@ -140,6 +149,7 @@ export function SpendCaps({ kind, spend, accounts, onSaved }: SpendCapsProps) {
             facts: [
               <>Per change {capCell(row.per_change, row.currency)}</>,
               <>Daily {capCell(row.daily, row.currency)}</>,
+              ...refusedFact(row.currency, liveCurrency(accounts, row.account)),
             ],
           }))}
         />
@@ -178,12 +188,34 @@ export function SpendCaps({ kind, spend, accounts, onSaved }: SpendCapsProps) {
   );
 }
 
-/** A cap as the document holds it, drawn in its currency, or the gap it leaves. */
+/** A cap as the document holds it, drawn in its currency, or the gap it leaves; never a bare number. */
 function capCell(amount: string | undefined, currency: string | undefined) {
   if (amount === undefined || amount.trim() === "") return <Text tone="secondary">Not set</Text>;
-  if (!currency || !/^[A-Za-z]{3}$/.test(currency.trim())) return amount;
-  const read = parseMoney(amount, currency);
-  return "micros" in read ? <Money micros={read.micros} currency={currency} /> : amount;
+  const code = (currency ?? "").trim().toUpperCase();
+  const read = /^[A-Z]{3}$/.test(code) ? parseMoney(amount, code) : null;
+  return read && "micros" in read ? (
+    <Money micros={read.micros} currency={code} />
+  ) : (
+    <Text tone="secondary">set, but not readable as an amount</Text>
+  );
+}
+
+/** Why caps stored in no currency, or in one the account is not in, refuse every request to spend. */
+function refusedFact(stored: string | undefined, live: string) {
+  const code = (stored ?? "").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code))
+    return [
+      <Tag key="refused" size="sm" variant="warning">
+        No currency: spending refused
+      </Tag>,
+    ];
+  if (live !== "" && live !== code)
+    return [
+      <Tag key="refused" size="sm" variant="warning">
+        The account is in {live}: spending refused
+      </Tag>,
+    ];
+  return [];
 }
 
 let fresh = 0;
@@ -202,6 +234,8 @@ function CapsForm({
   onSaved: () => void;
 }) {
   const product = growthProductName(kind);
+  // THE PAGE'S OWN IDS for the rows' headings and the add button, focused when a row goes.
+  const base = useId();
   const [rows, setRows] = useState<CapRow[]>(() => rowsOf(spend, accounts));
   const write = useSettingWrite({ reread: REREAD, onApplied: onSaved });
   const { problems, ok } = useMemo(() => checkRows(rows, accounts), [rows, accounts]);
@@ -265,11 +299,11 @@ function CapsForm({
             <section
               key={row.key}
               role="group"
-              aria-labelledby={`${row.key}-name`}
+              aria-labelledby={`${base}-${row.key}`}
               className="growth-caps__row"
             >
               <div className="growth-caps__head">
-                <h3 id={`${row.key}-name`} className="growth-caps__legend">
+                <h3 id={`${base}-${row.key}`} className="growth-caps__legend">
                   {known?.name.trim()
                     ? `${known.name} (${known.id})`
                     : row.account.trim() || "New account"}
@@ -279,9 +313,10 @@ function CapsForm({
                   size="sm"
                   label={`Remove the caps of ${known ? nameOf(known, accounts) : row.account.trim() || "this account"}`}
                   icon={<XGlyph />}
-                  onClick={() =>
-                    setRows((current) => current.filter((other) => other.key !== row.key))
-                  }
+                  onClick={() => {
+                    setRows((current) => current.filter((other) => other.key !== row.key));
+                    requestAnimationFrame(() => document.getElementById(`${base}-add`)?.focus());
+                  }}
                 />
               </div>
               {row.fixed && row.currencyFixed ? null : (
@@ -382,14 +417,21 @@ function CapsForm({
               {nameOf(account, accounts)}
             </Button>
           ))}
-          <Button size="small" variant="ghost" leadingIcon={<PlusGlyph />} onClick={() => add()}>
+          <Button
+            id={`${base}-add`}
+            size="small"
+            variant="ghost"
+            leadingIcon={<PlusGlyph />}
+            onClick={() => add()}
+          >
             Another account
           </Button>
         </div>
         <SettingWriteStatus
           write={write}
           unchanged="The caps are already so."
-          onReload={onClose}
+          // RELOAD READS THE CAPS AGAIN, so the next save is made over what is there now.
+          onReload={onSaved}
           answersWarning
         />
       </Stack>

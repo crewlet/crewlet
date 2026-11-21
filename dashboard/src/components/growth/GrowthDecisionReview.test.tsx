@@ -174,7 +174,28 @@ test("a refused answer reads the call again, so the card says where it stands", 
   await screen.findByText("Raise the daily budget of Spring sale?");
   fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await waitFor(() => expect(readHeldCall).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull());
+  // A moved target runs nothing if allowed: Allow once is held with why, and Deny stays.
+  expect((await screen.findAllByText(/moved since the agent asked/)).length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "Allow once" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  await waitFor(() => expect(answerHeldCall).toHaveBeenLastCalledWith("h1", "deny", undefined, ""));
+});
+
+test("a call that cannot be read again after a refusal keeps its card, and says both", async () => {
+  vi.mocked(answerHeldCall).mockRejectedValueOnce(new Error("The call moved."));
+  vi.mocked(readHeldCall)
+    .mockResolvedValueOnce(WHOLE)
+    .mockRejectedValueOnce(new Error("The runs could not be read; try again."));
+  render(<GrowthDecision id="h1" onAnswered={() => {}} />);
+  await screen.findByText("Raise the daily budget of Spring sale?");
+  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  expect(await screen.findByText(/The call moved\./)).toBeTruthy();
+  expect(
+    await screen.findByText(/could not be read again: The runs could not be read/),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
 });
 
 test("the next held call opens fresh, never with the last one's note", async () => {

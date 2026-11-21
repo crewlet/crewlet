@@ -62,7 +62,8 @@ export function GrowthDecisionCard({
   receipt,
   failure,
 }: GrowthDecisionCardProps) {
-  const danger = card.act === "account_admin" && card.acts.some((act) => act.danger === true);
+  // ANY ACT THAT CANNOT BE UNDONE waits for a tick: an account act, or a live target's delete.
+  const danger = card.acts.some((act) => act.danger === true);
   // AN AMOUNT WITHOUT ITS CURRENCY cannot be read, so it cannot be allowed here.
   const unpriced = pricedIn(card) === undefined && carriesMoney(card);
   return (
@@ -126,12 +127,19 @@ export function accountLine(card: GrowthCard): string {
   return [`${name}${id}`, account.currency, account.time_zone].filter(Boolean).join(" · ");
 }
 
+/** Whether a public act publishes text (a reply, a post), rather than changing what customers see. */
+function posts(card: GrowthCard): boolean {
+  return card.act === "public_post" && card.acts.every((act) => act.text !== undefined);
+}
+
 function summaryOf(card: GrowthCard, question: string): string {
-  if (card.act === "public_post") {
-    const n = card.acts.length;
-    return `${question} ${n === 1 ? "It is" : `All ${n} are`} published on ${growthProductName(card.product)}, where anyone can read ${n === 1 ? "it" : "them"}, and allowed or denied ${n === 1 ? "as one" : "together"}.`;
-  }
-  return question;
+  if (card.act !== "public_post") return question;
+  const n = card.acts.length;
+  const product = growthProductName(card.product);
+  const together = `allowed or denied ${n === 1 ? "as one" : "together"}`;
+  return posts(card)
+    ? `${question} ${n === 1 ? "It is" : `All ${n} are`} published on ${product}, where anyone can read ${n === 1 ? "it" : "them"}, and ${together}.`
+    : `${question} Customers see ${n === 1 ? "it" : `all ${n}`} on ${product} once ${n === 1 ? "it runs" : "they run"}, and ${n === 1 ? "it is" : "they are"} ${together}.`;
 }
 
 function findingsOf(card: GrowthCard): ReactNode {
@@ -150,16 +158,17 @@ function findingsOf(card: GrowthCard): ReactNode {
 
 function headingOf(card: GrowthCard, state: ProposalState): string | undefined {
   if (card.act !== "public_post" || card.acts.length === 1) return undefined;
-  return state === "applied"
-    ? `What was published (${card.acts.length})`
-    : `What will be published (${card.acts.length})`;
+  const n = card.acts.length;
+  if (!posts(card)) return state === "applied" ? `What changed (${n})` : `What will change (${n})`;
+  return state === "applied" ? `What was published (${n})` : `What will be published (${n})`;
 }
 
 function noteOf(card: GrowthCard): string {
-  const moved =
-    card.act === "public_post"
-      ? "If what it answers changes before it runs, nothing runs and the agent asks again."
-      : "If anything it changes, the caps or the account's currency move before it runs, nothing runs and the agent asks again.";
+  const moved = posts(card)
+    ? "If what it answers changes before it runs, nothing runs and the agent asks again."
+    : card.money
+      ? "If anything it changes, the caps or the account's currency move before it runs, nothing runs and the agent asks again."
+      : "If anything it changes moves before it runs, nothing runs and the agent asks again.";
   const others =
     card.other_open_asks > 0
       ? ` ${card.other_open_asks === 1 ? "Another open ask changes" : `${card.other_open_asks} other open asks change`} the same thing: allowing this one voids ${card.other_open_asks === 1 ? "it" : "them"}.`
@@ -187,7 +196,8 @@ export function growthCardRows(card: GrowthCard): ChangeListRow[] {
   ];
   const many = card.acts.length > 1;
   card.acts.forEach((act, index) => {
-    if (card.act === "public_post")
+    // A PUBLIC ACT WITHOUT TEXT (a live listing's edit, a delete) is drawn as the fields it changes.
+    if (card.act === "public_post" && act.text !== undefined)
       rows.push(publicRow(act, many ? `${index + 1} of ${card.acts.length}` : ""));
     else rows.push(...changeRows(act, currency));
   });
@@ -235,29 +245,36 @@ function changeRows(act: GrowthCardAct, currency: string | undefined): ChangeLis
 function publicRow(act: GrowthCardAct, place: string): ChangeListRow {
   const text = act.text ?? "";
   const length = [...text].length;
-  return {
-    kind: "added",
+  // A REPLY THAT REPLACES ONE shows the words it takes down, whole.
+  const replaced = act.changes.find((change) => !change.money && change.before !== "")?.before;
+  const head = {
     label: place ? `${act.summary}, ${place}` : act.summary,
     block: true,
-    to: (
-      <div className="growth-decision__post">
-        <div className="growth-decision__target">
-          {/* The figure beside the stars: on a tinted row the empty ones are faint. */}
-          {act.target_rating === undefined ? null : (
-            <Rating value={act.target_rating} size="xs" showValue />
-          )}
-          <span className="growth-decision__author">{act.target_author ?? act.target}</span>
-        </div>
-        {act.target_excerpt ? (
-          <q className="growth-decision__excerpt">{act.target_excerpt}</q>
-        ) : null}
-        <p className="growth-decision__text">{text}</p>
-      </div>
-    ),
     note: act.text_limit
       ? `${length.toLocaleString()} of ${act.text_limit.toLocaleString()} characters`
       : undefined,
   };
+  const post = (
+    <div className="growth-decision__post">
+      <div className="growth-decision__target">
+        {/* The figure beside the stars: on a tinted row the empty ones are faint. */}
+        {act.target_rating === undefined ? null : (
+          <Rating value={act.target_rating} size="xs" showValue />
+        )}
+        <span className="growth-decision__author">{act.target_author ?? act.target}</span>
+      </div>
+      {act.target_excerpt ? <q className="growth-decision__excerpt">{act.target_excerpt}</q> : null}
+      <p className="growth-decision__text">{text}</p>
+    </div>
+  );
+  return replaced === undefined
+    ? { kind: "added", ...head, to: post }
+    : {
+        kind: "changed",
+        ...head,
+        from: <p className="growth-decision__text">{replaced}</p>,
+        to: post,
+      };
 }
 
 function moneyRow(money: GrowthCardMoney, currency: string, product: string): ChangeListRow {

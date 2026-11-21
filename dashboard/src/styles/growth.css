@@ -130,6 +130,11 @@
   min-width: 0;
 }
 
+.growth-connection__state {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
 .growth-connection__roles {
   display: flex;
   flex-wrap: wrap;

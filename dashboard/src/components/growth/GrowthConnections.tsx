@@ -71,6 +71,10 @@ export function GrowthConnections({
               {nameOf(connection)}
             </Text>
             <span className="growth-connection__identity">{breakable(connection.identity)}</span>
+            {/* Where it stands, in the engine's words: a team the engine cannot reach says so. */}
+            {connection.state ? (
+              <span className="growth-connection__state">{connection.state}</span>
+            ) : null}
           </div>
           <div className="growth-connection__roles">
             {connection.roles_held.length === 0 ? (

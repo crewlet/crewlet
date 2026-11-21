@@ -286,3 +286,61 @@ test("Allow once held for a denial on its way says why beside it", () => {
   expect(screen.getAllByText("Sending your denial.").length).toBeGreaterThan(0);
   expect(screen.queryByText("Applying")).toBeNull();
 });
+
+test("a public act without text is drawn as the fields it changes, and a live delete waits for a tick", () => {
+  const live: GrowthCard = {
+    ...spend(),
+    act: "public_post",
+    product: "app_store_connect",
+    money: null,
+    acts: [
+      {
+        target: "Nimbus Notes, version 4.2",
+        summary: "change AppInfoLocalizations",
+        changes: [
+          {
+            field: "subtitle",
+            label: "Subtitle",
+            before: "Notes that sync",
+            after: "Notes for teams",
+          },
+        ],
+      },
+      { target: "Spring event", summary: "delete AppEvents", changes: [], danger: true },
+    ],
+  };
+  draw(live);
+  expect(screen.getByText("Notes that sync")).toBeTruthy();
+  expect(screen.getByText("Notes for teams")).toBeTruthy();
+  expect(screen.getByText(/Customers see all 2 on/)).toBeTruthy();
+  expect(screen.queryByText(/where anyone can read/)).toBeNull();
+  expect(screen.getByText("What will change (2)")).toBeTruthy();
+  expect(screen.getByRole("checkbox", { name: /cannot be undone/ })).toBeTruthy();
+});
+
+test("a reply that replaces one shows the words it takes down", () => {
+  const card: GrowthCard = {
+    ...spend(),
+    act: "public_post",
+    money: null,
+    acts: [
+      {
+        target: "review 1",
+        summary: "reply to a review",
+        text: "Fixed in 4.2, thank you.",
+        target_author: "A reader",
+        changes: [
+          {
+            field: "responseBody",
+            label: "Reply",
+            before: "We are looking into it.",
+            after: "Fixed in 4.2, thank you.",
+          },
+        ],
+      },
+    ],
+  };
+  draw(card);
+  expect(screen.getByText("We are looking into it.")).toBeTruthy();
+  expect(screen.getByText("Fixed in 4.2, thank you.")).toBeTruthy();
+});

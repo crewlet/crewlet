@@ -55,6 +55,8 @@ function Decision({ id, onAnswered, onBusy }: GrowthDecisionProps) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"once" | "deny" | null>(null);
   const [refusal, setRefusal] = useState("");
+  // Why the call could not be read again after a refusal: said beside it, the card kept.
+  const [unread, setUnread] = useState("");
   useEffect(() => {
     let live = true;
     readHeldCall(id).then(
@@ -70,6 +72,7 @@ function Decision({ id, onAnswered, onBusy }: GrowthDecisionProps) {
     setBusy(how);
     onBusy?.(true);
     setRefusal("");
+    setUnread("");
     try {
       const sent = await answerHeldCall(
         id,
@@ -81,7 +84,9 @@ function Decision({ id, onAnswered, onBusy }: GrowthDecisionProps) {
     } catch (err) {
       setRefusal(refusalText(err));
       // A REFUSED ANSWER may mean the call moved or lapsed: read it again, so the card says where it stands.
-      readHeldCall(id).then(setWhole, (again: unknown) => setFailed(refusalText(again)));
+      readHeldCall(id).then(setWhole, (again: unknown) =>
+        setUnread(`The call could not be read again: ${refusalText(again)}`),
+      );
     } finally {
       setBusy(null);
       onBusy?.(false);
@@ -94,7 +99,7 @@ function Decision({ id, onAnswered, onBusy }: GrowthDecisionProps) {
       <WholeCall
         whole={whole}
         busy={busy}
-        refusal={refusal}
+        refusal={[refusal, unread].filter(Boolean).join(" ")}
         onAllow={() => void answer("once")}
         onDeny={() => void answer("deny")}
       />
@@ -103,15 +108,21 @@ function Decision({ id, onAnswered, onBusy }: GrowthDecisionProps) {
     <GrowthDecisionCard
       card={whole.card}
       question={whole.question}
-      // A MOVED TARGET runs nothing if allowed: the card says so and offers no answer.
-      state={busy === "once" ? "applying" : whole.card.moved ? "stale" : "pending"}
-      // A DENIAL ON ITS WAY holds Allow once with what is happening, never "Applying".
-      held={busy === "deny" ? "Sending your denial." : undefined}
+      state={busy === "once" ? "applying" : "pending"}
+      // A DENIAL ON ITS WAY holds Allow once with what is happening, never "Applying". A MOVED
+      // TARGET runs nothing if allowed: Deny stays, and the agent asks again on what is there now.
+      held={
+        busy === "deny"
+          ? "Sending your denial."
+          : whole.card.moved
+            ? "What this changes moved since the agent asked, so allowing it would run nothing. Deny it, and the agent asks again."
+            : undefined
+      }
       note={note}
       onNote={setNote}
       onAllow={() => void answer("once")}
       onDeny={() => void answer("deny")}
-      refusal={refusal ? { sentence: refusal } : undefined}
+      refusal={refusal ? { sentence: refusal, hint: unread || undefined } : undefined}
     />
   );
 }

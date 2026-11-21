@@ -6,7 +6,7 @@
 
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import type { GrowthConnection, GrowthRoleOffer } from "~/contract/growth.ts";
+import type { GrowthConnection, GrowthLevel, GrowthRoleOffer } from "~/contract/growth.ts";
 import { GrowthConnections, accountStateWords, breakable } from "./GrowthConnections.tsx";
 import { GrowthRoles, levelsWords } from "./GrowthRoles.tsx";
 
@@ -93,7 +93,10 @@ test("each connection says who Crewlet is there, the roles it holds and every ac
   expect(within(main).getByText("Nimbus web")).toBeTruthy();
   expect(within(main).getAllByText("987654321")).toHaveLength(1);
   expect(within(main).getByText("Suspended by the vendor")).toBeTruthy();
+  // Where each connection stands, in the engine's words.
+  expect(within(main).getByText("connected")).toBeTruthy();
   const eu = screen.getByRole("region", { name: "eu" });
+  expect(within(eu).getByText("connecting")).toBeTruthy();
   expect(within(eu).getByText("Holds no role Crewlet can read.")).toBeTruthy();
   expect(within(eu).getByText("Reaches no account yet.")).toBeTruthy();
   expect(accountStateWords("serving")).toBe("Serving");
@@ -109,4 +112,10 @@ test("an identity too long for a phone may break after its own @, dots and dashe
   const { container } = render(<span>{breakable("crewlet-g-lead@id.example.com")}</span>);
   expect(container.textContent).toBe("crewlet-g-lead@id.example.com");
   expect(container.querySelectorAll("wbr")).toHaveLength(5);
+});
+
+test("a level this build does not know is said as sent, never left blank", () => {
+  expect(levelsWords(["read", "supervise" as GrowthLevel])).toBe(
+    `${levelsWords(["read"])}, supervise`,
+  );
 });

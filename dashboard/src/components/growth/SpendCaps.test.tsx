@@ -41,7 +41,7 @@ const ACCOUNTS = [
   { id: "987-654-3210", name: "Nimbus Japan", currency: "JPY" },
 ];
 
-async function mount(spend: GrowthSpend = SPEND, accounts = ACCOUNTS) {
+async function mount(spend: GrowthSpend = SPEND, accounts = ACCOUNTS, onSaved = () => {}) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
@@ -51,7 +51,7 @@ async function mount(spend: GrowthSpend = SPEND, accounts = ACCOUNTS) {
       <SessionReading>
         <ViewerProvider>
           <Router>
-            <SpendCaps kind="google_ads" spend={spend} accounts={accounts} onSaved={() => {}} />
+            <SpendCaps kind="google_ads" spend={spend} accounts={accounts} onSaved={onSaved} />
           </Router>
         </ViewerProvider>
       </SessionReading>
@@ -185,7 +185,8 @@ test("an account the vendor gives no name is told by its ID everywhere", async (
 });
 
 test("caps another admin saved since the form opened are reloaded, never written over", async () => {
-  await mount();
+  const onSaved = vi.fn();
+  await mount(SPEND, ACCOUNTS, onSaved);
   read.mockResolvedValue(
     documentOf({
       accounts: [
@@ -202,4 +203,22 @@ test("caps another admin saved since the form opened are reloaded, never written
   fireEvent.click(within(dialog).getByRole("button", { name: "Save caps" }));
   expect(await within(dialog).findByText(/Reload to see the caps as they are now/)).toBeTruthy();
   expect(save).not.toHaveBeenCalled();
+  // Reload hands back to the section, which reads the caps again, so the next save is made
+  // over what is there now.
+  fireEvent.click(within(dialog).getByRole("button", { name: /Reload/ }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+});
+
+test("caps the account's currency does not match, or with no currency, are flagged as refusing spend", async () => {
+  await mount({
+    accounts: [
+      { account: "123-456-7890", currency: "USD", per_change: "50", daily: "200" },
+      { account: "987-654-3210", per_change: "500", daily: "2000" },
+    ],
+  });
+  expect(screen.getByText("The account is in EUR: spending refused")).toBeTruthy();
+  expect(screen.getByText("No currency: spending refused")).toBeTruthy();
+  // A cap that cannot be drawn as money is never drawn as a bare number.
+  expect(screen.queryByText("500")).toBeNull();
+  expect(screen.getAllByText(/not readable as an amount/)).toHaveLength(2);
 });
