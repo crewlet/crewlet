@@ -255,6 +255,12 @@
 // A collection PAUSES the box, for a relaunch, a park or a retry to reuse. A job
 // its turn's cap ended is ended first, its bridge session closed before.
 //
+// # A node's collections
+//
+// A read of a run's box made on this node holds one of its turns for the read
+// alone ([Coordinator.collectionSlot]), since the gate does not admit them all:
+// a completion ended at its deadline and an ending start no turn.
+//
 // # Box host failures
 //
 // Four kinds, handled apart: the box gone ([ErrBoxGone]); the host silent

@@ -995,7 +995,11 @@ describe("llmChain", () => {
   test("reads all three shapes the engine marshals", () => {
     expect(llmChain("fast")).toEqual(["fast"]);
     expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
-    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
+    expect(llmChain({ default: "big", judge: "tiny", triage: "fast" })).toEqual([
+      "big",
+      "tiny",
+      "fast",
+    ]);
   });
 
   // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the

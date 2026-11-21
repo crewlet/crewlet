@@ -2,6 +2,8 @@ package engine
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -80,6 +83,80 @@ func TestTheDefaultLeaseTTLIsNotBelowTheFloor(t *testing.T) {
 	}
 }
 
+// A NODE'S PAGE CACHE IS SHARED BY EVERY CONNECTION IT HOLDS: on a data node
+// both files', the replicated estate's pinned writers for the whole register
+// included; on a node without data its own file's alone.
+//
+// Mutation: size it by the node's own file's connections on a data node.
+func TestANodesPageCacheIsSharedByEveryConnectionItHolds(t *testing.T) {
+	t.Parallel()
+	const memory = int64(8) << 30
+	for _, c := range []struct {
+		roles []string
+		logs  int
+	}{
+		{nil, estateLogs()},
+		{[]string{string(placement.RoleSeats)}, 0},
+	} {
+		b := testBootstrap(t)
+		b.Node.Roles = c.roles
+		b.Store.Scratch = c.logs == 0
+		opts := storeOptions(&b, nil, memory)
+		if want := store.PageCacheKiB(memory, opts.NodeConnections(c.logs)); opts.PageCacheKiB != want {
+			t.Errorf("roles %v: each connection caches %d KiB, want %d, a share over the %d connections "+
+				"of the files the node holds", c.roles, opts.PageCacheKiB, want, opts.NodeConnections(c.logs))
+		}
+	}
+}
+
+// THE CONCEPT PAGE COUNTS THE WRITERS A DATA NODE PINS BY THE REGISTER: it
+// sizes a Gitlet node's page cache by them, and gitlet/cache's docs test reads
+// the count off the page.
+//
+// Mutation: register a log, or state another count on the page.
+func TestTheConceptPageCountsTheWritersADataNodePins(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "gitlet.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("one pinned writer for each of its %d state logs", estateLogs())
+	if !strings.Contains(strings.Join(strings.Fields(string(raw)), " "), want) {
+		t.Errorf("docs/concepts/gitlet.md does not say %q", want)
+	}
+}
+
+// THE DEPLOYMENT GUIDE SIZES A DATA NODE'S PAGE CACHE AS THE NODE DOES: its
+// connections at the default readers on up to eight cores, and each row's
+// figure for one connection and for all of them.
+//
+// Mutations, each red: another share, floor or cap; a log more or less.
+func TestTheDeploymentGuideSizesThePageCacheAsTheNodeDoes(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "deployment.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := strings.Join(strings.Fields(string(raw)), " ")
+	b := testBootstrap(t)
+	b.Store.MaxOpenConns = store.MinReaderConns
+	conns := storeOptions(&b, nil, 0).NodeConnections(estateLogs())
+	wants := []string{fmt.Sprintf("A data node on up to eight cores holds %d connections", conns)}
+	for _, gib := range []int64{2, 4, 8, 16} {
+		kib := storeOptions(&b, nil, gib<<30).PageCacheKiB
+		all := fmt.Sprintf("%d MiB", int64(conns*kib)>>10)
+		if int64(conns*kib)>>10 == 1024 {
+			all = "1 GiB"
+		}
+		wants = append(wants, fmt.Sprintf("| %d GiB", gib), fmt.Sprintf("| %d MiB | %s |", kib>>10, all))
+	}
+	for _, want := range wants {
+		if !strings.Contains(page, want) {
+			t.Errorf("docs/guides/deployment.md does not say %q", want)
+		}
+	}
+}
+
 // A DATA NODE HOLDS THE REPLICATED ESTATE SIZED FOR THE WHOLE REGISTER, AND A
 // NODE WITHOUT `data` HOLDS NONE. Each domain's apply loop pins one connection
 // of the replicated pool for life, and an applier short of one never moves its
@@ -109,7 +186,7 @@ func TestADataNodeHoldsTheEstateForTheWholeRegister(t *testing.T) {
 			b.Node.Roles = c.roles
 			b.Store.Path = filepath.Join(t.TempDir(), "node.db")
 			b.Store.Scratch = !c.holds
-			opts := storeOptions(&b, nil)
+			opts := storeOptions(&b, nil, 0)
 			if opts.Scratch == c.holds {
 				t.Errorf("roles %v open the node's own file with scratch=%v, want %v: "+
 					"only a node that holds no data may discard its store at boot",

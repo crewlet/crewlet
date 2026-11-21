@@ -1,6 +1,7 @@
 package executordomain
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -473,8 +475,9 @@ func (h Head) Absorbs() []string {
 
 // The statements a launch's reads run.
 const (
-	// headStatement is a conversation's HEAD ([Head.Session]); a turn that
-	// read none sorts after every turn that did. An end's position is unique
+	// headStatement is a conversation's HEAD ([Head.Session]) among its own
+	// rows, which [headOf] weighs beside the turns it reads as served; a turn
+	// that read none sorts after every turn that did. An end's position is unique
 	// among the rows holding one, so the pair is a total order, which the
 	// line index serves without a sort.
 	headStatement = `SELECT ` + sessionColumns + `
@@ -483,8 +486,8 @@ const (
 		  AND object IS NOT NULL
 		ORDER BY read_through DESC, end_seq DESC LIMIT 1`
 
-	// endingsStatement is a conversation's other ended turns, the newest
-	// first, and endingsCountStatement how many there are. An end's position
+	// endingsStatement is a conversation's other ended turns of its own, the
+	// newest first, and endingsCountStatement how many there are. An end's position
 	// is unique, so it alone orders them, served by the conversation's index.
 	endingsStatement = `SELECT ` + sessionColumns + `
 		FROM executor_sessions INDEXED BY ` + conversationIdx + `
@@ -514,6 +517,94 @@ const (
 		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 )
 
+// THE TURNS A CONVERSATION READS AS SERVED (package doc, "A turn serves every
+// conversation its run read"): each a turn's one row, reached from the served
+// rows in the order their ends applied, which the line index serves without a
+// sort. A served row is placed at its end, so that one position orders it both
+// as a head and as an ending.
+var (
+	servedSelect = `SELECT ` + servedColumns() + `
+		FROM executor_session_serves AS v INDEXED BY ` + servesLineIdx + `
+		CROSS JOIN executor_sessions AS s INDEXED BY ` + sessionKey + `
+		WHERE v.agent_handle = ? AND v.conversation_key = ?
+		  AND s.agent_handle = v.agent_handle AND s.turn_id = v.turn_id AND s.end_seq IS NOT NULL`
+	servedCount = `SELECT COUNT(*)
+		FROM executor_session_serves AS v INDEXED BY ` + servesLineIdx + `
+		CROSS JOIN executor_sessions AS s INDEXED BY ` + sessionKey + `
+		WHERE v.agent_handle = ? AND v.conversation_key = ?
+		  AND s.agent_handle = v.agent_handle AND s.turn_id = v.turn_id AND s.end_seq IS NOT NULL`
+
+	// servedHeadStatement is the newest of them that names a session.
+	servedHeadStatement = servedSelect + ` AND s.object IS NOT NULL
+		ORDER BY v.end_seq DESC LIMIT 1`
+
+	// servedEndingsStatement is the others but the head, the newest first,
+	// and servedEndingsCountStatement how many; servedSiblingsCountStatement
+	// how many of those name a session.
+	servedEndingsStatement = servedSelect + ` AND v.turn_id <> ?
+		ORDER BY v.end_seq DESC LIMIT ?`
+	servedEndingsCountStatement  = servedCount + ` AND v.turn_id <> ?`
+	servedSiblingsCountStatement = servedCount + ` AND s.object IS NOT NULL AND v.turn_id <> ?`
+)
+
+// servedColumns is [sessionColumns] named under the served reads' alias for
+// the turn's row, `s`.
+func servedColumns() string {
+	fields := strings.Split(sessionColumns, ",")
+	for i, f := range fields {
+		fields[i] = "s." + strings.TrimSpace(f)
+	}
+	return strings.Join(fields, ", ")
+}
+
+// headOf is a conversation's head: of its own ended turns and those it reads
+// as served that name a session, the one that read it last. THE ONE RULE OF
+// THE LINE, as [headStatement] orders a conversation's own rows: the newest
+// read, then the newest end. A served turn read the conversation where its end
+// applied, so it outranks every turn of the conversation that read before that,
+// and one that read at or after it outranks it by its later end.
+func headOf(ctx context.Context, tx *sql.Tx, handle, conversationKey string) (*Session, error) {
+	own, err := oneSession(ctx, tx, headStatement, handle, conversationKey)
+	if err != nil {
+		return nil, err
+	}
+	srv, err := oneSession(ctx, tx, servedHeadStatement, handle, conversationKey)
+	switch {
+	case err != nil:
+		return nil, err
+	case srv == nil:
+		return own, nil
+	case own == nil:
+		return srv, nil
+	}
+	at := srv.EndedAtPosition.Packed()
+	if read := own.ReadThrough.Packed(); read > at || (read == at && own.EndedAtPosition.Packed() > at) {
+		return own, nil
+	}
+	return srv, nil
+}
+
+// endingsOf is a conversation's ended turns but the head, its own and those it
+// reads as served, the newest end first, at most [MaxEndings], and how many
+// there are.
+func endingsOf(ctx context.Context, tx *sql.Tx, handle, conversationKey, head string) ([]Session, int, error) {
+	own, ownTotal, err := boundedSessions(ctx, tx, endingsStatement, endingsCountStatement, MaxEndings,
+		handle, conversationKey, head)
+	if err != nil {
+		return nil, 0, err
+	}
+	srv, srvTotal, err := boundedSessions(ctx, tx, servedEndingsStatement, servedEndingsCountStatement,
+		MaxEndings, handle, conversationKey, head)
+	if err != nil {
+		return nil, 0, err
+	}
+	all := slices.Concat(own, srv)
+	slices.SortFunc(all, func(a, b Session) int {
+		return cmp.Compare(b.EndedAtPosition.Packed(), a.EndedAtPosition.Packed())
+	})
+	return all[:min(len(all), MaxEndings)], ownTotal + srvTotal, nil
+}
+
 // Head reads a conversation's head, its other ended turns and its siblings, in
 // one transaction, at the level fresh asks for.
 //
@@ -532,7 +623,7 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 	answer, err := r.log.Read(ctx, fresh.Query(ConversationScope(handle, conversationKey, ""), false),
 		func(tx *sql.Tx) error {
 			out = Head{}
-			head, headErr := oneSession(ctx, tx, headStatement, handle, conversationKey)
+			head, headErr := headOf(ctx, tx, handle, conversationKey)
 			if headErr != nil {
 				return headErr
 			}
@@ -541,8 +632,7 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 			if head != nil {
 				out.Session, headTurn = head, head.Turn
 			}
-			endings, total, endingsErr := boundedSessions(ctx, tx, endingsStatement,
-				endingsCountStatement, MaxEndings, handle, conversationKey, headTurn)
+			endings, total, endingsErr := endingsOf(ctx, tx, handle, conversationKey, headTurn)
 			if endingsErr != nil {
 				return endingsErr
 			}
@@ -550,11 +640,16 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 			// them: the query takes the newest, and they read oldest first.
 			slices.Reverse(endings)
 			out.Endings, out.EndingsOmitted = endings, total-len(endings)
-			var withSessions int
+			var withSessions, servedSessions int
 			if countErr := tx.QueryRowContext(ctx, siblingsCountStatement,
 				handle, conversationKey, headTurn).Scan(&withSessions); countErr != nil {
 				return countErr
 			}
+			if countErr := tx.QueryRowContext(ctx, servedSiblingsCountStatement,
+				handle, conversationKey, headTurn).Scan(&servedSessions); countErr != nil {
+				return countErr
+			}
+			withSessions += servedSessions
 			for i := len(endings) - 1; i >= 0 && len(out.Siblings) < MaxSiblings; i-- {
 				if endings[i].HasObject() {
 					out.Siblings = append(out.Siblings, endings[i])
@@ -692,8 +787,8 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 }
 
 // headsOf is the head of every distinct conversation sessions name, keyed by
-// the conversation's key: the turn the conversation's head statement answers
-// ([Reader.Head]'s own), or "" where the conversation has none. A row with no
+// the conversation's key: the turn [headOf] answers ([Reader.Head]'s own), or
+// "" where the conversation has none. A row with no
 // conversation names none, and is not keyed.
 //
 // One seek per conversation, in the caller's transaction: never a head chosen
@@ -707,7 +802,7 @@ func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session)
 		if _, read := out[s.ConversationKey]; read {
 			continue
 		}
-		head, err := oneSession(ctx, tx, headStatement, handle, s.ConversationKey)
+		head, err := headOf(ctx, tx, handle, s.ConversationKey)
 		if err != nil {
 			return nil, err
 		}

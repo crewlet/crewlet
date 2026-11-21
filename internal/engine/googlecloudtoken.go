@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
@@ -17,7 +18,7 @@ import (
 // An agent's own Google Cloud access token: the seat acts as its own service
 // account (made by the access sync, kept in the ledger by unique ID), and the
 // engine mints its token by impersonating it as the provisioner
-// ([googlecloud.Client.SeatToken]), named `${GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>}`
+// ([googleauth.Connection.SeatToken]), named `${GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>}`
 // and issued at use through [seatIssuer] (issued.go). Its outcomes:
 //   - ACCOUNT NOT READY (none in the ledger yet, or a 403/404 within
 //     [googlecloud.GrantSettle] of the grant): a wait nobody owes, asked again
@@ -37,11 +38,11 @@ var errGoogleCloudSettling = fmt.Errorf("engine: Google is still making the agen
 var errGoogleCloudUnread = errors.New("engine: the seat access ledger could not be read")
 
 // googleCloudSeatIssuer issues each agent its own service account's token
-// through the process's one [googlecloud.SeatIssuer], so an account costs one mint
+// through the process's one [googleauth.SeatIssuer], so an account costs one mint
 // an hour however many readers ask.
 type googleCloudSeatIssuer struct {
 	engine *Engine
-	tokens *googlecloud.SeatIssuer
+	tokens *googleauth.SeatIssuer
 	// http is the transport Google is reached through; nil in production.
 	http *http.Client
 }
@@ -81,7 +82,8 @@ func (g googleCloudSeatIssuer) issuing(c *Company, seat *org.Role, env *config.R
 		case !held:
 			return issuedToken{}, errGoogleCloudSettling
 		}
-		token, err := g.tokens.Token(ctx, client, rec.Account.ID, life)
+		token, err := g.tokens.Token(ctx, client.Connection(), rec.Account.ID,
+			[]string{googleauth.ScopeCloudPlatform}, life)
 		switch {
 		case err != nil && googlecloud.StillGranting(err) && time.Now().Before(googlecloud.GrantSettled(rec)):
 			return issuedToken{}, fmt.Errorf("%w: %w", errGoogleCloudSettling, err)
@@ -131,7 +133,7 @@ func (googleCloudSeatIssuer) words() issuedWords {
 		refused: "it is not issued until somebody fixes what Google names, on the Google Cloud connection " +
 			"or the agent's row of its Agents tab",
 		// NOT "at the next attempt": the issuer holds a refused mint for the
-		// restart schedule's wait ([googlecloud.SeatIssuer.RetryWait]).
+		// restart schedule's wait ([googleauth.SeatIssuer.RetryWait]).
 		retried: "Google is asked for it again on the restart schedule",
 	}
 }

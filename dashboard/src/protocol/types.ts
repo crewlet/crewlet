@@ -1595,6 +1595,7 @@ export interface ConfigRole {
   llm_subagent?: ProviderKeys;
   llm_auxiliary?: ProviderKeys;
   llm_judge?: ProviderKeys;
+  llm_triage?: ProviderKeys;
   /** Unset means the company default, so this is three-valued. */
   learning_enabled?: boolean | null;
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
@@ -1845,6 +1846,7 @@ export type PhaseLLM =
       subagent?: ProviderKeys;
       auxiliary?: ProviderKeys;
       judge?: ProviderKeys;
+      triage?: ProviderKeys;
     };
 
 /**

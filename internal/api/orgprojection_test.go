@@ -144,6 +144,7 @@ var roleFields = map[string]classified{
 	"LLMSubagent":          {exposureResolved, "provider keys, resolved into the worker chain", "llm"},
 	"LLMAuxiliary":         {exposureResolved, "provider keys, resolved into the auxiliary chain", "llm"},
 	"LLMJudge":             {exposureResolved, "provider keys, resolved into the judge's chain", "llm"},
+	"LLMTriage":            {exposureResolved, "provider keys, resolved into the busy seat's triage chain", "llm"},
 	"LearningEnabled":      {exposureGuarded, "an operational setting", ""},
 	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
 	"MCPLimits":            {exposureGuarded, "the limits a lead holds the seat's MCP servers to; which servers it holds is resolved into tool_sources, and a lead reads a seat's own through the config query", ""},
@@ -582,7 +583,7 @@ func (f *filler) company() *config.Company {
 // now that the projection is DERIVED from the company the node runs.
 var agentOnlyRoleFields = map[string]bool{
 	"LLM": true, "LLMReview": true, "LLMSubagent": true, "LLMAuxiliary": true,
-	"LLMJudge": true, "Sandbox": true, "TokenBudget": true,
+	"LLMJudge": true, "LLMTriage": true, "Sandbox": true, "TokenBudget": true,
 	"Workers": true, "LearningEnabled": true, "Schedules": true,
 	"MCPEnv": true, "MCPLimits": true, "BehavioralGuidelines": true,
 	// How an AGENT seat is drawn; a human seat is drawn as the person it
@@ -1198,7 +1199,7 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 				// The flat field wins over the mapping's own review.
 				"review":  {"big", "fast"},
 				"execute": {"fast"}, "subagent": {"fast"}, "auxiliary": {"fast"},
-				"judge": {"fast"}, "onboarding": {"fast"},
+				"judge": {"fast"}, "onboarding": {"fast"}, "triage": {"fast"},
 			},
 			// jira's grant names it; github's names a unit it does not
 			// sit in. Declaration order, builtins first.
@@ -1209,7 +1210,7 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 			llm: map[string][]string{
 				"execute": {"default"}, "review": {"default"}, "subagent": {"default"},
 				"auxiliary": {"default"}, "judge": {"default"},
-				"onboarding": {"default"},
+				"onboarding": {"default"}, "triage": {"default"},
 			},
 			// Through its unit's grant.
 			tools: []string{"builtin", "mcp:github", "mcp:search"},
