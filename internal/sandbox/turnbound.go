@@ -67,7 +67,9 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 // since the turn has no time left; asked by an announcement, or by a held
 // completion's backstop ([Coordinator.recheckHeld]). No turn starts, so no
 // admission is asked, but its claim meets the seat's recovery gate
-// (recoverygate.go). See the package doc, "What bounds a collected job's turn".
+// (recoverygate.go), and a read of its box made here holds one of the node's
+// collections ([Coordinator.boxResult]). See the package doc, "What bounds a
+// collected job's turn".
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {

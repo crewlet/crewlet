@@ -352,8 +352,9 @@
 // 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
-// flight at once: one per seat collecting on this node and up to the box host's
-// boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its worst,
+// flight at once: the node's own, at most its turns (internal/sandbox's
+// collections), up to the box host's boxReadsHeld (64) reads for its peers,
+// each about 5.3 MiB at its worst,
 // 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
 // scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
 // (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
@@ -395,8 +396,8 @@
 // [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
 // the constant beside its measurement, twice over for the heap's growth at the
 // default GOGC: where it hosts boxes, the base tier at its turns
-// (node.max_concurrent; a run collected at its deadline outside the node's
-// gate is past them) and its peers' reads, the takes and both large slots;
+// (node.max_concurrent, bounding every read of its runs' boxes) and its
+// peers' reads, the takes and both large slots;
 // and the transcript reads its API or its seats make. A Gitlet node keeps them
 // before sizing its git lanes and background budget (gitproc's
 // Options.Reserve), from the engine, which alone reads the roles: a registry
