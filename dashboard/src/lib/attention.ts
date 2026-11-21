@@ -40,6 +40,7 @@ import {
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 import { fmtAt, possessive } from "./format.ts";
+import { callsOf, turnById } from "./seatturn.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
@@ -746,10 +747,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       });
       continue;
     }
-    // A live call that has not moved is the condition a spinning row hides.
-    const call = agent.live_call;
-    if (call?.in_progress) {
-      const how = staleness(call.updated_at, now, agent.turn?.stage);
+    // A live call that has not moved is the condition a spinning row hides —
+    // each turn's on its own, since a seat may run several.
+    for (const call of callsOf(agent)) {
+      if (!call.in_progress) continue;
+      const how = staleness(call.updated_at, now, turnById(agent, call.turn_id)?.stage);
       if (how) {
         out.push({
           id: `stale-${agent.agent_id}-${call.turn_id}`,

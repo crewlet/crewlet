@@ -31,9 +31,9 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 	r := newDrainRig(t)
 	var asked atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+		return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 			asked.Add(1)
-			return next(ctx, handle, route)
+			return next(ctx, handle, conversation, route)
 		}
 	}
 	e := r.start(t)
@@ -119,9 +119,9 @@ func gatedSpyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy,
 		Pushes: noPushes{}, Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
-		Gate: func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+		Gate: func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 			asked.Add(1)
-			return gate(ctx, handle, route)
+			return gate(ctx, handle, conversation, route)
 		},
 	})
 	if err != nil {

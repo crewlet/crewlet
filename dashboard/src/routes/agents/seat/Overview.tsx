@@ -83,6 +83,7 @@ import { renderInline } from "~/lib/markdown.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useEngineHealth, useOrg, useExecutors, useSchedules } from "~/lib/store-hooks.ts";
 import { turnSteps } from "~/lib/turnsteps.ts";
+import { callOf, eachTurn, turnOf, turnsOf } from "~/lib/seatturn.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
 import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
@@ -210,7 +211,18 @@ function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps
     <div className="prof-overview">
       <div className="prof-main">
         <Kpis seat={seat} agent={agent} activity={activity} />
-        <CurrentTurn seat={seat} agent={agent} trail={trail} now={now} />
+        {/* ONE CARD PER TURN the seat is on (`eachTurn`): a seat runs up
+            to its sandbox.max_concurrent_runs turns at once. */}
+        {(agent ? eachTurn(agent) : [undefined]).map((row) => (
+          <CurrentTurn
+            key={turnIdOf(row) || "none"}
+            seat={seat}
+            agent={row}
+            concurrent={turnsOf(agent).length}
+            trail={trail}
+            now={now}
+          />
+        ))}
         <div className="prof-pair">
           <AssignedWork seat={seat} work={work} now={now} />
           <TurnsPerDay activity={activity} row={row} />
@@ -365,11 +377,15 @@ function Kpis({
 function CurrentTurn({
   seat,
   agent,
+  concurrent,
   trail,
   now,
 }: {
   seat: Seat;
+  /** The seat's row, narrowed to the one turn this card draws (`eachTurn`). */
   agent: AgentRow | undefined;
+  /** How many turns the seat is on, so the read of its newest turn rows holds this one's. */
+  concurrent: number;
   /** The reader may read this seat's trail (`mayReadTrail`). */
   trail: boolean;
   now: number;
@@ -379,8 +395,8 @@ function CurrentTurn({
   const ask = useServicesAsk();
   const executors = useExecutors();
   const phone = useScreenBelow(PHONE_BREAKPOINT);
-  const turn = agent?.turn ?? null;
-  const call = agent?.live_call ?? null;
+  const turn = turnOf(agent);
+  const call = callOf(agent);
   const turnId = turnIdOf(agent);
   const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
   const key = ref?.key ?? "";
@@ -404,11 +420,11 @@ function CurrentTurn({
     { id: asked },
     { enabled: viewer.worklet && ask.tracker && onTurn && asked !== "" },
   );
-  // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
-  // turn row is this turn's once any phase of it has completed.
+  // THE PHASES THIS TURN HAS RECORDED, for its tokens: among the seat's
+  // newest turn rows, one per turn it is on, once any phase of it completed.
   const newest = useQuery(
     "turns",
-    { seat: seat.handle, limit: 1 },
+    { seat: seat.handle, limit: Math.max(1, concurrent) },
     { enabled: trail && onTurn && seat.handle !== "", pollMs: 20_000 },
   );
   if (!agent || !onTurn) {
@@ -469,7 +485,7 @@ function CurrentTurn({
   const sandbox = executors.find((s) => s.turn_id === turnId) ?? null;
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   const started = Date.parse(turn?.started_at ?? call?.started_at ?? "");
-  const tokens = turnTokens(turnId, newest.data?.turns?.[0], !!newest.data, agent);
+  const tokens = turnTokens(turnId, newest.data?.turns, !!newest.data, agent);
   const rows = feedRows(agent);
   const round = roundWords(agent);
   return (

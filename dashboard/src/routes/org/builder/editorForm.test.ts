@@ -509,6 +509,7 @@ describe("a seat's advanced settings", () => {
       placementLabels: ["region=eu", "tier = gpu"],
       pauseTTL: "0",
       maxTurns: "30",
+      maxRuns: "2",
     };
     const [part] = seatParts("seat:dev", data, initial, form, { editableHandle: false });
     expect(part).toEqual({
@@ -522,6 +523,7 @@ describe("a seat's advanced settings", () => {
         { path: ["placement", "labels"], value: { region: "eu", tier: "gpu" } },
         { path: ["sandbox", "pause_ttl_seconds"], value: 0 },
         { path: ["sandbox", "max_turns"], value: 30 },
+        { path: ["sandbox", "max_concurrent_runs"], value: 2 },
       ],
     });
   });

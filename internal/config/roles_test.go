@@ -141,6 +141,7 @@ roles:
       gitlab: {enabled: true}
     sandbox:
       max_turns: 40
+      max_concurrent_runs: 3
       pause_ttl_seconds: 0
       env: {GITHUB_TOKEN: "${GH}"}
       mcp: {servers: [gitlab]}
@@ -171,6 +172,10 @@ roles:
 		seat.Sandbox.PauseTTLSeconds == nil || *seat.Sandbox.PauseTTLSeconds != 0 ||
 		seat.Sandbox.Env["GITHUB_TOKEN"] != "${GH}" || !slices.Equal(seat.Sandbox.MCP.Servers, []string{"gitlab"}) {
 		t.Fatalf("sandbox = %+v", seat.Sandbox)
+	}
+	if got := seat.Sandbox.ConcurrentRuns(); got != 3 {
+		t.Fatalf("the seat's run cap = %d, want the 3 it names: the engine reads the runtime seat, "+
+			"so a cap the conversion drops is one no admission enforces", got)
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {
 		t.Fatalf("mcp_env = %v", seat.MCPEnv)

@@ -1,16 +1,22 @@
 package node
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // ReleaseSeatTurnHoldForTest lifts [HoldSeatTurn] off handle's inbox while the
 // turn that took it is still running, so a case can stand in for a mailbox
 // delivery fetched before that hold took effect.
 func (n *Node) ReleaseSeatTurnHoldForTest(handle string) {
 	n.mu.Lock()
-	held := n.running[handle]
+	var held []*admission
+	if seat := n.running[handle]; seat != nil {
+		held = slices.Clone(seat.turns)
+	}
 	n.mu.Unlock()
-	if held != nil {
-		n.holdInbox(context.Background(), held, false)
+	for _, turn := range held {
+		n.holdInbox(context.Background(), turn, false)
 	}
 }
 
@@ -30,3 +36,7 @@ func (n *Node) SeatTurnRunningForTest(handle string) bool {
 func (n *Node) OnBusyRefusalForTest(hook func(handle string)) {
 	n.refusedBusy = hook
 }
+
+// MailboxTurnForTest marks ctx as a mailbox delivery's, which [Node.AdmitTurn]
+// admits on the mailbox's terms: waiting for room rather than refused.
+func MailboxTurnForTest(ctx context.Context) context.Context { return mailboxTurn(ctx) }

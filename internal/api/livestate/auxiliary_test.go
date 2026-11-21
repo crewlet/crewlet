@@ -47,7 +47,7 @@ func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {
 		"agent_id": "Lead", "provider_keys": []any{"cheap"}, "retry_at": "2026-06-14T13:00:00Z",
 	}, at("2026-06-14T12:00:09Z"), id("park-1")))
 	before := overlayOf(t, s, "Lead")
-	if before.Turn != nil || before.Activity != livestate.ActivityStopped {
+	if soleTurn(t, before.Turns) != nil || before.Activity != livestate.ActivityStopped {
 		t.Fatalf("set-up: overlay = %+v, want an ended turn on a stopped seat", before)
 	}
 
@@ -67,8 +67,8 @@ func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {
 		t.Error("an auxiliary record moved its seat, so a screen is pushed a change nothing made")
 	}
 	after := overlayOf(t, s, "Lead")
-	if after.Turn != nil {
-		t.Errorf("turn = %+v: an auxiliary record after the end reopened the turn", after.Turn)
+	if soleTurn(t, after.Turns) != nil {
+		t.Errorf("turn = %+v: an auxiliary record after the end reopened the turn", soleTurn(t, after.Turns))
 	}
 	if after.Activity != livestate.ActivityStopped || after.StoppedReason == nil ||
 		*after.StoppedReason != livestate.StoppedProvider {

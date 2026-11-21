@@ -685,7 +685,7 @@ function RunningSection({
         const item = turnItemKey(row);
         return (
           <SidebarNav.Item
-            key={row.id}
+            key={`${row.id}:${watch.path.join("/")}`}
             label={name}
             icon={
               <SeatAvatar

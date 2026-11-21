@@ -22,19 +22,20 @@ type postures struct {
 }
 
 func (p postures) SeatPostures() worklet.Posture {
-	return p.state.Posture(agentHandles(p.company))
+	return p.state.Posture(agentSeats(p.company))
 }
 
-// agentHandles is every agent seat in the company, agent id to handle.
-func agentHandles(company func() (*config.Company, *org.Organization)) map[string]string {
+// agentSeats is every agent seat in the company by agent id, with its handle
+// and the runs it holds at once.
+func agentSeats(company func() (*config.Company, *org.Organization)) map[string]livestate.PostureSeat {
 	organization := agentOrganization(company)
 	if organization == nil {
 		return nil
 	}
-	out := map[string]string{}
+	out := map[string]livestate.PostureSeat{}
 	for role := range organization.AllRoles() {
 		if id, ok := organization.AgentIDFor(role); ok {
-			out[id.String()] = role.Handle()
+			out[id.String()] = livestate.PostureSeat{Handle: role.Handle(), Runs: role.Sandbox.ConcurrentRuns()}
 		}
 	}
 	return out

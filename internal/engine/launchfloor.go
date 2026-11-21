@@ -29,6 +29,13 @@ type launchFloor struct {
 	// launch's first request, beside which its brief is counted.
 	static int
 
+	// beside is the room the seat's other runs holding it are counted to
+	// spend, the static floor each ([Engine.besideFloor]): an executor run's
+	// spend is charged at its collection, so a launch beside a running one
+	// would otherwise read room that run is about to take (ADR-0169). Zero for
+	// a seat holding no other run.
+	beside int
+
 	// context is the whole input, cache included, of the last request of the
 	// session the launch continues, zero where it continues none or nothing
 	// measured it; brief is the estimate of the brief it is handed, zero for
@@ -172,6 +179,10 @@ func (f launchFloor) heldFor() string {
 		"has turned over since", f.waited.Period, f.waited.Label)
 }
 
+// needs is the room a launch needs left on its seat's windows: its own floor
+// ([launchFloor.tokens]) and what the seat's other runs are counted to spend.
+func (f launchFloor) needs() int { return f.tokens() + f.beside }
+
 // tokens is the floor, in tokens: a known context's with its brief, the static
 // floor with its brief beside it where no context is known, and a held floor
 // ([launchFloor.held]) at the static floor where that fits in its room and at
@@ -293,6 +304,12 @@ type floorRefusal struct {
 // floor alone.
 func (r *floorRefusal) Error() string {
 	f := r.floor
+	if f.beside > 0 {
+		return fmt.Sprintf("this seat has %d tokens left and an executor run needs at least %d: its own %d "+
+			"beside the %d the seat's other running runs are counted to spend before their collection "+
+			"charges it (turn_engine.executor_min_budget_tokens each): %v", r.left, f.needs(), f.tokens(),
+			f.beside, toolloop.ErrBudgetExhausted)
+	}
 	switch {
 	case f.context > 0:
 		return fmt.Sprintf("this seat has %d tokens left and an executor run that continues its "+

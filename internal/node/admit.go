@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 //
 //  1. FRESH OWNERSHIP ([seat.Host.MayStart]): no minutes of work on a seat a peer may own.
 //  2. A CONCURRENCY SLOT ([gate]): waits at its ceiling, refuses at once while draining.
-//  3. ONE TURN PER SEAT ([ErrSeatBusy]), after the slot so a draining node says so.
+//  3. THE SEAT'S CAP, ONE TURN PER CONVERSATION, after the slot so a draining node says so.
 //  4. THE DRAIN'S CUT: the context is cancelled if a drain finds acks lost.
 
 // ErrSeatNotOwned is a turn refused because this node cannot prove it still
@@ -31,19 +32,22 @@ import (
 // it back for that node to take.
 var ErrSeatNotOwned = errors.New("node: this node cannot prove it holds the seat")
 
-// ErrSeatBusy is a turn refused because another turn is running on the same
-// seat on this node. Nothing is wrong with the work: the caller hands it back,
-// or waits for [Config.SeatTurnEnded], and it runs once the seat's turn ends.
+// ErrSeatFull is a turn refused because the seat runs as many turns on this
+// node as its cap ([Config.SeatTurns]), ErrConversationBusy one refused
+// because another turn of its conversation runs there (ADR-0169). The caller
+// hands the work back, or waits for [Config.SeatTurnEnded].
 //
-// A seat is one agent and two of its turns would act with no view of each
-// other; the mailbox dispatches one at a time, but a person's answer resumes on
-// the control topic beside it, so the rule lives where every road passes. A
-// non-mailbox turn is REFUSED on a busy seat and HOLDS THE SEAT'S INBOX while it
-// runs ([HoldSeatTurn]), so the mail waits on the broker intact. A mailbox
-// delivery fetched before the hold WAITS rather than being handed back, since
-// each hand-back spends a delivery (queue.OutcomeDefer) and a long-busy seat
-// would spend its mail into the dead-letter subject.
-var ErrSeatBusy = errors.New("node: another turn is running on the seat")
+// The mailbox dispatches one at a time, but a person's answer resumes on the
+// control topic beside it, so the rule lives where every road passes. A
+// non-mailbox turn is REFUSED and HOLDS THE SEAT'S INBOX while it runs
+// ([HoldSeatTurn]), so the mail waits on the broker intact. A mailbox delivery
+// fetched before the hold WAITS rather than being handed back, since each
+// hand-back spends a delivery (queue.OutcomeDefer) and a long-busy seat would
+// spend its mail into the dead-letter subject.
+var (
+	ErrSeatFull         = errors.New("node: the seat runs as many turns as its cap")
+	ErrConversationBusy = errors.New("node: another turn of the conversation is running on the seat")
+)
 
 // ErrDraining is a turn refused because this node is draining. The node is
 // handing its seats to peers, and a turn started now would run inside a
@@ -70,9 +74,9 @@ const HoldSeatTurn = "seat_turn"
 type admission struct {
 	node   *Node
 	handle string
-	// done is closed when the admission is released, for a mailbox delivery
-	// waiting for the seat.
-	done chan struct{}
+	// conversation is the conversation identity the turn works in, "" for one
+	// it cannot name, which no other turn is refused behind.
+	conversation string
 	// hold is the reason this admission holds the seat's inbox under, its
 	// own ([HoldSeatTurn]), and seat and inbox the mailbox it took that hold
 	// on and the attachment it took it for, the zero one for none taken.
@@ -81,8 +85,8 @@ type admission struct {
 	seat  uuid.UUID
 	inbox queue.Attachment
 	// contended is set when another turn was refused for the seat while this
-	// admission held it ([ErrSeatBusy]): somebody is waiting for the seat,
-	// and its release says so ([Config.SeatTurnEnded]).
+	// admission held it ([ErrSeatFull], [ErrConversationBusy]): somebody is
+	// waiting for the seat, and its release says so ([Config.SeatTurnEnded]).
 	contended atomic.Bool
 	// released is set when the hold is let go, after which a context that
 	// still carries it admits nothing.
@@ -102,18 +106,54 @@ func mailboxTurn(ctx context.Context) context.Context {
 	return context.WithValue(ctx, mailboxKey{}, true)
 }
 
-// AdmitTurn admits one turn on handle's seat, or refuses it. A turn that does
-// not come from the seat's mailbox (an executor's completion, a recorded
-// answer's resume) is refused on a busy seat, and once admitted holds the
-// seat's inbox until it is released ([HoldSeatTurn]); a mailbox delivery's
-// turn waits for the seat instead (see "One turn per seat" above).
+// seatTurns is the turns one seat has admitted on this node and not yet
+// released, and freed, closed and replaced at every release, which a mailbox
+// delivery waiting for room waits on.
+type seatTurns struct {
+	turns []*admission
+	freed chan struct{}
+}
+
+// refusal is why a seat admits no turn of conversation now, nil where it does:
+// it runs one of that conversation, named first since only that turn's end
+// lifts it, or as many as its cap.
+func (s *seatTurns) refusal(conversation string, limit int) error {
+	if s == nil {
+		return nil
+	}
+	if conversation != "" && slices.ContainsFunc(s.turns, func(a *admission) bool {
+		return a.conversation == conversation
+	}) {
+		return ErrConversationBusy
+	}
+	if len(s.turns) >= limit {
+		return ErrSeatFull
+	}
+	return nil
+}
+
+// seatLimit is how many turns handle's seat runs at once on this node
+// ([Config.SeatTurns]), one where nothing says.
+func (n *Node) seatLimit(handle string) int {
+	if n.cfg.SeatTurns == nil {
+		return 1
+	}
+	return max(n.cfg.SeatTurns(handle), 1)
+}
+
+// AdmitTurn admits one turn of conversation on handle's seat, or refuses it.
+// A turn that does not come from the seat's mailbox (an executor's completion,
+// a recorded answer's resume) is refused on a seat at its cap or busy with the
+// conversation, and once admitted holds the seat's inbox until it is released
+// ([HoldSeatTurn]); a mailbox delivery's turn waits instead. conversation is
+// the turn's conversation identity, "" where it names none.
 //
 // Admitted, it returns the context the turn runs under and the release the
 // caller defers. The release is idempotent, and it ends the context it
-// returned. Refused, the error wraps [ErrSeatNotOwned], [ErrSeatBusy],
-// [ErrDraining] or the caller's own context error, and the release is nil:
-// there is nothing to give back.
-func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, func(), error) {
+// returned. Refused, the error wraps [ErrSeatNotOwned], [ErrSeatFull],
+// [ErrConversationBusy], [ErrDraining] or the caller's own context error, and
+// the release is nil: there is nothing to give back.
+func (n *Node) AdmitTurn(ctx context.Context, handle, conversation string) (context.Context, func(), error) {
 	// A MAILBOX DELIVERY'S TURN ([mailboxTurn]) waits for a busy seat rather
 	// than being refused, and takes no hold on the inbox it is itself being
 	// dispatched from.
@@ -138,35 +178,47 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 			}
 			return nil, nil, fmt.Errorf("%w, so the turn on %q was not started", ErrDraining, handle)
 		}
-		// THE SEAT, once the turn has a slot: a second turn on a seat that
-		// is mid-turn gives its slot straight back.
-		held := &admission{node: n, handle: handle, done: make(chan struct{}),
+		// THE SEAT, once the turn has a slot: a turn past the seat's cap,
+		// or a second of one conversation, gives its slot straight back.
+		held := &admission{node: n, handle: handle, conversation: conversation,
 			hold: fmt.Sprintf("%s:%d", HoldSeatTurn, n.admissions.Add(1))}
 		n.mu.Lock()
-		running, busy := n.running[handle]
+		seat := n.running[handle]
+		refused := seat.refusal(conversation, n.seatLimit(handle))
 		switch {
-		case !busy:
-			n.running[handle] = held
+		case refused == nil:
+			if seat == nil {
+				seat = &seatTurns{freed: make(chan struct{})}
+				n.running[handle] = seat
+			}
+			seat.turns = append(seat.turns, held)
 		case !fromMailbox:
-			// MARKED UNDER THE LOCK the running turn's release frees the
+			// MARKED UNDER THE LOCK a running turn's release frees the
 			// seat under ([Node.freeSeat]), so that release either finds
-			// the seat free for this turn or reads the mark: set once the
-			// lock was let go, a release landing in between announced
-			// nothing, and the refused turn waited for its backstop.
-			running.contended.Store(true)
+			// room for this turn or reads the mark: set once the lock was
+			// let go, a release landing in between announced nothing, and
+			// the refused turn waited for its backstop. Every running turn,
+			// since the release of any can make the room.
+			for _, running := range seat.turns {
+				running.contended.Store(true)
+			}
+		}
+		var freed <-chan struct{}
+		if seat != nil {
+			freed = seat.freed
 		}
 		n.mu.Unlock()
-		if busy {
+		if refused != nil {
 			free()
 			if !fromMailbox {
 				if n.refusedBusy != nil {
 					n.refusedBusy(handle)
 				}
-				return nil, nil, fmt.Errorf("%w %q", ErrSeatBusy, handle)
+				return nil, nil, fmt.Errorf("%w %q", refused, handle)
 			}
-			// A MAILBOX DELIVERY WAITS, unspent, and asks again once the
-			// running turn is released.
-			if err := n.waitForSeat(ctx, handle, running); err != nil {
+			// A MAILBOX DELIVERY WAITS, unspent, and asks again once one
+			// of the seat's running turns is released.
+			if err := n.waitForSeat(ctx, handle, freed); err != nil {
 				return nil, nil, err
 			}
 			continue
@@ -175,13 +227,14 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 	}
 }
 
-// waitForSeat waits for the turn running on a seat to be released, for a
-// mailbox delivery that met it, telling the queue the delivery is still being
+// waitForSeat waits for one of a seat's running turns to be released (freed
+// closing), for a mailbox delivery that met the seat full or its conversation
+// busy, telling the queue the delivery is still being
 // worked on as often as the queue asks ([queue.Progress]). The running turn
 // can last longer than the delivery's acknowledgement window, and a window
 // that ran out would hand the delivery back and spend one of its deliveries
 // on nothing but the wait.
-func (n *Node) waitForSeat(ctx context.Context, handle string, running *admission) error {
+func (n *Node) waitForSeat(ctx context.Context, handle string, freed <-chan struct{}) error {
 	var tick <-chan time.Time
 	every, signal, ok := queue.Progress(ctx)
 	if ok {
@@ -191,7 +244,7 @@ func (n *Node) waitForSeat(ctx context.Context, handle string, running *admissio
 	}
 	for {
 		select {
-		case <-running.done:
+		case <-freed:
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("node: admitting a turn on %q: %w", handle, ctx.Err())
@@ -303,13 +356,19 @@ func (n *Node) holdInbox(ctx context.Context, held *admission, hold bool) {
 	}
 }
 
-// freeSeat frees the seat a turn held, and wakes a mailbox delivery waiting
-// for it.
+// freeSeat frees the room on its seat a turn held, and wakes every mailbox
+// delivery waiting for room on it.
 func (n *Node) freeSeat(held *admission) {
 	n.mu.Lock()
-	if n.running[held.handle] == held {
-		delete(n.running, held.handle)
+	if seat := n.running[held.handle]; seat != nil {
+		if i := slices.Index(seat.turns, held); i >= 0 {
+			seat.turns = slices.Delete(seat.turns, i, i+1)
+			close(seat.freed)
+			seat.freed = make(chan struct{})
+		}
+		if len(seat.turns) == 0 {
+			delete(n.running, held.handle)
+		}
 	}
 	n.mu.Unlock()
-	close(held.done)
 }

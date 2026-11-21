@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,18 +41,17 @@ type Seeded interface {
 	Seed(livestate.History) livestate.Change
 }
 
-// SeedTurnsPerSeat is how many of a seat's newest turns the seed reads to find
-// the last one it ENDED.
+// SeedTurnsFor is how many of a seat's newest turns the seed reads, for a seat
+// running up to runs turns at once (its sandbox.max_concurrent_runs): enough
+// to hold every turn it left parked and the last one it ENDED.
 //
-// THREE, because a seat runs one turn at a time: its newest turn may be the one
-// in flight, and the one before it may be parked on its executor — a seat with
-// a run in flight takes no new work until it is collected — so the newest
-// ended turn is among the newest three unless the seat's recent turns died
-// mid-flight, which leaves nothing the store could honestly call an end. It is
-// asked per seat, rather than as one company-wide page, because a page of the
-// company's newest turns says nothing about a seat that has been quiet longer
-// than everyone else's recent work.
-const SeedTurnsPerSeat = 3
+// RUNS AND TWO MORE: up to runs of its newest turns are unended (in flight, or
+// parked on their runs), one more beside them may have died mid-flight, which
+// the store cannot tell from running, and the newest ended turn comes after
+// those — the three a seat of one has always been read for. Asked per seat,
+// rather than as one company-wide page, because a page of the company's newest
+// turns says nothing about a seat quieter than everyone else's recent work.
+func SeedTurnsFor(runs int) int { return max(runs, 1) + 2 }
 
 // seedTurnReads is how many seats' turn reads are in flight at once.
 //
@@ -74,7 +74,7 @@ const seedTurnReads = 16
 //     carries ([store.ListQuery.FeedOnly]), inside [store.EventHistory]'s floor;
 //   - the spend: the newest [livestate.SpendRecordLimit] records inside
 //     [livestate.LiveSpendWindow], capped at the READ on every node and paged;
-//   - each agent seat's newest [SeedTurnsPerSeat] turns, by AGENT ID.
+//   - each agent seat's newest [SeedTurnsFor] its cap turns, by AGENT ID.
 //
 // FROM EVERY DATA NODE, since each also keeps custody ([Custody]) for nodes
 // without `data`; who answered is recorded ([livestate.LiveState.SeededFrom]).
@@ -164,23 +164,31 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 	return h.Coverage, errors.Join(errs...)
 }
 
-// agentSeats is every agent seat's id in the composed org, sorted: the seats
-// the projection states and the turns are asked for.
+// seatRead is one agent seat's turn read: its agent id, and how many of its
+// newest turns to ask for ([SeedTurnsFor]).
+type seatRead struct {
+	id    string
+	turns int
+}
+
+// agentSeats is every agent seat in the composed org, sorted by id: the seats
+// the projection states and the turns are asked for, each with its read's size
+// from the turns it runs at once as the org states it now.
 //
 // BY AGENT ID, the one identity a turn row carries for its seat — never the
 // role name, which two seats may share.
-func agentSeats(organization *org.Organization) []string {
+func agentSeats(organization *org.Organization) []seatRead {
 	if organization == nil {
 		return nil
 	}
-	var out []string
+	var out []seatRead
 	for role := range organization.AllRoles() {
 		if id, ok := organization.AgentIDFor(role); ok {
-			out = append(out, id.String())
+			out = append(out, seatRead{id: id.String(), turns: SeedTurnsFor(role.Sandbox.ConcurrentRuns())})
 		}
 	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	slices.SortFunc(out, func(a, b seatRead) int { return strings.Compare(a.id, b.id) })
+	return slices.CompactFunc(out, func(a, b seatRead) bool { return a.id == b.id })
 }
 
 // seedTurns reads each seat's newest turns, [seedTurnReads] seats at a time,
@@ -192,7 +200,7 @@ func agentSeats(organization *org.Organization) []string {
 // read that succeeded are returned beside it. The coverage is returned read by
 // read rather than combined, so the caller folds it into the seed's own
 // combination exactly as it does its other reads.
-func seedTurns(ctx context.Context, history FleetHistory, seats []string, at time.Time) (
+func seedTurns(ctx context.Context, history FleetHistory, seats []seatRead, at time.Time) (
 	[]store.Turn, []eventfan.Coverage, bool, error,
 ) {
 	var (
@@ -204,7 +212,8 @@ func seedTurns(ctx context.Context, history FleetHistory, seats []string, at tim
 		slots  = make(chan struct{}, seedTurnReads)
 	)
 	asked := false
-	for _, seat := range seats {
+	for _, read := range seats {
+		seat := read.id
 		if seat == "" {
 			continue
 		}
@@ -220,7 +229,7 @@ func seedTurns(ctx context.Context, history FleetHistory, seats []string, at tim
 			}
 			defer func() { <-slots }()
 			page, c, err := history.Turns(ctx, store.TurnQuery{
-				AgentID: seat, Sort: store.TurnSortStarted, Limit: SeedTurnsPerSeat, At: at,
+				AgentID: seat, Sort: store.TurnSortStarted, Limit: read.turns, At: at,
 			})
 			mu.Lock()
 			defer mu.Unlock()

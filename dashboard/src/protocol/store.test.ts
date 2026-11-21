@@ -206,7 +206,7 @@ describe("the event feed", () => {
 });
 
 describe("completed phases", () => {
-  // THE DURABLE HALF OF A LIVE PHASE. The projection clears `live_call` the
+  // THE DURABLE HALF OF A LIVE PHASE. The projection clears a turn's live call the
   // instant a phase completes, and the query that answered a seat's history was
   // answered once, at mount — so without this slice the turn a reader is
   // watching vanishes the moment its review lands, and on a seat's first turn
@@ -496,31 +496,33 @@ describe("a live call's heavy fields", () => {
   ): OverlayRow {
     return {
       agent_id: "a-pm",
-      live_call: {
-        turn_id: "t1",
-        phase: "execute",
-        iteration: 0,
-        model: "m",
-        round_num: 2,
-        rounds_used: 3,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        trigger: null,
-        in_progress: true,
-        updated_at: "2026-10-06T09:00:00Z",
-        versions: {
-          prompt: 0,
-          response: 0,
-          narration: 0,
-          executions: 0,
-          rounds: 0,
-          invocations: 0,
-          ...versions,
-        },
-        ...carried,
-        ...over,
-      } as never,
+      live_calls: [
+        {
+          turn_id: "t1",
+          phase: "execute",
+          iteration: 0,
+          model: "m",
+          round_num: 2,
+          rounds_used: 3,
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+          trigger: null,
+          in_progress: true,
+          updated_at: "2026-10-06T09:00:00Z",
+          versions: {
+            prompt: 0,
+            response: 0,
+            narration: 0,
+            executions: 0,
+            rounds: 0,
+            invocations: 0,
+            ...versions,
+          },
+          ...carried,
+          ...over,
+        } as never,
+      ],
     };
   }
   const prompt = { prompt: "fix it", prompt_messages: [{ role: "system", content: "lead" }] };
@@ -540,11 +542,50 @@ describe("a live call's heavy fields", () => {
       store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]),
     ).toEqual([]);
     expect(store.applyAgents([pushed({ prompt: 1, narration: 2 }, narration(2))])).toEqual([]);
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.prompt).toBe("fix it");
     expect(call?.prompt_messages).toEqual(prompt.prompt_messages);
     expect(call?.round_narration).toHaveLength(2);
     expect(call?.versions).toMatchObject({ prompt: 1, narration: 2 });
+  });
+
+  // TWO TURNS OF ONE SEAT KEEP TWO CALLS, each merged onto the copy held for
+  // its own turn: a seat runs up to its sandbox.max_concurrent_runs turns at
+  // once. A push that leaves a field out keeps that turn's copy, never the
+  // other turn's, and a turn the push no longer lists is gone.
+  //
+  // Mutation: merge every pushed call onto the seat's first held call, or keep
+  // one call per seat, and the second turn's prompt is lost or borrowed.
+  test("keeps each turn's call apart on a seat running two", () => {
+    const store = seated();
+    const two = (a: OverlayRow, b: OverlayRow): OverlayRow => ({
+      agent_id: "a-pm",
+      live_calls: [...(a.live_calls ?? []), ...(b.live_calls ?? [])],
+    });
+    const second = (versions: Record<string, number>, carried: Record<string, unknown>) =>
+      pushed(versions, carried, { turn_id: "t2", phase: "review" });
+    store.applyAgents([
+      two(
+        pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) }),
+        second({ prompt: 2 }, { prompt: "review it", prompt_messages: [] }),
+      ),
+    ]);
+    expect(
+      store.applyAgents([
+        two(pushed({ prompt: 1, narration: 3 }, narration(3)), second({ prompt: 2 }, {})),
+      ]),
+    ).toEqual([]);
+    const [first, other] = store.state.agents[0]?.live_calls ?? [];
+    expect(first?.turn_id).toBe("t1");
+    expect(first?.prompt).toBe("fix it");
+    expect(first?.round_narration).toHaveLength(3);
+    expect(other?.turn_id).toBe("t2");
+    expect(other?.prompt).toBe("review it");
+    // The first turn's call clears; the second stays as it was.
+    store.applyAgents([{ agent_id: "a-pm", live_calls: second({ prompt: 2 }, {}).live_calls }]);
+    expect(store.state.agents[0]?.live_calls?.map((c) => [c.turn_id, c.prompt])).toEqual([
+      ["t2", "review it"],
+    ]);
   });
 
   // A PUSH NAMING A NEWER VERSION THAN THE ONE HELD, WITHOUT THE FIELD, is a tab
@@ -556,16 +597,16 @@ describe("a live call's heavy fields", () => {
     store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
     // The push carrying narration 2 was dropped; this one names 3 and carries nothing.
     expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual(["a-pm"]);
-    expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(1);
+    expect(store.state.agents[0]?.live_calls?.[0]?.round_narration).toHaveLength(1);
 
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
-      live_call:
-        pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) }).live_call ?? null,
+      live_calls:
+        pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) }).live_calls ?? [],
       live_call_seq: 0,
     });
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.round_narration).toHaveLength(3);
     expect(call?.versions?.narration).toBe(3);
     expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual([]);
@@ -577,7 +618,7 @@ describe("a live call's heavy fields", () => {
     const store = seated();
     store.applyAgents([pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) })]);
     store.applyAgents([pushed({ prompt: 1, narration: 2 }, narration(2), { model: "later" })]);
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.round_narration).toHaveLength(3);
     expect(call?.model).toBe("later");
   });
@@ -588,7 +629,7 @@ describe("a live call's heavy fields", () => {
     const store = seated();
     store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
     const stale = store.applyAgents([pushed({ prompt: 1, narration: 0 }, {}, { phase: "review" })]);
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.phase).toBe("review");
     expect(call?.prompt).toBe("");
     expect(call?.round_narration).toBeNull();
@@ -621,7 +662,7 @@ describe("a live call's heavy fields", () => {
     const stale = store.applyAgents([
       pushed({ prompt: 9, response: 11, narration: 11 }, { ...narration(1), response: "new" }),
     ]);
-    let call = store.state.agents[0]?.live_call;
+    let call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.response).toBe("new");
     expect(call?.round_narration).toHaveLength(1);
     expect(stale).toEqual(["a-pm"]);
@@ -630,14 +671,14 @@ describe("a live call's heavy fields", () => {
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
-      live_call:
+      live_calls:
         pushed(
           { prompt: 9, response: 11, narration: 11 },
           { ...again, ...narration(1), response: "new" },
-        ).live_call ?? null,
+        ).live_calls ?? [],
       live_call_seq: 0,
     });
-    call = store.state.agents[0]?.live_call;
+    call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.prompt).toBe("judge it");
     expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
   });
@@ -672,7 +713,7 @@ describe("a live call's heavy fields", () => {
     frame([withheld(2)]);
     frame([withheld(3)]);
     expect(ask.mock.calls.filter(([what]) => what === "live_call")).toEqual([]);
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.body_withheld).toBe(true);
     expect(call?.prompt).toBeUndefined();
     expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3, invocations: 3 });
@@ -688,7 +729,7 @@ describe("a live call's heavy fields", () => {
     store.applyAgents([pushed({ prompt: 4, narration: 4 }, { ...prompt, ...narration(4) })]);
     const stale = store.applyAgents([pushed({}, {}, { body_withheld: true })]);
     expect(stale).toEqual([]);
-    const call = store.state.agents[0]?.live_call;
+    const call = store.state.agents[0]?.live_calls?.[0];
     expect(call?.prompt).toBeUndefined();
     expect(call?.round_narration).toBeUndefined();
     expect(call?.versions).toMatchObject({ prompt: 0, narration: 0 });
@@ -714,12 +755,13 @@ describe("a live call's heavy fields", () => {
         data: {
           agent_id: "a-pm",
           handle: "pm",
-          live_call: pushed({ prompt: 1, narration: 4 }, { ...prompt, ...narration(4) }).live_call,
+          live_calls: pushed({ prompt: 1, narration: 4 }, { ...prompt, ...narration(4) })
+            .live_calls,
         },
       }),
     );
     await eventually(() =>
-      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
+      expect(store.state.agents[0]?.live_calls?.[0]?.round_narration).toHaveLength(4),
     );
   });
 });
@@ -732,13 +774,22 @@ describe("a live_call answer the socket delivers late", () => {
   const running = (seq: number, phase = "execute"): OverlayRow => ({
     agent_id: "a-pm",
     live_call_seq: seq,
-    live_call: {
-      turn_id: "t1",
-      phase,
-      iteration: 0,
-      in_progress: true,
-      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1, invocations: 1 },
-    } as never,
+    live_calls: [
+      {
+        turn_id: "t1",
+        phase,
+        iteration: 0,
+        in_progress: true,
+        versions: {
+          prompt: 1,
+          response: 1,
+          narration: 1,
+          executions: 1,
+          rounds: 1,
+          invocations: 1,
+        },
+      } as never,
+    ],
   });
   // The same running call at `seq`, its narration at version `narration`,
   // carrying only the fields in `carried` — a lean push, or an answer whole.
@@ -750,12 +801,14 @@ describe("a live_call answer the socket delivers late", () => {
   ): OverlayRow => ({
     agent_id: "a-pm",
     live_call_seq: seq,
-    live_call: {
-      ...running(seq).live_call,
-      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1, invocations: 1 },
-      ...carried,
-      ...over,
-    } as never,
+    live_calls: [
+      {
+        ...running(seq).live_calls![0],
+        versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1, invocations: 1 },
+        ...carried,
+        ...over,
+      } as never,
+    ],
   });
   // Every heavy field of the call, `n` rounds narrated: what an opening push or
   // an answer carries.
@@ -775,7 +828,7 @@ describe("a live_call answer the socket delivers late", () => {
   // THE ANSWER CANNOT PUT A CLEARED CALL BACK ON SCREEN. A slow tab drops a
   // push, the next push marks the seat stale and the socket asks for the call
   // whole; while that query is out the phase completes and the engine pushes
-  // the seat with live_call null, delivered before the answer. The answer
+  // the seat with no live call, delivered before the answer. The answer
   // carries the running call at an OLDER sequence and is dropped, so the seat
   // stays cleared — not a phase rendering as running on a seat that stopped.
   //
@@ -785,17 +838,17 @@ describe("a live_call answer the socket delivers late", () => {
     const store = seated();
     store.applyAgents([running(10)]);
     // The completion push clears the call at a newer sequence.
-    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_call: null, live_call_seq: 12 }]);
-    expect(store.state.agents[0]?.live_call).toBeNull();
+    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_calls: [], live_call_seq: 12 }]);
+    expect(store.state.agents[0]?.live_calls).toEqual([]);
 
     // The overtaken answer — the running call read a moment before the clear.
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
-      live_call: running(10).live_call ?? null,
+      live_calls: running(10).live_calls ?? [],
       live_call_seq: 10,
     });
-    expect(store.state.agents[0]?.live_call).toBeNull();
+    expect(store.state.agents[0]?.live_calls).toEqual([]);
     expect(store.state.agents[0]?.live_call_seq).toBe(12);
   });
 
@@ -808,10 +861,10 @@ describe("a live_call answer the socket delivers late", () => {
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
-      live_call: running(10, "execute").live_call ?? null,
+      live_calls: running(10, "execute").live_calls ?? [],
       live_call_seq: 10,
     });
-    expect(store.state.agents[0]?.live_call?.phase).toBe("review");
+    expect(store.state.agents[0]?.live_calls?.[0]?.phase).toBe("review");
   });
 
   // BUT AN ANSWER FOR THE SAME CALL STILL BRINGS WHAT THE TAB MISSED. The fetch
@@ -838,9 +891,9 @@ describe("a live_call answer the socket delivers late", () => {
       agent_id: "a-pm",
       handle: "pm",
       live_call_seq: 10,
-      live_call: call(10, 9, whole(9), { model: "earlier" }).live_call ?? null,
+      live_calls: call(10, 9, whole(9), { model: "earlier" }).live_calls ?? [],
     });
-    const held = store.state.agents[0]?.live_call;
+    const held = store.state.agents[0]?.live_calls?.[0];
     expect(current).toBe(false);
     expect(held?.round_narration).toHaveLength(9);
     expect(held?.versions?.narration).toBe(9);
@@ -876,11 +929,11 @@ describe("a live_call answer the socket delivers late", () => {
     // Read at 10: narration 3 is taken, and 4 is still missing.
     answer(1, call(10, 3, whole(3)));
     await eventually(() => expect(ask).toHaveBeenCalledTimes(2));
-    expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(3);
+    expect(store.state.agents[0]?.live_calls?.[0]?.round_narration).toHaveLength(3);
 
     answer(2, call(12, 4, whole(4)));
     await eventually(() =>
-      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
+      expect(store.state.agents[0]?.live_calls?.[0]?.round_narration).toHaveLength(4),
     );
     expect(store.state.agents[0]?.live_call_seq).toBe(12);
 
@@ -890,7 +943,7 @@ describe("a live_call answer the socket delivers late", () => {
     expect(ask).toHaveBeenCalledTimes(3);
     answer(3, call(15, 6, whole(6)));
     await eventually(() =>
-      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(6),
+      expect(store.state.agents[0]?.live_calls?.[0]?.round_narration).toHaveLength(6),
     );
     // A TASK BOUNDARY, NOT A WAIT FOR TIME: whether to ask again is decided in
     // the answer's own promise chain, which is all microtasks, and every one of
@@ -903,14 +956,14 @@ describe("a live_call answer the socket delivers late", () => {
   // sequence is the repair the fetch exists for.
   test("an answer at a newer sequence is applied", () => {
     const store = seated();
-    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_call: null, live_call_seq: 8 }]);
+    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_calls: [], live_call_seq: 8 }]);
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
-      live_call: running(14).live_call ?? null,
+      live_calls: running(14).live_calls ?? [],
       live_call_seq: 14,
     });
-    expect(store.state.agents[0]?.live_call?.phase).toBe("execute");
+    expect(store.state.agents[0]?.live_calls?.[0]?.phase).toBe("execute");
     expect(store.state.agents[0]?.live_call_seq).toBe(14);
   });
 });

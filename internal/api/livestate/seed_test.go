@@ -357,13 +357,13 @@ func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
 		lead.LastTurn.EndedAt != base.Add(time.Hour+time.Minute).Format(time.RFC3339Nano) {
 		t.Errorf("last turn = %+v, want the newest ENDED turn, failed", lead.LastTurn)
 	}
-	if lead.Turn != nil {
-		t.Errorf("turn = %+v, want none claimed for a turn nobody can say is running", lead.Turn)
+	if soleTurn(t, lead.Turns) != nil {
+		t.Errorf("turn = %+v, want none claimed for a turn nobody can say is running", soleTurn(t, lead.Turns))
 	}
 	coder := overlayOf(t, s, "Coder")
-	if coder.Turn == nil || coder.Turn.TurnID != "waiting" || coder.Turn.Stage != livestate.StageParked ||
-		coder.Turn.WorkItem == nil || coder.Turn.WorkItem.Key != "ENG-1" {
-		t.Errorf("turn = %+v, want the parked turn on its item", coder.Turn)
+	if soleTurn(t, coder.Turns) == nil || soleTurn(t, coder.Turns).TurnID != "waiting" || soleTurn(t, coder.Turns).Stage != livestate.StageParked ||
+		soleTurn(t, coder.Turns).WorkItem == nil || soleTurn(t, coder.Turns).WorkItem.Key != "ENG-1" {
+		t.Errorf("turn = %+v, want the parked turn on its item", soleTurn(t, coder.Turns))
 	}
 	// A PARKED TURN IS NOT WORK OF ITS OWN: what its run is doing is the
 	// run record's to say, and the record is read separately. The seed

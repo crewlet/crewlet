@@ -69,6 +69,7 @@ import { EscalationNote, ReleaseRequestFacts } from "./Delegation.tsx";
 import { delegationEscalated, releaseRequestOf } from "~/lib/delegation.ts";
 import { heldCallNamed, heldCallTitle, type HeldCallSubject } from "~/lib/heldCall.ts";
 import type { DelegatedAct, HeldDelegation } from "~/contract/delegated.ts";
+import { callOf, turnOf } from "~/lib/seatturn.ts";
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -872,7 +873,7 @@ export function holdLine(run: ExecutorRow, now: number): string | undefined {
 function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; now: number }) {
   const handle = seat.row.handle ?? seat.row.role;
   const who = seatOf(index, handle);
-  const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
+  const item = turnOf(seat.row)?.work_item ?? callOf(seat.row)?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
   const sub = joined([item ? "stopped mid-turn" : ""]);
   return (

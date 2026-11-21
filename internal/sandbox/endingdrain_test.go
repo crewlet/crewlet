@@ -170,7 +170,7 @@ func TestACappedRunNamesACallInFlightAtOnceAndAsItsRecordGoes(t *testing.T) {
 	read := &endingCalls{}
 	rig.coordinator.turnLost = read.lost
 	// Its model at its limit: past the cap the completion is ended, not kept.
-	rig.coordinator.gate = func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+	rig.coordinator.gate = func(context.Context, string, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, weeklyLimit(rig.now.Add(time.Hour))
 	}
 	rig.launchUntil("t1", rig.now.Add(-time.Minute))
