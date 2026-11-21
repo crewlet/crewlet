@@ -250,9 +250,9 @@ func (l *lastByte) Read(p []byte) (int, error) {
 }
 
 // notesHeld is, of the inbox ids asked ([Copilot.inboxID]), those whose note
-// the box's copy of session shows reached the model ([copilotNotesHeld]): the
-// confirm path of a runner whose extension never confirms (ruling 1 of #1818's
-// design), read off the record by the runner inside its read of the session.
+// the box's copy of session shows reached the model ([copilotNotesHeld]): its
+// [recordConfirmer], as its extension confirms nothing (ruling 1 of #1818's
+// design), which the Runner's main-thread read asks for the takes it is asked.
 // An error where the record could not be read, which is neither held nor not.
 func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 	inboxIDs []string) ([]string, error) {

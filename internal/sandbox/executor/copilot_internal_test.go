@@ -625,6 +625,26 @@ func TestACopilotNoteIsHeldToTheSharedItemBound(t *testing.T) {
 	}
 }
 
+// A Copilot run confirms its notes off its session's record: the Runner's
+// main-thread read answers a take asked with the record's word, and states the
+// receipts it settles, so its notes are taken.
+//
+// Mutation: drop notesHeld (no recordConfirmer) — the run confirms nothing and
+// its traits state no receipts.
+func TestACopilotRunConfirmsItsNotesOffItsRecord(t *testing.T) {
+	if !confirms(Copilot{}) || !NewCopilot().ThreadTraits().Receipts {
+		t.Fatal("Copilot confirms no take")
+	}
+	box := sandbox.NewFakeSandbox("b")
+	const session = "55555555-5555-4555-8555-555555555555"
+	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
+	reading := NewCopilot().ReadMainThread(t.Context(), box, sandbox.MainThreadAsk{Session: session,
+		Takes: []sandbox.AskedTake{{Take: "msg_inbox1"}, {Take: "msg_never"}}})
+	if !slices.Equal(reading.Receipts.Held, []string{"msg_inbox1"}) {
+		t.Fatalf("receipts = %+v, want msg_inbox1 held", reading.Receipts)
+	}
+}
+
 // The runner reads a note's confirmation off the box's own copy of the
 // session, and says it could not where the record is not there to read.
 //

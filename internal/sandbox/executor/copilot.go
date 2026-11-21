@@ -39,6 +39,7 @@ var (
 	_ artifactHolder    = Copilot{}
 	_ notesOffExplainer = Copilot{}
 	_ sessionJudge      = Copilot{}
+	_ recordConfirmer   = Copilot{}
 )
 
 // NewCopilot returns the runner.
