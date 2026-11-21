@@ -363,6 +363,13 @@ func MemoryReserve(transfers, cores int, memory, engine int64) int64 {
 	return memoryReserve(transfers, cores, memory, engine)
 }
 
+// MemoryNeeded is the least memory at and past which a node of transfers
+// transfers and cores read slots keeping engine bytes beside Gitlet holds what
+// it keeps: what code_cache_memory_short names.
+func MemoryNeeded(transfers, cores int, engine int64) int64 {
+	return memoryNeeded(transfers, cores, engine)
+}
+
 // MemoryReserved is what c keeps of the node's memory from background work,
 // as Open fixed it.
 func MemoryReserved(c *Cache) int64 { return c.memReserve }

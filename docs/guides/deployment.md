@@ -1748,14 +1748,16 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
-Every figure here is of the memory the executor's pools leave: a Gitlet node
+Every figure above is of the memory the executor's pools leave: a Gitlet node
 keeps them first and sizes Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 116 MiB for the
 transcript reads its API answers and 1 980 MiB where it runs seats too, so
 give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
-([Replica count](#replica-count)), and keeps its one transfer past its memory
-on 2 GiB.
+([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
+transfer takes it past its memory: it still boots and serves, logging
+`code_cache_memory_short` once, but at the default `node.max_concurrent` give a
+node running seats beside Gitlet 4 GiB of memory or more in all.
 
 The node that publishes also holds:
 

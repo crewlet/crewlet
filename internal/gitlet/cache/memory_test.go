@@ -768,7 +768,7 @@ func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 		{16, 16 * gitproc.CoreMemory, 16}, {64, 64 * gitproc.CoreMemory, 64},
 		{64, 16 << 30, 8}, {32, 4 << 30, 2}, {4, 2 << 30, 1},
 	} {
-		transfers := int(min(int64(gitproc.TransfersPerProcess*node.cores), node.memory/gitproc.TransferShare))
+		transfers := lanesOf(t, node.cores, node.memory, 0)
 		left := node.memory - cache.MemoryReserve(transfers, node.cores, node.memory, 0)
 		if want := node.backedShares * cache.MaintenanceMemoryPerCore; left != want {
 			t.Errorf("a node of %d cores and %d bytes at the default lanes leaves its maintenance %d, want "+
@@ -815,6 +815,128 @@ func TestTheEnginesPoolsAreKeptBeforeGitletsShares(t *testing.T) {
 			t.Errorf("%d cores and %d bytes without seats: budget %d, %d transfers; want the node's own "+
 				"sizing, %d transfers a core, above the %d it gives beside the pools", node.cores, node.memory,
 				alone, aloneTransfers, gitproc.TransfersPerProcess, budget)
+		}
+	}
+}
+
+// A NODE SHORT OF WHAT IT KEEPS BOOTS AND SAYS SO ONCE, WITH WHAT HOLDS IT:
+// 2 GiB on one core running seats beside Gitlet, or with gitlet.max_transfers
+// set past the serving share's cap, keeps more than its memory. Its open is
+// not refused; it logs code_cache_memory_short once at WARN with the figures
+// and memory_needed, and no pass after logs it again. Booted at memory_needed
+// it is quiet, and one byte below it logs once, short by that byte. A node
+// whose pools fit logs nothing.
+//
+// Mutations, each red: never log; log at INFO, whatever the memory, at no
+// shortfall or only past a margin; drop memory_from or memory_needed; name the
+// pools' excess or the whole reserve as the shortfall; log on a pass's reread.
+func TestANodeShortOfWhatItKeepsSaysSoOnceAtBoot(t *testing.T) {
+	t.Parallel()
+	memory := gitproc.CoreMemory
+	boot := func(memory int64, transfers int, reserve int64) (*world, []map[string]any) {
+		w := newWorld(t)
+		w.processes, w.memory, w.transfers, w.reserve = 1, memory, transfers, reserve
+		c := w.open(t)
+		cache.SetNodeMemory(c, memory-1)
+		cache.MaintainerPass(c)
+		return w, w.logs.lines(t, "code_cache_memory_short")
+	}
+	for _, node := range []struct {
+		name      string
+		transfers int
+		pools     int64
+	}{
+		{"running seats at the default lanes", 0, executorPools(true, memory)},
+		{"with gitlet.max_transfers set past the serving share's cap", 6, executorPools(false, memory)},
+	} {
+		w, lines := boot(memory, node.transfers, node.pools)
+		transfers := w.pool.Slots(gitproc.ClassTransfer)
+		kept := cache.MemoryReserve(transfers, 1, memory, node.pools)
+		if kept <= memory || node.pools >= memory {
+			t.Fatalf("the premise: a %d-byte node %s keeps %d bytes beside %d of pools, which is no more than "+
+				"its memory, or its pools alone are not within it", memory, node.name, kept, node.pools)
+		}
+		if len(lines) != 1 {
+			t.Fatalf("a node %s keeping %d bytes of %d logged code_cache_memory_short %d times across its boot "+
+				"and a pass, want once", node.name, kept, memory, len(lines))
+		}
+		needed := int64(numberOf(t, lines[0], "memory_needed"))
+		for key, want := range map[string]int64{"memory": memory, "pools": node.pools,
+			"transfer_slots": int64(transfers), "memory_reserved": kept, "shortfall": kept - memory} {
+			if got := int64(numberOf(t, lines[0], key)); got != want {
+				t.Errorf("a node %s: code_cache_memory_short says %s %d, want %d", node.name, key, got, want)
+			}
+		}
+		from, _ := lines[0]["memory_from"].(string)
+		if level := lines[0]["level"]; level != "WARN" || from == "" {
+			t.Errorf("a node %s: code_cache_memory_short is logged at %v naming memory_from %q, want WARN "+
+				"naming where the memory was read", node.name, level, from)
+		}
+		holdsFrom(t, needed, transfers, 1, node.pools)
+		if _, lines := boot(needed, node.transfers, node.pools); len(lines) != 0 {
+			t.Errorf("a node %s booted at the memory_needed its line named, %d bytes, logged "+
+				"code_cache_memory_short %d times: %v", node.name, needed, len(lines), lines)
+		}
+		w, lines = boot(needed-1, node.transfers, node.pools)
+		if len(lines) != 1 {
+			t.Fatalf("a node %s booted one byte short of memory_needed logged code_cache_memory_short %d "+
+				"times, want once", node.name, len(lines))
+		}
+		if got := w.pool.Slots(gitproc.ClassTransfer); got != transfers {
+			t.Fatalf("a node %s booted one byte short of memory_needed has %d transfers, not the %d it was "+
+				"named for", node.name, got, transfers)
+		}
+		for key, want := range map[string]int64{"shortfall": 1, "memory_needed": needed} {
+			if got := int64(numberOf(t, lines[0], key)); got != want {
+				t.Errorf("a node %s one byte short of memory_needed: code_cache_memory_short says %s %d, want %d",
+					node.name, key, got, want)
+			}
+		}
+	}
+	if _, lines := boot(memory, 0, executorPools(false, memory)); len(lines) != 0 {
+		t.Errorf("a %d-byte node keeping its %d bytes of pools within its memory logged code_cache_memory_short",
+			memory, executorPools(false, memory))
+	}
+}
+
+// THE MEMORY A SHORT NODE IS TOLD TO HAVE HOLDS WHAT IT KEEPS, AND NO LESS
+// DOES: the serving share grows with the memory, so the figure is where they
+// meet, checked through MemoryReserve at every lane on up to eight cores,
+// beside no pools, the transcript reads' and a node running seats', both where
+// the share's cap comes first and where it does not.
+//
+// Mutations, each red: need a step more or less; drop the share's cap.
+func TestTheMemoryAShortNodeIsToldToHaveHoldsWhatItKeeps(t *testing.T) {
+	t.Parallel()
+	for _, engine := range []int64{0, executorPools(false, 0), executorPools(true, 0)} {
+		for _, cores := range []int{1, 2, 4, 8} {
+			for transfers := 1; transfers <= 48; transfers++ {
+				holdsFrom(t, cache.MemoryNeeded(transfers, cores, engine), transfers, cores, engine)
+			}
+		}
+	}
+}
+
+// holdsFrom fails t unless needed is the least memory at and past which a
+// node of transfers transfers and cores read slots, keeping engine bytes
+// beside Gitlet, holds what it keeps (MemoryReserve): within needed, and at
+// the start of each of the serving share's next 4 096 steps, where a node is
+// nearest short; past needed less one byte.
+func holdsFrom(t *testing.T, needed int64, transfers, cores int, engine int64) {
+	t.Helper()
+	fits := func(memory int64) bool { return cache.MemoryReserve(transfers, cores, memory, engine) <= memory }
+	if !fits(needed) || fits(needed-1) {
+		t.Errorf("%d bytes is not the least memory that holds what %d transfers on %d cores beside %d bytes "+
+			"of pools keep: %d holds it %v, one byte less %v", needed, transfers, cores, engine, needed,
+			fits(needed), fits(needed-1))
+		return
+	}
+	step := gitproc.CoreMemory >> 20
+	for q := (needed-engine)/step + 1; q <= (needed-engine)/step+4096; q++ {
+		if memory := engine + q*step; !fits(memory) {
+			t.Errorf("%d transfers on %d cores beside %d bytes of pools are held at %d bytes but not at %d",
+				transfers, cores, engine, needed, memory)
+			return
 		}
 	}
 }
@@ -928,6 +1050,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 			"gitlet.max_transfers is unset and the memory was lowered after the node booted",
 		fmt.Sprintf("first the executor's pools it runs (%s MiB of transcript reads, %s MiB on a node running "+
 			"seats), then of the memory they leave", alone, seats),
+		fmt.Sprintf("A node whose boot logged `code_cache_memory_short` keeps more than its memory, so its "+
+			"budget is zero: give it the `memory_needed` that line names, %s or more in all where it runs seats "+
+			"beside Gitlet at the default node.max_concurrent.", amount(t, seatsFloor(t))),
 	} {
 		if !strings.Contains(remedy, want) {
 			t.Errorf("the %s remedy does not say %q: %s", statelog.KindCodeMaintenanceRefused, want, remedy)
@@ -962,6 +1087,8 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 			fmt.Sprintf("keeps them first and sizes Gitlet by what is left "+
 				"([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), %s MiB for the transcript reads its "+
 				"API answers and %s MiB where it runs seats too", alone, seats),
+			fmt.Sprintf("logging `code_cache_memory_short` once, but at the default `node.max_concurrent` give a "+
+				"node running seats beside Gitlet %s of memory or more in all", amount(t, seatsFloor(t))),
 		}},
 	} {
 		path := filepath.Join(sourcetree.Root(t), page.path)
@@ -1069,7 +1196,7 @@ func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 	// left is what a node of cores and memory leaves its background work at
 	// the pool's default lanes, and how many transfers those lanes admit.
 	left := func(cores int, memory int64) (budget int64, transfers int) {
-		transfers = int(min(int64(gitproc.TransfersPerProcess*cores), memory/gitproc.TransferShare))
+		transfers = lanesOf(t, cores, memory, 0)
 		return memory - cache.MemoryReserve(transfers, cores, memory, 0), transfers
 	}
 	shape, _ := left(4, 4*gitproc.CoreMemory)
@@ -1159,8 +1286,7 @@ func seatsBesideGitlet(t *testing.T) []string {
 		memory := int64(cores) * gitproc.CoreMemory
 		for _, seats := range []bool{false, true} {
 			reserve := executorPools(seats, memory)
-			left := max(0, memory-reserve)
-			transfers := int(min(int64(gitproc.TransfersPerProcess*cores), max(1, left/gitproc.TransferShare)))
+			transfers := lanesOf(t, cores, memory, reserve)
 			kept := cache.MemoryReserve(transfers, cores, memory, reserve)
 			serving := kept - reserve - int64(transfers)*gitproc.TransferMemory
 			yes, plural := "no", "s"
@@ -1178,7 +1304,72 @@ func seatsBesideGitlet(t *testing.T) []string {
 			}
 		}
 	}
-	return want
+	if cost := readsCost(t, true); cost != 0 {
+		t.Errorf("the transcript reads' pool costs a node running seats %d transfers at %s a core, and the "+
+			"page states its cost for a node without seats alone", cost, amount(t, gitproc.CoreMemory))
+	}
+	turnMiB := float64(turn) / (1 << 20)
+	return append(want,
+		fmt.Sprintf("so every Gitlet node keeps the transcript reads' pool, with seats or without; on a node "+
+			"without seats of %s of memory a core in all, that costs it %s transfer", amount(t, gitproc.CoreMemory),
+			word(t, readsCost(t, false))),
+		fmt.Sprintf("logs `code_cache_memory_short` once at boot with the figures; at the default "+
+			"`node.max_concurrent`, give a node running seats beside Gitlet %s of memory or more in all",
+			amount(t, seatsFloor(t))),
+		fmt.Sprintf("the executor's `pools`, %s for each of its `transfer_slots`, and the serving share",
+			amount(t, gitproc.TransferMemory)),
+		fmt.Sprintf("or, on a node running seats, a lower `node.max_concurrent` (%.1f MiB a turn)", turnMiB))
+}
+
+// readsCost is how many transfers the transcript reads' pool, which every
+// Gitlet node keeps as every one serves ingress, costs a node of
+// gitproc.CoreMemory a core with seats or without: the same at every shape the
+// table sizes, or the docs could not state it once.
+func readsCost(t *testing.T, seats bool) int {
+	t.Helper()
+	cost := -1
+	for _, cores := range []int{1, 2, 4, 8} {
+		memory := int64(cores) * gitproc.CoreMemory
+		without := nodeWork(seats)
+		without.PersonReads = false
+		n := lanesOf(t, cores, memory, without.MemoryPools(memory)) -
+			lanesOf(t, cores, memory, executorPools(seats, memory))
+		if cost >= 0 && n != cost {
+			t.Fatalf("the transcript reads' pool costs %d cores %d transfers and fewer cores %d: say each", cores,
+				n, cost)
+		}
+		cost = n
+	}
+	return cost
+}
+
+// seatsFloor is the least memory, at gitproc.CoreMemory a core, at which a
+// node running seats beside Gitlet keeps no more than its memory at the
+// default lanes: what the docs recommend for one.
+func seatsFloor(t *testing.T) int64 {
+	t.Helper()
+	for cores := 1; cores <= 64; cores++ {
+		memory := int64(cores) * gitproc.CoreMemory
+		reserve := executorPools(true, memory)
+		if cache.MemoryReserve(lanesOf(t, cores, memory, reserve), cores, memory, reserve) <= memory {
+			return memory
+		}
+	}
+	t.Fatal("no node of up to 64 cores at CoreMemory a core holds what a node running seats keeps")
+	return 0
+}
+
+// lanesOf is the transfer slots a real pool gives a node of cores read slots
+// and memory bytes keeping reserve of it beside Gitlet, at the default lanes:
+// every figure the docs derive goes through gitproc's own rule, never a copy.
+func lanesOf(t *testing.T, cores int, memory, reserve int64) int {
+	t.Helper()
+	layout, err := cache.Prepare(t.Context(), filepath.Join(t.TempDir(), "c"))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(layout.Release)
+	return newPoolOf(t, layout, "", cores, 0, memory, reserve).Slots(gitproc.ClassTransfer)
 }
 
 // executorPools is what a Gitlet node of memory bytes keeps of the
@@ -1186,12 +1377,15 @@ func seatsBesideGitlet(t *testing.T) []string {
 // answers, as every Gitlet node serves ingress, and with seats its boxes'
 // pools at the default node.max_concurrent and the box host's reads for its
 // peers (queue.ConcurrentAnswers, the engine's boxReadsHeld).
-func executorPools(seats bool, memory int64) int64 {
+func executorPools(seats bool, memory int64) int64 { return nodeWork(seats).MemoryPools(memory) }
+
+// nodeWork is the executor's work a Gitlet node runs, as executorPools sizes it.
+func nodeWork(seats bool) executor.NodeWork {
 	w := executor.NodeWork{PersonReads: true}
 	if seats {
 		w.Boxes, w.Turns, w.PeerReads = true, enginenode.DefaultMaxConcurrent, queue.ConcurrentAnswers
 	}
-	return w.MemoryPools(memory)
+	return w
 }
 
 // mib is n bytes in whole mebibytes, rounded, as the docs write them.

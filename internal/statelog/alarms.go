@@ -1847,7 +1847,11 @@ var table = []rule{
 			"boot. A restart alone keeps the same lanes over the same memory, " +
 			"and clears it only where gitlet.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
-			"to what it has. See docs/concepts/gitlet.md.",
+			"to what it has. A node whose boot logged `code_cache_memory_short` " +
+			"keeps more than its memory, so its budget is zero: give it the " +
+			"`memory_needed` that line names, 4 GiB or more in all where it runs " +
+			"seats beside Gitlet at the default node.max_concurrent. See " +
+			"docs/concepts/gitlet.md.",
 	},
 	{
 		// The threshold is the push decide's (ADR-0015): the most live packs a
