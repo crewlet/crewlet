@@ -121,6 +121,31 @@ type Report struct {
 	EmptyReason EmptyReason `json:"empty_reason,omitempty"`
 }
 
+// Cell is one cell of a report's rows.
+type Cell struct {
+	Row, Column int
+	Text        string
+}
+
+// UntrustedCells are the text cells of r's [Column.Untrusted] columns that
+// hold something, which an answer fences.
+func (r Report) UntrustedCells() []Cell {
+	var out []Cell
+	for c, col := range r.Columns {
+		if !col.Untrusted {
+			continue
+		}
+		for i, row := range r.Rows {
+			if c < len(row) {
+				if text, ok := row[c].(string); ok && text != "" {
+					out = append(out, Cell{Row: i, Column: c, Text: text})
+				}
+			}
+		}
+	}
+	return out
+}
+
 // RowLimit is the rows a call asked for, held to [ReportMaxRows], and
 // [ReportDefaultRows] for none.
 func RowLimit(asked int) int {

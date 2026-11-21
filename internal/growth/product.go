@@ -14,10 +14,12 @@ type Call struct {
 	HeldCall, Approver string
 }
 
-// Hold is a held call as its product prepared it: the digest of the exact
-// vendor operations and the target's before-state it binds to, the identity of
-// what it decides (delegated.Subject), and what a person reads.
+// Hold is a write as its product prepared it: the class it comes to against
+// its target as read now ([Classify]), the digest of the exact vendor
+// operations and the target's before-state it binds to, and for a held call
+// the identity of what it decides (delegated.Subject) and what a person reads.
 type Hold struct {
+	Class                               Class
 	Binding, Subject, Question, Context string
 }
 
