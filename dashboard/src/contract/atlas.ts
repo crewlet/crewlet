@@ -74,6 +74,7 @@ export type AtlasVendor =
   | "google"
   | "google_cloud"
   | "mattermost"
+  | "meta"
   | "openai"
   | "scaleway"
   | "slack"
@@ -739,6 +740,7 @@ export const ATLAS_FACT_SPECS = {
       "google",
       "google_cloud",
       "mattermost",
+      "meta",
       "openai",
       "scaleway",
       "slack",

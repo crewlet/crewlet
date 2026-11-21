@@ -174,6 +174,7 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   google: { name: "Google" },
   google_cloud: { name: "Google Cloud", mark: "google-cloud" },
   mattermost: { name: "Mattermost", mark: "mattermost" },
+  meta: { name: "Meta" },
   openai: { name: "OpenAI" },
   scaleway: { name: "Scaleway", mark: "scaleway" },
   slack: { name: "Slack", mark: "slack" },

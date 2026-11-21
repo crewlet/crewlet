@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -51,6 +52,8 @@ func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
 func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	e.growthOnce.Do(func() {
 		e.growth = []builtin.GrowthProduct{
+			metaads.New(metaads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value, Audit: e.GrowthAudit(),
+				Leases: growthLeases{engine: e}, Renewals: metaAdsRenewals{engine: e}, Signals: e.GrowthSignals()}),
 			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 		}

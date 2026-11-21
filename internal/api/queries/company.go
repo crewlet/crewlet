@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
+	"github.com/crewlet/crewlet/internal/metaads"
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -392,6 +393,19 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// NOTHING INBOUND: the engine dials out to each registered server,
 		// and the row says how many there are.
 		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
+	}
+	if m := in.MetaAds; m != nil {
+		// THE APP AND THE TOKEN SLOTS FILLED, never a token: what each
+		// permission a token may hold allows.
+		var tokens []string
+		for _, t := range []struct{ name, ref string }{{"read", m.ReadToken}, {"operate", m.OperateToken},
+			{"admin", m.AdminToken}} {
+			if t.ref != "" {
+				tokens = append(tokens, t.name)
+			}
+		}
+		add("meta_ads", m.Enabled, nil, map[string]any{"app_id": m.AppID, "business_id": m.BusinessID,
+			"tokens": tokens, "ad_accounts": len(m.AdAccounts), "permissions": metaads.Catalog().Permissions})
 	}
 	if a := in.AppStoreConnect; a != nil {
 		// THE TEAMS AND THE ROLES, never a key: each connection's issuer and
