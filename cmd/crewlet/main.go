@@ -1329,6 +1329,16 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		draining = []any{"in_flight", e.Backends().Queue.InFlightCount(),
 			"detail", detail}
 	default:
+		// ANOTHER CONNECTION WENT FIRST while the queue's own is down too, as
+		// both to one server go when it refuses the node's credentials: the
+		// queue's own decides, and it has not yet ([engine.Engine.OwnLinkDown]).
+		if fatal != nil && e.OwnLinkDown() {
+			draining = []any{"in_flight", e.Backends().Queue.InFlightCount(),
+				"detail", "this node's own broker connection is down too: if it is closed " +
+					"for good, the turns still running are cancelled rather than waited for " +
+					"and the drain ends at once, and if it comes back " + finish +
+					" before this node stops"}
+		}
 	}
 	log.InfoContext(ctx, "engine_draining", draining...)
 
