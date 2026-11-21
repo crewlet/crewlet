@@ -2525,6 +2525,7 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 	cfg.Integrations.AWS = &config.AWS{Enabled: true}
 	cfg.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true}
 	cfg.Integrations.GoogleAnalytics = &config.GoogleAnalytics{Enabled: true}
+	cfg.Integrations.GoogleAds = &config.GoogleAds{Enabled: true}
 	cfg.Integrations.SSH = &config.SSH{Enabled: true}
 
 	body := asMap(t, answer(t, queries.Sources{
