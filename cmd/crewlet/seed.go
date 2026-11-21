@@ -467,25 +467,40 @@ func (s tierBSeed) is(opened []byte) (bool, error) {
 }
 
 // isFleets reports whether the seed's file is the revision the fleet's pointer
-// names, read from the body the pointer names as a peer's reconciler reads it,
-// and answers that revision as this node's history would keep it.
+// names, and answers that revision as this node's history would keep it: FROM
+// THAT HISTORY WHERE IT HOLDS THE REVISION, as every reader of the pointer
+// does, else from the body the pointer names, given its size's crossing.
 //
 // An error is a comparison that could not be made — the body is gone with a
 // pointer that moved on since it was read, or it does not open under this
 // node's keyring — and never a claim that the two differ.
-func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane,
+func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane, configs *store.Configs,
 	target coord.Activation, cipher secrets.Cipher) (bool, store.Revision, error) {
 
-	payload, found, err := plane.Body(ctx, target)
+	fleets, held, err := configs.Get(ctx, target.RevisionID)
 	if err != nil {
-		return false, store.Revision{}, fmt.Errorf("read the fleet's revision %s: %w",
-			target.RevisionID, err)
+		return false, store.Revision{}, fmt.Errorf("read the fleet's revision %s from this "+
+			"node's history: %w", target.RevisionID, err)
 	}
-	if !found {
-		return false, store.Revision{}, fmt.Errorf("the fleet's revision %s was "+
-			"replaced while it was read", target.RevisionID)
+	if held {
+		fleets.ActivatedAt = target.At
+	} else {
+		var (
+			payload json.RawMessage
+			found   bool
+		)
+		payload, found, err = plane.Body(ctx, target)
+		if err != nil {
+			return false, store.Revision{}, fmt.Errorf("read the fleet's revision %s: %w",
+				target.RevisionID, err)
+		}
+		if !found {
+			return false, store.Revision{}, fmt.Errorf("the fleet's revision %s was "+
+				"replaced while it was read", target.RevisionID)
+		}
+		fleets = configplane.RevisionOf(target, payload)
 	}
-	document, err := secrets.Open(cipher, payload)
+	document, err := secrets.Open(cipher, fleets.Payload)
 	if err != nil {
 		return false, store.Revision{}, fmt.Errorf("open the fleet's revision %s: %w",
 			target.RevisionID, err)
@@ -494,7 +509,7 @@ func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane,
 	if err != nil {
 		return false, store.Revision{}, err
 	}
-	return same, configplane.RevisionOf(target, payload), nil
+	return same, fleets, nil
 }
 
 // runnableRevision decodes the revision this node boots on, for the engine.

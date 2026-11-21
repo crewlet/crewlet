@@ -149,7 +149,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			return fmt.Errorf("read the activation pointer: %w", err)
 		}
 		if pointed {
-			fleetOutranks(ctx, plane, plan.file, target, cipher, log)
+			fleetOutranks(ctx, plane, configs, plan.file, target, cipher, log)
 			return nil
 		}
 		return importSeed(ctx, configs, plane, pub, plan.file, store.Revision{}, cipher,
@@ -199,7 +199,7 @@ func importOverride(ctx context.Context, configs *store.Configs, plane coord.Pla
 		base = known
 	}
 	if pointed {
-		same, fleets, uncompared := seed.isFleets(ctx, plane, target, cipher)
+		same, fleets, uncompared := seed.isFleets(ctx, plane, configs, target, cipher)
 		if uncompared != nil {
 			// NOT SHOWN TO BE THE FILE, so it is replaced, as the
 			// override asks — and said, because a fleet revision this
@@ -289,10 +289,10 @@ func publishOverride(ctx context.Context, plane coord.Plane, pub queue.Publisher
 // fleetOutranks says that a -company file is not imported because the fleet
 // already runs a company — unless the fleet runs this very file, which is no
 // news: every node of a fleet started from one company.yaml carries it.
-func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
+func fleetOutranks(ctx context.Context, plane coord.Plane, configs *store.Configs, seed tierBSeed,
 	target coord.Activation, cipher secrets.Cipher, log *slog.Logger) {
 
-	same, _, err := seed.isFleets(ctx, plane, target, cipher)
+	same, _, err := seed.isFleets(ctx, plane, configs, target, cipher)
 	if same {
 		return
 	}
@@ -413,7 +413,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 			return fmt.Errorf("activate the seeded company config: %w; "+
 				"and the pointer that won could not be read: %w", err, terr)
 		}
-		fleetOutranks(ctx, plane, seed, current, cipher, log)
+		fleetOutranks(ctx, plane, configs, seed, current, cipher, log)
 		return nil
 	}
 	if err != nil {
