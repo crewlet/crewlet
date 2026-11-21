@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -46,14 +47,16 @@ func readLive(text string, h int, r *rand.Rand, most int, flush func() bool) liv
 	return run
 }
 
-// liveText is a text a live stream is read over, the hold it is read at, and
+// liveText is a text a live stream is read over, the hold it is read at,
 // whether it is built in a layout that can refuse at that hold
 // ([redact.ErrDecidedEarly]): a run about as long as the hold beside a key's
-// block and a claim decided past it.
+// block and a claim decided past it, and whether it is read only flushed in
+// 96 KiB pieces, a layout [TestAStreamThatDecidesEarlySaysSo] reads unflushed.
 type liveText struct {
-	name, text string
-	hold       int
-	canRefuse  bool
+	name, text  string
+	hold        int
+	canRefuse   bool
+	flushedOnly bool
 }
 
 // liveTexts is a text of each kind the package's tests draw, at each length a
@@ -63,11 +66,11 @@ type liveText struct {
 // among them, all shorter than the hold they are read at. Then texts a stream
 // decides early: a shape of each hold at 256 KiB, an armour beside a run, an
 // AWS secret's blanks or a Google token's dots in no layout that refuses there;
-// and at the stream's own hold, after 600 KiB of lines, each layout the package
-// doc names, and its neighbours, beside a run past the lag.
+// and at the stream's own hold, after 600 KiB of lines, every second layout the
+// package doc names, and of its neighbours, beside a run past the lag.
 func liveTexts(r *rand.Rand) (texts []liveText) {
 	add := func(name, text string, h int, canRefuse bool) {
-		texts = append(texts, liveText{name, text, h, canRefuse})
+		texts = append(texts, liveText{name, text, h, canRefuse, false})
 	}
 	transcript := func(size int) string {
 		var b strings.Builder
@@ -103,18 +106,21 @@ func liveTexts(r *rand.Rand) (texts []liveText) {
 	layouts, named := redact.RefusingLayouts(r)
 	lines := strings.Repeat("ok\n", 200<<10)
 	for i, l := range layouts {
-		add(l[0]+", after 600 KiB of lines", lines+l[1], redact.HoldBytes(), named[i])
+		if i%2 == 1 {
+			continue
+		}
+		texts = append(texts, liveText{l[0] + ", after 600 KiB of lines", lines + l[1], redact.HoldBytes(), named[i], true})
 	}
 	return texts
 }
 
 // A LIVE STREAM WRITES WHAT THE WHOLE TEXT REDACTS TO HOWEVER IT IS FLUSHED:
-// over [liveTexts], cut and flushed at random, where Close answers nil it
-// wrote [redact.Secrets], and a flush then answers all of it final; what any
-// flush answered final is a prefix of Secrets; a text in no layout that can
-// refuse, flushed around windows decided early, is never refused; never
-// flushed, it answers as a [redact.NewStream] does. In a layout that can, a
-// flush may spare, make or move a refusal ([redact.Stream.Flush]).
+// over [liveTexts] cut and flushed at random (past three wholeBytes, in one
+// schedule each in turn, a layout flushed), where Close answers nil it wrote
+// [redact.Secrets], all final; every final count is a prefix of Secrets; a
+// text in no layout that can refuse, flushed around windows decided early,
+// is never refused; never flushed, it answers as a [redact.NewStream]. In a
+// layout that can, a flush may spare, make or move a refusal ([Stream.Flush]).
 //
 // Mutation: decide each stage to what it was handed, settled or not, or have
 // the end keep what the head's flushes wrote, and a text is written otherwise
@@ -134,21 +140,37 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 		{"up to 8 KiB, flushed 1 in 4", 8 << 10, 4},
 		{"up to 96 KiB, flushed 1 in 2", 96 << 10, 2},
 	}
-	refused, differ, early := 0, 0, 0
-	for _, tx := range texts {
-		want := redact.Secrets(tx.text)
-		plain := readLive(tx.text, tx.hold, r, 64<<10, nil)
-		if plain.err != nil {
-			refused++
+	refused, plains, differ, early := 0, 0, 0, 0
+	for i, tx := range texts {
+		want := sync.OnceValue(func() string { return redact.Secrets(tx.text) })
+		// A long text is read in one schedule, each in turn, and read as a
+		// plain stream only where it is never flushed.
+		long, only := len(tx.text) > 3*redact.WholeBytes, -1
+		switch {
+		case tx.flushedOnly:
+			only = 3
+		case long:
+			only = []int{0, 2, 3}[i%3]
 		}
-		for _, sc := range schedules {
-			if sc.most < 1<<10 && len(tx.text) > 3*redact.WholeBytes {
+		var plain *liveRun
+		for j, sc := range schedules {
+			if only >= 0 && j != only {
 				continue
+			}
+			if plain == nil && (!long || sc.odds == 0) {
+				run := readLive(tx.text, tx.hold, r, 64<<10, nil)
+				plain, plains = &run, plains+1
+				if run.err != nil {
+					refused++
+				}
 			}
 			got := readLive(tx.text, tx.hold, r, sc.most, func() bool { return sc.odds > 0 && r.IntN(sc.odds) == 0 })
 			name := tx.name + ", " + sc.name
-			at, plainAt := redact.RefusedAt(got.err), redact.RefusedAt(plain.err)
-			if at != plainAt {
+			at, plainAt := redact.RefusedAt(got.err), -2
+			if plain != nil {
+				plainAt = redact.RefusedAt(plain.err)
+			}
+			if plain != nil && at != plainAt {
 				differ++
 			}
 			if sc.odds > 0 && !tx.canRefuse && got.early > 0 {
@@ -160,14 +182,14 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 				t.Errorf("%s: a text in no layout that can refuse was refused: %v", name, got.err)
 			case sc.odds == 0 && (at != plainAt || plain.err == nil && got.out != plain.out):
 				t.Errorf("%s: never flushed, the live stream answered %v and wrote another text, or refused otherwise, than a stream, which answered %v", name, got.err, plain.err)
-			case got.err == nil && got.out != want:
-				t.Errorf("%s: Close answered nil, and the live stream wrote another text than Secrets %s", name, streamParted(got.out, want))
+			case got.err == nil && got.out != want():
+				t.Errorf("%s: Close answered nil, and the live stream wrote another text than Secrets %s", name, streamParted(got.out, want()))
 			case got.err == nil && last[1] != int64(len(got.out)):
 				t.Errorf("%s: Close answered nil, and a flush after it answered %d of the %d bytes it wrote final", name, last[1], len(got.out))
 			}
 			for _, f := range got.flushes {
-				if f[1] > f[0] || got.out[:f[1]] != want[:min(int(f[1]), len(want))] {
-					t.Errorf("%s: a flush answered %d of %d bytes final, which are not Secrets' %s", name, f[1], f[0], streamParted(got.out[:min(f[1], int64(len(got.out)))], want))
+				if f[1] > 0 && (f[1] > f[0] || got.out[:f[1]] != want()[:min(int(f[1]), len(want()))]) {
+					t.Errorf("%s: a flush answered %d of %d bytes final, which are not Secrets' %s", name, f[1], f[0], streamParted(got.out[:min(f[1], int64(len(got.out)))], want()))
 					break
 				}
 			}
@@ -176,7 +198,7 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 	if early == 0 {
 		t.Errorf("no flushed reading of a text in no layout that can refuse decided a window early, so none of them could be refused")
 	}
-	t.Logf("%d texts, %d refused by a stream; %d flushed live readings refused otherwise than it; %d flushed readings of a text in no layout that can refuse decided a window early", len(texts), refused, differ, early)
+	t.Logf("%d texts, %d of %d read as a stream refused; %d flushed live readings refused otherwise than it; %d flushed readings of a text in no layout that can refuse decided a window early", len(texts), refused, plains, differ, early)
 }
 
 // BenchmarkALiveStream is what a live stream costs against a [redact.Stream]

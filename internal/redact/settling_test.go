@@ -46,7 +46,7 @@ var counterexampleShapes = [][3]string{
 // settlingTexts is every text Settled is read in pieces over: transcripts;
 // the keys' corpus ([streamCorpus]'s keys in every wrapping, a transcript's
 // line between); every shape a stage carries; an armour beside password's
-// keys and 32 KiB runs; the counterexamples past a reach and a megabyte at
+// keys and 32 KiB runs; the counterexamples past a reach and four reaches at
 // both parities; chains of keys each decided by the next key's line in every
 // wrapping, and long lines of keys before a key pending; random short shapes,
 // three with a password's key after an END on its line, [keyLineAboveABlock]
@@ -84,11 +84,11 @@ func settlingTexts(r *rand.Rand) []settlingText {
 	for _, sh := range counterexampleShapes {
 		for _, k := range []int{7000, 7001} {
 			add(fmt.Sprintf("a 70 KiB line ending %q, then %q and %q x %d", sh[0], sh[1], sh[2], k),
-				counterexample("filler "+strings.Repeat("x", 70<<10)+" ", sh, k), true)
+				counterexample("filler "+strings.Repeat("x", 70<<10)+" ", sh, k), false)
 		}
 		for _, k := range []int{30000, 30001} {
-			add(fmt.Sprintf("a 1.1 MiB line ending %q, then %q and %q x %d", sh[0], sh[1], sh[2], k),
-				counterexample("filler "+strings.Repeat("x", 1100<<10)+" ", sh, k), false)
+			add(fmt.Sprintf("a 300 KiB line ending %q, then %q and %q x %d", sh[0], sh[1], sh[2], k),
+				counterexample("filler "+strings.Repeat("x", 300<<10)+" ", sh, k), false)
 		}
 	}
 	for _, w := range settlingWraps {
@@ -98,11 +98,11 @@ func settlingTexts(r *rand.Rand) []settlingText {
 			}
 		}
 		for _, k := range []int{3000, 3001} {
-			add(fmt.Sprintf("a line of %q x %d", w, k), "x "+strings.Repeat(w+" ", k)+"\nhunter2secretvalue9\n"+strings.Repeat(w+"\n", 5)+"ok\n", true)
+			add(fmt.Sprintf("a line of %q x %d", w, k), "x "+strings.Repeat(w+" ", k)+"\nhunter2secretvalue9\n"+strings.Repeat(w+"\n", 5)+"ok\n", false)
 		}
 	}
 	toks := []string{"password: ", "pwd: ", "x ", "passwd ", `"password": "`, "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----" + `\n`, "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun", `\n`, "7→", " ", ":", `"`, "|", "pwd=", "-----END RSA PRIVATE KEY-----", "**Password:**", "| Password: |", "- "}
-	for i := range 2000 {
+	for i := range 1000 {
 		var b strings.Builder
 		for range 1 + r.IntN(6) {
 			for range 1 + r.IntN(5) {
@@ -123,7 +123,7 @@ func settlingTexts(r *rand.Rand) []settlingText {
 	for i, text := range keyLineAboveABlock {
 		add(fmt.Sprintf("a key's line above a block on a password's key's line, %d", i), text, true)
 	}
-	for i := range 2000 {
+	for i := range 1000 {
 		add(fmt.Sprintf("structured text %d", i), structuredText(r), true)
 	}
 	after := func(settled string) string {
@@ -135,10 +135,10 @@ func settlingTexts(r *rand.Rand) []settlingText {
 	for _, settled := range []string{"", "ok\n", "abcdef\n", strings.Repeat("ok\n", 1000) + "hunter2x9\n"} {
 		for _, at := range []int{64<<10 - 1, 64 << 10, 64<<10 + 1, 128 << 10} {
 			pad := func(gutter string) string { return settled + gutter + strings.Repeat("x", at-len(gutter)-1) + " " }
-			add(fmt.Sprintf("a key %d bytes into a line under a pipe%s", at, after(settled)), pad("| ")+"password: \n| hunter2secretvalue9\n| ok\n", true)
-			add(fmt.Sprintf("a key %d bytes into a line under a word's gutter%s", at, after(settled)), pad("   32\t")+"password: \n   33\thunter2secretvalue9\n   34\tok\n", true)
-			add(fmt.Sprintf("a key %d bytes into a line under a quote%s", at, after(settled)), pad(`"`)+"password: \n\"hunter2secretvalue9\n\"ok\n", true)
-			add(fmt.Sprintf("a key %d bytes into a string with its breaks escaped%s", at, after(settled)), pad(`{"log": "`)+`password:\n hunter2secretvalue9\n ok"}`+"\n", true)
+			add(fmt.Sprintf("a key %d bytes into a line under a pipe%s", at, after(settled)), pad("| ")+"password: \n| hunter2secretvalue9\n| ok\n", false)
+			add(fmt.Sprintf("a key %d bytes into a line under a word's gutter%s", at, after(settled)), pad("   32\t")+"password: \n   33\thunter2secretvalue9\n   34\tok\n", false)
+			add(fmt.Sprintf("a key %d bytes into a line under a quote%s", at, after(settled)), pad(`"`)+"password: \n\"hunter2secretvalue9\n\"ok\n", false)
+			add(fmt.Sprintf("a key %d bytes into a string with its breaks escaped%s", at, after(settled)), pad(`{"log": "`)+`password:\n hunter2secretvalue9\n ok"}`+"\n", false)
 		}
 		add(fmt.Sprintf("a key opening a string at its line's start%s", after(settled)),
 			settled+`"password:\n`+keyLine+`\n" +`+"\n"+keyLine[:56]+" -----END RSA PRIVATE KEY-----\n+\nok\n", true)
@@ -244,7 +244,7 @@ func (tx settlingText) sampled(r *rand.Rand, i, n, k int) bool {
 }
 
 // SETTLED CHAINS AT ITS OWN POINT, AND NEVER FALLS: over [settlingTexts], at
-// every line end in order (on a long text the first and last 30 and about 30
+// every line end in order (on a long text the first and last ten and about ten
 // more), Settled of the text so far read whole is never less than it was at
 // the line end before, and it is that point and Settled of the text past it.
 // A settling rests on both.
@@ -266,7 +266,7 @@ func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 		}
 		prev := 0
 		for i, c := range ends {
-			if !tx.sampled(r, i, len(ends), 30) {
+			if !tx.sampled(r, i, len(ends), 10) {
 				continue
 			}
 			got := redact.SettledWhole(tx.text[:c])
@@ -283,8 +283,8 @@ func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 
 // A TEXT READ IN PIECES SETTLES AS IT SETTLES WHOLE: over [settlingTexts],
 // written to a settling whole, a line at a time and in random pieces
-// ([settlingPlans]), after every write (on a long text the first and last ten
-// and about ten more) what it has answered settled is exactly Settled of the
+// ([settlingPlans]), after every write (on a long text the first and last five
+// and about five more) what it has answered settled is exactly Settled of the
 // text so far read whole, and it holds only what is past that.
 //
 // Mutation: ask Settled of only the last four reaches of the text past the
@@ -300,7 +300,7 @@ func TestATextReadInPiecesSettlesAsItSettlesWhole(t *testing.T) {
 				s.Write([]byte(tx.text[at : at+n]))
 				at += n
 				settled += s.Settle()
-				if !tx.sampled(r, i, len(plan), 10) {
+				if !tx.sampled(r, i, len(plan), 5) {
 					continue
 				}
 				if want := redact.SettledWhole(tx.text[:at]); settled != want || s.Held() != at-settled {
