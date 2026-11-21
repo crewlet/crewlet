@@ -41,6 +41,113 @@ type growthSeat interface {
 	// GrowthSeatLevel is the seat's level where its block is on, and ""
 	// where it is off.
 	GrowthSeatLevel() string
+	// SeatAccess is the block as seat access reads it; SetSeatAccess writes it.
+	SeatAccess() GrowthSeatAccess
+	SetSeatAccess(GrowthSeatAccess)
+	// seatScopeKey is the key its scope is written under.
+	seatScopeKey() string
+	// seatEnabled is where its `enabled` is kept.
+	seatEnabled() **bool
+	// check holds the block to the rest of c, at here.
+	check(c *Company, p *problems, here Path)
+}
+
+// growthSeatKeys is every growth seat block's key under
+// `roles[].integrations`, in the order the blocks are declared.
+var growthSeatKeys = sync.OnceValue(func() []string {
+	var out []string
+	seat := reflect.TypeFor[growthSeat]()
+	for f := range reflect.TypeFor[RoleIntegrations]().Fields() {
+		if f.IsExported() && f.Type.Implements(seat) {
+			out = append(out, jsonName(f))
+		}
+	}
+	return out
+})
+
+// isGrowthSeat reports whether lane is a growth product's seat block.
+func isGrowthSeat(lane string) bool { return slices.Contains(growthSeatKeys(), lane) }
+
+// growthBlockKeys is every growth block's key under `integrations`, each its
+// product's kind.
+var growthBlockKeys = sync.OnceValue(func() []string {
+	var out []string
+	block := reflect.TypeFor[growthBlock]()
+	for f := range reflect.TypeFor[Integrations]().Fields() {
+		if f.IsExported() && f.Type.Implements(block) {
+			out = append(out, jsonName(f))
+		}
+	}
+	return out
+})
+
+// holdsGrowthSeat reports whether r holds any growth seat block.
+func (r RoleIntegrations) holdsGrowthSeat() bool {
+	v := reflect.ValueOf(r)
+	seat := reflect.TypeFor[growthSeat]()
+	for n := range v.NumField() {
+		if f := v.Type().Field(n); f.IsExported() && f.Type.Implements(seat) && !v.Field(n).IsNil() {
+			return true
+		}
+	}
+	return false
+}
+
+// GrowthSeatAccess is a growth seat block as internal/seataccess reads and
+// writes every lane: on or off, its level (the default where it names none)
+// and the accounts, properties or apps it names.
+type GrowthSeatAccess struct {
+	On    *bool
+	Level string
+	Scope []string
+}
+
+// GrowthSeatAccess is the role's seat block for growth product kind, false
+// where the role has none.
+func (r *Role) GrowthSeatAccess(kind string) (GrowthSeatAccess, bool) {
+	s := r.growthSeatOf(kind)
+	if s == nil {
+		return GrowthSeatAccess{}, false
+	}
+	return s.SeatAccess(), true
+}
+
+// SetGrowthSeatAccess writes the role's seat block for growth product kind,
+// making it where absent; false where kind names no growth seat block.
+func (r *Role) SetGrowthSeatAccess(kind string, a GrowthSeatAccess) bool {
+	f, ok := r.growthSeatField(kind)
+	if !ok {
+		return false
+	}
+	if f.IsNil() {
+		f.Set(reflect.New(f.Type().Elem()))
+	}
+	f.Interface().(growthSeat).SetSeatAccess(a)
+	return true
+}
+
+// growthSeatOf is the role's seat block for growth product kind, nil where
+// it holds none.
+func (r *Role) growthSeatOf(kind string) growthSeat {
+	f, ok := r.growthSeatField(kind)
+	if !ok || f.IsNil() {
+		return nil
+	}
+	return f.Interface().(growthSeat)
+}
+
+// growthSeatField is the field of the role's integrations holding kind's
+// growth seat block, found by its key, so a product adds no row here.
+func (r *Role) growthSeatField(kind string) (reflect.Value, bool) {
+	v := reflect.ValueOf(&r.Integrations).Elem()
+	seat := reflect.TypeFor[growthSeat]()
+	for n := range v.NumField() {
+		field := v.Type().Field(n)
+		if field.IsExported() && jsonName(field) == kind && field.Type.Implements(seat) {
+			return v.Field(n), true
+		}
+	}
+	return reflect.Value{}, false
 }
 
 // GrowthLevels is the seat's level on each growth lane it is on at, by the
@@ -49,15 +156,10 @@ type growthSeat interface {
 // so a product adds no row here.
 func (r *Role) GrowthLevels() map[string]string {
 	out := map[string]string{}
-	v := reflect.ValueOf(&r.Integrations).Elem()
-	for n := range v.NumField() {
-		f := v.Field(n)
-		if f.Kind() != reflect.Pointer || f.IsNil() || !v.Type().Field(n).IsExported() {
-			continue
-		}
-		if s, ok := f.Interface().(growthSeat); ok {
+	for _, kind := range growthSeatKeys() {
+		if s := r.growthSeatOf(kind); s != nil {
 			if level := s.GrowthSeatLevel(); level != "" {
-				out[jsonName(v.Type().Field(n))] = level
+				out[kind] = level
 			}
 		}
 	}

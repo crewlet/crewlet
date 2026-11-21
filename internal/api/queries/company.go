@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -390,6 +391,12 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// NOTHING INBOUND: the engine dials out to each registered server,
 		// and the row says how many there are.
 		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
+	}
+	if in.GoogleAnalytics != nil {
+		// NO SECRET: the properties the company narrows agents to, and its
+		// catalog's roles with what each allows.
+		add("google_analytics", in.GoogleAnalytics.Enabled, nil, map[string]any{
+			"properties": in.GoogleAnalytics.Properties, "roles": growthRoles("google_analytics")})
 	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
@@ -1075,4 +1082,14 @@ func instantOrNil(at time.Time) any {
 		return nil
 	}
 	return at.UTC().Format(time.RFC3339)
+}
+
+// growthRoles is kind's catalog's roles, each with what it allows, for the
+// setup card ([growth.Catalog.RoleOffers]); nil for a kind with no catalog.
+func growthRoles(kind string) []growth.RoleOffer {
+	c, ok := growth.CatalogOf(kind)
+	if !ok {
+		return nil
+	}
+	return c.RoleOffers()
 }

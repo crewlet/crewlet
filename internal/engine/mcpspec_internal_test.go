@@ -243,7 +243,8 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		// Issued at use through the broker.
 		integration.KindAWS: "no pass mints a seat's AWS credential",
 		// Signed at use.
-		integration.KindSSH: "no pass mints a seat's SSH credential",
+		integration.KindSSH:             "no pass mints a seat's SSH credential",
+		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {
