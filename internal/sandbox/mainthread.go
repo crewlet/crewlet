@@ -69,11 +69,13 @@ type MainThreadAsk struct {
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
-// ([HookServed.Take]) and the boundary it was served at
-// ([HookServed.Boundary]), which the runner reads as its harness's own event.
+// ([HookServed.Take]), the boundary it was served at ([HookServed.Boundary]),
+// which the runner reads as its harness's own event, and a poll serve's item
+// digest ([HookServed.Digest]).
 type AskedTake struct {
 	Take     string
 	Boundary types.SteerBoundary
+	Digest   string
 }
 
 // TakeReceipts is what the job's session shows of the takes asked: each asked
@@ -129,7 +131,7 @@ func askedTakes(run PendingRun) []AskedTake {
 				slices.ContainsFunc(takes, func(t AskedTake) bool { return t.Take == h.Take }) {
 				continue
 			}
-			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary)})
+			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest})
 		}
 	}
 	return takes

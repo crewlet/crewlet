@@ -818,14 +818,15 @@ func TestAVerdictTheStoreRefusesOnceIsAskedAgainWithinItsRoom(t *testing.T) {
 
 // A POLL SERVE A SESSION RECORD HOLDS IS CONFIRMED THROUGH THE ONE RECEIPTS
 // PATH: a poll recorded under the inbox id its harness admitted the note by is
-// asked of the job's record at its read, a record holding the id settles the
-// note and publishes it, and a record that cannot be read decides nothing,
-// leaving the note waiting. A runner that confirms off its record and reads no
-// thread is asked the takes alone, never a count.
+// asked of the job's record at its read, beside its item's digest for a record
+// that holds text; a record holding the item settles the note and publishes
+// it, and a record that cannot be read decides nothing, leaving the note
+// waiting. A runner that confirms off its record and reads no thread is asked
+// the takes alone, never a count.
 //
-// Mutation: ask no poll serve of the record, settle it off another id, publish
-// an undecided record's notes, or ask such a runner a count, and a case goes
-// red.
+// Mutation: ask no poll serve of the record, drop its digest from the ask,
+// settle it off another id, publish an undecided record's notes, or ask such a
+// runner a count, and a case goes red.
 func TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -844,7 +845,7 @@ func TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts(t *testing.T
 			fileNote(t, rig.pending, "t1", "n1")
 			if _, err := rig.pending.ServeNotes(t.Context(), "t1", NoteServe{IDs: []string{"n1"},
 				Launch: launched.LaunchID, Statuses: []string{StatusLaunching, StatusRunning},
-				Inbox: map[string]string{"n1": "msg_n1"}}); err != nil {
+				Inbox: map[string]InboxItem{"n1": {ID: "msg_n1", Digest: "digest-n1"}}}); err != nil {
 				t.Fatalf("the poll: %v", err)
 			}
 			thread := &receiptThread{receipts: tc.receipts}
@@ -854,8 +855,8 @@ func TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts(t *testing.T
 			}
 			asked := thread.asks()
 			if len(asked) != 1 || asked[0].Count || !slices.Equal(asked[0].Takes,
-				[]AskedTake{{Take: "msg_n1", Boundary: types.SteerBoundaryStep}}) {
-				t.Errorf("the record was asked %+v, want the poll's inbox id alone and no count", asked)
+				[]AskedTake{{Take: "msg_n1", Boundary: types.SteerBoundaryStep, Digest: "digest-n1"}}) {
+				t.Errorf("the record was asked %+v, want the poll's inbox id and digest alone and no count", asked)
 			}
 			if got := spy.ids(); !slices.Equal(got, tc.published) {
 				t.Errorf("published %v, want %v", got, tc.published)
@@ -888,7 +889,7 @@ func TestAWakeServedOnceSettlesAtTheRunsEndOffItsRecord(t *testing.T) {
 	}
 	if _, err := rig.pending.ServeNotes(t.Context(), "t1", NoteServe{IDs: []string{wake.ID},
 		Launch: launched.LaunchID, Statuses: []string{StatusLaunching, StatusRunning},
-		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]string{wake.ID: "msg_w"}}); err != nil {
+		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]InboxItem{wake.ID: {ID: "msg_w"}}}); err != nil {
 		t.Fatalf("the poll: %v", err)
 	}
 	if err := rig.coordinator.settleReceipts(t.Context(), rig.get("t1"),

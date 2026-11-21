@@ -1324,24 +1324,28 @@ func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtaking
 }
 
 // A POLL SERVE IS RECORDED UNDER ITS INBOX ID AND SETTLED BY IT, for a harness
-// whose session record confirms a take by that id: the serve is the job's,
-// once however often the poll serves the note again, a verdict holding the id
+// whose session record confirms a take: the serve is the job's, kept with its
+// item's digest beside the id (a record holding text matches by it), once
+// however often the poll serves the note again, a verdict holding the id
 // reads the note off it, and a verdict for another job settles nothing of it.
 // A poll naming no inbox id records no serve, as a plugin's that confirms
 // itself. A wake served once waits through a read that decided nothing (a
 // record not yet flushed) and is read off the verdict the run's end gives.
 //
-// Mutation: record the serve under the note's id, again on a second poll, let
+// Mutation: record the serve under the note's id or without its digest, again
+// on a second poll, let
 // another job's verdict read it, or let a verdict that held nothing lose the
 // wake's one serve, and a check goes red.
 func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-poll-record"
+	pollDigest := strings.Repeat("d", 64)
 	launch := mustLaunched(t, s, run(turn))
 	mustFile(t, s, turn, "n-1")
 	mustFile(t, s, turn, "n-2")
 	poll := sandbox.NoteServe{IDs: []string{"n-1"}, Launch: launch,
-		Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning}, Inbox: map[string]string{"n-1": "msg_1"}}
+		Statuses: []string{sandbox.StatusLaunching, sandbox.StatusRunning},
+		Inbox:    map[string]sandbox.InboxItem{"n-1": {ID: "msg_1", Digest: pollDigest}}}
 	for range 2 {
 		if served, err := s.ServeNotes(ctx, turn, poll); err != nil || !slices.Equal(idsOf(served), []string{"n-1"}) {
 			t.Fatalf("the poll served %v, %v, want n-1", idsOf(served), err)
@@ -1353,8 +1357,9 @@ func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandb
 	}
 	notes := notesByID(t, s, turn)
 	if n := notes["n-1"]; !slices.Equal(servesOf(n), []string{"msg_1"}) || n.Served != launch ||
-		n.Serves[0].Launch != launch || n.Serves[0].Boundary != string(types.SteerBoundaryStep) {
-		t.Errorf("the polled note is %+v, want one serve to the job under its inbox id, at a step", n)
+		n.Serves[0].Launch != launch || n.Serves[0].Boundary != string(types.SteerBoundaryStep) ||
+		n.Serves[0].Digest != pollDigest {
+		t.Errorf("the polled note is %+v, want one serve to the job under its inbox id and digest, at a step", n)
 	}
 	if n := notes["n-2"]; len(n.Serves) != 0 || n.Served != launch {
 		t.Errorf("a poll naming no inbox id recorded %+v, want the note served and no serve", n)
@@ -1373,7 +1378,7 @@ func testAPollServeIsRecordedUnderItsInboxIDAndSettledByIt(t *testing.T, s sandb
 	// holds its inbox id.
 	wake := fileWake(t, s, turn, launch, sealedWake("w-1", 64))
 	once := sandbox.NoteServe{IDs: []string{wake.ID}, Launch: launch, Statuses: poll.Statuses,
-		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]string{wake.ID: "msg_w"}}
+		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]sandbox.InboxItem{wake.ID: {ID: "msg_w"}}}
 	if served, err := s.ServeNotes(ctx, turn, once); err != nil || !slices.Equal(idsOf(served), []string{wake.ID}) {
 		t.Fatalf("the poll served %v, %v, want the wake", idsOf(served), err)
 	}

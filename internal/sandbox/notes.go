@@ -320,6 +320,10 @@ type HookServed struct {
 	// ([PendingStore.SettleHook]).
 	Take string `json:"take"`
 
+	// Digest is a poll serve's digest of the item it handed
+	// ([InboxItem.Digest]); empty for a hook's.
+	Digest string `json:"digest,omitempty"`
+
 	// Launch is the job whose hook was served.
 	Launch string `json:"launch"`
 
@@ -743,12 +747,22 @@ type NoteServe struct {
 	// by id ([handsWhole]).
 	Wakes map[string]int
 
-	// Inbox is the id the harness admits each note under, by note id, for a
-	// harness whose session record confirms a take by it: the serve is then
-	// recorded under that id, as a hook's is under its token, so a read asks
-	// the record for it and a settle finds it ([PendingStore.SettleHook]).
-	// Nil for a harness confirmed otherwise, whose serve records no take.
-	Inbox map[string]string
+	// Inbox is how the harness admits each note, by note id, for a harness
+	// whose session record confirms a take: the serve is then recorded under
+	// the item's id, as a hook's is under its token, beside its digest, so a
+	// read asks the record for either and a settle finds it by the id
+	// ([PendingStore.SettleHook]). Nil for a harness confirmed otherwise,
+	// whose serve records no take.
+	Inbox map[string]InboxItem
+}
+
+// InboxItem is how a harness admits one note a poll serves it: the id it
+// admits the note under, and the digest of the note's text as the poll
+// renders it (SHA-256, hex; executor.ItemDigest), for a record that holds the
+// text rather than the id. The text itself is never stored (ADR-0067).
+type InboxItem struct {
+	ID     string
+	Digest string
 }
 
 // HookServe is a hook's take serving notes to its job's harness
@@ -1159,11 +1173,11 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 				held.Served = serve.Launch
 				marked = true
 			}
-			if take := serve.Inbox[held.ID]; take != "" && !slices.ContainsFunc(held.Serves, func(h HookServed) bool {
-				return h.Launch == serve.Launch && h.Take == take
+			if item := serve.Inbox[held.ID]; item.ID != "" && !slices.ContainsFunc(held.Serves, func(h HookServed) bool {
+				return h.Launch == serve.Launch && h.Take == item.ID
 			}) {
-				held.Serves = append(slices.Clone(held.Serves), HookServed{Take: take, Launch: serve.Launch,
-					Boundary: string(types.SteerBoundaryStep), At: at})
+				held.Serves = append(slices.Clone(held.Serves), HookServed{Take: item.ID, Digest: item.Digest,
+					Launch: serve.Launch, Boundary: string(types.SteerBoundaryStep), At: at})
 				marked = true
 			}
 			notes[i] = held

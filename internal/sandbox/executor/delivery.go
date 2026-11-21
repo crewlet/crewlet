@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"unicode/utf8"
 
@@ -112,9 +114,9 @@ func PollCeiling(harness string) (int, bool) {
 }
 
 // ConfirmsByRecord reports whether harness's session record confirms a take
-// by the inbox id its note was admitted under ([recordConfirmer]): the poll's
-// serves of its run are then recorded under those ids
-// (sandbox.NoteServe.Inbox), so its receipts can settle them.
+// by the item its note was admitted as ([recordConfirmer]): the poll's serves
+// of its run are then recorded under the items' inbox ids, beside their
+// digests (sandbox.NoteServe.Inbox), so its receipts can settle them.
 func ConfirmsByRecord(harness string) bool {
 	_, ok := harnessNamed(harness).(recordConfirmer)
 	return ok
@@ -147,27 +149,44 @@ func confirms(h Harness) bool {
 // off the harness's own delivery event.
 type pluginConfirmer interface{ pluginConfirms() bool }
 
+// ItemDigest is the digest a poll's serve records of an item's text as the
+// poll rendered it (sandbox.InboxItem.Digest): SHA-256, hex. A record that
+// holds the text it admitted rather than an id matches by it
+// ([recordConfirmer]), hashing each entry with this same function.
+func ItemDigest(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// ServedTake is one poll serve a session record is asked for: the inbox id
+// its note was admitted under ([inboxDelivery.inboxID]), and the digest of the
+// item's rendered text ([ItemDigest]).
+type ServedTake struct{ InboxID, Digest string }
+
 // recordConfirmer is an [inboxDelivery] whose session record shows the notes
-// its plugin admitted, each by the inbox id it was admitted under
-// ([inboxDelivery.inboxID]): notesHeld is the ids among inboxIDs the record
-// holds whole. The record's shape is the harness's own. An error is a record
-// that could not be read, which decides nothing.
+// its plugin admitted, each by its inbox id or by its rendered text:
+// notesHeld is the inbox ids of takes, in their order, whose item the record
+// holds whole. A record of ids ignores Digest; one of text hashes each entry
+// with [ItemDigest]. The record's shape is the harness's own. An error is a
+// record that could not be read, which decides nothing.
 type recordConfirmer interface {
-	notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, inboxIDs []string) ([]string, error)
+	notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, takes []ServedTake) ([]string, error)
 }
 
 // recordReceipts is what h's session record shows of the takes ask asks, each
 // keyed by the inbox id it was admitted under: held where the record holds it
 // whole, undecided with a reason where the record could not be read, never
-// absent, since a record that does not show an id has not proved it absent.
+// absent, since a record that does not show an item has not proved it absent.
 func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
 
+	takes := make([]ServedTake, 0, len(ask.Takes))
 	ids := make([]string, 0, len(ask.Takes))
 	for _, take := range ask.Takes {
+		takes = append(takes, ServedTake{InboxID: take.Take, Digest: take.Digest})
 		ids = append(ids, take.Take)
 	}
-	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, ids)
+	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes)
 	if err != nil {
 		return sandbox.TakeReceipts{Why: "the session record could not be read: " + err.Error()}
 	}
