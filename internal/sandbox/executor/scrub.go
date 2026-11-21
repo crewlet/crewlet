@@ -63,7 +63,7 @@ const minScrubBytes = 8
 //
 // 256 MiB, apart from the archive's bound (executorkeep.SessionMaxBytes): it is
 // what the take's wait (internal/sandbox's SessionScrubWait) is derived for,
-// read twice. A text-only session gzip shrinks further than the two bounds'
+// read once, and again from a unit it goes on from. A text-only session gzip shrinks further than the two bounds'
 // ratio is refused here first; media, already compressed, inflates to about
 // its archive's size, so it is held by the archive's bound and no ratio.
 const scrubPlainMax = 256 << 20
