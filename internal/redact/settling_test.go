@@ -6,17 +6,47 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// settlingText is a text a settling is read over, and whether every line end
-// of it is checked against Settled read whole, or a sample of them.
+// settlingText is a text a settling is read over, whether every line end of
+// it is checked against Settled read whole, or a sample of them, and what
+// Settled read whole answered at each line end asked of ([settlingText.whole]).
 type settlingText struct {
 	name, text string
 	every      bool
+	asked      *settledAt
 }
+
+// settledAt is Settled read whole at each line end of a text it was asked at.
+type settledAt struct {
+	mu sync.Mutex
+	at map[int]int
+}
+
+// whole is Settled of tx's text up to at, read whole ([redact.SettledWhole]),
+// asked once per line end however many tests and writes ask it: Settled reads
+// nothing past the last line break ([TestAnUnfinishedLineChangesNothingSettled]).
+func (tx settlingText) whole(at int) int {
+	end := strings.LastIndexByte(tx.text[:at], '\n') + 1
+	tx.asked.mu.Lock()
+	defer tx.asked.mu.Unlock()
+	n, ok := tx.asked.at[end]
+	if !ok {
+		n = redact.SettledWhole(tx.text[:end])
+		tx.asked.at[end] = n
+	}
+	return n
+}
+
+// settlingCorpus is [settlingTexts] drawn once, so the tests over it share
+// what Settled read whole answers at each line end ([settlingText.whole]).
+var settlingCorpus = sync.OnceValue(func() []settlingText {
+	return settlingTexts(rand.New(rand.NewPCG(1666, 40)))
+})
 
 // settlingWraps are the lines a password's key ends in under every wrapping
 // a value is read below its key in, and settlingSeps the separators between
@@ -57,7 +87,9 @@ var counterexampleShapes = [][3]string{
 // settled lines, so a settling reads it from past the start.
 func settlingTexts(r *rand.Rand) []settlingText {
 	var texts []settlingText
-	add := func(name, text string, every bool) { texts = append(texts, settlingText{name, text, every}) }
+	add := func(name, text string, every bool) {
+		texts = append(texts, settlingText{name, text, every, &settledAt{at: map[int]int{}}})
+	}
 	for i := range 300 {
 		var b strings.Builder
 		for range 1 + r.IntN(30) {
@@ -257,7 +289,7 @@ func (tx settlingText) sampled(r *rand.Rand, i, n, k int) bool {
 func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 42))
-	for _, tx := range settlingTexts(r) {
+	for _, tx := range settlingCorpus() {
 		var ends []int
 		for i := range len(tx.text) {
 			if tx.text[i] == '\n' {
@@ -269,7 +301,7 @@ func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 			if !tx.sampled(r, i, len(ends), 10) {
 				continue
 			}
-			got := redact.SettledWhole(tx.text[:c])
+			got := tx.whole(c)
 			if got < prev {
 				t.Fatalf("%s, at %d: Settled fell to %d from %d", tx.name, c, got, prev)
 			}
@@ -292,7 +324,7 @@ func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 func TestATextReadInPiecesSettlesAsItSettlesWhole(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 41))
-	for _, tx := range settlingTexts(r) {
+	for _, tx := range settlingCorpus() {
 		for p, plan := range settlingPlans(r, tx) {
 			var s redact.Settling
 			settled, at := 0, 0
@@ -303,7 +335,7 @@ func TestATextReadInPiecesSettlesAsItSettlesWhole(t *testing.T) {
 				if !tx.sampled(r, i, len(plan), 5) {
 					continue
 				}
-				if want := redact.SettledWhole(tx.text[:at]); settled != want || s.Held() != at-settled {
+				if want := tx.whole(at); settled != want || s.Held() != at-settled {
 					t.Fatalf("%s, plan %d, after %d bytes: settled %d and held %d; Settled of the text so far is %d", tx.name, p, at, settled, s.Held(), want)
 				}
 			}
@@ -356,7 +388,7 @@ func settlingPlans(r *rand.Rand, tx settlingText) [][]int {
 func TestASettlingAsksOnlyOnceALineHasEnded(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1666, 43))
-	for _, tx := range settlingTexts(r) {
+	for _, tx := range settlingCorpus() {
 		plan := settlingPlans(r, tx)[1]
 		var s redact.Settling
 		breaks, at := 0, 0
