@@ -794,8 +794,15 @@ const (
 // SeatGrants are every grant, in declaration order.
 var SeatGrants = []SeatGrant{SeatGrantHealth, SeatGrantSSHRead, SeatGrantSSHOperate, SeatGrantDelegate}
 
-// Valid reports whether a grant is one this build knows.
-func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
+// Valid reports whether a grant is one this build knows: one of
+// [SeatGrants], or a registered growth product's ([GrowthSeatGrantOf]).
+func (g SeatGrant) Valid() bool {
+	if slices.Contains(SeatGrants, g) {
+		return true
+	}
+	_, _, ok := GrowthSeatGrantOf(g)
+	return ok
+}
 
 // AssistClass is what the Dashboard Assistant may do with a verb: take it
 // under a read grant, carry it only as the one approved request an exec grant
@@ -1893,7 +1900,7 @@ var rules = map[Action]rule{
 // (internal/api/queries' postures). A caller deciding for itself would be a
 // second implementation. Use [Decide].
 func RecencyOf(a Action) (iam.Recency, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.recency, ok
 }
 
@@ -1903,7 +1910,7 @@ func RecencyOf(a Action) (iam.Recency, bool) {
 // EXPORTED FOR WHAT SHOWS A GESTURE TO A PERSON first (the assistant's card),
 // on [RecencyOf]'s terms; decides nothing.
 func IrreversibleOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.irreversible, ok
 }
 
@@ -1913,7 +1920,7 @@ func IrreversibleOf(a Action) (bool, bool) {
 //
 // EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func SelfRecencyOf(a Action) (iam.Recency, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.selfRecency, ok
 }
 
@@ -1922,7 +1929,7 @@ func SelfRecencyOf(a Action) (iam.Recency, bool) {
 //
 // EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func PresenceOf(a Action) (Presence, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.presence, ok
 }
 
@@ -1936,7 +1943,7 @@ func PresenceOf(a Action) (Presence, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func AppOf(a Action) (iam.Grant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.app, ok
 }
 
@@ -1948,7 +1955,7 @@ func AppOf(a Action) (iam.Grant, bool) {
 // did not make would have named. A copy, so no caller edits the row. Use
 // [Decide].
 func AnyOf(a Action) ([]iam.Grant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return slices.Clone(r.anyOf), ok
 }
 
@@ -1957,7 +1964,7 @@ func AnyOf(a Action) ([]iam.Grant, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func HumanOnlyOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.humanOnly, ok
 }
 
@@ -1966,7 +1973,7 @@ func HumanOnlyOf(a Action) (bool, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatOnlyOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seatOnly, ok
 }
 
@@ -1976,7 +1983,7 @@ func SeatOnlyOf(a Action) (bool, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatGrantOf(a Action) (SeatGrant, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seatGrant, ok
 }
 
@@ -1986,7 +1993,7 @@ func SeatGrantOf(a Action) (SeatGrant, bool) {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func MinRoleOf(a Action) (artifacts.Role, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.minRole, ok
 }
 
@@ -1998,7 +2005,7 @@ func MinRoleOf(a Action) (artifacts.Role, bool) {
 // with the tools' annotations: a steerable verb must be a write. Use
 // [DecideWithin].
 func SteerableOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.steerable, ok
 }
 
@@ -2008,7 +2015,7 @@ func SteerableOf(a Action) (bool, bool) {
 // EXPORTED FOR THE WALKS, here and wherever what the assistant is offered is
 // held against what the table lets it take. Use [Decide].
 func AssistOf(a Action) (AssistClass, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	if !ok {
 		return "", false
 	}
@@ -2151,7 +2158,7 @@ var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 //
 // EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
 func SeatedOf(a Action) (bool, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.seated, ok
 }
 
@@ -2164,6 +2171,6 @@ func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
 // EXPORTED FOR THE WALKS, not for a caller to branch on: a surface deciding
 // for itself would be a second implementation. Use [Decide].
 func ClassOf(a Action) (Class, bool) {
-	r, ok := rules[a]
+	r, ok := ruleOf(a)
 	return r.class, ok
 }

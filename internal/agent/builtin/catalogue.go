@@ -4,6 +4,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -61,12 +62,15 @@ const (
 	GroupMemory Group = "memory"
 	// GroupDiscovery is the pair an agent reaches MCP tools through.
 	GroupDiscovery Group = "discovery"
+	// GroupGrowth is every growth product's tools (internal/growth), filed
+	// from its catalog.
+	GroupGrowth Group = "growth"
 )
 
-// Groups are the twelve, in the order the catalogue shows them.
+// Groups are the thirteen, in the order the catalogue shows them.
 var Groups = []Group{
 	GroupWork, GroupProjects, GroupKnowledge, GroupChat, GroupArtifacts,
-	GroupCode, GroupHealth, GroupAtlas, GroupServers, GroupColleagues, GroupMemory, GroupDiscovery,
+	GroupCode, GroupHealth, GroupAtlas, GroupServers, GroupGrowth, GroupColleagues, GroupMemory, GroupDiscovery,
 }
 
 // Valid reports whether g is a group this build files tools under.
@@ -93,6 +97,8 @@ var groupWords = map[Group]struct{ label, description string }{
 		"The company's atlas: what it runs on, how sure the atlas is of each entry, and what depends on what."},
 	GroupServers: {"Servers",
 		"The company's servers over SSH: allowlisted reads, and commands a person or a delegate approves first."},
+	GroupGrowth: {"Marketing and growth",
+		"The company's analytics, ad, store and earnings accounts: reads, recorded changes, and acts an administrator approves first."},
 	GroupColleagues: {"Colleagues",
 		"Finding a colleague, and asking another agent a question."},
 	GroupMemory: {"Memory and skills",
@@ -184,14 +190,21 @@ const (
 	// GateDelegate names an agent an enabled delegation rule names
 	// ([authz.ClassAdmin] with [authz.SeatGrantDelegate]).
 	GateDelegate Gate = "delegated_decisions"
+	// GateGrowthRead names an agent on a growth product's lane at read or
+	// above ([authz.ClassAdmin] with the product's [authz.GrowthSeatGrant]).
+	GateGrowthRead Gate = "growth_read"
+	// GateGrowthOperate names one at operate or above.
+	GateGrowthOperate Gate = "growth_operate"
+	// GateGrowthAdminister names one at administer.
+	GateGrowthAdminister Gate = "growth_administer"
 )
 
-// Gates are the eighteen, in declaration order.
+// Gates are the twenty-one, in declaration order.
 var Gates = []Gate{
 	GateEverybody, GateSelf, GateWorklet, GateWorkletAsked, GateProjectLead,
 	GateDoclet, GateChatlet, GateArtifacts, GateGitlet, GateAtlas, GateArtifactViewer,
 	GateArtifactEditor, GateArtifactOwner, GateArtifactCommenter, GateHealthTools, GateSSHRead,
-	GateSSHOperate, GateDelegate,
+	GateSSHOperate, GateDelegate, GateGrowthRead, GateGrowthOperate, GateGrowthAdminister,
 }
 
 // Valid reports whether g is a gate this build names.
@@ -382,15 +395,46 @@ var filings = sync.OnceValue(func() map[string]Filing {
 // false for a tool the catalogue does not list: an MCP server's, or a verb
 // only the operator's surface offers.
 func FilingOf(tool string) (Filing, bool) {
-	f, ok := filings()[tool]
-	return f, ok
+	if f, ok := filings()[tool]; ok {
+		return f, true
+	}
+	return growthFiling(tool)
+}
+
+// growthGates are the gates by the least level a growth tool's class needs.
+var growthGates = map[growth.Level]Gate{
+	growth.LevelRead: GateGrowthRead, growth.LevelOperate: GateGrowthOperate,
+	growth.LevelAdminister: GateGrowthAdminister,
+}
+
+// growthFiling is a growth tool's filing, from its catalog: its gate by its
+// class's level, its vendor the product's lane, ranked in its catalog's order.
+// False for a tool no registered catalog lists.
+func growthFiling(tool string) (Filing, bool) {
+	kind, ok := growth.KindOfTool(tool)
+	if !ok {
+		return Filing{}, false
+	}
+	c, _ := growth.CatalogOf(kind)
+	rank := slices.IndexFunc(c.Tools, func(t growth.Tool) bool { return t.Name == tool })
+	def := c.Tools[rank]
+	return Filing{Group: GroupGrowth, Gate: growthGates[def.Class.Level()], Rank: rank,
+		Vendor: VendorNeed{Vendor: c.API, Lane: kind, Level: string(def.Class.Level())}}, true
 }
 
 // Catalogued is every tool the catalogue lists, in its order: group by group,
-// each group's tools by rank.
+// each group's tools by rank, the growth tools in their catalogs' order.
 func Catalogued() []string {
 	out := make([]string, 0, len(filed))
 	for _, g := range Groups {
+		if g == GroupGrowth {
+			for _, c := range growth.Catalogs() {
+				for _, t := range c.Tools {
+					out = append(out, t.Name)
+				}
+			}
+			continue
+		}
 		for _, f := range filed {
 			if f.group == g {
 				out = append(out, f.tool)

@@ -49,13 +49,18 @@ func TestAnIssuedLaneReportsItsVariableAndNoMintTime(t *testing.T) {
 	}
 }
 
-// A CATALOG MAY SEAL NOTHING WHEN EVERY LANE'S CREDENTIAL IS ISSUED, and is
-// refused where a lane holds no credential at all, or issues a field it also
-// seals, which would show one credential twice.
+// A CATALOG MAY SEAL NOTHING WHEN EVERY LANE'S CREDENTIAL IS ISSUED OR HELD BY
+// THE ENGINE ALONE, and is refused where a lane holds no credential at all
+// without saying the engine holds it, says so and names a field anyway, or
+// issues a field it also seals, which would show one credential twice.
 func TestACatalogHoldsACredentialOnEveryLane(t *testing.T) {
 	t.Parallel()
 	if problem := catalogProblem(integration.KindDatadog, issuedOnly); problem != "" {
 		t.Fatalf("a catalog whose every lane is issued is refused: %s", problem)
+	}
+	held := Catalog{Kind: integration.KindDatadog, Lanes: []LaneSpec{{Lane: LaneDatadog, EngineHeld: true}}}
+	if problem := catalogProblem(integration.KindDatadog, held); problem != "" {
+		t.Fatalf("a lane the engine alone holds the credential of is refused: %s", problem)
 	}
 	for name, c := range map[string]struct {
 		cat  Catalog
@@ -67,6 +72,8 @@ func TestACatalogHoldsACredentialOnEveryLane(t *testing.T) {
 			Lanes: []LaneSpec{{Lane: LaneDatadog, Issued: "TOKEN"}}}, "one of its sealed fields"},
 		"a blank-padded issued field": {Catalog{Kind: integration.KindDatadog,
 			Lanes: []LaneSpec{{Lane: LaneDatadog, Issued: " TOKEN"}}}, "blank-padded"},
+		"an engine-held lane naming a field": {Catalog{Kind: integration.KindDatadog,
+			Lanes: []LaneSpec{{Lane: LaneDatadog, Issued: "TOKEN", EngineHeld: true}}}, "the engine alone holds"},
 	} {
 		if problem := catalogProblem(integration.KindDatadog, c.cat); !strings.Contains(problem, c.says) {
 			t.Errorf("%s: the problem is %q, want it to say %q", name, problem, c.says)

@@ -27,9 +27,11 @@ package orgchart
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -285,7 +287,18 @@ func carries(role *org.Role, grant authz.SeatGrant) bool {
 	case authz.SeatGrantDelegate:
 		return role.Delegate
 	}
+	if kind, need, ok := authz.GrowthSeatGrantOf(grant); ok {
+		return atLeast(role.GrowthLevels[kind], need)
+	}
 	return false
+}
+
+// atLeast reports whether a seat on a growth lane at held may call a tool
+// needing need: held is a level this build knows, and no lower. A lane that
+// is off holds no level.
+func atLeast(held string, need growth.Level) bool {
+	h := growth.Level(held)
+	return h.Valid() && slices.Index(growth.Levels(), h) >= slices.Index(growth.Levels(), need)
 }
 
 // MemberOf reports whether actor's seat sits in the unit key names or in any
