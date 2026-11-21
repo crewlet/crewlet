@@ -793,12 +793,12 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 		Coord: backend, Plane: plane, NodeID: "node-a",
 	}, "fleet", nil))
 
-	if body["target_epoch"] != float64(1) {
+	if body["target_epoch"] != float64(published.Epoch) {
 		t.Errorf("target_epoch = %v, want the activation pointer", body["target_epoch"])
 	}
 	nodes, _ := body["nodes"].([]any)
 	node, _ := nodes[0].(map[string]any)
-	if node["config_epoch"] != float64(1) || node["config_status"] != "ok" {
+	if node["config_epoch"] != float64(published.Epoch) || node["config_status"] != "ok" {
 		t.Errorf("config columns = %v", node)
 	}
 	reported, present := node["config_reported_at"]
