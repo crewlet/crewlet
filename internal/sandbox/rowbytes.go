@@ -559,6 +559,19 @@ func RedactedOpening(output string, outputBytes int) (shown string, whole int) {
 	return shown, len(shown) + max(outputBytes-len(settled), 1)
 }
 
+// ShownOutput is a call's output as the log keeps it (output, outputBytes
+// as [BridgeCall] holds them) as a person reading the log is shown it, and the
+// size beside it: whole, redacted; cut, its [RedactedOpening] marked as the
+// log marks a cut, the size that opening is of beside it, so [OutputOpening]
+// reads it back. The log itself stays as the harness was handed it.
+func ShownOutput(output string, outputBytes int) (shown string, shownBytes int) {
+	if outputBytes == 0 {
+		return redact.Secrets(output), 0
+	}
+	opening, whole := RedactedOpening(output, outputBytes)
+	return rowRecord.Cut(opening, whole), whole
+}
+
 // ValidCallID reports whether id is one the log keeps as the id a call's
 // harness gave it ([BridgeCall.CallID]): letters, digits, `-` and `_`, at
 // most [MaxBridgeCallIDBytes] of them — the shape a session's id is held to
