@@ -96,6 +96,10 @@ type Record struct {
 	// Answerer is the human seat of the administrator who allowed or denied a
 	// held call; "" for every other step, a lapse included.
 	Answerer string
+	// Via is the vendor role of the credential a product holding several made
+	// the call through (App Store Connect's key role), never the credential;
+	// "" for a product with one.
+	Via string
 	// Operation is the SHA-256, in lowercase hex, of the exact vendor
 	// operation; Before the target's before-state's, "" where it held none.
 	Operation, Before string

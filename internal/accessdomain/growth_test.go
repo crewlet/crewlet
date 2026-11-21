@@ -114,6 +114,7 @@ func TestAGrowthRecordKeepsNoCredentialPersonalDataOrPublishedText(t *testing.T)
 			n.Changes[0] = accessdomain.GrowthChange{Field: "name", After: strings.Repeat("a",
 				accessdomain.GrowthValueMaxBytes+1)}
 		},
+		"a credential as the role it went through": func(n *accessdomain.NewGrowth) { n.Via = jwt },
 		"an answerer who is not a seat": func(n *accessdomain.NewGrowth) {
 			*n = heldStep(n.Handle, n.HeldCall, growth.StepAllowed)
 			n.Answerer = "ada@example.com"
@@ -193,7 +194,9 @@ func TestAGrowthActHoldsOneAnswerAndOneOutcome(t *testing.T) {
 	other := uuid.NewString()
 	record(t, a, heldStep("growth", other, growth.StepAsked))
 	record(t, a, heldStep("growth", other, growth.StepAllowed))
-	record(t, b, heldStep("growth", other, growth.StepApplied))
+	applied := heldStep("growth", other, growth.StepApplied)
+	applied.Via = "admin"
+	record(t, b, applied)
 	failed := heldStep("growth", other, growth.StepFailed)
 	if _, err := a.writer.Growth(t.Context(), growthCall(failed), failed); !errors.Is(err, accessdomain.ErrRecorded) {
 		t.Errorf("a failure after the apply answers %v, want ErrRecorded", err)
@@ -206,10 +209,11 @@ func TestAGrowthActHoldsOneAnswerAndOneOutcome(t *testing.T) {
 	}
 	var steps []string
 	for _, row := range page.Rows {
-		steps = append(steps, row.Act()[:8]+":"+string(row.Step)+":"+string(row.AnsweredBy)+":"+row.Answerer)
+		steps = append(steps, row.Act()[:8]+":"+string(row.Step)+":"+string(row.AnsweredBy)+":"+row.Answerer+
+			":"+row.Via)
 	}
-	want := []string{other[:8] + ":applied::", other[:8] + ":allowed:person:ops-lead", other[:8] + ":asked::",
-		held[:8] + ":lapsed:engine:", held[:8] + ":asked::"}
+	want := []string{other[:8] + ":applied:::admin", other[:8] + ":allowed:person:ops-lead:",
+		other[:8] + ":asked:::", held[:8] + ":lapsed:engine::", held[:8] + ":asked:::"}
 	if !slices.Equal(steps, want) {
 		t.Errorf("the acts' steps are %v, want %v", steps, want)
 	}
