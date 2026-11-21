@@ -148,18 +148,6 @@ func (m *MetaAds) validate(path Path) error {
 			p.add(at(path, f.name), ErrMissing, "%s", f.what)
 		}
 	}
-	tokens := map[string]string{}
-	for _, f := range []struct{ name, value string }{{"read_token", m.ReadToken}, {"operate_token", m.OperateToken},
-		{"admin_token", m.AdminToken}} {
-		if f.value == "" {
-			continue
-		}
-		if other, dup := tokens[f.value]; dup {
-			p.add(at(path, f.name), ErrConflict, "%s names the same token as %s: each holds its own permissions",
-				f.name, other)
-		}
-		tokens[f.value] = f.name
-	}
 	return p.err()
 }
 

@@ -104,6 +104,11 @@ func TestAMetaAdsBlockRefusesWhatCannotSignIn(t *testing.T) {
 		"caps on bare digits":    {`{account: "act_1112223333", currency`, `{account: "1112223333", currency`, "spend.accounts[0].account"},
 		"caps outside the block": {`{account: "act_1112223333", currency`, `{account: "act_555", currency`, "spend.accounts[0].account"},
 	}
+	open := strings.Replace(metaAdsDoc, `    ad_accounts: ["act_1112223333", "4445556666"]`+"\n", "", 1)
+	bare := strings.Replace(open, `{account: "act_1112223333", currency`, `{account: "1112223333", currency`, 1)
+	if _, err := config.ParseCompany([]byte(bare)); err == nil || !strings.Contains(err.Error(), "as Meta writes it") {
+		t.Errorf("caps on bare digits with no ad accounts named answered %v", err)
+	}
 	for name, tc := range cases {
 		doc := strings.Replace(metaAdsDoc, tc.from, tc.to, 1)
 		if doc == metaAdsDoc {
