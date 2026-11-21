@@ -122,3 +122,34 @@ func TestAChangeThatAddsNothingIsNotRefusedByCapacity(t *testing.T) {
 		t.Errorf("a suspended account answered %v, want not_serving", err)
 	}
 }
+
+// THE CONTRACT SUITE'S LOCKS KEEP THE LEASER'S WORD: a hold whose context
+// ends takes nothing, so the resource stays free for the next holder, and a
+// waiter whose context ends stops waiting.
+//
+// Mutation: take the lock before reading the context, and the next hold
+// waits forever.
+func TestALockWhoseContextEndedTakesNothing(t *testing.T) {
+	t.Parallel()
+	locks := &spendguardtest.Locks{}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if release, err := locks.Hold(ended, "spend/twin/a"); err == nil || release != nil {
+		t.Fatalf("a hold with an ended context took the lock (%v)", err)
+	}
+	release, err := locks.Hold(t.Context(), "spend/twin/a")
+	if err != nil {
+		t.Fatalf("the lock was left taken: %v", err)
+	}
+	waiting, stop := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := locks.Hold(waiting, "spend/twin/a")
+		done <- err
+	}()
+	stop()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("a waiter whose context ended answered %v", err)
+	}
+	release()
+}
