@@ -219,7 +219,8 @@ export type Tool =
   | "aws"
   | "google_cloud"
   | "ssh"
-  | "google_analytics";
+  | "google_analytics"
+  | "google_ads";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -239,6 +240,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   google_cloud: "Google Cloud",
   ssh: "SSH",
   google_analytics: "Google Analytics",
+  google_ads: "Google Ads",
 };
 
 /**

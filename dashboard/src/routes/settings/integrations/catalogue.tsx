@@ -179,6 +179,7 @@ const SURFACE_NAMES: Record<string, string> = {
   google_cloud: "Google Cloud",
   ssh: "SSH",
   google_analytics: "Google Analytics",
+  google_ads: "Google Ads",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -305,6 +306,14 @@ export const CATALOG: Entry[] = [
     vendor: "google-analytics",
     surfaces: surfacesOf("google_analytics"),
     doc: "google-analytics",
+  },
+  {
+    key: "google_ads",
+    name: "Google Ads",
+    description: "Campaigns, budgets, bids, ads and reports, spend held to your caps.",
+    vendor: "google-ads",
+    surfaces: surfacesOf("google_ads"),
+    doc: "google-ads",
   },
 ];
 

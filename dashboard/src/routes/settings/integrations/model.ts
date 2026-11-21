@@ -206,6 +206,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in Admin, Property access management.",
   },
+  google_ads: {
+    does: [
+      "Read campaign, ad, keyword and search term reports for the accounts you choose",
+      "Pause campaigns and ads, lower budgets and bids, and add negatives where you allow operate",
+      "Ask you before any change that can raise spend, publishes ad text or removes, held to your caps",
+    ],
+    identity:
+      "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
+    byHand:
+      "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in Admin, Access and security, and set each account's spending caps.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */
