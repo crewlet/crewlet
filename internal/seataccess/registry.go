@@ -62,11 +62,12 @@ func catalogProblem(kind integration.Kind, cat Catalog) string {
 			kind, words.And(got), words.And(want))
 	}
 	for _, spec := range cat.Lanes {
-		// EVERY LANE HOLDS A CREDENTIAL, sealed or issued at use, and an
-		// issued one is never also sealed, which would show it twice.
-		if len(cat.Credentials) == 0 && spec.Issued == "" {
-			return fmt.Sprintf("seataccess: the %s vendor's %s lane names no credential field, "+
-				"sealed or issued", kind, spec.Lane)
+		// EVERY LANE HOLDS A CREDENTIAL, sealed or issued at use, or is held
+		// by the engine alone, and an issued one is never also sealed, which
+		// would show it twice.
+		if spec.EngineHeld != (len(cat.Credentials) == 0 && spec.Issued == "") {
+			return fmt.Sprintf("seataccess: the %s vendor's %s lane names no credential field, sealed or "+
+				"issued, or names one and says the engine alone holds it", kind, spec.Lane)
 		}
 		if spec.Issued != "" && (strings.TrimSpace(spec.Issued) != spec.Issued ||
 			slices.Contains(cat.Credentials, spec.Issued)) {
