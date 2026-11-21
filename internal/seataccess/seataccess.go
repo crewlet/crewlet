@@ -25,7 +25,10 @@
 //
 //   - A seat's credential is sealed only under the name the engine derives for
 //     it ([SinkName]), never one the document names, and never one a company
-//     block references ([CompanyVariables]).
+//     block references ([CompanyVariables]). A lane whose credential the
+//     engine alone holds and calls with ([LaneSpec.EngineHeld], a growth
+//     lane, ADR-0170) seals and issues none: no seat, variable or box holds
+//     it, and its tools are the engine's own built-ins ([ToolStateOf]).
 //
 //   - Every pass computes the same plan from the document (desired), the
 //     account ledger, and what the vendor shows now (observed), and the
