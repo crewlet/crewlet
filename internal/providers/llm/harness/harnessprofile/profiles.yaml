@@ -2605,6 +2605,23 @@ copilot:
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "rate limit"
+  # The harness's own report, measured on 1.0.114 against a stand-in model
+  # through COPILOT_PROVIDER_* (BYOK), NOT against GitHub's service: a 429,
+  # retried five times, ends the run on a `session.error` of errorType
+  # `rate_limit`, exit 1, in the session's events.jsonl (`in: record`) and on an
+  # executor's stream, whose "Rate limit" no sentinel above matches. `quota` is
+  # the other limit type session-events.d.ts declares. No said_path: the whole
+  # line is what is shown, so the service's errorCode (user_weekly_rate_limited,
+  # quota_exceeded, ...) is kept beside the sentence.
+  limit_events:
+    - in: record
+      match:
+        - {path: ["type"], equals: "session.error"}
+        - {path: ["data", "errorType"], equals: "rate_limit"}
+    - in: record
+      match:
+        - {path: ["type"], equals: "session.error"}
+        - {path: ["data", "errorType"], equals: "quota"}
   # The harness's own words. Signed out, 1.0.103 exits 1 on "Error: No
   # authentication information found." (measured); a credential the service
   # refuses is "Authentication failed due to invalid credentials" (read from
