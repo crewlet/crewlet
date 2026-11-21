@@ -11,7 +11,7 @@ import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import type { CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf } from "./mentions.ts";
-import { Thread } from "./Thread.tsx";
+import { CUT_LINE, Thread } from "./Thread.tsx";
 import { EMPTY, type TurnView } from "./turn.ts";
 
 // THE READS AN ANSWER WORKS OUT, counted: the real ones, through a spy.
@@ -257,6 +257,20 @@ test("a turn that failed before it wrote a word shows its sentence", () => {
     },
   });
   expect(screen.getByText("Ask Crewlet's model took too long to answer.")).toBeTruthy();
+});
+
+// A SNAPSHOT THAT LEFT PART OF THE TURN OUT SAYS SO where the turn begins,
+// right under the question, and a turn drawn whole says nothing.
+test("a turn whose snapshot was cut says so under its question, and a whole one does not", () => {
+  const { container, unmount } = draw({ ...turn, phase: "completed", cut: true });
+  const line = screen.getByText(CUT_LINE);
+  const question = screen.getByText(turn.question);
+  expect(question.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(line.closest("p")).not.toBeNull();
+  expect(container.textContent).toContain("Reopen the conversation");
+  unmount();
+  draw({ ...turn, phase: "completed" });
+  expect(screen.queryByText(CUT_LINE)).toBeNull();
 });
 
 test("a sent question shows the images it carried as chips under its bubble", async () => {
