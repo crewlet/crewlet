@@ -119,6 +119,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 			return applyVerdictResealed(ctx, tx, c, payload)
 		}
 		return applyVerdict(ctx, tx, c, payload)
+	case KindGrowth:
+		return applyGrowth(ctx, tx, c, payload)
 	case KindSeat:
 		return applyForget(ctx, tx, c, payload)
 	case KindExpiry:
@@ -359,9 +361,57 @@ func applyVerdictResealed(ctx context.Context, tx *sql.Tx, c applyContext, paylo
 	return affected(res), nil
 }
 
+// applyGrowth writes one step's row, create-only. Its id is its act's and
+// step's, held here as the subject is, so an act never holds two answers.
+func applyGrowth(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
+	g, ok := payload.(Growth)
+	if !ok {
+		return 0, fmt.Errorf("accessdomain: the growth record at %s carries a %T", c.position, payload)
+	}
+	if err := ownedKey(c, g.Handle, g.ID); err != nil {
+		return 0, err
+	}
+	if g.ID != GrowthID(g.act(), g.Step) {
+		return 0, fmt.Errorf("accessdomain: the growth record at %s is %s and names %s's %s", c.position,
+			g.ID, g.act(), g.Step)
+	}
+	changes, err := json.Marshal(nonNilChanges(g.Changes))
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: encode the changes at %s: %w", c.position, err)
+	}
+	var m GrowthMoney
+	if g.Money != nil {
+		m = *g.Money
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO access_growth (agent_handle, growth_id, turn_id, call_id, held_call, product,
+			connection, account, target, tool, class, step, answered_by, answerer, operation_digest,
+			before_digest, changes, currency, delta_micros, daily_micros, daily_after_micros,
+			per_change_cap_micros, daily_cap_micros, failure, at, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (agent_handle, growth_id) DO NOTHING`,
+		g.Handle, g.ID, g.Turn, g.Call, g.HeldCall, g.Product, g.Connection, g.Account, g.Target, g.Tool,
+		string(g.Class), string(g.Step), string(g.AnsweredBy), g.Answerer, g.Operation, g.Before,
+		string(changes), m.Currency, m.DeltaMicros, m.DailyMicros, m.DailyAfterMicros, m.PerChangeCapMicros,
+		m.DailyCapMicros, string(g.Failure), c.at(), c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("accessdomain: record %s's %s at %s: %w", g.act(), g.Step, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// nonNilChanges is a change list that encodes as an array, never as null.
+func nonNilChanges(in []GrowthChange) []GrowthChange {
+	if in == nil {
+		return []GrowthChange{}
+	}
+	return in
+}
+
 // applyForget removes what a removed seat was told and records the removal,
 // which a told record decided before it is held to. Its certificates,
-// commands and verdicts are the audit trail and stay to their retention.
+// commands, verdicts and growth records are the audit trail and stay to their
+// retention.
 func applyForget(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (int, error) {
 	f, ok := payload.(Forget)
 	if !ok || f.Handle == "" || f.Handle != c.record.Subject.ID {
@@ -383,13 +433,14 @@ func applyForget(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (
 
 // expiryStatements are what an expiry deletes, oldest first, each by its broker
 // instant: every told record but a seat's baseline, every removal, certificate,
-// command and verdict.
+// command, verdict and growth record.
 var expiryStatements = []string{
 	`DELETE FROM access_told WHERE latest = 0 AND at < ?`,
 	`DELETE FROM access_seat_removals WHERE at < ?`,
 	`DELETE FROM access_certificates WHERE at < ?`,
 	`DELETE FROM access_commands WHERE at < ?`,
 	`DELETE FROM access_verdicts WHERE at < ?`,
+	`DELETE FROM access_growth WHERE at < ?`,
 }
 
 // applyExpire removes every record past the retention through the hour the
