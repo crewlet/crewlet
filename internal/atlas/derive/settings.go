@@ -134,6 +134,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindGoogleCloud:     googleCloud,
 	integration.KindSSH:             sshHosts,
 	integration.KindAppStoreConnect: appStoreConnect,
+	integration.KindAppleAds:        appleAds,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -370,6 +371,24 @@ func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 		issuer := strings.ToLower(a.Connections[id].IssuerID)
 		b.account("integrations.app_store_connect.connections."+id+".issuer_id", atlas.VendorApple, issuer, issuer,
 			"App Store Connect", a.Enabled, atlas.CapabilityAppDelivery)
+	}
+}
+
+// appleAds records each connected Apple Ads organization, keyed by its ID
+// where the document names it, else by its API user's client ID; neither is a
+// secret.
+func appleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AppleAds
+	if a == nil {
+		return
+	}
+	for _, id := range a.ConnectionIDs() {
+		conn := a.Connections[id]
+		where, key := "integrations.apple_ads.connections."+id+".org_id", strings.TrimSpace(conn.OrgID)
+		if key == "" {
+			where, key = "integrations.apple_ads.connections."+id+".client_id", strings.ToLower(conn.ClientID)
+		}
+		b.account(where, atlas.VendorApple, key, key, "Apple Ads", a.Enabled)
 	}
 }
 

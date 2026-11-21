@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -52,6 +53,8 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	e.growthOnce.Do(func() {
 		e.growth = []builtin.GrowthProduct{
 			appstoreconnect.New(appstoreconnect.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
+				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
+			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 		}
 	})
