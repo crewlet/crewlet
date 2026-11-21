@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -577,7 +578,7 @@ func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *harness
 		return "", 0, fmt.Errorf("the login is stored as %s, and this node cannot re-activate "+
 			"the revision; other nodes take it at the next apply", name)
 	}
-	if err = writer.Reload(ctx, "reload: device sign-in for "+key, by); err != nil {
+	if err = writer.Reload(ctx, deviceSignInSummary(key), by); err != nil {
 		return "", 0, fmt.Errorf("the login is stored as %s, and the re-activation that carries "+
 			"it to every node failed: %w", name, err)
 	}
@@ -591,6 +592,17 @@ func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *harness
 	}
 	return target.RevisionID, uint64(max(target.Epoch, 0)), nil
 }
+
+// deviceSignInSummary is the summary of the re-activation a device sign-in
+// makes, its key cut to [deviceSignInKeyBytes] so that even escaped whole it
+// fits the activation pointer's coord.MaxSummaryBytes.
+func deviceSignInSummary(key string) string {
+	return "reload: device sign-in for " + textcut.Within(key, deviceSignInKeyBytes)
+}
+
+// deviceSignInKeyBytes bounds the provider key in [deviceSignInSummary]: six
+// bytes a byte escaped is under coord.MaxSummaryBytes with room for the words.
+const deviceSignInKeyBytes = 512
 
 // bundleVariable is the secret an entry's credential bundle is read from: the
 // ${VAR} its auth.credential_bundle names, else the convention

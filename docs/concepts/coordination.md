@@ -426,10 +426,14 @@ refuses exactly the same values, so a test passing on it passes on the store.
 Two kinds of value come near it, and both are held to it where they are made:
 a sandbox run's record and its tool log, budgeted field by field
 ([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)),
-and the activation pointer, which carries the company document sealed: a
-config write whose document would make a pointer past it is refused `413`
-before the revision is stored
+and the activation's body, the company document sealed: a config write whose
+sealed document is past it is refused `413` before the revision is stored
 ([PATCH /config](../reference/api-endpoints.md#patch-config--the-narrower-write)).
+The activation pointer that names the body is held to 8 KiB
+(`coord.MaxPointerBytes`), its summary to 4 KiB as the pointer encodes it,
+because every probe on every node reads it: at its bound its read crosses the
+slowest link allowed in a third of a second. The body is read only by a node
+that lacks the revision, given the time its recorded size takes to cross.
 Every other record is bounded by its own fields far below it.
 
 ### A compare-and-set waits for the leader to decide
@@ -657,7 +661,13 @@ Three hours is not what keeps an answer right. Nothing in the engine takes a mar
 The sweep removes only what it saw. It purges each key **through the marker's own revision**, and the broker applies that bound, so a record created again after the sweep's pass saw the marker has a later revision and is untouched. The client library's own sweep (`PurgeDeletes`) purges a key outright, and would take that new record with the marker.
 
 
-The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already carries every record and every part, so a sweep walks the logs once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
+The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already names every record and every part, so a sweep walks the bucket once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
+
+The pass carries each key's metadata, never its value, so a sweep moves no run log.
+
+### Superseded bodies are swept
+
+The job `activation_bodies`, on the same duty and tick, removes from `config` an activation's body (`body.<sha256>`) that the pointer no longer names and that was written more than **an hour** (`coord.BodyRetention`) before the tick. It walks `config` itself, each key's metadata and never its value, so it moves no body. The pointer is read after the walk, and a flip lands within half an hour of its body's write beginning or not at all: twice the longest a body at its bound takes to write across a link at the slowest pace, the other half left for clock skew. So a body a flip in flight will name is either younger than the cutoff or written again after the walk, and the purge through the revision the walk saw leaves it. Each activation leaves its predecessor's body for up to an hour and a quarter, so a company at its bound activating N times an hour keeps up to about 1.25 × N × 6.29 MB more in `config`, on each replica.
 
 ## The lease TTL bounds seats and presence only
 

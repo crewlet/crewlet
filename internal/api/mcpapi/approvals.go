@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -234,8 +233,7 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 		return nil, false
 	}
 	if summary = strings.TrimSpace(summary); summary == "" {
-		summary = fmt.Sprintf("Always allow %s on MCP server %s, answering a call %s held for approval",
-			held.Raw, held.Server, run.AgentHandle)
+		summary = AllowedSummary(held.Raw, held.Server, run.AgentHandle)
 	}
 	allow := config.MCPToolAllow
 	write := configapi.MCPToolsWrite{
