@@ -25,7 +25,8 @@ func (c *Company) ValidateHost(euid int) error {
 	}
 	var p problems
 	for _, key := range c.executorKeys() {
-		harness := c.Providers.LLM[key].HarnessName()
+		entry := c.Providers.LLM[key]
+		harness := entry.HarnessName()
 		cell := c.EntryCell(key)
 		if !RunsAsEngineUser(cell) || (c.Providers.Sandbox != nil && c.Providers.Sandbox.Fake) {
 			continue
