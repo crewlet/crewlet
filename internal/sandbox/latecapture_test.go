@@ -94,17 +94,9 @@ func (a *appliedLog) Session(ctx context.Context, handle, turn string) (executor
 	return read.Session.Kept(), nil
 }
 
-// errNoArchive is this log's answer to a fetch: it keeps rows, never the
+// errNoArchive is this log's answer to an open: it keeps rows, never the
 // objects they name, and no case over it continues a session.
 var errNoArchive = errors.New("this log keeps no session's archive: no case over it continues one")
-
-func (a *appliedLog) Fetch(context.Context, executorkeep.TurnRow, io.Writer) error {
-	return errNoArchive
-}
-
-func (a *appliedLog) OpenSpooled(executorkeep.TurnRow, io.Reader) (io.Reader, error) {
-	return nil, errNoArchive
-}
 
 func (a *appliedLog) Open(context.Context, executorkeep.TurnRow) (io.ReadCloser, error) {
 	return nil, errNoArchive

@@ -232,7 +232,7 @@ var modelCalls = map[string]modelCall{
 		"internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows",
 		"internal/sandbox.TestTheBriefMatchesWhatTheRunHas",
 		"internal/sandbox.TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease",
-		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
+		"internal/executordomain.TestAStoredSessionOpensOnlyForItsOwnRow",
 	}},
 	// AND OF THE SESSION A CONVERSATION'S LAST TURN LEFT, the base the turn's
 	// first launch froze: that turn's own object, of the launching seat, read
@@ -244,7 +244,7 @@ var modelCalls = map[string]modelCall{
 		"internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase",
 		"internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone",
 		"internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn",
-		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
+		"internal/executordomain.TestAStoredSessionOpensOnlyForItsOwnRow",
 	}},
 	"internal/sandbox/launch.go:Launch": {tests: []string{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",

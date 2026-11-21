@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -28,8 +26,7 @@ import (
 // the takeover, withdrawal and read back, keep and stamp; a standby's wait, the
 // longer life and one read; its window, the rest of its take, its digest and
 // five changes past the wait (a settle still writing, the read of the log and
-// the settle it decides, its last read, its takeover); a spool's longest wait,
-// its digest, the wait, seven changes and two reads. Each is the docs' figure
+// the settle it decides, its last read, its takeover). Each is the docs' figure
 // at today's bounds, to the nanosecond.
 //
 // Mutation: drop any term, or the skew from either reading, and its row goes red.
@@ -43,7 +40,6 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	wait := life + captureWaitTick
 	window := SessionPackWait + SessionScrubWait + change + discardGrace + wait + change + change + change +
 		change + change
-	opened := discardGrace + wait + 7*change + 2*sessionRecordBudget
 	skew := 2 * objstore.AssumedClockSkew
 	for _, c := range []struct {
 		name      string
@@ -51,16 +47,15 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 		floor     string
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
-		{"a keep", SessionKeepBudget, keep, "18m0s"},
+		{"a keep", SessionKeepBudget, keep, "26m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "49m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h12m0.102653496s"},
-		{"a capture's life", captureLife, life, "1h12m0.102653496s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h12m0.102653496s"},
-		{"a standby's wait", standbyWait, wait, "1h12m2.102653496s"},
-		{"a standby's window", standbyWindow, window, "2h37m32.25663374s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h37m32.25663374s"},
-		{"a spool's longest wait for its keep", spoolOpenedWithin, opened, "2h48m2.282297114s"},
+		{"a take's life", takeLife, take, "1h2m30.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h20m0.102653496s"},
+		{"a capture's life", captureLife, life, "1h20m0.102653496s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h20m0.102653496s"},
+		{"a standby's wait", standbyWait, wait, "1h20m2.102653496s"},
+		{"a standby's window", standbyWindow, window, "2h50m32.25663374s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h50m32.25663374s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -346,64 +341,6 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 				t.Errorf("uploaded %d sessions, want none without the turn's operations", len(uploads))
 			}
 		})
-	})
-}
-
-// A SPOOL OUTLIVES THE LONGEST ITS KEEP WAITS TO OPEN IT. A standby's keep
-// opens its spool only once the capture it stood by for has come to something
-// and it has taken the next place: at the longest, its digest, its wait, seven
-// changes of the row at the slowest crossing (the read of the turn's row on the
-// log past the wait and its settle among them) and its keep's two reads. A take
-// on the same node sweeps the spools a crash left by their age on the wall
-// clock, which NTP may step forward by up to the assumed skew. So a spool aged
-// that longest wait and the skew less a minute survives the sweep and is kept;
-// one a minute past both is swept.
-//
-// Mutation: sweep at the longest wait alone, at twice a capture's life, or one
-// change short, and the standby's spool is swept before its keep opens it.
-func TestASpoolOutlivesTheLongestItsKeepWaitsToOpenIt(t *testing.T) {
-	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		rig, writes, keep := keepingRig(t)
-		run := rig.launchKept(t, "t1")
-		begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-			State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess, TakerEpoch: 1,
-			Harness: "claude-code", SessionID: "s-1"}
-		if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-			t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
-		}
-		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
-			t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
-		}
-		age := func(file string, by time.Duration) {
-			at := time.Now().Add(-by)
-			if err := os.Chtimes(file, at, at); err != nil {
-				t.Fatal(err)
-			}
-		}
-		change := sessionRecordBudget + coord.MaxValueCrossing
-		longest := discardGrace + captureLife + captureWaitTick + 7*change + 2*sessionRecordBudget
-		age(standby.file, longest+objstore.AssumedClockSkew-time.Minute)
-		crashed := filepath.Join(rig.coordinator.spoolDirectory(), spoolPrefix+"crashed")
-		if err := os.WriteFile(crashed, []byte("sealed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		age(crashed, longest+objstore.AssumedClockSkew+time.Minute)
-		rig.coordinator.sweepSpools()
-		if _, err := os.Stat(standby.file); err != nil {
-			t.Errorf("the standby's spool, aged by its keep's longest wait, was swept: %v", err)
-		}
-		if _, err := os.Stat(crashed); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a spool past the longest wait and the skew was left (%v)", err)
-		}
-		// THE CAPTURE IT STOOD BY FOR read as past what any clock allows, so
-		// the keep takes the place after it at once and opens its spool.
-		rig.now = rig.now.Add(SessionCaptureBudget)
-		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-			t.Fatalf("the standby's keep came to %+v, want its session kept", kept)
-		}
-		keptByTheStandby(t, rig, writes, keep)
 	})
 }
 

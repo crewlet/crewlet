@@ -208,3 +208,13 @@ const (
 	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
 	AssistantCardsShownAsNotice = "crewlet.assistant.cards.shown_as_notice"
 )
+
+// THE CODE SANDBOX'S INSTRUMENTS: the room an engine process's
+// executor-session spools share, which internal/sandbox measures and
+// internal/engine records (the sandbox links no state log). Named under
+// crewlet.executor, the sessions they spool, because crewlet.sandbox. is
+// the sandbox's subject head (topics.SandboxPrefix).
+const (
+	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
+	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
+)

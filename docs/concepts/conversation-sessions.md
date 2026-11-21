@@ -396,7 +396,7 @@ turn_engine:
                                   #   turn's last record, read at every pass
     max_bytes_per_seat: 67108864  # object-store bytes one seat's sessions
                                   #   may hold, and again its saves'
-                                  #   allowance (33 MiB..64 GiB)
+                                  #   allowance (49 MiB..64 GiB)
     save_interval_seconds: 600    # shortest time between saves of a running
                                   #   executor job's session (300..3600;
                                   #   0 takes 600), paced by size beyond it
@@ -436,8 +436,8 @@ ended, and a capture the seat's live turns leave no room for is refused, so
 that turn's next launch starts fresh. A session a live turn's first launch was
 handed is held until that turn keeps a session of its own or ends, so it
 counts beside the seat's live turns for as long. The default, 64 MiB, holds a
-live turn's session at its 32 MiB bound beside about twenty ordinary ones (a
-day's work compresses to one or two mebibytes); the least it accepts, 33 MiB,
+live turn's session at its 48 MiB bound beside about ten ordinary ones (a
+day's work compresses to one or two mebibytes); the least it accepts, 49 MiB,
 is one session at that bound once sealed. It is also the **allowance of the
 seat's saves** of its running sessions: a save another replaces is kept by the
 object store until its collector deletes it, a day and more, so a seat holds up

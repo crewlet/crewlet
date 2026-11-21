@@ -244,8 +244,10 @@ leaves the note waiting, with a warning naming the keys the node holds, and
 refuses a decision on the anchor as unavailable under no wait, the condition
 of the fleet the steer channel's own unheld key is; a seal that does not open, or
 opens as another turn's or another note's, is never handed to a model, carried
-or attributed, and is logged at error. The detail is `internal/engine`'s
-(runsteer.go).
+or attributed, and is logged at error. A wake the engine hands such a run, a
+message about its work, is signed the same way in a domain of its own
+(`seat.wake.item`), bound to the turn, its job and the wake, with the same two
+dispositions. The detail is `internal/engine`'s (runsteer.go, wakeitem.go).
 
 ## Amendment: the live relay is sealed too
 

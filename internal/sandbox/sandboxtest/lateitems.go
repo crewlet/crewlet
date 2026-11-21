@@ -190,7 +190,7 @@ func testALateCallAskedAgainAfterItsAnswerWasLostIsHandedOnce(t *testing.T, s sa
 }
 
 // NO ITEM IS FILED FOR A JOB THAT CANNOT TAKE IT. A job takes its notes while
-// it is launching or running ([sandbox.LateCallStatuses]) and its run's ending
+// it is launching or running ([sandbox.ItemStatuses]) and its run's ending
 // is undecided: a job parked on a question, or whose run's ending is decided,
 // is handed nothing more, its harness reading nothing until a later launch,
 // whose continuation tells the call. The call is listed late all the same.

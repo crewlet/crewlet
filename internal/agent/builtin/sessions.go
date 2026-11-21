@@ -89,12 +89,12 @@ type SessionRows interface {
 //
 // TWO MINUTES: at the object store's slowest accepted pace (objstore.ReadBase
 // and MiBPace: a minute plus thirty seconds a MiB) a session of a MiB or two
-// arrives within it; one at its 32 MiB bound would take about seventeen, which
-// no call should wait out, and two is far inside the ten a harness waits on a
-// call. Past it the call is answered unavailable, naming the session's size,
-// never as a session that holds nothing. A decode at its bounds of what a
-// harness writes takes up to 58 s, within it; one queued behind other such
-// reads, or of a value none writes (`pwd=x` lines), can miss it, and fails
+// arrives within it; one at its 48 MiB bound would take about twenty-five and a
+// half, which no call should wait out, and two is far inside the ten a harness
+// waits on a call. Past it the call is answered unavailable, naming the
+// session's size, never as a session that holds nothing. A decode at its bounds
+// of what a harness writes takes up to 58 s, within it; one queued behind other
+// such reads, or of a value none writes (`pwd=x` lines), can miss it, and fails
 // closed so ([executor.PersonTranscriptReadWorst]).
 const SessionReadWithin = 2 * time.Minute
 

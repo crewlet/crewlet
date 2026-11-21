@@ -164,8 +164,10 @@ type sessionKeep struct {
 	// keep at its first step, before its upload.
 	gate     chan struct{}
 	mintGate chan struct{}
-	// uploaded is what every upload read.
+	// uploaded is what every upload read, and wrote the bytes each seal's
+	// spool took, a seal refused part way included.
 	uploaded [][]byte
+	wrote    []int64
 }
 
 func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
@@ -215,6 +217,9 @@ func (k *sessionKeep) MintedAt(ctx context.Context, _, _ string, _ time.Time) (t
 func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error) {
 	var read bytes.Buffer
 	n, err := io.Copy(dst, io.TeeReader(archive, &read))
+	k.mu.Lock()
+	k.wrote = append(k.wrote, n)
+	k.mu.Unlock()
 	if err != nil {
 		return executorkeep.SealedSpool{}, err
 	}
@@ -398,10 +403,10 @@ func (r *coordRig) launchKept(t *testing.T, turnID string) PendingRun {
 // awaitKeeps waits for every keep under way ([Coordinator.keepLater]).
 func (r *coordRig) awaitKeeps() { r.coordinator.keeping.Wait() }
 
-// spools are the spools left in the rig's spool directory.
+// spools are the spools left in the rig's coordinator's own spool directory.
 func (r *coordRig) spools(t *testing.T) []string {
 	t.Helper()
-	left, err := filepath.Glob(filepath.Join(r.coordinator.spoolDirectory(), spoolPrefix+"*"))
+	left, err := filepath.Glob(filepath.Join(r.coordinator.ownSpoolDir(), spoolPrefix+"*"))
 	if err != nil {
 		t.Fatalf("listing the spools: %v", err)
 	}
@@ -1497,4 +1502,18 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 			})
 		})
 	}
+}
+
+// ownSpoolDir is c's own spool directory, "" before its first spool.
+func (c *Coordinator) ownSpoolDir() string {
+	c.spools.mu.Lock()
+	defer c.spools.mu.Unlock()
+	return c.spools.dir
+}
+
+// seals is the bytes each seal's spool took, in order.
+func (k *sessionKeep) seals() []int64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.wrote)
 }

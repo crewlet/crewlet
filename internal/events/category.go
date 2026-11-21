@@ -299,6 +299,7 @@ var categories = map[string]placement{
 	"agent_turn_completed":     {"system", RateEngine},
 	"agent_turn_stopped":       {"system", RateEngine},
 	"agent_turn_steered":       {"system", RateAuthenticated},
+	"agent_turn_joined":        {"system", RateEngine},
 	"agent_phase_started":      {"system", RateEngine},
 	"agent_phase_completed":    {"system", RateEngine},
 	"phase.tool_skill_blocked": {"system", RateEngine},
