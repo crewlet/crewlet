@@ -402,8 +402,11 @@ type RecordedEnding struct {
 // depth ([PendingRun.DelegationDepth]). No Extra, so a later field is a top-level
 // key (wirekeys.go).
 type ColleagueAsk struct {
-	ChannelID    string   `json:"channel_id"`
-	Question     string   `json:"question,omitempty"`
+	ChannelID string `json:"channel_id"`
+	// question is the colleague's words as asked, `question` on the wire: read
+	// through [ColleagueAsk.Question], redacted, and by the answer alone
+	// [ColleagueAsk.RawQuestion]. Its two encodings are in colleagueask.go.
+	question     string
 	Chain        []string `json:"chain,omitempty"`
 	TraceID      string   `json:"trace_id,omitempty"`
 	SpanID       string   `json:"span_id,omitempty"`

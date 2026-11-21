@@ -757,7 +757,8 @@ func TestWhatTheEngineAnsweredAColleagueIsWhatItsReplyDid(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		return &sandbox.ColleagueAsk{ChannelID: id, Question: "What broke last night?"}
+		asked := sandbox.ColleagueAsk{ChannelID: id}.WithQuestion("What broke last night?")
+		return &asked
 	}
 	cto := answeringTurn{handle: "cto", runID: "run-answer", workKey: "wk-answer", depth: 1}
 	res := turn.Result{Decision: phase.Done, Artifact: "the deploy at 02:14 rolled back"}
