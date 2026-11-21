@@ -447,7 +447,7 @@ func (p *pipeline) held() streamHeld {
 				h.rooms += 32 * cap(*st.handed)
 			}
 			if st.raw != nil {
-				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 56*len(st.src.words)
+				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 72*len(st.src.words)
 				h.stageEdits = max(h.stageEdits, len(st.raw.edits))
 			}
 			if st.to != nil {
@@ -509,7 +509,7 @@ func streamBound() (text, entries int) {
 	keys := keysBytes
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*56/5 + 2*32*earlyWindows +
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*72/5 + 2*32*earlyWindows +
 		32*handedEdits()
 	return text, entries
 }
