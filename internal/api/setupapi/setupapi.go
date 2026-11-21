@@ -149,6 +149,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -1003,7 +1004,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// in the document.
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
-		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
+		reqs = googlecloud.Requirements(company.Name, block, googleauth.EnabledProducts(company), s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSSH:
