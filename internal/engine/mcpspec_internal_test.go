@@ -246,6 +246,7 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 		integration.KindSSH:             "no pass mints a seat's SSH credential",
 		integration.KindGoogleAnalytics: "no pass mints a seat's Google Analytics credential: its tokens are minted at use",
 		integration.KindGoogleAds:       "no pass mints a seat's Google Ads credential: its tokens are minted at use",
+		integration.KindSearchConsole:   "no pass mints a seat's Search Console credential: its tokens are minted at use",
 	}
 	e := &Engine{}
 	for _, pass := range e.setupPasses() {

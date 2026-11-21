@@ -141,6 +141,11 @@ const (
 	// caps. It ingests nothing.
 	KindGoogleAds Kind = "google_ads"
 
+	// KindSearchConsole is Google Search Console, with Site Verification and
+	// the Indexing API: agents read and manage properties as their Google
+	// growth identity, through engine tools. It ingests nothing.
+	KindSearchConsole Kind = "search_console"
+
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
 	// is where the account itself is created, which no site API can do. It
@@ -156,7 +161,7 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian, KindGoogleAnalytics, KindGoogleAds,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAtlassian, KindGoogleAnalytics, KindGoogleAds, KindSearchConsole,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -179,7 +184,7 @@ var ConvergeOrder = []Kind{
 	KindScaleway, KindAWS, KindGoogleCloud, KindSSH,
 	// THE GOOGLE GROWTH PRODUCTS AFTER GOOGLE CLOUD, whose company pass makes
 	// the growth identities they sign in as (internal/googleauth).
-	KindGoogleAnalytics, KindGoogleAds,
+	KindGoogleAnalytics, KindGoogleAds, KindSearchConsole,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -263,5 +268,5 @@ func (k Kind) Ingress() Ingress {
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
 		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindGoogleAnalytics &&
-		k != KindGoogleAds
+		k != KindGoogleAds && k != KindSearchConsole
 }

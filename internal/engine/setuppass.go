@@ -67,6 +67,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&sshPass{engine: e},
 		&googleGrowthPass{engine: e, kind: integration.KindGoogleAnalytics, name: "Google Analytics"},
 		&googleGrowthPass{engine: e, kind: integration.KindGoogleAds, name: "Google Ads"},
+		&googleGrowthPass{engine: e, kind: integration.KindSearchConsole, name: "Search Console"},
 		&atlassianPass{engine: e},
 	}
 }

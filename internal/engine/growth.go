@@ -5,11 +5,13 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
+	"github.com/crewlet/crewlet/internal/searchconsole"
 )
 
 var (
 	_ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
 	_ builtin.GrowthProduct = (*googleads.Product)(nil)
+	_ builtin.GrowthProduct = (*searchconsole.Product)(nil)
 )
 
 // growthProducts are the growth products this engine's tools reach, each on
@@ -18,6 +20,7 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	return []builtin.GrowthProduct{
 		googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil),
 		googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), spendLeases{engine: e}, e.GrowthAudit(), nil),
+		searchconsole.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil, nil),
 	}
 }
 
