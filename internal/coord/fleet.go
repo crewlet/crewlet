@@ -307,6 +307,11 @@ type Ledger interface {
 	// same way.
 	WorkedAt(ctx context.Context, scope string, keys []string) (map[string]time.Time, error)
 
+	// WorkedBy is Worked with the detail each key's first record stated (the
+	// completion ledger's: the turn that worked it), "" where it states none.
+	// Fails open the same way.
+	WorkedBy(ctx context.Context, scope string, keys []string) (map[string]string, error)
+
 	// Record marks one key worked. Best effort, for the same reason.
 	Record(ctx context.Context, scope, key, detail string, at time.Time) error
 }

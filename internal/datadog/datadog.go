@@ -54,6 +54,14 @@
 // identities is the same pair Datadog's webhook API takes, so the reconcile
 // registers the definition, keeps its address current, and withdraws it on
 // disconnect.
+//
+// # The atlas reads what the keys may list
+//
+// The same key pair reads the organization, its monitors, service catalogue,
+// hosts and Synthetic tests for the atlas (ADR-0130, atlas.go), each listing
+// behind its own permission ([Listing]): a refused one is a finding, and the
+// credential check only warns of it. A monitor relates to what its `service:`
+// and `host:` tags name, never to its query or its message.
 package datadog
 
 // Backend is the source name on the wire.

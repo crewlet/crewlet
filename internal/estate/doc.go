@@ -60,8 +60,9 @@
 // which derived ids come, so no retry repeats the effect): `code.compact`, which
 // waits in the repository's one queue so everything that moves its packs meets on
 // one node; `code.expunge`; `code.change`; `code.queue`; `code.merge`, one record
-// the merge gate decides from one snapshot (ADR-0096); and `code.conversation`,
-// whose change writer publishes on the change's own subject ([op.keyedBy]). A
+// the merge gate decides from one snapshot (ADR-0096); `code.conversation`,
+// whose change writer publishes on the change's own subject; and `code.checks`,
+// whose checks writer decides one write per repository at a time ([op.keyedBy]). A
 // committer that refuses before appending anything ran nothing, so the runner-up
 // is asked with the same push id and the refuser is asked LAST for the next
 // [suspectFor]. A committer answers INSIDE THE ATTEMPT that asked it, busy and

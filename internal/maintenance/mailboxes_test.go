@@ -414,7 +414,11 @@ func (h *mailboxHarness) send(handle, body string) {
 
 // held is how many letters the seat's inbox retains.
 func (h *mailboxHarness) held(handle string) int {
-	return len(h.queue.Backlog(inbox(handle), inboxGroup(handle)))
+	mail, err := h.queue.Backlog(h.t.Context(), inbox(handle), inboxGroup(handle), 1<<12)
+	if err != nil {
+		h.t.Fatalf("read %s's inbox: %v", handle, err)
+	}
+	return len(mail)
 }
 
 // exists reports whether a subscription is there, without creating one.

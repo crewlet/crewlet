@@ -505,6 +505,14 @@ type CoordinatorOptions struct {
 	// under an id from the turn and the wake. Nil reports nothing.
 	WakesEnded func(ctx context.Context, run PendingRun, wakes []RunNote)
 
+	// Busy is told a seat's runs holding it went from none to some on this
+	// node or back, or that this node let the seat go: the engine's router of
+	// the seat's held inbox follows it, reading [Coordinator.SeatRuns]. Not an
+	// owed answer's hold, which leaves no run to hand a wake to. Called outside
+	// the coordinator's lock, possibly out of order, hence a read rather than a
+	// value. Nil tells nobody.
+	Busy func(handle string)
+
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes awaits its resume ([SeatHold]). Nil holds nothing (a test's
 	// coordinator).
@@ -726,6 +734,8 @@ type Coordinator struct {
 	steersEnded     func(ctx context.Context, run PendingRun) error
 	steersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
 	wakesEnded      func(ctx context.Context, run PendingRun, wakes []RunNote)
+	// busy is [CoordinatorOptions.Busy].
+	busy func(handle string)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -1019,6 +1029,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		steersEnded:        opts.SteersEnded,
 		steersConfirmed:    opts.SteersConfirmed,
 		wakesEnded:         opts.WakesEnded,
+		busy:               opts.Busy,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
@@ -1336,10 +1347,14 @@ func (c *Coordinator) moved(handle string) {
 
 // seatFreed signals [SeatCoding] for a seat whose last holding run has just
 // left [Holding], so an answer owed on it is resumed now rather than at its
-// backstop. Called outside c.mu, which [Coordinator.Readmit] takes.
+// backstop, and tells [CoordinatorOptions.Busy] of a seat that became busy or
+// free. Called outside c.mu, which [Coordinator.Readmit] takes.
 func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 	if was.holding > 0 && now.holding == 0 {
 		c.Readmit(SeatCoding, handle)
+	}
+	if (was.holding > 0) != (now.holding > 0) && c.busy != nil {
+		c.busy(handle)
 	}
 }
 
@@ -5693,6 +5708,10 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// release's detach: forgotten, never lifted (its mail is the successor's to
 	// order). See [Coordinator.forgetHold].
 	c.forgetHold(handle)
+	// AND THE ROUTER OF ITS HELD INBOX stops: the seat's mail is the successor's.
+	if c.busy != nil {
+		c.busy(handle)
+	}
 	log.Debug("sandbox_seat_released", "seat", handle)
 }
 

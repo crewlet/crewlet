@@ -42,6 +42,11 @@
 //     (ListSubscriptions). A mailbox outlives everything that knew its name,
 //     a removed seat's handle included, so the broker has to be able to say
 //     which mailboxes exist or a leaked one can never be found again.
+//   - A subscription's mail can be READ WITHOUT CONSUMING IT (Backlog): lane
+//     first, at most a limit, no delivery made or spent and no hold touched,
+//     possibly with mail already acked. A busy seat's router reads its held
+//     inbox so (internal/engine, ADR-0167), which is why it is contract and
+//     not a test's inspection.
 //   - DEAD LETTERS ARE ONE PLACE with one retention, whoever gives up on a
 //     message: a subscription's backend when its budget runs out, or a
 //     reader that settles its own deliveries and keeps what it gives up on
@@ -515,6 +520,15 @@ var ErrUnavailable = errors.New("queue: broker unavailable")
 // the caller's decision was never about.
 var ErrAttachmentGone = errors.New("queue: the attachment the hold was taken for has ended")
 
+// CheckBacklogLimit refuses an [EventQueue.Backlog] limit below one: a read of
+// nothing is a caller's bug, never an empty mailbox.
+func CheckBacklogLimit(limit int) error {
+	if limit < 1 {
+		return fmt.Errorf("queue: a backlog read needs a limit of at least one, got %d", limit)
+	}
+	return nil
+}
+
 // Attachment names ONE ATTACHMENT of a (topic, group) pair on one client: the
 // span from one Detach of the pair to the next, whether a consumer is attached
 // in it yet or not. A client mints them from one counter, so no two
@@ -902,6 +916,18 @@ type EventQueue interface {
 	// that trails a publish by a moment; nothing may decide delivery on it.
 	// A subscription that does not exist waits for nothing.
 	Waiting(ctx context.Context, topic, group string) (Waiting, error)
+
+	// Backlog reads the mail a subscription holds WITHOUT CONSUMING IT: no
+	// delivery is made or spent, no hold, quiesce or attachment is touched,
+	// and a held subscription stays held. A laned topic's lane first, then
+	// the topic's own, each in the order its subscription holds it, at most
+	// limit events (below one is refused). It MAY INCLUDE MAIL ALREADY ACKED
+	// or under a running handler (a backend reads from its group's ack
+	// floor), so a caller acting on it checks what it acts on was not worked.
+	// READ-YOUR-OWN-WRITE: a publish that has returned is in it.
+	// What a seat's router reads a held inbox by (internal/engine); a
+	// subscription that does not exist holds nothing.
+	Backlog(ctx context.Context, topic, group string, limit int) ([]*events.Event, error)
 
 	// SubscribeStream creates an ephemeral per-caller broadcast
 	// subscription — every subscriber receives every matching event.

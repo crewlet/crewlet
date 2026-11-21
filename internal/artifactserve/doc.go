@@ -23,7 +23,7 @@
 //
 // A path-borne view ticket (internal/artifactserve/ticket) names one
 // principal, one immutable version, the credential it was minted through and
-// the artifact's access epoch, for an hour at most. In per-artifact mode the
+// the artifact's access epoch, for an hour at most. In either origin mode the
 // request's host must be the host the ticket's artifact is served on. A
 // top-level open of a ticket URL is refused, so a ticket cannot be pasted into
 // a tab and presented as a standalone page. A refusal is an empty 404 that

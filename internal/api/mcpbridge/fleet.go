@@ -60,24 +60,18 @@ type fleet struct {
 	holderWait time.Duration
 }
 
-// Join makes this bridge one of its fleet's: a box's call that reaches its
-// route is answered by the node holding the run's seat, wherever that is, and
-// a call for a session this node holds is answered here wherever it landed. It
-// serves until the returned Unsubscribe runs.
+// Join makes this bridge one of its fleet's: a box's call is answered by the
+// node holding the run's seat, wherever it landed. It serves until the
+// returned Unsubscribe runs.
 //
-// # Why every node joins, and the route is wherever the API is
-//
-// A session is live state in the process holding its seat (see
-// [Bridge.verdict]), and the address a box dials is fixed when the box starts.
-// Between the two sit a load balancer in front of several nodes, which sends a
-// call wherever it likes, and a seat that moves to a peer mid-run, which
-// leaves the box dialling a node that no longer holds it. So the node a call
-// lands on reads the seat's lease — the seat is in the token — and relays the
-// whole exchange to the holder over the broker (internal/httprelay), event
-// stream included. Every node is reached that way, so [BaseURLVar] is ONE
-// address for the fleet: any node that serves the route, and a node that
-// serves none — one without the ingress role — is still reached through one
-// that does.
+// # Why every node joins
+// A session is live state in the process holding its seat ([Bridge.verdict]),
+// but a box's address is fixed at start, a load balancer sends a call
+// anywhere and a seat can move mid-run. So the node a call lands on reads the
+// seat's lease (the seat is in the token) and relays the whole exchange,
+// event stream included, to the holder (internal/httprelay). Hence
+// [BaseURLVar] is ONE address for the fleet, reaching even a node without
+// the ingress role.
 func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe, error) {
 	if b == nil {
 		return nil, errors.New("mcpbridge: no bridge to join to its fleet")
@@ -154,15 +148,13 @@ const (
 // holder answers it, here or relayed, or the call waits for one that can. The
 // holder is the one its seat's lease names ([route]).
 //
-// A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). While the call
-// waits, no node has taken it, so nothing of it runs anywhere, and a node that
-// went on waiting held its listener busy for the whole grace of a graceful
-// stop — up to [FleetOptions.HolderWait], two seat-lease lifetimes, where the
-// listener is closed without one — and was then cut, which a box's client
-// reads as a broken connection rather than an answer to retry. So the wait
-// ends at the shutdown, answered that this node is draining and when to try
-// again, and the box's retry lands on a node that stays. A call already
-// handed to its holder is left to finish, as [Bridge.forwardPoll] leaves one.
+// A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). A waiting call has
+// been taken by no node, and one that kept waiting would hold the listener
+// busy through the graceful stop (up to [FleetOptions.HolderWait], two
+// seat-lease lifetimes) and then be cut, which a box's client reads as a
+// broken connection, not a retry. So the wait ends at shutdown with an answer
+// that this node is draining and when to retry, landing on a node that stays.
+// A call already handed to its holder finishes, as [Bridge.forwardPoll] has it.
 func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
 	req, err := httprelay.Read(r)
 	switch {

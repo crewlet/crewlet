@@ -16,74 +16,31 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT A SESSION'S LAST REQUEST CARRIED, read off its archive as a take streams
-// it out of its box ([sandbox.TakenSession.Context]).
-//
-// A launch continuing a session sends its whole context before a word of its
-// brief, so its floor is that context and the brief (internal/engine's launch
-// floor): the take's estimate of the next request (nextrequest.go), else the
-// harness's own record of its last request, cache included:
-//
-//   - Claude Code's transcript keeps every assistant message with the usage
-//     of the request that produced it, so the last one on the main thread (a
-//     subagent's messages are sidechains, or files of their own) is the
-//     input the session's last request carried: its uncached input, its cache
-//     reads and its cache writes;
-//   - OpenCode's export keeps every settled assistant message with its tokens,
-//     and the newest that measured a prompt is the input the session's last
-//     request carried, its input, cache reads and cache writes, by ONE RULE for
-//     every reader of an OpenCode session's measure ([measuredPrompt]): this
-//     one ([meterExport]), and the read that measures the copy a job's box
-//     holds as the job ends, off its session's own message list
-//     ([openCodeContext]).
-//
-// READ OFF THE ARCHIVE AS IT IS KEPT, the scrub's output, so it is the session a
-// later launch continues and not the box's copy, and in a goroutine of its own
-// beside the take, which every byte reaches and which never holds the take up:
-// what it cannot read it says nothing about (zero), and it drains the rest.
-//
-// AND WHAT THE HARNESS COUNTS THE SESSION AT and estimates its next request at
-// ([sandbox.TakenSession.Count], [sandbox.TakenSession.Next]; package doc), off
-// the same read: an OpenCode export walked ONCE ([meterExport]), a Claude Code
-// main thread ONCE through the line layer ([walkThread]) by three readings
-// ([contextReading], [resumedReading], [nextReading]). So the meter DECIDES
-// something now (whether a relaunch that continues the capture is told it as a
-// cut-off one), and reads its archive's members by the layer's rules: a member
-// named absolutely or with a `..` element, or a main thread held twice, leaves
-// the count unread, since the member it would read need not be the file a
-// resumed session holds; a saved compaction under either of its names marks it
-// ([claudePrecompact]); and a thread written by a release older than the
-// count's floor is no count of a session ([claudeCountFloor]).
-//
-// THE FLOOR'S FIGURE IS WHAT THE LAYER READS OF A REPLY ([contextReading]):
-// the input side of the last reply of the main thread's own
-// ([threadHead.Main]) whose usage the layer reads ([threadLine.Usage]), by
-// the one rule a reply's usage is read by in a thread and in a run's stream
-// ([readUsage]), the count's included. So the two readings of one walk never
-// part on which record is a main-thread reply or on what its usage says: each
-// key exactly as written, each count a whole number in digits alone, and the
-// usage counted as Claude Code counts it, a reply read otherwise giving no
-// figure and the reply before it standing. Never encoding/json's reading of
-// the whole line, a rule of its own that matched a key in any case, merged a
-// key written twice, read a null or a negative count as 0, and took a record
-// that does not say it is a sidechain, or that names an agent, for the main
-// thread's; and that refused the whole line for any key it read, in any case,
-// holding a value of another kind, where the layer reads each key it reads by
-// its last value as written, so a reply that one refused for a `Type` of
-// another kind, an earlier `isSidechain` that is no boolean or an earlier
-// `message` that is no object now gives its figure. Every reply measured
-// carries a usage the layer reads ([threadLine.Usage] has the measure). A
-// last piece with no break is no line (the box cuts it away before a resume),
-// and a line the layer refuses counts nothing.
-//
-// ITS PACE: the walk is fed by the pipe the take writes into, so a meter slower
-// than the scrub would hold the take up inside its wait. The walk reads each
-// line in one pass into every fact the layer's readers read
-// ([threadReader.Next]), the next request's estimate among them, beside the
-// scrub's rewrite, gzip and checksum (BenchmarkTheMeterAtItsBounds measures
-// both, one case a process on a dedicated two-core slot, three runs): at a
-// 32 MiB archive's plaintext the meter took 1.61 to 1.75 s, the scrub 10.7 to
-// 10.8 s; of results of text blocks, 2.19 to 2.22 s and 26.1 to 27.0 s.
+// What a session's last request carried, read off its archive as a take streams
+// it out of its box ([sandbox.TakenSession.Context]). A launch continuing a
+// session sends its whole context before its brief, so its floor is that
+// context plus the brief (internal/engine's launch floor): the take's estimate
+// of the next request (nextrequest.go), else the harness's own record of its
+// last request, cache included. Claude Code: the last main-thread assistant
+// message's usage (subagents are sidechains). OpenCode: the newest settled
+// message that measured a prompt, by ONE rule for every reader
+// ([measuredPrompt]: [meterExport], [openCodeContext]).
+
+// The meter reads the scrub's output, the archive as kept, in a goroutine beside
+// the take that never holds it up: what it cannot read counts as zero, and it
+// drains the rest. It also yields the harness's count and next-request estimate
+// ([sandbox.TakenSession.Count], [sandbox.TakenSession.Next]; package doc) in
+// ONE walk ([meterExport], [walkThread] with [contextReading], [resumedReading],
+// [nextReading]). Refusals leave the count unread: a member named absolutely or
+// with `..`, a main thread held twice, a release below [claudeCountFloor];
+// [claudePrecompact] marks a saved compaction. A usage is read by the layer's
+// one rule ([readUsage]), keys exactly as written, never encoding/json's looser
+// reading, so the readings never part on what a main-thread reply is. A reply
+// it cannot read gives no figure and the one before stands; a last piece with
+// no break is no line (the box cuts it before a resume).
+
+// Pace: the walk is fed by the take's pipe, so a slower meter would hold the
+// take up. BenchmarkTheMeterAtItsBounds measures it against the scrub.
 
 // contextMeter reads an archive written to it and keeps the whole input of the
 // last request its transcript records, what its harness counts it at, with
@@ -351,18 +308,13 @@ type openCodeMeasuredWire struct {
 }
 
 // message is the message w holds, as far as [measuredPrompt] reads one, each
-// value decoded on its own BY ITS KEYS EXACTLY AS WRITTEN ([wireDecode]):
-// its kind a string, its time's `completed` a whole number, its tokens'
-// counts whole numbers, null as absent; and its id. AN ERROR, never a message
-// read as one that measured nothing, where any of them is of another type: a
-// reader that passed over a message it could not read would take an earlier
-// message's figure for a request that may have carried more.
-//
-// ONLY WHAT THE MEASURE READS IS HELD TO ITS TYPE: of the time, its
-// `completed` alone ([openCodeSettled]), and of the tokens, the prompt's
-// counts alone ([openCodeTokens]). A value the measure never reads, a step's
-// `created` or its reply's count, is no reason to lose a figure its counts
-// and its completion state.
+// value decoded on its own by its keys exactly as written ([wireDecode]):
+// kind a string, time's `completed` and the tokens' counts whole numbers, null
+// as absent. A value of another type is an error, never a message that
+// measured nothing: skipping it would take an earlier message's figure for a
+// request that may have carried more. Only what the measure reads is held to
+// its type: `completed` alone ([openCodeSettled]) and the prompt's counts
+// alone ([openCodeTokens]); any other value cannot cost a figure.
 func (w openCodeMeasuredWire) message() (openCodeMessage, string, error) {
 	var (
 		m       openCodeMessage

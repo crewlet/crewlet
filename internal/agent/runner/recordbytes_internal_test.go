@@ -116,7 +116,7 @@ func worstRecord(run bool) phaseRecord {
 		// The push record's reason, whose worst is past the pushed refs'
 		// (internal/sandbox's runtext.go); a record carries one or the other.
 		rec.Run = RunRecord{Harness: named(64), SandboxID: named(128), ProviderKey: named(256), Model: named(256),
-			LaunchID: named(64), PushedUnread: events.ClipDiagnostic(worst(1 << 20))}
+			LaunchID: named(64), PushedUnread: events.Diagnostic(worst(1 << 20))}
 		for used := 0; used < sandbox.MaxDeliveredRefBytes; used += 256 {
 			rec.Run.DeliveredRefs = append(rec.Run.DeliveredRefs, worst(256))
 		}

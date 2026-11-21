@@ -43,6 +43,17 @@
 // merged meanwhile) is answered by the engine, never put to a delegate
 // ([OverruledAlreadyMerged]).
 //
+// # Values only
+//
+// The package holds the vocabulary and no behavior that reads a server: it is
+// a leaf over gitref and words. Config, the run record, the tracker, the access
+// log, the delegate's verdict tool (agent/builtin) and the engine's sweep all
+// read these values, so none can mean something different by a panel, a low
+// confidence or an unmet condition. [EscalatingPaths] is matched by
+// [gitref.PathGlob] beside a rule's own globs, and [DeclaredFor] picks the
+// checks a repository's branch requires, which the GitHub reads judge as check
+// runs that succeeded on the commit decided.
+//
 // # What a person still sees
 //
 // Escalations, with the delegate's findings first; a daily digest of what was

@@ -24,26 +24,25 @@
 // # Who may be a recipient for a seat
 //
 // The hub INDEXES a watch and decides nothing about it; the socket decides it
-// ([watching]), the way the `work_inbox` question decides a read of the same
-// seat's inbox — its holder, whoever leads it, an admin, each with the
-// tracker — through the
-// same three-valued chart seam, and re-decides it whenever the socket's
-// credential is decided again (lifetime.go).
+// ([watching]) as the `inbox` question decides a read of that seat's inbox —
+// its holder, whoever leads it, or an admin, with no app — through the same
+// three-valued chart seam, and re-decides it whenever the socket's credential
+// is decided again (lifetime.go) or a company is published.
 // The seat's room carries `inbox_changed`, which says whose inbox moved, when
 // and why; an index anyone could write to would be a way to follow somebody
 // else's inbox that the question itself refuses.
+//
+// AND IT IS RESOLVED BEFORE IT IS DECIDED, through [iam.OwnerOf] and the same
+// identity directory `work_inbox` reads: a frame is pushed to the name a
+// person's notices are kept under — their seat, when the directory binds them
+// to one — so a watch naming their login is installed on that seat, and the
+// directory is asked only once the watch has been decided as far as it can
+// be without the record.
 //
 // # Who may be in an artifact's room
 //
 // Decided like reading the artifact, and decided again whenever access to it
 // can have narrowed: see rooms.go.
-//
-// AND IT IS RESOLVED BEFORE IT IS DECIDED, through [iam.OwnerOf] and the same
-// identity directory that question reads: a frame is pushed to the name a
-// person's notices are kept under — their seat, when the directory binds them
-// to one — so a watch naming their login is installed on that seat, and the
-// directory is asked only once the watch has been decided as far as it can
-// be without the record.
 //
 // # An open socket's credential
 //
@@ -54,6 +53,15 @@
 // published company is decided in memory, and the credential's own end by a
 // timer. lifetime.go states every case and what each close code asks of the
 // client.
+//
+// # The rest of the socket
+//
+// The socket's `query` frames are a thin adapter over the same function each
+// REST route calls ([Query]), so the two transports cannot answer one question
+// differently; the bound on them is per socket ([MaxInFlightQueries]). The
+// handshake's `Origin` is judged by the writes' rule ([Handler]). Chat is its
+// own arm, every frame filtered by its recipient's visibility (chatpush.go),
+// and a surface this node does not serve answers as one type ([Unserved]).
 package stream
 
 import (

@@ -23,6 +23,16 @@
 // or deletes it unread (off). A crash anybody outside could steer is held in the
 // sent record, never sent.
 //
+// A class's shape is immutable once a reporting tag ships it
+// (`schema/issue-report-history/`), and a site is a stable token a test maps to a
+// live function, so an older release's reports keep validating at the relay.
+//
+// AN OUTAGE IS NOT A DEFECT: a signal an outage can cause counts nothing while an
+// alarm in [ShadowAlarms] stands anywhere in the fleet, and fails closed when the
+// alarms cannot be read. A hand-back counts nothing while a node drains or the live
+// nodes run more than one build. A panic is never shadowed. Reporting is off until
+// a revision turns it on, and one that turns it off cancels a send under way.
+//
 // WHO HAS TO AGREE: the sent record is the whole company's, now, so it is one
 // compare-and-set record per fingerprint in the coordination store
 // ([coord.IssueReports]). Threshold counters are this node's alone: a seat that

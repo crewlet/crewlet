@@ -68,6 +68,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/named"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -154,12 +155,13 @@ type IntegrationTrigger interface {
 type Trigger struct {
 	ID   string
 	Type string
-	// Summary is the waking event's one line ([events.Event.Summary]), held
-	// to [MaxTriggerSummaryBytes] where the descriptor is built.
+	// Summary is the waking event's one line ([events.Event.Summary]),
+	// redacted, then held to [MaxTriggerSummaryBytes] where the descriptor is
+	// built.
 	Summary string
 	// Refs is what Summary names ([events.Event.References]). A ref whose
-	// words the bound cut off is kept: a reader that cannot find its words
-	// leaves it unmarked.
+	// words the bound cut off or the redaction replaced is kept: a reader
+	// that cannot find its words leaves it unmarked.
 	Refs      []named.Ref
 	Actor     string
 	Timestamp time.Time
@@ -259,7 +261,7 @@ func DescribeTrigger(e *events.Event) Trigger {
 	t := Trigger{
 		ID:        e.ID.String(),
 		Type:      e.Type,
-		Summary:   textcut.Within(e.Summary(), MaxTriggerSummaryBytes),
+		Summary:   triggerSummary(e.Summary()),
 		Refs:      e.References(),
 		Actor:     e.Actor(),
 		Timestamp: e.Timestamp,
@@ -282,6 +284,23 @@ func DescribeTrigger(e *events.Event) Trigger {
 		t.SourceEventType = integrationTrigger.IntegrationEventType()
 	}
 	return t
+}
+
+// triggerSummary is an event's summary as every record of its turn keeps it:
+// redacted, then held to [MaxTriggerSummaryBytes], never cut inside a marker.
+// A summary can be somebody's words (a mail's subject, a page's title); the
+// model reads the trigger through the turn's brief, never through this.
+func triggerSummary(summary string) string {
+	shown, whole := redact.Prefix(summary, MaxTriggerSummaryBytes+redact.LongestMarker())
+	if whole <= MaxTriggerSummaryBytes {
+		return shown
+	}
+	kept := textcut.Opening(shown, MaxTriggerSummaryBytes)
+	// Its words end where the cut's own marker (an Opening of nothing) begins.
+	if begin, _, inside := redact.MarkersAround(shown, len(kept)-len(textcut.Opening("", 0))); inside {
+		return textcut.Opening(shown[:begin], MaxTriggerSummaryBytes)
+	}
+	return kept
 }
 
 // IsZero reports whether this descriptor names no trigger at all.

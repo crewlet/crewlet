@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 // catalogue is every payload this package registers, one prototype each. It is
@@ -765,6 +767,60 @@ func TestATriggersSummaryIsOneLineWithinItsBound(t *testing.T) {
 		Subject: "Need a hand"}, events.TraceContext{})).Summary
 	if short != "Message from alice: Need a hand" {
 		t.Errorf("a short subject is summarised as %q, want it whole", short)
+	}
+}
+
+// A TRIGGER'S SUMMARY HOLDS NO SECRET HOWEVER ITS CUT FALLS. The summary rides
+// every record of the turn it woke, and a subject is somebody's words: a key in
+// the kept opening, and a bearer token with the bound falling at every offset
+// of it and of its marker, reach the summary as markers, never in part.
+//
+// Mutation: cut before redacting, and the cut keeps the head of the credential
+// it ran across; drop the move back off a marker, and a cut inside one keeps
+// it in part.
+func TestATriggersSummaryHoldsNoSecretHoweverItsCutFalls(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	opening, value := sample["anthropic-key"], sample["jwt"]
+	straddling := "Authorization: Bearer " + value
+	summarise := func(subject string) string {
+		return DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+			Subject: subject}, events.TraceContext{})).Summary
+	}
+	// THE CUT AT EVERY OFFSET of the token and of its marker, placed in the
+	// redaction's bytes, which the opening's own marker shortens.
+	head := "deploy key " + opening + " "
+	lead := len("Message from alice: ") + len(redact.Secrets(head))
+	for at := 1; at < len(redact.Secrets(straddling))+2*redact.LongestMarker(); at++ {
+		subject := head + strings.Repeat("x", MaxTriggerSummaryBytes-lead-at) + " " + straddling + " " +
+			strings.Repeat("y", 256)
+		got := summarise(subject)
+		if len(got) > MaxTriggerSummaryBytes || !strings.HasSuffix(got, "…") {
+			t.Fatalf("a %d-byte subject is summarised in %d bytes, want it cut within %d and marked",
+				len(subject), len(got), MaxTriggerSummaryBytes)
+		}
+		for _, secret := range []string{opening, value} {
+			for i := 0; i+6 <= len(secret); i++ {
+				if strings.Contains(got, secret[i:i+6]) {
+					t.Errorf("the bound %d bytes into the token's line: the summary holds %q of a credential", at,
+						secret[i:i+6])
+					break
+				}
+			}
+		}
+		for _, words := range redact.OwnWords(got) {
+			if strings.Contains(words, "REDACTED") {
+				t.Errorf("the bound %d bytes into the token's line: the summary holds a marker in part", at)
+				break
+			}
+		}
+	}
+	if got := summarise("deploy key " + opening); strings.Contains(got, opening[:12]) ||
+		!strings.HasPrefix(got, "Message from alice: deploy key ") {
+		t.Errorf("a short subject is summarised as %q, want its credential redacted and the rest kept", got)
 	}
 }
 

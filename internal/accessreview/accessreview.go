@@ -8,6 +8,13 @@
 // the alarms' route (ADR-0095). The turn it wakes is told the change at its
 // dispatch, as every turn is (ADR-0104), and the record is dropped when a turn
 // that was told the change ends.
+//
+// The node holding the seat measures it once its applies go quiet, on
+// admission and on a write to the seat's access ledger, against its told
+// baseline by the closed list. It publishes only where the seat has open
+// work. Any node may write the record, each write conditional on the revision
+// it read. The record also ends when the change is undone or its review is
+// settled untold, a check sees the turn ended, or the seat is removed.
 package accessreview
 
 import (
