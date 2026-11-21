@@ -77,4 +77,13 @@
 // tell the same change twice. The dashboard pages a seat's told records, and an
 // administrator's audit pages certificates, commands and verdicts, at the
 // caller's level.
+//
+// A sealed text OPENS REDACTED ([CommandRow.Open], [VerdictRow.Open]), so a
+// credential a command or a giver's words carried reads as a marker in every
+// view, the audit's included; the digests of what ran stay to check it by.
+// The seal keeps the words whole and a reseal moves them unchanged. Redacting
+// before the seal is wrong: [Writer.VerdictSealed] opens the words again and
+// holds them to the writer's bounds ([VerdictReasonMaxRunes],
+// [VerdictFindingMaxRunes]), which a marker longer than what it replaced
+// would break for words the giver kept within them.
 package accessdomain
