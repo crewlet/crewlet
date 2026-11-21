@@ -91,6 +91,20 @@ const HeldApproversSSH = "ssh"
 // fresh step-up (authz's release.approve).
 const HeldApproversRelease = "release"
 
+// HeldApproversAdmin is [HeldCall.Approvers] for a growth integration's
+// spend, public or admin act: a person holding admin alone, at a fresh
+// step-up, never a lead, a named person or a delegate (ADR-0171; authz's
+// growth.*.approve). Such a call lapses at [HeldCall.LapsesAt].
+const HeldApproversAdmin = "admin"
+
+// HeldLapse is how long a growth act waits for its answer before it lapses:
+// a day, the budget cycle its change acts on. A raise allowed later acts on
+// another day's spend than the one the agent reasoned about.
+const HeldLapse = 24 * time.Hour
+
+// heldApprovers is every [HeldCall.Approvers] a call may name beside empty.
+var heldApprovers = []string{HeldApproversSSH, HeldApproversRelease, HeldApproversAdmin}
+
 // maxHeldBindingBytes bounds [HeldCall.Binding]: a SHA-256 in hex.
 const maxHeldBindingBytes = 64
 
@@ -268,6 +282,11 @@ type HeldCall struct {
 
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`
+
+	// LapsesAt is when a call answered by [HeldApproversAdmin] lapses
+	// unanswered, [HeldLapse] after HeldAt: the engine then answers it Deny,
+	// and nothing runs. Zero for every other call, which waits until answered.
+	LapsesAt time.Time `json:"lapses_at,omitzero"`
 
 	// CallingAt is when a resume began making the call
 	// ([PendingStore.MarkHeldCall]): zero until then, and from then on the
@@ -515,9 +534,22 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 				"escalation on a call being held, and both come after it is held"))
 		}
 	}
-	if h.Approvers != "" && ((h.Approvers != HeldApproversSSH && h.Approvers != HeldApproversRelease) || !h.Fixed) {
+	if h.Approvers != "" && (!slices.Contains(heldApprovers, h.Approvers) || !h.Fixed) {
 		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+
 			"not know, or names them on a call that may be allowed always"))
+	}
+	growthAct := slices.Contains([]delegated.Kind{delegated.KindAdSpend, delegated.KindPublicPost,
+		delegated.KindAccountAdmin}, delegated.Kind(h.Act))
+	switch {
+	case growthAct != (h.Approvers == HeldApproversAdmin):
+		found = append(found, fieldRefusal("held_call.approvers", "is admin exactly for a growth act "+
+			"(ad_spend, public_post, account_admin), which an administrator alone answers"))
+	case growthAct && !h.LapsesAt.Equal(h.HeldAt.Add(HeldLapse)):
+		found = append(found, fieldRefusal("held_call.lapses_at", "is not a day after held_at, and a "+
+			"growth act lapses a day after it is held"))
+	case !growthAct && !h.LapsesAt.IsZero():
+		found = append(found, fieldRefusal("held_call.lapses_at", "is set on a call that waits until "+
+			"answered"))
 	}
 	return found
 }

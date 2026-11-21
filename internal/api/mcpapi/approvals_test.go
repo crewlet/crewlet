@@ -225,3 +225,24 @@ func TestAHeldCallIsAnsweredByNobodyElseAndOnce(t *testing.T) {
 		})
 	}
 }
+
+// A PERSON'S NOTE RIDES THE ANSWER to the agent, trimmed, and one past a
+// paragraph is refused with nothing delivered.
+//
+// Mutation: drop the note from the delivery, or skip its bound, and the agent
+// is never told why, or a page of text rides the run's row.
+func TestANoteRidesTheAnswerToTheAgent(t *testing.T) {
+	t.Parallel()
+	desk := &fakeApprovals{run: waitingRun()}
+	svc := approvalSurface(t, desk, &fakeToolDocuments{}, &recordedAudit{})
+	code, _ := answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID,
+		`{"answer": "deny", "note": "  Raise it by ten euros at most.  "}`)
+	if code != http.StatusAccepted || len(desk.delivered) != 1 || desk.delivered[0].Answer != "Raise it by ten euros at most." {
+		t.Fatalf("POST = %d, delivered %+v", code, desk.delivered)
+	}
+	long := strings.Repeat("a", 2001)
+	code, _ = answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID, `{"answer": "deny", "note": "`+long+`"}`)
+	if code != http.StatusBadRequest || len(desk.delivered) != 1 {
+		t.Errorf("a note past its bound answered %d and delivered %d", code, len(desk.delivered))
+	}
+}

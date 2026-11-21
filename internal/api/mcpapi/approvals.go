@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -26,7 +28,7 @@ import (
 )
 
 // `POST /mcp-approvals/{id}` answers a call parked on an agent run's row
-// (ADR-0077): `{"answer": "once"|"always"|"deny"}`, optional `_summary`.
+// (ADR-0077): `{"answer": "once"|"always"|"deny"}`, optional `_summary` and `note`.
 // WHO MAY ANSWER is decided twice: the route admits on `tools.approve` on the
 // caller's own record (no agent seats, no assistant); the handler then reads
 // the held call and decides `tools.approve` on the run's seat, known only then.
@@ -60,10 +62,17 @@ type approvalRequest struct {
 	// configuration write takes it; a summary naming the tool is written
 	// where none is sent.
 	Summary string `json:"_summary"`
+	// Note is what the person says to the agent with the answer, which the
+	// resumed run reads as their words beside the verdict.
+	Note string `json:"note"`
 }
 
 // approvalShape is the body, as a refusal names it.
-const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<hex>"}`
+const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<hex>", "note": "<text>"}`
+
+// maxApprovalNoteRunes bounds a note: a paragraph telling the agent why, or
+// what to ask instead, as a person's steering note is bounded.
+const maxApprovalNoteRunes = steer.MaxNoteRunes
 
 // maxApprovalBody bounds the body: an answer and a revision summary, which
 // configuration writes hold to a line.
@@ -122,6 +131,11 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 		return
 	}
 	rec.Answer = req.Answer
+	if utf8.RuneCountInString(req.Note) > maxApprovalNoteRunes || !utf8.ValidString(req.Note) {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": fmt.Sprintf("note is UTF-8 text of at most %d characters", maxApprovalNoteRunes)})
+		return
+	}
 	run, found, err := s.approvals.Held(ctx, id)
 	switch {
 	case err != nil:
@@ -171,7 +185,7 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 	by := auth.AttributionOf(ctx)
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
-		Choice: req.Answer, AnsweredBy: by.Name, AnsweredByKind: string(by.Kind),
+		Choice: req.Answer, Answer: strings.TrimSpace(req.Note), AnsweredBy: by.Name, AnsweredByKind: string(by.Kind),
 		OperatorID: by.OperatorID,
 		// THE QUESTION AND THE CALL THIS ANSWERS, off the row just read as
 		// waiting on it: the seat records it only while the run still
@@ -258,9 +272,10 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 }
 
 // readWhole reports whether a held call is made only once its approver read
-// all of it: an SSH operate command, whose stdin can run as root.
+// all of it: an SSH operate command, whose stdin can run as root, and a
+// growth act, whose texts are published and whose amounts are spent as sent.
 func readWhole(held sandbox.HeldCall) bool {
-	return held.Fixed && held.Approvers == sandbox.HeldApproversSSH
+	return held.Fixed && (held.Approvers == sandbox.HeldApproversSSH || held.Approvers == sandbox.HeldApproversAdmin)
 }
 
 // openHeld is the arguments run's held call would send and their digest,

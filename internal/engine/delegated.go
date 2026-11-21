@@ -606,11 +606,40 @@ func (s *delegatedSweep) holds(ctx context.Context) (bool, error) {
 	return s.claim(ctx)
 }
 
-// pass escalates every request due, and logs what it could not.
+// pass escalates every request due and answers every growth act that lapsed,
+// and logs what it could not.
 func (s *delegatedSweep) pass(ctx context.Context) {
 	rules := delegatedRules{engine: s.engine}
-	sweepDelegated(ctx, sandbox.NewCoordStore(s.engine.backends.Fleet), rules, rules.Limits().Deadline,
+	store := sandbox.NewCoordStore(s.engine.backends.Fleet)
+	sweepDelegated(ctx, store, rules, rules.Limits().Deadline,
 		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.Arguments, s.now())
+	sweepLapsed(ctx, store, delegatedDesk{engine: s.engine}.answerAsEngine, s.now())
+}
+
+// sweepLapsed answers Deny, as the engine, every growth act left unanswered
+// past its lapse ([sandbox.HeldCall.LapsesAt], ADR-0171): nothing runs, its
+// tool records the lapse, and the agent is told why.
+func sweepLapsed(ctx context.Context, store sandbox.PendingStore,
+	answer func(context.Context, sandbox.PendingRun, string) error, now time.Time) {
+	runs, err := store.ListActive(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "lapse_sweep_unread", "error", err.Error())
+		return
+	}
+	for _, run := range runs {
+		held := run.HeldCall
+		if held == nil || held.LapsesAt.IsZero() || now.Before(held.LapsesAt) || !run.HeldOpen() ||
+			!slices.Contains(sandbox.Awaiting, run.Status) {
+			continue
+		}
+		said := "Nobody answered within " + words.Count(int(sandbox.HeldLapse/time.Hour), "hour", "hours") +
+			", so the request lapsed and nothing was sent. Ask again if it is still needed, with figures read now."
+		if err := answer(ctx, run, said); err != nil {
+			log.WarnContext(ctx, "lapse_unanswered", "run", run.TurnID, "held_call", held.ID, "error", err.Error())
+			continue
+		}
+		log.InfoContext(ctx, "held_call_lapsed", "run", run.TurnID, "held_call", held.ID, "tool", held.Tool)
+	}
 }
 
 // delegatedRecorder records the engine's own escalation of a request.
