@@ -319,7 +319,7 @@ func TestARoundsAbandonedAttemptShowsNoSecretWhereverItsEndIsCut(t *testing.T) {
 // values and still one JSON object, and a committed round's prose, redacted
 // whole. The model's copy is as it came.
 //
-// Mutation: show a call's arguments as they came (no tools.RedactedArgs in
+// Mutation: show a call's arguments as they came (no redact.Args in
 // liveWords.executions or runningCalls), or a round's prose (none in
 // liveWords.narration), and its case holds the plant.
 func TestAPhasesLiveFrameShowsNoSecretItsCallsOrProseCarried(t *testing.T) {

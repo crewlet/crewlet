@@ -349,7 +349,7 @@ func (e *Engine) heldMergeAsks(ctx context.Context) (map[string]bool, error) {
 			run.LaunchID != held.LaunchID || !slices.Contains(sandbox.Awaiting, run.Status) {
 			continue
 		}
-		args, err := seal.OpenArguments(run.TurnID, *held)
+		args, err := seal.OpenRawArguments(run.TurnID, *held)
 		if err != nil {
 			return nil, fmt.Errorf("engine: open the merge ask held on %s's run: %w", run.AgentHandle, err)
 		}

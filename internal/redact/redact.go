@@ -8,8 +8,8 @@
 // command whose ${VAR} was resolved before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
-// up redacting a token shape its neighbour already knows about. It imports
-// nothing from the rest of Crewlet so every layer can depend on it.
+// up redacting a token shape its neighbour already knows about. Its only
+// Crewlet import is plainjson, a leaf: every layer can depend on it.
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
 // this can promise: it catches the vendor prefixes, the engine's own per-run
