@@ -650,7 +650,7 @@ Four runs. First, under no label: what needs you, what reached you, what is your
 | **Structure** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, an app's state and connecting are an Admin's on the page |
-| **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
+| **Budgets** | `#/company/budgets` | none (tokens only; the one money drawn is a growth integration's, rule 19) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
 | **Gitlet** | `#/gitlet` | none; locked, naming Gitlet, for a reader without Gitlet access (as Worklet's row is without Worklet's), since every section reads a code question the engine refuses them (ADR-0110); a holder's answers are held to their own grant. Hidden where the company hosts no code in the engine (`code.backend` is not `gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
@@ -5607,30 +5607,38 @@ Structure shows the draft as an Org chart and a Table, both reading one module (
     fails on an unhashed name under `assets/`. The engine gzips text once per
     file at the best level for a client that asks, so nothing is pre-compressed
     and no proxy is needed ([API endpoints](api-endpoints.md#wiring)).
-19. **Tokens, never money.** Every spend figure the dashboard draws is a token
-    count: on Spend, a seat's profile, a task's cost, a turn's phases and the
-    landing screen's pulse. The engine records a price only where one is
-    reported, and only a subscription harness reports one, so a currency figure
-    covers the minority of calls while the token count beside it covers all, and
-    reads as the company's spend while being a fraction. So no screen draws a
-    price, a currency sign before a figure, a currency code or an `Intl`
-    currency format, and the client declares no price field at all, since a
-    field `protocol/types.ts` declares is one line from being drawn. The
-    engine's price stays on its API ([API endpoints](api-endpoints.md#token-spend-breakdown)).
-    Two places a price can be read on a screen: a record shown **verbatim**, as
-    stored (an event's own payload), because dropping a field would misreport
-    the record, and nothing there is drawn as a figure; and an artifact sheet's
-    own cells, where a number column whose schema declares a currency is the
-    author's data, drawn by the design system's sheet model in the author's
-    format, never an engine-recorded figure. The bundle gate admits exactly that
-    construct and the currency signs the sheet strips from typed input before
-    parsing a number, each written as the whole construct; a currency format or
-    sign anywhere else is refused. Three gates, each over a different artefact:
-    the SOURCE, where `src/money.test.tsx` parses every shipped module (comments
-    excluded, so a note can name what it forbids); the SCREENS, where the same
-    suite renders the landing screen, Spend, a task, a seat's Overview and
-    Activity tabs and a turn over wire fixtures carrying a price everywhere the
-    engine puts one, and reads text and attributes back for any trace; and the
-    BUNDLE, where `TestTheDashboardRendersNoPrice` scans every module the engine
-    serves, lazy chunks included, because the committed bundle is what a browser
-    runs.
+19. **Tokens for what agents spend; money only a vendor's, through the kit.**
+    Every figure of what agents spend is a token count: on Spend, a seat's
+    profile, a task's cost, a turn's phases and the landing screen's pulse. The
+    engine records a price only where one is reported, and only a subscription
+    harness reports one, so a currency figure covers the minority of calls
+    while the token count beside it covers all, and reads as the company's
+    spend while being a fraction. So no screen draws a model price, and the
+    client declares no price field at all, since a field `protocol/types.ts`
+    declares is one line from being drawn. The engine's price stays on its API
+    ([API endpoints](api-endpoints.md#token-spend-breakdown)).
+    The one money a screen draws is a growth integration's own: a vendor
+    account's ad spend, earnings, proceeds and spending caps, in the account's
+    currency as the vendor reports it. It is drawn only by the design system's
+    `Money` (`formatMoney`), from integer micros, never through a float and
+    never summed across currencies, and only the growth modules
+    (`contract/growth.ts`, `components/growth/`, `routes/growth/`) name a
+    currency, as data; none spells a code or a sign or asks `Intl` for a
+    currency format itself.
+    Two other places a price can be read on a screen: a record shown
+    **verbatim**, as stored (an event's own payload), because dropping a field
+    would misreport the record, and nothing there is drawn as a figure; and an
+    artifact sheet's own cells, where a number column whose schema declares a
+    currency is the author's data, drawn by the design system's sheet model in
+    the author's format, never an engine-recorded figure. Three gates, each
+    over a different artefact: the SOURCE, where `src/money.test.tsx` parses
+    every shipped module (comments excluded, so a note can name what it
+    forbids) and admits a currency's name in the growth modules alone; the
+    SCREENS, where the same suite renders the landing screen, Spend, a task, a
+    seat's Overview and Activity tabs and a turn over wire fixtures carrying a
+    price everywhere the engine puts one, and reads text and attributes back
+    for any trace; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans
+    every module the engine serves, lazy chunks included, and admits exactly
+    the sheet model's currency format and the signs it strips from typed
+    input, and `Money`'s formatter and its ISO 4217 table, each written as the
+    whole construct, because the committed bundle is what a browser runs.
