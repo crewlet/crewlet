@@ -170,11 +170,9 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 }
 
 // copilotNotesHeld is, of the inbox ids asked, in the order asked, those whose
-// note Copilot's own record shows reached the model, read off a session's
-// events.jsonl: the note's `user.message` under its clientTurnId
-// ([CopilotClientTurnID]), delivered `steering` or `queued`, AND a
-// `session.usage_record` after it, a model request made once it was in the
-// conversation.
+// note a session's events.jsonl shows reached the model: its `user.message`
+// under its clientTurnId ([CopilotClientTurnID]), delivered `steering` or
+// `queued`, AND a `session.usage_record` after it, a request made with it.
 //
 // THE LINE ALONE IS NO PROOF (ruling 1 of #1818's design, measured on 1.0.114):
 // Copilot writes it before the request it rides, flushing about every 100 ms, so
