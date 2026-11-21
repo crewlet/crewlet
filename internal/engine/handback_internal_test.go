@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nats-io/nats-server/v2/server"
 
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/kv"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
@@ -36,9 +37,10 @@ func awaited[T any](t *testing.T, ch <-chan T, what string) T {
 
 // A HANDED-BACK DELIVERY REACHES THE PEER ONCE, AFTER ITS NAK (T6): a leaf
 // hands back a seat's delivery while its upload holds the data link, so the
-// Nak crosses behind the upload's bytes, and detaches; the member's node then
-// attaches the same group and is delivered the message once the Nak has
-// arrived, decided by the link's count of the upload when it is, and only
+// Nak crosses behind the upload's bytes, detaches and releases the seat; the
+// member's node claims it, over the lease links while the Nak is still
+// crossing, attaches the same group and is delivered the message once the Nak
+// has arrived, decided by the link's count of the upload when it is, and only
 // once. A delivery that waited out AckWait (thirty minutes) would never come
 // inside the case's bound (design §8.1: a Nak arrives inside its ack window).
 //
@@ -50,6 +52,16 @@ func TestAHandedBackDeliveryReachesThePeerOnceAfterItsNak(t *testing.T) {
 	f := openLeafAcross(t, 0, func(t testing.TB, target string) *linktest.Link {
 		return linktest.SharedEachWay(t, target, handBackRate)
 	})
+	resource := coord.SeatResource(uuid.New())
+	claim := func(store *kv.Store, owner string) *coord.Lease {
+		lease, _, err := store.TryAcquire(ctx, resource, coord.AcquireOptions{Owner: owner,
+			TTL: store.TTL(), Ungated: true, Protocol: coord.ProtocolVersion})
+		if err != nil || lease == nil {
+			t.Fatalf("%s claims %s = (%v, %v)", owner, resource, lease, err)
+		}
+		return lease
+	}
+	held := claim(f.leafStore, "node:leaf")
 	const topic, group = "handback.peer", "seat"
 	if _, err := f.member.Queue.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("subscribe the seat's group: %v", err)
@@ -59,8 +71,8 @@ func TestAHandedBackDeliveryReachesThePeerOnceAfterItsNak(t *testing.T) {
 
 	taken := make(chan struct{}, 1)
 	giveBack := make(chan struct{})
-	release := sync.OnceFunc(func() { close(giveBack) })
-	t.Cleanup(release)
+	handBack := sync.OnceFunc(func() { close(giveBack) })
+	t.Cleanup(handBack)
 	if err := f.leaf.Queue.Subscribe(ctx, topic, group, func(context.Context, *events.Event) queue.Result {
 		select {
 		case taken <- struct{}{}:
@@ -76,14 +88,18 @@ func TestAHandedBackDeliveryReachesThePeerOnceAfterItsNak(t *testing.T) {
 	}
 	awaited(t, taken, "the leaf to be delivered the seat's message")
 
-	carried := func() int64 {
-		return f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, linktest.ToBroker).Carried
-	}
-	start := carried()
-	uploaded := f.bulkOnTheDataLink(t)
-	release()
+	uploaded, start := f.bulkOnTheDataLink(t)
+	handBack()
 	if _, err := f.leaf.Queue.Detach(ctx, topic, group); err != nil {
 		t.Fatalf("detach the leaf: %v", err)
+	}
+	if released, err := f.leafStore.Release(ctx, resource, "node:leaf", held.Epoch); err != nil || !released {
+		t.Fatalf("the leaf releases %s = (%v, %v)", resource, released, err)
+	}
+	claim(f.memberStore, "node:member")
+	if got := f.carried() - start; got >= outlastingBytes {
+		t.Fatalf("the seat moved with the whole %d-byte upload carried: the case never had the peer "+
+			"attach while the Nak was behind it", got)
 	}
 
 	var deliveries atomic.Int32
@@ -93,7 +109,7 @@ func TestAHandedBackDeliveryReachesThePeerOnceAfterItsNak(t *testing.T) {
 		switch ev.ID {
 		case handedBack.ID:
 			if deliveries.Add(1) == 1 {
-				reached <- carried()
+				reached <- f.carried()
 			}
 		default:
 			select {

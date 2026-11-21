@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,12 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// scaledRate is the case's link: twice the object store's floor, a mebibyte
-// in objstore.MiBPace, so bulk crossing it reads moving to the data path's
-// meter, which asks 0.7 of the floor, whatever the steps its acknowledged
-// bytes move in.
+// scaledRate is the case's link: twice the object store's floor (a mebibyte
+// in objstore.MiBPace). The leaf's acknowledged bytes move in the RELAY's
+// steps, a loopback segment of some 64 KiB at a time (linktest's package
+// doc), where a real far end acknowledges every segment or two of 1,460
+// bytes. At the floor the meter's line over the probe's bound is about
+// 120 KiB, two such steps, so one step more or less in a span decides the
+// verdict; at twice the floor a span holds four or more.
 const scaledRate = 2 * (1 << 20) * int64(time.Second) / int64(objstore.MiBPace)
 
 // scaledInflight is what the case's first-in, first-out link reads of a
@@ -46,20 +51,21 @@ func overAScaledLink(t *testing.T) (leafAcross, string, *coord.Lease) {
 	if got := f.leafStore.TTL(); got != config.MinLeaseTTL {
 		t.Fatalf("the leaf holds leases at %v, want the floor TTL %v", got, config.MinLeaseTTL)
 	}
-	seat := coord.SeatResource(uuid.New())
-	lease, _, err := f.leafStore.TryAcquire(t.Context(), seat, coord.AcquireOptions{Owner: "node:leaf",
+	resource := coord.SeatResource(uuid.New())
+	lease, _, err := f.leafStore.TryAcquire(t.Context(), resource, coord.AcquireOptions{Owner: "node:leaf",
 		TTL: f.leafStore.TTL(), Ungated: true, Protocol: coord.ProtocolVersion})
 	if err != nil || lease == nil {
-		t.Fatalf("claim %s = (%v, %v)", seat, lease, err)
+		t.Fatalf("claim %s = (%v, %v)", resource, lease, err)
 	}
-	return f, seat, lease
+	return f, resource, lease
 }
 
 // bulkOnTheDataLink sends outlastingBytes from the leaf's queue connection to
 // the member across the data link, and answers on the channel it returns once
 // the member has them, after waiting until the link carries more of them than
-// a connection's window.
-func (f leafAcross) bulkOnTheDataLink(t *testing.T) <-chan error {
+// a connection's window; before is what the link had carried toward the
+// member when the upload began.
+func (f leafAcross) bulkOnTheDataLink(t *testing.T) (done <-chan error, before int64) {
 	t.Helper()
 	far := f.member.Queue.(*jetstream.Queue).Conn()
 	near := f.leaf.Queue.(*jetstream.Queue).Conn()
@@ -80,19 +86,22 @@ func (f leafAcross) bulkOnTheDataLink(t *testing.T) <-chan error {
 	if _, err := rand.Read(body); err != nil {
 		t.Fatal(err)
 	}
-	carried := func() int64 {
-		return f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, linktest.ToBroker).Carried
-	}
-	before := carried()
-	done := make(chan error, 1)
+	before = f.carried()
+	answered := make(chan error, 1)
 	go func() {
 		_, err := near.Request(subject, body, 2*time.Minute)
-		done <- err
+		answered <- err
 	}()
 	pollUntil(t, time.Minute, "the bulk on the data link", func() bool {
-		return carried() > before+scaledInflight
+		return f.carried() > before+scaledInflight
 	})
-	return done
+	return answered, before
+}
+
+// carried is what the link has carried of the leaf's data connections toward
+// the member.
+func (f leafAcross) carried() int64 {
+	return f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, linktest.ToBroker).Carried
 }
 
 // A LARGE WRITE ON THE DATA LINK KEEPS THE NODE'S SEATS (#1035): behind a
@@ -100,17 +109,18 @@ func (f leafAcross) bulkOnTheDataLink(t *testing.T) <-chan error {
 // the TTL holds the data path's probe unanswered for the whole crossing, past
 // its bound. The link moves throughout, so the data path stays proven, and the
 // renewals, on the lease link, keep landing: the seat's epoch never moves.
-// Decided by the verdict and every renewal read back to back while the upload
-// crosses, never by a clock.
+// Decided by the verdict, read every few milliseconds, and every renewal read
+// back to back while the upload crosses, never by a clock.
 //
 // Red with ruling 2's letter (a probe out past its bound refuses, the link's
 // movement aside): the verdict refuses some five seconds in. Red on main, whose
 // renewals rode the data link: each waits the upload out, past its term.
 func TestALargeWriteOnTheDataLinkKeepsTheNodesSeats(t *testing.T) {
 	t.Parallel()
-	f, seat, lease := overAScaledLink(t)
+	f, resource, lease := overAScaledLink(t)
 	q := f.leaf.Queue.(*jetstream.Queue)
-	done := f.bulkOnTheDataLink(t)
+	done, _ := f.bulkOnTheDataLink(t)
+	stop := watchedForRefusal(t, q)
 	renewals := 0
 	for crossing := true; crossing; {
 		select {
@@ -121,21 +131,58 @@ func TestALargeWriteOnTheDataLinkKeepsTheNodesSeats(t *testing.T) {
 			crossing = false
 		default:
 		}
-		if err := q.DataPath(); err != nil {
-			t.Fatalf("after %d renewals behind the upload, the data path reads %v while its link "+
-				"moves", renewals, err)
-		}
-		renewed, err := f.leafStore.Renew(t.Context(), seat, "node:leaf", lease.Epoch, f.leafStore.TTL())
+		renewed, err := f.leafStore.Renew(t.Context(), resource, "node:leaf", lease.Epoch, f.leafStore.TTL())
 		if err != nil || !renewed {
 			t.Fatalf("renewal %d behind the upload = (%v, %v), want it landed", renewals+1, renewed, err)
 		}
 		renewals++
 	}
-	got, err := f.memberStore.Get(t.Context(), seat)
+	if err := stop(); err != nil {
+		t.Fatalf("while the upload crossed the data path read %v: the link moved throughout", err)
+	}
+	got, err := f.memberStore.Get(t.Context(), resource)
 	if err != nil || got == nil || got.Epoch != lease.Epoch || got.Owner != "node:leaf" {
 		t.Errorf("after the upload the seat reads (%v, %v) on the member, want the leaf's at epoch %d",
 			got, err, lease.Epoch)
 	}
+}
+
+// watchedForRefusal reads q's data path every few milliseconds, from its own
+// goroutine, until stop (or the case's end), which ends it and answers the
+// first refusal read. The log line data_path_unproven would show a shorter
+// flap, but the queue logs to the process's logger, which a parallel case
+// cannot capture.
+func watchedForRefusal(t *testing.T, q *jetstream.Queue) (stop func() error) {
+	first := make(chan error, 1)
+	quit, ended := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(ended)
+		tick := time.NewTicker(5 * time.Millisecond) //fixedwait:liveness
+		defer tick.Stop()
+		for {
+			if err := q.DataPath(); err != nil {
+				first <- err
+				return
+			}
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	stop = sync.OnceValue(func() error {
+		close(quit)
+		<-ended
+		select {
+		case err := <-first:
+			return err
+		default:
+			return nil
+		}
+	})
+	t.Cleanup(func() { _ = stop() })
+	return stop
 }
 
 // A DATA LINK THAT DIES MID-WRITE IS REFUSED WITHIN THE PROBE'S BOUND: the
@@ -144,19 +191,31 @@ func TestALargeWriteOnTheDataLinkKeepsTheNodesSeats(t *testing.T) {
 // refused for that silence, not left to the moving cap minutes later. The
 // seat is still the leaf's when it is: refused before its TTL ran out.
 //
-// The case's minute is a liveness bound, far inside the cap (some four
-// minutes), so the refusal it sees is the silence clause's, as it names.
+// The upload moves for a probe period and a window before the link dies, so
+// a probe went out while it moved; the minute is a liveness bound, far inside
+// the cap (some four minutes), so the refusal seen is the silence clause's.
 //
 // Mutant: silence counted from the probe's send, not the link's last byte —
 // the link moved since, so only the cap refuses, past the minute.
 func TestADataLinkThatDiesMidWriteIsRefusedWithinTheProbesBound(t *testing.T) {
 	t.Parallel()
-	f, seat, lease := overAScaledLink(t)
-	_ = f.bulkOnTheDataLink(t)
+	f, resource, lease := overAScaledLink(t)
+	_, before := f.bulkOnTheDataLink(t)
+	// The data path's probe period (jetstream's dataPathProbeEvery), in bytes
+	// of the link: no faster than scaledRate, so a tick fell inside it.
+	probePeriod := config.MinLeaseTTL / seat.HeartbeatRatio
+	moved := before + scaledRate*int64(probePeriod/time.Millisecond)/1000 + scaledInflight
+	pollUntil(t, time.Minute, "a probe period of the upload on the data link", func() bool {
+		return f.carried() > moved
+	})
+	if at := f.carried() - before; at >= outlastingBytes-scaledInflight {
+		t.Fatalf("the link carried %d bytes of the %d-byte upload before it died: the case needs it "+
+			"to die mid-write", at, outlastingBytes)
+	}
 	f.link.Blackhole(server.DEFAULT_GLOBAL_ACCOUNT)
 	t.Cleanup(func() { f.link.Mend(server.DEFAULT_GLOBAL_ACCOUNT) })
 
-	refused := renewUntilRefused(t, f.leafStore, seat, "node:leaf", lease.Epoch)
+	refused := renewUntilRefused(t, f.leafStore, resource, "node:leaf", lease.Epoch)
 	if !errors.Is(refused, coord.ErrUnavailable) || !errors.Is(refused, jetstream.ErrDataPathUnproven) {
 		t.Fatalf("a renewal across a data link dead mid-write = %v, want unknown for the unproven "+
 			"data path", refused)
@@ -164,7 +223,7 @@ func TestADataLinkThatDiesMidWriteIsRefusedWithinTheProbesBound(t *testing.T) {
 	if !strings.Contains(refused.Error(), "carried nothing") {
 		t.Errorf("the refusal %q does not name the link's silence", refused)
 	}
-	got, err := f.memberStore.Get(t.Context(), seat)
+	got, err := f.memberStore.Get(t.Context(), resource)
 	if err != nil || got == nil || got.Epoch != lease.Epoch || got.Owner != "node:leaf" {
 		t.Errorf("at the refusal the seat reads (%v, %v) on the member, want still the leaf's at "+
 			"epoch %d", got, err, lease.Epoch)
