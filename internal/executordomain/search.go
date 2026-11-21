@@ -117,7 +117,8 @@ type SearchPage struct {
 
 // Search is one page of a seat's sessions whose words hold every term of
 // ask's query, the latest begun first, after ask's cursor, at the level fresh
-// asks for, in one read examining at most [SearchScanRows] rows.
+// asks for, in one read examining at most [SearchScanRows] rows and holding
+// its hits to the bytes the read carries ([statelog.RowsOf]).
 //
 // It reads the seat's page statement one row past the page, so a page that
 // stops knows whether an older row exists.
@@ -154,6 +155,7 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 			lastBegun int64
 			older     bool
 		)
+		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			// A ROW PAST WHAT THE PAGE EXAMINES is only counted: it says the
 			// page did not reach the seat's oldest.
@@ -167,9 +169,17 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 				_ = rows.Close()
 				return scanErr
 			}
+			hit, found := searchHit(s, terms)
+			if found && !held.TakeEncoded(hit) {
+				// THE REFUSED ROW IS LEFT UNEXAMINED: the cursor stays on the
+				// row before it, so the next page starts at it. A kept hit
+				// precedes any refusal, so that row exists.
+				older = true
+				break
+			}
 			out.Scanned++
 			lastBegun = first
-			if hit, found := searchHit(s, terms); found {
+			if found {
 				out.Hits = append(out.Hits, hit)
 			}
 		}

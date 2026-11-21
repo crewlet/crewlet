@@ -7607,10 +7607,15 @@ export interface ArtifactCommentThread {
   created_at: string;
   updated_at: string;
   remarks: ArtifactCommentRemark[];
+  /** The thread began on the page before: these are the rest of its remarks. */
+  continued: boolean;
+  /** The next page carries more of this thread's remarks. */
+  remarks_cut: boolean;
 }
 
-/** `artifact_comments{id, version}`: every thread, placed on the version asked. `open` counts open
- *  threads still placed, `outdated` open ones whose part is gone, `resolved` every resolved one. */
+/** `artifact_comments{id, version, cursor}`: a page of the threads, placed on the version asked;
+ *  `next` asks for the page after. `open` counts open threads still placed, `outdated` open ones
+ *  whose part is gone, `resolved` every resolved one, each thread on the page it begins on. */
 export interface ArtifactCommentsAnswer {
   artifact: string;
   version: number;
@@ -7620,6 +7625,7 @@ export interface ArtifactCommentsAnswer {
   can_comment: boolean;
   role: ArtifactRole;
   threads: ArtifactCommentThread[];
+  next?: string;
 }
 
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */

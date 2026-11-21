@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -90,6 +93,91 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
+}
+
+// LivePage is [Reader.Live] a page at a time, by position and claim, after
+// the cursor `after` (empty for the first), as a node holding no data reads
+// it: held to the bytes the read carries ([statelog.RowsOf]), and the cursor
+// the next page starts after, empty on the last. A record's claims share its
+// position, so the claim's id orders them within it. Each page is its own
+// snapshot, so a claim replaced between two pages may come back beside its
+// successor: its caller keeps a voice's newest claim on a slot ([LiveClaims]).
+func (r *Reader) LivePage(ctx context.Context, after string,
+	fresh statelog.Freshness) (Live, string, error) {
+
+	var (
+		fromPos int64
+		fromID  string
+	)
+	if after != "" {
+		raw, id, ok := strings.Cut(after, "|")
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if !ok || err != nil {
+			return Live{}, "", invalid("the cursor %q is not one a page answered", after)
+		}
+		fromPos, fromID = n, id
+	}
+	var out Live
+	var next string
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out, next = Live{}, ""
+		rows, err := tx.QueryContext(ctx, `
+			SELECT claim, observed_at, position, claim_id FROM atlas_claims INDEXED BY atlas_claims_live_idx
+			WHERE replaced = 0 AND (? = '' OR (position, claim_id) > (?, ?))
+			ORDER BY position, claim_id LIMIT ?`, after, fromPos, fromID, MaxLiveClaims+1)
+		if err != nil {
+			return err
+		}
+		held, last := statelog.RowsOf(ctx), ""
+		for rows.Next() {
+			var (
+				body, id           string
+				observed, position int64
+				wire               Claim
+			)
+			if err := rows.Scan(&body, &observed, &position, &id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if err := json.Unmarshal([]byte(body), &wire); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("the claim at %d does not decode: %w", position, err)
+			}
+			claim := wire.vocabulary(store.DecodeTime(observed), uint64(position))
+			if !held.TakeEncoded(claim) {
+				next = last
+				break
+			}
+			out.Claims, last = append(out.Claims, claim), strconv.FormatInt(position, 10)+"|"+id
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return Live{}, "", fmt.Errorf("atlasdomain: read the atlas's live claims: %w", err)
+	}
+	out.Position, out.Complete = answer.Position, answer.Complete
+	return out, next, nil
+}
+
+// LiveClaims is every page's claims as one read answers them: a voice's
+// newest claim on each slot of each entry, where a claim replaced between two
+// pages came back beside its successor.
+func LiveClaims(claims []atlas.Claim) []atlas.Claim {
+	type key struct{ entry, kind, name, slot string }
+	newest := map[key]int{}
+	out := make([]atlas.Claim, 0, len(claims))
+	for _, c := range claims {
+		k := key{c.Subject.ID().String(), string(c.Source.Kind), c.Source.Name, c.Slot()}
+		if i, seen := newest[k]; seen {
+			if c.Position > out[i].Position {
+				out[i] = c
+			}
+			continue
+		}
+		newest[k] = len(out)
+		out = append(out, c)
+	}
+	return out
 }
 
 // LiveOf reads every live claim one voice holds: what an integration's read is
@@ -257,6 +345,56 @@ func (r *Reader) Purges(ctx context.Context, fresh statelog.Freshness) ([]PurgeR
 		return nil, fmt.Errorf("atlasdomain: read the purges: %w", err)
 	}
 	return out, nil
+}
+
+// PurgesPage is [Reader.Purges] a page at a time, newest first, below the
+// position `before` (zero for the first), held to the bytes the read carries
+// ([statelog.RowsOf]), and the position the next page reads below, zero on
+// the last.
+func (r *Reader) PurgesPage(ctx context.Context, before int64,
+	fresh statelog.Freshness) ([]PurgeRow, int64, error) {
+
+	if before == 0 {
+		before = math.MaxInt64
+	}
+	var out []PurgeRow
+	var next int64
+	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out, next = nil, 0
+		rows, err := tx.QueryContext(ctx, `
+			SELECT kind, id, by, by_kind, at, rejects, last_reject_at, position FROM atlas_purges
+			WHERE position < ? ORDER BY position DESC LIMIT ?`, before, MaxPurges)
+		if err != nil {
+			return err
+		}
+		held, last := statelog.RowsOf(ctx), int64(0)
+		for rows.Next() {
+			var (
+				p                        PurgeRow
+				kind, byKind             string
+				at, lastReject, position int64
+			)
+			if scanErr := rows.Scan(&kind, &p.ID, &p.By.Name, &byKind, &at, &p.Blocked,
+				&lastReject, &position); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			p.Entry, p.By.Kind, p.At = kind == string(markerEntry), iam.ActorKind(byKind), store.DecodeTime(at)
+			if lastReject != 0 {
+				p.LastBlocked = store.DecodeTime(lastReject)
+			}
+			if !held.TakeEncoded(p) {
+				next = last
+				break
+			}
+			out, last = append(out, p), position
+		}
+		return errors.Join(rows.Err(), rows.Close())
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("atlasdomain: read the purges: %w", err)
+	}
+	return out, next, nil
 }
 
 // ---- the engine's duties ------------------------------------------------ //

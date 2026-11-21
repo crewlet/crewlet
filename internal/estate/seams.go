@@ -63,13 +63,58 @@ func (w Work) File(ctx context.Context, project, path string,
 
 // Views answers one container's strip of views, to show.
 func (w Work) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
-	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
+	return w.strip(ctx, opViews, q)
 }
 
 // CarriedViews answers one container's strip of views as a caller saves a view
-// of it again from, read whole or refused ([ErrUnknownKeys]).
+// of it again from, each page read whole or refused ([ErrUnknownKeys]).
 func (w Work) CarriedViews(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
-	return call(ctx, w.r, opViewsCarried, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
+	return w.strip(ctx, opViewsCarried, q)
+}
+
+// ViewsPage answers one page of a container's strip.
+func (w Work) ViewsPage(ctx context.Context, q worklet.ViewQuery, after string) (worklet.ViewListing, string, error) {
+	page, err := call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone), After: after})
+	return page.Listing, page.Next, err
+}
+
+// EveryViewPage answers one page of every view a person sees.
+func (w Work) EveryViewPage(ctx context.Context, q worklet.EveryViewQuery,
+	after string) (worklet.ViewListing, string, error) {
+	page, err := call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone), After: after})
+	return page.Listing, page.Next, err
+}
+
+// strip is a container's strip a page at a time, each page one answer: the
+// implicit views, then the saved ones with the viewer's pins first, as one
+// read orders them; complete only where every page was.
+func (w Work) strip(ctx context.Context, o op[viewsArgs, viewsPage], q worklet.ViewQuery) (worklet.ViewListing, error) {
+	var out worklet.ViewListing
+	var implicit, saved []worklet.ViewRow
+	complete, incomplete := true, (*worklet.Incomplete)(nil)
+	for after := ""; ; {
+		page, err := call(ctx, w.r, o, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone), After: after})
+		if err != nil {
+			return worklet.ViewListing{}, err
+		}
+		for _, row := range page.Listing.Views {
+			if row.Builtin {
+				implicit = append(implicit, row)
+			} else {
+				saved = append(saved, row)
+			}
+		}
+		out = page.Listing
+		if complete = complete && page.Listing.Complete; page.Listing.Incomplete != nil {
+			incomplete = page.Listing.Incomplete
+		}
+		if after = page.Next; after == "" {
+			implicit = append(implicit, worklet.PinnedFirst(saved)...)
+			out.Views = implicit
+			out.Complete, out.Incomplete = complete, incomplete
+			return out, nil
+		}
+	}
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
@@ -222,7 +267,26 @@ func (w Work) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 
 // EveryView answers every saved view, whoever owns it.
 func (w Work) EveryView(ctx context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error) {
-	return call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone)})
+	var out worklet.ViewListing
+	var views []worklet.ViewRow
+	complete, incomplete := true, (*worklet.Incomplete)(nil)
+	for after := ""; ; {
+		page, err := call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone), After: after})
+		if err != nil {
+			return worklet.ViewListing{}, err
+		}
+		views = append(views, page.Listing.Views...)
+		out, out.Views = page.Listing, views
+		if complete = complete && page.Listing.Complete; page.Listing.Incomplete != nil {
+			incomplete = page.Listing.Incomplete
+		}
+		if after = page.Next; after == "" {
+			// THE PINS FIRST over every page's rows, as one read orders them;
+			// complete only where every page was.
+			out.Views, out.Complete, out.Incomplete = worklet.PinnedFirst(out.Views), complete, incomplete
+			return out, nil
+		}
+	}
 }
 
 // Flow answers how work moved through the company, its days cut on loc.
@@ -555,13 +619,48 @@ func (p Pages) Get(ctx context.Context, ref string, fresh statelog.Freshness) (d
 // SkillPages is the tool-skill container, for the skill sync.
 func (p Pages) SkillPages(ctx context.Context, container string,
 	fresh statelog.Freshness) ([]doclet.Page, error) {
-	return call(ctx, p.r, opSkillPages, nil, skillPagesArgs{Container: container, Fresh: fresh})
+	var out []doclet.Page
+	for after := ""; ; {
+		page, err := call(ctx, p.r, opSkillPages, nil, skillPagesArgs{Container: container, After: after,
+			Fresh: fresh})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Pages...)
+		if after = page.Next; after == "" {
+			return out, nil
+		}
+	}
 }
 
-// Containers lists every container.
+// SkillPagesPage answers one page of a container's skill pages.
+func (p Pages) SkillPagesPage(ctx context.Context, container, after string,
+	fresh statelog.Freshness) ([]doclet.Page, string, error) {
+	page, err := call(ctx, p.r, opSkillPages, nil, skillPagesArgs{Container: container, After: after, Fresh: fresh})
+	return page.Pages, page.Next, err
+}
+
+// ContainersPage answers one page of containers.
+func (p Pages) ContainersPage(ctx context.Context, after string,
+	fresh statelog.Freshness) ([]doclet.ContainerListing, string, error) {
+	page, err := call(ctx, p.r, opContainers, nil, containersArgs{After: after, Fresh: fresh})
+	return page.Containers, page.Next, err
+}
+
+// Containers lists every container, a page at a time.
 func (p Pages) Containers(ctx context.Context, fresh statelog.Freshness) (
 	[]doclet.ContainerListing, error) {
-	return call(ctx, p.r, opContainers, nil, containersArgs{Fresh: fresh})
+	out := []doclet.ContainerListing{}
+	for after := ""; ; {
+		page, err := call(ctx, p.r, opContainers, nil, containersArgs{After: after, Fresh: fresh})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Containers...)
+		if after = page.Next; after == "" {
+			return out, nil
+		}
+	}
 }
 
 // Activity answers what happened to a page, a container or the whole
@@ -1005,6 +1104,11 @@ func (i Identity) BindingByLogin(ctx context.Context, login string) (Binding,
 // directory.
 func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error) {
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
+}
+
+// SeatHoldersHeld is [Identity.SeatHolders]: the routed answer is the held one.
+func (i Identity) SeatHoldersHeld(ctx context.Context) ([]iamdomain.SeatHolder, error) {
+	return i.SeatHolders(ctx)
 }
 
 // Requester answers who holds one seat, with the holder's grants, and whether

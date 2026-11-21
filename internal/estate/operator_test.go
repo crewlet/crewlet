@@ -76,6 +76,12 @@ func (b deskBoard) Workload(_ context.Context, q worklet.WorkloadQuery, _ time.T
 	return worklet.WorkloadAnswer{Truncated: q.Unit == "eng"}, nil
 }
 
+func (b deskBoard) EveryViewPage(ctx context.Context, q worklet.EveryViewQuery,
+	_ string) (worklet.ViewListing, string, error) {
+	listing, err := b.EveryView(ctx, q)
+	return listing, "", err
+}
+
 func (b deskBoard) EveryView(_ context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error) {
 	if q.Units != b.d.units {
 		return worklet.ViewListing{}, errors.New("the serving node's chart was not attached")
@@ -134,6 +140,12 @@ func (deskBoard) Routing(_ context.Context, q worklet.RoutingQuery, _ time.Time)
 }
 
 type deskPages struct{ PageReader }
+
+func (p deskPages) ContainersPage(ctx context.Context, _ string,
+	fresh statelog.Freshness) ([]doclet.ContainerListing, string, error) {
+	list, err := p.Containers(ctx, fresh)
+	return list, "", err
+}
 
 func (deskPages) Containers(context.Context, statelog.Freshness) ([]doclet.ContainerListing, error) {
 	return []doclet.ContainerListing{{Pages: 4}}, nil
