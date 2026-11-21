@@ -133,6 +133,9 @@ type EndRecord struct {
 	Ask string
 
 	Ending executorkeep.Ending
+
+	// Served is [TurnEnd.Served].
+	Served []string
 }
 
 // LogAnswer is how the executor log settled one record a coordinator asked of
@@ -2186,9 +2189,10 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 // is not woken. Made by the ending's own retry ([Coordinator.finishEnding]).
 //
 // A STEP THE STORE DID NOT ANSWER ([ErrStoreSilent]) is returned and the
-// ending kept; only the host's alone (another node's host, rowRead answered)
-// is given up as a stop's is ([Coordinator.hostGivenUp]), the loss then ending
-// with its notes unconfirmed. Every other failure is logged and answers nil.
+// ending kept, as is a read here that never started ([errReadUnstarted]); only
+// the store's silence to another node's host, rowRead answered, is given up as
+// a stop's is ([Coordinator.hostGivenUp]), the loss then ending with its notes
+// unconfirmed. Every other failure is logged and answers nil.
 func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRead bool) error {
 	if !c.capturesLoss(run) {
 		return nil
@@ -2196,9 +2200,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	asked, local := c.now(), c.hosts(run)
 	var err error
 	if local {
-		var spooled *spooledCapture
-		spooled, _, err = c.readLost(ctx, run)
-		c.keepLater(ctx, spooled)
+		err = c.readLostHere(ctx, run)
 	} else {
 		if c.boxes == nil {
 			return nil
@@ -2213,6 +2215,8 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, errReadUnstarted):
+		return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
 	case !errors.Is(err, ErrStoreSilent):
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 			"node", run.LaunchNode, "error", err.Error(),
@@ -2227,6 +2231,20 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 		return nil
 	}
 	return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
+}
+
+// readLostHere is keepLostSession's read of a box this node reaches itself
+// ([Coordinator.hosts]), holding one of the node's collections for the read
+// alone ([Coordinator.collectionSlot]), its session kept later.
+func (c *Coordinator) readLostHere(ctx context.Context, run PendingRun) error {
+	collecting, err := c.collectionSlot(ctx, run.TurnID)
+	if err != nil {
+		return err
+	}
+	defer collecting()
+	spooled, _, err := c.readLost(ctx, run)
+	c.keepLater(ctx, spooled)
+	return err
 }
 
 // readLost is the read of a lost run's box on this node's host, for this
@@ -3330,12 +3348,22 @@ type TurnEnd struct {
 	Ask string
 
 	Ending executorkeep.Ending
+
+	// Served is every other conversation the turn served, each one whose wake
+	// a step of its run read ([CoordinatorOptions.Served]): each then
+	// continues the session the turn kept. None for a turn whose record is
+	// gone, which took its wakes with it.
+	Served []string
 }
 
 // turnEndOf is the end of the turn run's row belongs to, ending as ending.
-func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
-	return TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID, ConversationKey: run.ConversationKey,
+func (c *Coordinator) turnEndOf(ctx context.Context, run PendingRun, ending executorkeep.Ending) TurnEnd {
+	end := TurnEnd{Handle: run.AgentHandle, TurnID: run.TurnID, ConversationKey: run.ConversationKey,
 		WorkKey: run.WorkKey, WorkSince: run.WorkSince, Ask: run.TaskDescription, Ending: ending}
+	if c.served != nil {
+		end.Served = c.served(ctx, run)
+	}
+	return end
 }
 
 // OweEnd records on the turn's run row how the turn ended
@@ -3444,7 +3472,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		run = c.settleUnresolved(ctx, run, askEvery)
 		ending.Unkept, ending.WentOn, ending.LastWord = unkeptOf(run), wentOnPast(run), lastWordOf(run)
 		ending.Exhausted = run.ExhaustedSessions
-		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
+		if recordErr := c.recordEnd(ctx, c.turnEndOf(ctx, run, ending)); recordErr != nil {
 			return run, recordErr
 		}
 	}
@@ -3506,7 +3534,7 @@ func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 			end.TurnID, err)
 	}
 	record := EndRecord{Handle: end.Handle, Turn: end.TurnID, ConversationKey: end.ConversationKey,
-		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending}
+		WorkKey: end.WorkKey, Minted: minted, Ask: end.Ask, Ending: end.Ending, Served: end.Served}
 	var lastErr error
 	ended := false
 	c.askRecord(ctx, "end", end.TurnID, c.recordBudget, func(ctx context.Context) (bool, error) {

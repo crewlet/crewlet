@@ -2828,6 +2828,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// the relaunch's write removed it, its delivery left to a turn of its
 		// own. See wakeitem.go.
 		WakesEnded: e.runSteers.wakesEnded,
+		// AND EVERY OTHER CONVERSATION WHOSE WAKE A STEP READ is named by the
+		// turn's end, so its next turn continues the session the turn kept.
+		// See wakeitem.go.
+		Served: e.runSteers.served,
 		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
 		// wake from the run's requester about its work handed to it. See
 		// wakerouter.go.
@@ -2873,6 +2877,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// as it admits a mailbox's: the seat owned fresh, a slot under
 		// node.max_concurrent, and no drain. See [Engine.admitResume].
 		Gate: e.turnGate(),
+		// AND EVERY READ OF ITS RUNS' BOXES, the ones that gate does not admit
+		// included, holds one of as many collections as it runs turns. See
+		// [sandbox.CoordinatorOptions.Collections].
+		Collections: e.turns,
 		// A recorded answer that leaves its run — taken by a turn, on the
 		// inline attempt as on a retry, or handed back — is recorded as
 		// worked in the same completion ledger the dispatcher records a

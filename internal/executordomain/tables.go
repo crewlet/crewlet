@@ -15,6 +15,9 @@ var ReproducibleTables = []string{
 	// seat's removal from recreating its turns.
 	"executor_sessions", "executor_session_tombs", "executor_seat_removals",
 
+	// The other conversations an ended turn served, each reading its row.
+	"executor_session_serves",
+
 	// The node gate's table and the reanchor's audit row.
 	"executor_evictions", "executor_log_generations",
 }
