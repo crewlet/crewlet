@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -33,6 +34,7 @@ import (
 func SetupProbes() map[integration.Kind]setup.Probe {
 	return map[integration.Kind]setup.Probe{
 		integration.KindAtlassian:       atlassian.Probe(atlassian.ClientOptions{}),
+		integration.KindMetaAds:         metaads.Probe(),
 		integration.KindAppStoreConnect: appstoreconnect.Probe(),
 		integration.KindCloudflare:      cloudflare.Probe(nil),
 		integration.KindConfluence:      confluence.Probe(nil),
