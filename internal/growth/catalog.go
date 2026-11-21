@@ -33,9 +33,24 @@ type Operation struct {
 	Roles []string
 	// Permissions are the catalog's permissions ([Permission.ID]) it needs.
 	Permissions []string
+	// States are the classes a write takes while its target is in a state the
+	// product reads before acting: a draft edit is operate where the same edit
+	// to what customers see is public. The first that holds replaces Class; an
+	// unread or unknown state keeps Class, the stricter.
+	States []StateRule
+	// Danger marks a change that cannot be undone, which a card asks a person
+	// to confirm.
+	Danger bool
 	// Reason says why a never operation is not offered: the vendor's terms
 	// forbid it, or it cannot be done. Required for never, a note otherwise.
 	Reason string
+}
+
+// StateRule is the class of a write while its target is in a named state.
+type StateRule struct {
+	// When names the state, in the product's own vocabulary ("draft").
+	When  string
+	Class Class
 }
 
 // FieldRule is the class of changing one field of a write.
@@ -117,6 +132,9 @@ func number(v any) (*big.Rat, bool) {
 // classes is every class a call of op can come to.
 func (op Operation) classes() []Class {
 	out := []Class{op.Class}
+	for _, r := range op.States {
+		out = append(out, r.Class)
+	}
 	for _, r := range op.Fields {
 		out = append(out, r.Class)
 		if r.Lower != "" {
@@ -223,6 +241,12 @@ func (c Catalog) Validate() error {
 				bad("growth: %s operation %s names permission %q, which the catalog does not list", c.Kind, op.ID, p)
 			}
 		}
+		for _, st := range op.States {
+			if strings.TrimSpace(st.When) == "" || !st.Class.Callable() || st.Class == op.Class {
+				bad("growth: %s operation %s state rule %q needs a state and a callable class other than "+
+					"the operation's", c.Kind, op.ID, st.When)
+			}
+		}
 		for _, f := range op.Fields {
 			if f.Field == "" || !f.Class.Callable() || (f.Lower != "" && f.Lower.Rank() > f.Class.Rank()) {
 				bad("growth: %s operation %s field rule %q needs a field, a callable class, "+
@@ -232,7 +256,9 @@ func (c Catalog) Validate() error {
 	}
 	tools := map[string]bool{}
 	for _, t := range c.Tools {
-		if t.Name == "" || tools[t.Name] || !t.Class.Callable() || len(t.Operations) == 0 ||
+		// A READ TOOL MAY NAME NO OPERATION: it answers from the catalog alone.
+		if t.Name == "" || tools[t.Name] || !t.Class.Callable() ||
+			(len(t.Operations) == 0 && t.Class != ClassRead) ||
 			strings.TrimSpace(t.Description) == "" || t.Parameters == nil {
 			bad("growth: %s tool %q needs a unique name, a callable class, its operations, a description "+
 				"and its parameters", c.Kind, t.Name)

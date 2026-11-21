@@ -166,6 +166,9 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		"a tool not described": func(c *growth.Catalog) { c.Tools[1].Description = "" },
 		"a role without note":  func(c *growth.Catalog) { c.Roles[0].Note = "" },
 		"a rule lowering up":   func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = growth.ClassAdmin },
+		"a state with no name": func(c *growth.Catalog) {
+			c.Operations[2].States = []growth.StateRule{{Class: growth.ClassPublic}}
+		},
 	} {
 		c := validCatalog()
 		c.Operations = append([]growth.Operation(nil), c.Operations...)
