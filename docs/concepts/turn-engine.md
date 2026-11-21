@@ -1414,7 +1414,9 @@ round streams only as finely as its harness's record does: a record that carries
 the model's text as it is written (Claude Code's `text_delta` events) streams
 it in fragments, and one that writes a response's prose only once it is
 finished delivers it in one piece ([what streams](llm-backends.md#finding-the-answer-in-the-harnesss-output)).
-Nothing above the backend reads the absence of fragments as a failure.
+Nothing above the backend reads the absence of fragments as a failure. The
+frame shows the round in flight redacted, a line at a time as its lines
+complete ([the live frame](event-system.md#what-an-agent-record-keeps)).
 
 **A tab is sent what moved.** Five frames a second would otherwise mean the
 whole call five times a second to every open dashboard — the prompt, every

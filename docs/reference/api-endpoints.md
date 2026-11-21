@@ -13431,12 +13431,16 @@ by a string marker such as `(1.0 MiB not kept on the run's record, digest
 was not kept. `args_bytes` and `output_bytes` are set only on such a call, to
 the size in bytes of the whole arguments and the whole output, and absent where
 the log keeps the call whole: decide "partly kept" by them, never by
-reading a marker. `digest` is the call's identity, the SHA-256 of its whole
-arguments as the run counts its calls, absent on a call no tool admitted (one
-refused after the run's tools closed, or whose arguments did not parse) and on
-a `held` or `approved` call, whose arguments ride the record sealed and are
-never digested in the clear. `args_unparsed: true` marks a call whose
-arguments did not parse: the bridge answered it unrun, with `failed: true`,
+reading a marker. `args` and `output` are served redacted, the log itself kept
+as the run's harness was handed it: `args` value by value, still one JSON
+object, `args_bytes` still the logged arguments' whole size, and an output the
+log cut as the redaction of its opening's complete lines, its `output_bytes`
+the size that redaction is the opening of. `digest` is the call's identity, the
+SHA-256 of its whole arguments as the run counts its calls, absent on a call no
+tool admitted (one refused after the run's tools closed, or whose arguments did
+not parse) and on a `held` or `approved` call, whose arguments ride the record
+sealed and are never digested in the clear. `args_unparsed: true` marks a
+call whose arguments did not parse: the bridge answered it unrun, with `failed: true`,
 holding no object of what the model wrote, so it has no `args`, as a call made
 with none has none. It is a call made with arguments that are not known, and
 the executors board says so rather than drawing it as one made with none;
