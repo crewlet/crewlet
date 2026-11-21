@@ -1591,7 +1591,7 @@ func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
 // stubProfiles is what a seat learned about its colleagues, as fixtures.
 type stubProfiles struct{ profiles []learning.Profile }
 
-func (s *stubProfiles) List(_ context.Context, _ string, limit int) ([]learning.Profile, error) {
+func (s *stubProfiles) List(_ context.Context, _ string, limit, _ int) ([]learning.Profile, error) {
 	return s.profiles[:min(limit, len(s.profiles))], nil
 }
 

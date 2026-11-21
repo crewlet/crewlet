@@ -65,12 +65,20 @@ var episodeListingColumns = func() string {
 // Listing returns a seat's most recent episodes, newest first — the rows
 // [Episodes.Recent] returns — with each one's ask and account read only as far
 // as an opening of at most opening bytes, and no vector.
-func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening int) ([]ListedEpisode, error) {
+//
+// It ends at limit rows, or before the row that would take the text it holds
+// ([textBytes]) past maxBytes, whichever comes first: the openings bound two
+// texts, and the label, the outcome, the tool and skill lists and a compacted
+// row's patterns are bounded by nothing a row holds to.
+func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening, maxBytes int) ([]ListedEpisode, error) {
 	if limit <= 0 {
 		limit = defaultEpisodeListing
 	}
 	if opening <= 0 {
 		return nil, errors.New("learning: an episode listing needs an opening to read each text to")
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New("learning: an episode listing needs a byte bound to end at")
 	}
 	// THE BINDS IN COLUMN ORDER: the account comes before the ask in
 	// episodeColumns, and both take the same read.
@@ -83,7 +91,10 @@ func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening in
 		return nil, fmt.Errorf("learning: list episodes for %s: %w", handle, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []ListedEpisode
+	var (
+		out  []ListedEpisode
+		held int
+	)
 	for rows.Next() {
 		var listed ListedEpisode
 		ep, err := scanEpisode(withSizes{rows: rows, sizes: []any{
@@ -95,6 +106,11 @@ func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening in
 		ep.PlanSummary = openingOf(ep.PlanSummary, opening)
 		ep.Ask = openingOf(ep.Ask, opening)
 		listed.Episode = ep
+		size := textBytes(ep)
+		if !fitsBytes(len(out), held, size, maxBytes) {
+			break
+		}
+		held += size
 		out = append(out, listed)
 	}
 	if err := rows.Err(); err != nil {
