@@ -124,3 +124,50 @@ func TestATurnsRecordsHoldNoSecretItsWordsCarried(t *testing.T) {
 		}
 	}
 }
+
+// A TURN'S RECORDS HOLD NO SECRET ITS TRIGGER'S SUMMARY CARRIED. A subject is
+// somebody's words: a provider's key in a mail's subject reaches
+// agent_turn_completed's prompt and trigger and turn_completed's task summary
+// as a marker, while the reviewer's account the turn's result holds stays as
+// the model wrote it. Where the summary's cut falls is the descriptor's own
+// test (types.TestATriggersSummaryHoldsNoSecretHoweverItsCutFalls).
+//
+// Mutation: keep the event's summary unredacted (types.DescribeTrigger), and
+// every record holds the key.
+func TestATurnsRecordsHoldNoSecretItsTriggersSummaryCarried(t *testing.T) {
+	t.Parallel()
+	var key string
+	for _, s := range redacttest.Shapes() {
+		if s.Name == "anthropic-key" {
+			key = s.Sample
+		}
+	}
+	e, p, tel := failing(t)
+	tel.trigger = types.DescribeTrigger(events.New(types.ExternalNotification{NotificationSource: "mail",
+		Sender: "alice", Subject: "deploy key " + key + " for the release"}, events.TraceContext{}))
+	review := &turn.Review{CompletedWork: "shipped with " + key}
+	e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, turn.Result{Decision: phase.Done,
+		Artifact: "done", LastReview: review}, nil, time.Now())
+	if review.CompletedWork != "shipped with "+key {
+		t.Error("the reviewer's account was changed: the model's copy must stay as it came")
+	}
+	for _, ev := range p.events {
+		wire, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i+6 <= len(key); i++ {
+			if strings.Contains(string(wire), key[i:i+6]) {
+				t.Errorf("%s holds %q of the key: %.300s", ev.Type, key[i:i+6], wire)
+				break
+			}
+		}
+	}
+	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+	completed := only[*types.TurnCompleted](t, p, "turn_completed")
+	for field, text := range map[string]string{"prompt": summary.Prompt, "task_summary": completed.TaskSummary} {
+		if !strings.HasPrefix(text, "Message from alice: deploy key [REDACTED:") {
+			t.Errorf("%s is %.80q, want the subject with its key as a marker", field, text)
+		}
+	}
+}
