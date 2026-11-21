@@ -1832,8 +1832,9 @@ var table = []rule{
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
 			"keeps is fixed when it boots: first the executor's pools it runs " +
-			"(116 MiB of transcript reads, 1 980 MiB on a node running seats), " +
-			"then of the memory they leave 224 MiB for every transfer its git " +
+			"(116 MiB of transcript reads, 1 980 MiB on a node running seats) " +
+			"and the store's page cache (a sixteenth of its memory), then of " +
+			"the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
 			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
 			"to that memory, no more than one for every 512 MiB, and leaves the " +
