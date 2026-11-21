@@ -3,12 +3,15 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -117,17 +120,22 @@ func readings(t *testing.T, m *LinkMeter, what string, f func(n int) bool) {
 // boundReadings is how many of the meter's readings a bound spans.
 const boundReadings = int(pathBound / meterPeriod)
 
+// stillAfter is how many readings past its last byte a link crossed at its
+// full rate still reads moving over a bound: until under movingShare of the
+// floor, half the rate, is left of the bound's bytes.
+const stillAfter = (1 - movingShare/2) * float64(boundReadings)
+
 // THE DATA PATH IS PROVEN END TO END through a leaf's client and data link,
 // counted in the meter's readings: (a) blackholed idle, refused within a probe
 // period and a bound, never before a bound, the lease link standing; (b) a
 // mebibyte crossing four bounds ahead of the probe, proven throughout; (c) two
-// mebibytes blackholed six seconds in, proven until then and refused within
-// two bounds; (d) a probe never answered while bulk moves, refused at the cap
-// as a link that moves, never before.
+// mebibytes blackholed six seconds in, proven until then, refused once the
+// link reads still over a bound and within two; (d) a probe never answered
+// while bulk moves, refused at the cap as a link that moves, never before.
 //
-// Mutant: the silence clause dropped — (b). Mutant: silence counted over the
-// probe's age, not the bound — (c). Mutant: no cap — (d). Mutant: DataPath
-// reads only the first hop — (a).
+// Mutant: the silence clause dropped — (b). Mutant: silence read over less
+// than the bound — (c). Mutant: no cap — (d). Mutant: DataPath reads only the
+// first hop — (a).
 func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 	t.Parallel()
 	t.Run("(a) blackholed while idle", func(t *testing.T) {
@@ -146,7 +154,7 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 			case n < boundReadings-1:
 				t.Fatalf("the path was refused %d readings after the blackhole, under a bound's %d: %v",
 					n, boundReadings, err)
-			case n > 2*boundReadings+int(pathEvery/meterPeriod):
+			case n > boundReadings+2*int(pathEvery/meterPeriod)+4:
 				t.Fatalf("the path was refused only %d readings after the blackhole: %v", n, err)
 			case !errors.Is(err, ErrDataPathUnproven) || !strings.Contains(err.Error(), "carried nothing"):
 				t.Fatalf("the blackholed path was refused for %v, want its silence", err)
@@ -205,6 +213,9 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 					t.Fatalf("%d readings after the link's last byte the path still reads proven", n)
 				}
 				return false
+			case float64(n) < stillAfter-1:
+				t.Fatalf("the path was refused %d readings after the link's last byte, while its "+
+					"bound still read moving (%.1f readings): %v", n, stillAfter, err)
 			case !strings.Contains(err.Error(), "carried nothing"):
 				t.Fatalf("the path blackholed mid-crossing was refused for %v, want its silence", err)
 			}
@@ -248,9 +259,11 @@ func TestTheDataPathIsProvenEndToEnd(t *testing.T) {
 // THE DATA PATH'S CAP IS ITS LINK'S OWN TOLERANCE, read from the options in
 // force, a probe period and a read term on: on a leaf the leaf server's pings
 // (nats-server's two minutes and two out), on an external dial the client's
-// (nats.go's, the same), and on a member, which crosses no link, none.
+// (nats.go's, the same), and on a member, which crosses no link, none. Pings
+// set otherwise are read as set, a leaf's leaf-node ones over its server's.
 //
-// Mutant: the tolerance left out — every cap is six seconds.
+// Mutant: the tolerance left out — every cap is six seconds. Mutant: the
+// defaults hard-coded, or the leaf-node pings ignored — the set rows.
 func TestTheDataPathsCapIsItsLinksOwnTolerance(t *testing.T) {
 	t.Parallel()
 	f := newMeterFleet(t, linktest.Lagging)
@@ -269,5 +282,156 @@ func TestTheDataPathsCapIsItsLinksOwnTolerance(t *testing.T) {
 		if got := c.q.dataPathTiming().cap; got != c.want {
 			t.Errorf("%s's data path is capped at %v, want %v", c.name, got, c.want)
 		}
+	}
+
+	remotes := server.LeafNodeOpts{Remotes: []*server.RemoteLeafOpts{{}}}
+	leafPings := remotes
+	leafPings.PingInterval, leafPings.MaxPingsOut = 5*time.Second, 4
+	for _, c := range []struct {
+		name string
+		opts server.Options
+		want time.Duration
+	}{
+		{"a leaf's server pings", server.Options{PingInterval: 7 * time.Second, MaxPingsOut: 3,
+			LeafNode: remotes}, 21 * time.Second},
+		{"a leaf's leaf-node pings", server.Options{PingInterval: 7 * time.Second, MaxPingsOut: 3,
+			LeafNode: leafPings}, 20 * time.Second},
+		{"a member's pings", server.Options{PingInterval: 7 * time.Second, MaxPingsOut: 3}, 0},
+	} {
+		if got := leafPingTolerance(&c.opts); got != c.want {
+			t.Errorf("%s: a link tolerates %v without a pong, want %v", c.name, got, c.want)
+		}
+	}
+	dialled := &Queue{nc: &nats.Conn{Opts: nats.Options{PingInterval: 9 * time.Second, MaxPingsOut: 4}}}
+	if got := dialled.linkTolerance(); got != 36*time.Second {
+		t.Errorf("an external dial pinging every 9s, 4 out, tolerates %v without a pong, want 36s", got)
+	}
+}
+
+// startPath starts a data path on timing with no link to meter, which never
+// moves, its first hop up, proven now; stopped with the case, if not before.
+func startPath(t *testing.T, timing dataPathTiming) *dataPath {
+	t.Helper()
+	d := startDataPath(timing, func() error { return nil }, nil, slog.New(slog.DiscardHandler), time.Now())
+	t.Cleanup(d.stop)
+	return d
+}
+
+// signalled waits for c within a liveness bound, failing the case with what.
+func signalled[T any](t *testing.T, c chan T, what string) T {
+	t.Helper()
+	bound := time.NewTimer(30 * time.Second) //fixedwait:liveness
+	defer bound.Stop()
+	select {
+	case v := <-c:
+		return v
+	case <-bound.C:
+		t.Fatalf("waited 30s for %s", what)
+	}
+	var zero T
+	return zero
+}
+
+// A PROBE NOBODY ANSWERS IS ASKED AGAIN past its bound on a link carrying
+// nothing, as a member drops a request while its metadata group has no leader:
+// let go no sooner than its bound, its age kept, so the path reads refused for
+// its silence until the next probe is answered, and proven once it is.
+//
+// Mutant: the abandon deleted — the dropped probe is waited out to its cap.
+// Mutant: the next ask restarts the age — the path reads proven, still silent.
+func TestADroppedProbeIsAskedAgainPastItsBound(t *testing.T) {
+	t.Parallel()
+	const bound = 100 * time.Millisecond
+	type retry struct {
+		asked   time.Time
+		verdict error
+	}
+	var calls atomic.Int32
+	self := make(chan *dataPath, 1)
+	dropped, retried := make(chan time.Time, 1), make(chan retry, 1)
+	answered := make(chan struct{})
+	d := startPath(t, dataPathTiming{every: 10 * time.Millisecond, bound: bound,
+		notAvailable: time.Hour, cap: time.Hour,
+		probe: func(ctx context.Context) error {
+			switch calls.Add(1) {
+			case 1:
+				<-ctx.Done()
+				dropped <- time.Now()
+				return ctx.Err()
+			case 2:
+				d := <-self
+				d.mu.Lock()
+				asked := d.asked
+				d.mu.Unlock()
+				retried <- retry{asked, d.verdict(time.Now())}
+			case 3:
+				close(answered)
+			}
+			return nil
+		}})
+	self <- d
+	let := signalled(t, dropped, "the dropped probe to be let go")
+	r := signalled(t, retried, "the probe asked again")
+	if age := let.Sub(r.asked); age < bound {
+		t.Errorf("the dropped probe was let go %v after it was asked, under its %v bound", age, bound)
+	}
+	if !errors.Is(r.verdict, ErrDataPathUnproven) || !strings.Contains(r.verdict.Error(), "carried nothing") {
+		t.Errorf("asked again past its bound with nothing heard, the path read %v, want its silence", r.verdict)
+	}
+	signalled(t, answered, "the probe asked again to be answered")
+	if err := d.verdict(time.Now()); err != nil {
+		t.Errorf("once the probe asked again was answered, the path read %v", err)
+	}
+}
+
+// "NOT AVAILABLE" REFUSES THE PATH ONLY PAST ITS BUDGET with no success: a
+// member answers so while its metadata group elects a leader, which a rolling
+// restart makes routine. Refused once the answer has stood the budget since
+// the last success, and proven again by the next.
+//
+// Mutant: refused on the first "not available" — refused inside the budget.
+// Mutant: a success leaves the answer standing — refused a budget after it.
+func TestNotAvailableRefusesThePathOnlyPastItsBudget(t *testing.T) {
+	t.Parallel()
+	const budget, never = time.Hour, 2 * time.Hour
+	notAvailable := &jetstream.APIError{Code: 503, ErrorCode: 10008,
+		Description: "JetStream system temporarily unavailable"}
+	var healed atomic.Bool
+	var calls, successes atomic.Int32
+	second, recorded := make(chan struct{}), make(chan struct{})
+	d := startPath(t, dataPathTiming{every: 10 * time.Millisecond, bound: never,
+		notAvailable: budget, cap: never,
+		probe: func(context.Context) error {
+			if calls.Add(1) == 2 {
+				close(second)
+			}
+			if !healed.Load() {
+				return notAvailable
+			}
+			// One at a time: a second success asked means the first is recorded.
+			if successes.Add(1) == 2 {
+				close(recorded)
+			}
+			return nil
+		}})
+	d.mu.Lock()
+	proven := d.proven
+	d.mu.Unlock()
+	signalled(t, second, "a probe after the first \"not available\"")
+	if err := d.verdict(proven.Add(budget - time.Millisecond)); err != nil {
+		t.Errorf("answered \"not available\" inside its budget, the path read %v", err)
+	}
+	err := d.verdict(proven.Add(budget))
+	if !errors.Is(err, ErrDataPathUnproven) || !strings.Contains(err.Error(), "not available") {
+		t.Errorf("answered \"not available\" for its whole budget, the path read %v", err)
+	}
+	healed.Store(true)
+	signalled(t, recorded, "a success to be recorded")
+	d.stop()
+	d.mu.Lock()
+	proven = d.proven
+	d.mu.Unlock()
+	if err := d.verdict(proven.Add(budget)); err != nil {
+		t.Errorf("a budget after a success, the path still read %v", err)
 	}
 }

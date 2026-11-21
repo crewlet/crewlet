@@ -123,8 +123,8 @@ func TestALeafReadsEachOfItsLinksByAccount(t *testing.T) {
 // addLeafNodeConnection: same leaf, cluster and remote account) against the
 // next bump.
 //
-// Mutant: the second remote's local account is the global one — the links
-// evict each other on every connect.
+// Mutant: the second remote's local account is the global one — refused at
+// NewServer as a duplicate remote (leafnode.go validateLeafNode).
 // Mutant: the lease connection bound to the global account — its interest
 // crosses the data link.
 func TestALeafsTwoLinksToOneMemberStandSideBySide(t *testing.T) {

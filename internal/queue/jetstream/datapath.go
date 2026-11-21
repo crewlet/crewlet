@@ -201,8 +201,8 @@ func (d *dataPath) verdict(now time.Time) error {
 	age := now.Sub(asked)
 	if age >= d.timing.bound && !d.moving(d.timing.bound) {
 		return fmt.Errorf("%w: the data link carried nothing for %s and the fleet's JetStream "+
-			"has not answered its probe for %s", ErrDataPathUnproven, d.timing.bound,
-			age.Round(time.Millisecond))
+			"has not answered its probe for %s", ErrDataPathUnproven,
+			d.timing.bound.Round(time.Millisecond), age.Round(time.Millisecond))
 	}
 	if age >= d.timing.cap {
 		return fmt.Errorf("%w: the data link moves but the fleet's JetStream has not answered "+
