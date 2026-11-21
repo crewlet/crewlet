@@ -6167,7 +6167,12 @@ type bar struct {
 // start.
 func (h heldLines) settled() int {
 	end := len(h.whole)
-	var bars []bar
+	// Room on the stack for the bars a live view's ask most often holds, at
+	// a line end of what it has not shown: an open block, the back hold, a
+	// block and a hold, so the ask allocates nothing for them, an allocation
+	// being a few percent of reading a short text. More grow onto the heap.
+	var room [4]bar
+	bars := room[:0]
 	if h.open >= 0 {
 		bars = append(bars, bar{lo: h.open, hi: end})
 	}
