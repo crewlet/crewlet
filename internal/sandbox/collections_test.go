@@ -701,3 +701,35 @@ func TestALossReadThatCannotStartKeepsItsEnding(t *testing.T) {
 		}
 	})
 }
+
+// A NEGATIVE BOUND ON A NODE'S COLLECTIONS IS REFUSED, not read as none: zero
+// is the one setting that bounds nothing.
+//
+// Mutation: accept a negative Collections, and the coordinator reads every box
+// at once.
+func TestANegativeBoundOnANodesCollectionsIsRefused(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	for _, tc := range []struct {
+		collections, want int
+		refused           bool
+	}{
+		{-1, 0, true},
+		{0, 0, false},
+		{3, 3, false},
+	} {
+		c, err := NewCoordinator(CoordinatorOptions{
+			Pushes: &pushSpy{}, Answers: rigAnswers(), Lease: leased(rigLease), Audience: &audienceSpy{},
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Resume: rig.resumer,
+			Collections: tc.collections,
+		})
+		switch {
+		case tc.refused && err == nil:
+			t.Errorf("Collections %d was taken, want it refused", tc.collections)
+		case !tc.refused && err != nil:
+			t.Errorf("Collections %d: %v", tc.collections, err)
+		case !tc.refused && cap(c.collections) != tc.want:
+			t.Errorf("Collections %d bounds %d reads at once, want %d", tc.collections, cap(c.collections), tc.want)
+		}
+	}
+}

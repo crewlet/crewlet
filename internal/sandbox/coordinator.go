@@ -530,8 +530,8 @@ type CoordinatorOptions struct {
 	// at once ([Coordinator.collectionSlot]): its turns, node.max_concurrent as
 	// its gate resolves it, so the reads the gate does not admit (a completion
 	// ended at its turn's deadline, a stop's, a loss's) stay within them. Zero
-	// bounds none, as a nil Gate admits every turn. See the package doc, "A
-	// node's collections".
+	// bounds none, as a nil Gate admits every turn; below zero is refused. See
+	// the package doc, "A node's collections".
 	Collections int
 
 	// Lease is the seat lease this node holds a seat under, stamped on the row by
@@ -995,6 +995,10 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation is %d bytes, past the %d a run's "+
 			"row carries of one: an incarnation is `<node>:<uuid>`, its node id at most 64 bytes",
 			len(opts.Incarnation), maxIncarnationBytes)
+	case opts.Collections < 0:
+		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Collections is %d: it is how many of its runs' "+
+			"boxes the node reads at once, its turns (node.TurnsAtOnce), or zero for no bound",
+			opts.Collections)
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
