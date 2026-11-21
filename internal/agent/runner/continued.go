@@ -187,18 +187,25 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// it holds; internal/sandbox's notesHeld), as [Runner.inPlaceNotes] does. One
 	// whose notes stop before a read marked unanswered or restarted is told every
 	// note past that ([Runner.notesHeldBy]).
+	// And the wakes it may not show past the same cursor ([Runner.toldWakes]).
 	var unheld []string
 	if holds.lacks() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
+		after = append(after, r.toldWakes(0, false)...)
 	} else {
 		held, unsure := r.notesHeldBy(basis.NoteCursor, false)
+		wakes := r.toldWakes(held, false)
 		// And where the cursor counts a read at a hook's step or a hook's telling
 		// is credited, the telling for a box whose release the resume was not
 		// read in, which holds no such read ([UnheldTelling]).
-		if strict, strictUnsure := r.notesHeldBy(basis.NoteCursor, true); strict < held || unheldCalls != calls {
+		strict, strictUnsure := r.notesHeldBy(basis.NoteCursor, true)
+		if strictWakes := r.toldWakes(strict, true); strict < held || unheldCalls != calls ||
+			!slices.Equal(strictWakes, wakes) {
 			unheld = append(append(before, unheldCalls), r.toldNotes(r.readsSince(strict), strictUnsure, fresh)...)
+			unheld = append(unheld, strictWakes...)
 		}
 		after = append(after, r.toldNotes(r.readsSince(held), unsure, fresh)...)
+		after = append(after, wakes...)
 	}
 	return &keptBrief{basis: basis, after: after, unheld: unheld, omitted: omitted, unheldOmitted: unheldOmitted,
 		told: again.refs, toldUnread: again.unread, readHeld: readHeld,
@@ -328,12 +335,54 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHo
 	case carry.session() == "" || !carry.boxKept() || !carry.keeps():
 		return renderedNotes(fresh)
 	case holds.lacks():
-		return r.toldNotes(r.readsSince(0), true, fresh)
+		return append(r.toldNotes(r.readsSince(0), true, fresh), r.toldWakes(0, false)...)
 	}
+	// And the wakes the copy may not show: each served and never shown read,
+	// and each read past the first read no session of its job holds.
 	if first := r.firstUnheld(false); first > 0 {
-		return r.toldNotes(r.readsSince(first-1), true, fresh)
+		return append(r.toldNotes(r.readsSince(first-1), true, fresh), r.toldWakes(first-1, false)...)
 	}
-	return r.toldNotes(nil, false, fresh)
+	return append(r.toldNotes(nil, false, fresh), r.toldWakes(math.MaxInt, false)...)
+}
+
+// toldWakes is the section telling a continued session again the wakes it may
+// not show ([Resume.Wakes], [prompts.WakesReadAgain]): each served and never
+// shown read, each read past cursor or at no known place, and each read where
+// no session of its job is known to hold it, before its last restart or,
+// where hooks, at a hook's step. Nil where none is.
+func (r *Runner) toldWakes(cursor int, hooks bool) []string {
+	if r.cfg.Resume == nil {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	var told []string
+	for _, w := range r.cfg.Resume.Wakes {
+		if !w.Read || w.Place == 0 || w.Place > cursor || w.Restarted || (hooks && w.Hook) {
+			told = append(told, prompts.WakeMessage(w.Wake, b, r.cfg.Turn.ConversationKey))
+		}
+	}
+	if section := prompts.WakesReadAgain(told); section != "" {
+		return []string{section}
+	}
+	return nil
+}
+
+// wakesRead is every wake a step of the turn's run read ([Resume.Wakes]),
+// rendered, for a run that starts a session of its own: the turn worked each,
+// so its delivery starts no turn of its own, and a session lacking it would
+// lose it. One served and never read is left to a turn of its own, untold.
+func (r *Runner) wakesRead() []string {
+	if r.cfg.Resume == nil {
+		return nil
+	}
+	b := r.cfg.Turn.Context.FenceBoundary()
+	var out []string
+	for _, w := range r.cfg.Resume.Wakes {
+		if w.Read {
+			out = append(out, prompts.WakeMessage(w.Wake, b, r.cfg.Turn.ConversationKey))
+		}
+	}
+	return out
 }
 
 // keptBrief is a relaunch's continuation of a kept session but for its lead

@@ -39,6 +39,14 @@ const (
 	// ([Capture.Absorbs]): the head and every ending the read handed out.
 	MaxAbsorbs = 1 + MaxEndings
 
+	// MaxServed is the most other conversations an end may name as served
+	// ([End.Served]): eight, the wake items a run's record holds for a whole
+	// turn (internal/sandbox's MaxTurnWakes), and eight keys at
+	// [ConversationKeyMaxBytes], escaped, keep the worst end inside
+	// [MaxRecordBytes]. The engine names the first eight its run read; a ninth
+	// conversation's next turn reads its own head as before.
+	MaxServed = 8
+
 	// MaxPageSize is the most rows [Reader.Sessions] returns at once, and
 	// DefaultPageSize what a page that names none takes.
 	MaxPageSize     = 100

@@ -11,8 +11,9 @@ import (
 // pause hold under one reason ([SeatHold]) for as long as the seat has a run in
 // [Holding] or owes a resume or an ending's finish, lifted the moment it has
 // neither, at the transition itself. Held, the mail waits on the broker in
-// order at no cost; a delivery that reaches a held seat anyway is deferred. A
-// seat busy coding takes no other work, a person's answer to another run
+// order at no cost, read by the engine's router of the seat without being
+// consumed (ADR-0167); a delivery that reaches a held seat anyway is deferred. A
+// seat busy coding starts no other turn, a person's answer to another run
 // included; an answer by turn travels on the control topic and its resume waits
 // ([SeatCoding]). This node's alone; each hold names its inbox attachment
 // ([queue.Attachment]). See the package doc, "The seat's inbox hold".

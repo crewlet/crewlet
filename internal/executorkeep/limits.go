@@ -16,16 +16,16 @@ const (
 	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
 	// sealed: a harness's transcript and its sidecars, packed.
 	//
-	// THIRTY-TWO MEBIBYTES. A Claude Code or OpenCode session of a day's
-	// work compresses to one or two mebibytes, and the long ones that read
-	// whole files into their context reach the low tens; past thirty-two a
-	// transcript is a context the harness could not resume within its own
-	// window anyway. The bound is also what one capture or restore costs a
-	// node while it streams (one chunk, [secrets.StreamChunkBytes]) and the
-	// object store at rest ([SealedMaxBytes]), and it is pinned against
-	// objstore.RecordWithin at the objstore.MiBPace floor in
+	// FORTY-EIGHT MEBIBYTES: one whole-file read at a harness's limit beside
+	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
+	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
+	// 20.1 MiB; a session holding more media than that is still not kept
+	// (crewlet/crewlet#1626), since compaction keeps every line before its
+	// boundary. A capture or restore streams it a chunk at a time
+	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
+	// pinned against objstore.RecordWithin at objstore.MiBPace in
 	// internal/objstore/references.
-	SessionMaxBytes = 32 << 20
+	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
 	// account of what landed and the executor's evidence of what stopped a

@@ -309,6 +309,46 @@ func (r PendingRun) HeldOpen() bool {
 		(r.Status == StatusLaunching || r.Status == StatusRunning || slices.Contains(Awaiting, r.Status))
 }
 
+// HeldInFlight reports whether the run's held call has not yet come to an end
+// another turn of its seat could act on: open ([PendingRun.HeldOpen]), or its
+// job's completion claimed and not yet parked, or answered and the answer not
+// yet taken by the resumed turn, or allowed and not yet made. A repeat of the
+// same request joins it in any of those (ADR-0125): a second request raised
+// then reached its delegate after the first was carried out. Taken and not made
+// (a denial the turn read) or made, it is over, and the same ask after it is a
+// new request. A person's answer is sealed, so only a delegates' allow is told
+// from a denial between its taking and its making.
+func (r PendingRun) HeldInFlight() bool {
+	h := r.HeldCall
+	switch {
+	case h == nil || r.Ending != nil || h.LaunchID != r.LaunchID:
+		return false
+	case h.Calling():
+		return !h.Made()
+	case r.Answer != nil:
+		return !r.Answer.Taken() || h.delegatesAllowed()
+	}
+	// COLLECTED, NOT YET PARKED: the completion's claim holds the row resumed
+	// until the park marks it awaiting and wakes whoever decides it.
+	return r.HeldOpen() || (r.Status == StatusResumed && r.AskedBy(r.LaunchID))
+}
+
+// delegatesAllowed reports whether the call's delegates decided it and allowed
+// it, never put to people: their verdicts are on the row in the clear.
+func (h HeldCall) delegatesAllowed() bool {
+	d := h.Delegation
+	if d == nil || d.Escalated != nil {
+		return false
+	}
+	given := make([]delegated.Given, 0, len(d.Given))
+	for _, v := range d.Given {
+		given = append(given, delegated.Given{By: v.By, Verdict: delegated.Verdict(v.Verdict),
+			Confidence: delegated.Confidence(v.Confidence)})
+	}
+	o := delegated.Combine(d.Delegates, given)
+	return o.Decided && o.Verdict == delegated.Allow
+}
+
 // HeldDelegation is how a held call was put to agent delegates (ADR-0125):
 // the rule, the seats, what a verdict binds to, what each answered, and the
 // escalation that put it to people.

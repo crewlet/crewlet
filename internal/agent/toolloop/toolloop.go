@@ -358,6 +358,14 @@ type Execution struct {
 	Output string
 	Failed bool
 
+	// OutputBytes is the whole output's size where Output is only its opening,
+	// ending in the marker of the record that cut it: an executor run's call
+	// its log kept cut (internal/sandbox's BridgeCall.OutputBytes). 0 where
+	// Output is whole. Set by the run's collection alone. A record that
+	// redacts Output reads that opening only as far as its redaction settles:
+	// a credential the cut ran across left a head no rule knows.
+	OutputBytes int
+
 	// Images is what the answer's images were, by type and size: the bytes
 	// went to the harness and no record keeps them.
 	Images []mcp.ImageRecord

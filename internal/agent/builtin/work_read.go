@@ -588,7 +588,8 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 }
 
 // fenceTask fences what a work item read holds that somebody wrote: the
-// description under its author, each comment under its own. The description's
+// description under its author, each comment under its own (an answer that
+// chose quoting its asker's option too, [worklet.QuotesAChoice]). The description's
 // author is its last writer, so a body past its first version is labelled as
 // having unnamed writers too ([fencePage]'s reason).
 func fenceTask(read *foreignRead, at fieldPath, d worklet.TaskDetail) {
@@ -604,7 +605,7 @@ func fenceTask(read *foreignRead, at fieldPath, d worklet.TaskDetail) {
 	for i, c := range d.Comments {
 		author := read.writer(c.Author, iam.ActorKind(c.AuthorKind))
 		read.fence(at.key("comments").index(i).key("body"), provenance.SourceWorkComment,
-			[]provenance.Author{author}, false, c.Body)
+			[]provenance.Author{author}, worklet.QuotesAChoice(c.Body), c.Body)
 		if c.Decision != nil {
 			// The ask's options are its author's.
 			read.attribute([]provenance.Author{author}, false)

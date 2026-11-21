@@ -175,7 +175,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
 	remembered := &memoUse{memo: r.memo, scope: take.Scope}
-	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large).remembering(remembered)
+	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()

@@ -34,10 +34,10 @@ func TestAReasonIsRedactedWholeThenCut(t *testing.T) {
 		{"stampReason", executorkeep.UnkeptReasonMaxBytes, stampReason, reason(executorkeep.UnkeptReasonMaxBytes)},
 		{"PushedUnread", events.MaxDiagnosticBytes, func(s string) string {
 			return (&Coordinator{}).fitText(t.Context(), PendingRun{}, Result{PushedUnread: s}).PushedUnread
-		}, events.ClipDiagnostic},
+		}, events.Diagnostic},
 		{"Unopened", events.MaxDiagnosticBytes, func(s string) string {
 			return fitOpened([]OpenedChange{{Unopened: s}})[0].Unopened
-		}, events.ClipDiagnostic},
+		}, events.Diagnostic},
 	}
 	// words is n bytes of a sentence, ending on a space.
 	words := func(n int) string { return strings.Repeat("the run broke ", n/14+1)[:n-1] + " " }

@@ -16,31 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// Every seat's memory at a glance — the `memory_overview` answer.
+// Every seat's memory at a glance, the `memory_overview` answer: [Reader.Memory]'s
+// question for every agent seat, cut to a list row. One scatter, not a lease
+// read and a scatter per seat per poll: the asker reads every seat lease in
+// ONE listing, groups seats by holding incarnation, puts ONE request on the
+// broker naming each holder's seats, and reads its own from its own store.
 //
-// # One scatter, not one read per seat
-//
-// The overview is the same question [Reader.Memory] answers, asked of every
-// agent seat at once and cut to what a list row draws: the three totals and the
-// newest reflection. Asked per seat it would be one lease read and one scatter
-// for EACH seat on every poll — fifty round trips for a fifty-seat company to
-// draw one list. Instead the asker reads every seat lease in ONE listing,
-// groups the seats by the incarnation holding them, and puts ONE request on
-// the broker naming each holder's seats; every holder answers for its own in
-// one reply. What the asker holds itself it reads from its own store, beside
-// the scatter.
-//
-// # A row is answered by its holder or says why it is not
-//
-// The rules are [Reader.Memory]'s, per seat: a seat no node holds has no
-// current copy and is sent with `held_by: none` and nothing counted; a seat
-// whose holder did not answer — silent, its answer unreadable, or still
-// taking it — is sent with its `unavailable` reason rather than with zeros,
-// because "this seat remembers nothing" and "its holder did not say" are
-// opposite facts on a screen. The COVERAGE names every holder that was asked
-// and whether it answered, in the one shape every fleet answer carries
-// ([eventfan.Coverage]), so the screen's partial callout is the same callout
-// the history screens draw.
+// A row is answered by its holder or says why not, by [Reader.Memory]'s rules:
+// a seat no node holds is `held_by: none`, nothing counted; one whose holder
+// was silent, unreadable or still taking it carries `unavailable`, not zeros,
+// since "remembers nothing" and "its holder did not say" are opposite facts.
+// The COVERAGE names every holder asked and whether it answered
+// ([eventfan.Coverage]), so the partial callout matches the history screens'.
 
 // OverviewSeat is one seat's row of the overview.
 type OverviewSeat struct {

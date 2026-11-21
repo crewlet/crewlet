@@ -483,24 +483,17 @@ func ctTypes(lines []threadLine) []string {
 }
 
 // A THREAD IS READ A WHOLE LINE AT A TIME: a line is what ends in "\n", its
-// break dropped, and a last piece with none is never a line, whatever it holds
-// (a record its harness never finished writing, or the NULs GNU tar fills a
-// member that shrank out with). Torn says the piece was there. A carriage
-// return ends no line: before a break it is the line's own, which JSON reads
-// as whitespace, and alone it breaks nothing. The member's end is the end:
-// asked again, the reader answers it again. A subagent's metadata, one JSON
-// document with no break after it, is no line at all, only a torn piece: no
-// reader of a thread reads it through this one. Each line says the bytes it
-// takes, its break included, hands what a reader of its bytes reads of them,
-// its break dropped ([threadBytes]), and reads as the record's whole decode
-// ([decodeThreadLine]).
+// break dropped; a last piece with none is never a line, whatever it holds (a
+// record still being written, or the NULs GNU tar pads a shrunk member with),
+// and Torn says it was there. A carriage return ends no line. The member's end
+// is sticky: asked again, the reader answers it again. A subagent's metadata
+// (one JSON document, no break) is only a torn piece. Each line says the bytes
+// it takes, break included, hands its bytes minus the break ([threadBytes]),
+// and decodes as the record ([decodeThreadLine]).
 //
-// Mutation: hand out the last piece with no break as a line, and the torn
-// record, the padding, a piece a carriage return ends and a subagent's
-// metadata each come back as a line, or a line that is no record, where the
-// member's end belongs; count a record's size without its break, read its
-// byte facts with the break or without a carriage return before it, or decode
-// a line from bytes other than its record's, and every line says so.
+// Mutation: hand out the last piece as a line, count a size without its break,
+// read byte facts with the break or a CR, or decode other bytes, and every
+// line says so.
 func TestAThreadIsReadAWholeLineAtATime(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -585,17 +578,13 @@ func ctPadded(n int) string {
 // it with errThreadBound, saying which it ran past, and the reading stays
 // over. A member is past its bound EVEN WHERE THE BOUND FALLS RIGHT AFTER A
 // BREAK, where io.LimitReader would end it cleanly. A value or a member AT its
-// bound reads whole, the member's bound is the take's scrub's own, and a 9 MiB
-// line of a value no reader reads is no bound's.
+// bound reads whole, and a 9 MiB line of a value no reader reads is no bound's.
 //
 // Mutation: read a line past a bound as a refused line, and the record after
 // it is read; meter the member with io.LimitReader, and a member past its
 // bound ends cleanly; swap two bounds' words, and one reads as the other.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
-	if kept := boundsFor(executorkeep.SessionMaxBytes); threadPlainMax != kept.plain {
-		t.Errorf("a thread's member is read within %d bytes, the take's scrub within %d", threadPlainMax, kept.plain)
-	}
 	// valued is a brief whose uuid, as written, is n bytes long.
 	valued := func(n int) string { return ctBrief(strings.Repeat("u", n-2)) }
 	// called is a reply of n calls, whose facts pass the bound before its
@@ -713,22 +702,18 @@ func TestAMemberPastItsLinesBoundEndsTheReading(t *testing.T) {
 	}
 }
 
-// A MEMBER'S READER THAT FAILS ENDS THE READING WITH ITS ERROR, never with the
-// member's end: an archive cut short (tar and gzip answer io.ErrUnexpectedEOF)
-// or a box's stream reset part way through a member ends the reading with that
-// error once the whole lines before it are read, the half record before it is
-// no torn piece, and asked again, the reader answers the same error. Only
-// io.EOF is the member's end: read as one, a cut stream would pass for a
-// thread whose last write tore, and what the cut took (a pair, a compaction's
-// boundary) would be neither read nor missed. A reader's error that wraps the
-// take's scrub's bound, as a reader metering a kept archive with the scrub's
-// own meter returns once the archive inflates past a reading, is that error
-// too, in its own words, never the bound the layer reads within.
+// A MEMBER'S READER THAT FAILS ENDS THE READING WITH ITS ERROR, never the
+// member's end: an archive cut short (io.ErrUnexpectedEOF) or a box's stream
+// reset mid-member ends it with that error after the whole lines before it; the
+// half record is no torn piece, and asked again the reader answers the same
+// error. Only io.EOF is the end: read as one, a cut stream would pass for a
+// thread whose last write tore, and what the cut took would be neither read nor
+// missed. An error wrapping the scrub's bound (a reader metering a kept archive
+// with the scrub's own meter) is returned in its own words, never the layer's.
 //
-// Mutation: read a reader's error as the member's end, the half record before
-// it its torn piece, and each reading ends with io.EOF; take a reader's error
-// that wraps the scrub's bound for the layer's own, and the archive that
-// inflated past its reading ends as a member past its bound.
+// Mutation: read a reader's error as the end, and each reading ends with
+// io.EOF; take a scrub-bound error for the layer's own, and an inflated archive
+// ends as a member past its bound.
 func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 	t.Parallel()
 	reset := errors.New("read: connection reset by peer")
@@ -912,24 +897,17 @@ func ctBrokenLines() map[string]ctRefusal {
 }
 
 // EVERY LINE IS READ TO ITS END BEFORE ANYTHING READS IT: a line that is not
-// one record (two values, one cut short, a value that is no
-// object) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
-// and a user record's `replacesSpan` a boolean, as the brief's here) is a
-// *threadLineError naming its line, whatever keywords it holds, and the reader
-// reads on to the next line; and a whole record's head is what it says. None
-// of these lines holds a key a reader of hooks or calls looks for. Each such
-// error says how Claude Code's load reads its line, the kind of record a
-// refused head's type names where it names one the load reads, and how many
-// bytes the line takes, its break included.
-//
-// Mutation: read only the lines that name a hook or a call, and every broken
-// line here reads as a record, and the records' heads as nothing; read
-// replacesSpan by its text alone, and one that is a string or null reads as a
-// record; read every refused line as one that yields the load nothing, and
-// the lines cut short, followed by more or led by a NUL read so; or hold a
-// refused head's type off the seven kinds the load reads, and a type that is
-// a number names one.
+// one record (two values, one cut short, a non-object) or whose head key is of
+// the wrong type (`type`, `subtype`, `agentId` strings; `parentUuid` null or a
+// string; `isSidechain` a boolean; a user record's `replacesSpan` a boolean) is
+// a *threadLineError naming its line, whatever keywords it holds, and the
+// reader reads on. None holds a key a reader of hooks or calls looks for. Each
+// error says how Claude Code's load reads the line, the kind a refused head's
+// type names where the load reads it, and the bytes it takes, break included.
+// Mutation: read only lines naming a hook or call, and every broken line reads
+// as a record; read replacesSpan by text alone; read every refused line as one
+// yielding nothing; or hold a refused type off the kinds the load reads, and a
+// numeric type names one.
 func TestEveryLineIsReadToItsEndBeforeAnythingReadsIt(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
@@ -1024,37 +1002,17 @@ func ctRefusedLines(t *testing.T) map[string]ctRefusal {
 	}
 }
 
-// A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
-// before any whole value (a record a later write tore into, a line of white
-// space alone) yields Claude Code's load nothing, faultSyntax; one whole value
-// that is no object is passed over by its test of a record, faultNotObject;
-// one object whose head key is of the wrong type is faultHead, naming the
-// kind of record it is where its type is one of the eight the load reads
-// (user, assistant, attachment, system, last-prompt, progress,
-// fork-context-ref, content-replacement) and none where it is another type or
-// no string; a value
-// cut at the line's break, which the load reads on past, is faultPrefix; a
-// whole value followed by more, which the load keeps, faultTrailing; a line
-// led by a NUL or a byte order mark, faultLead; and a value nested past the
-// decoder's 10,000 levels, which the load may read whole, faultDepth, where
-// one nested 10,000 deep reads as a record. Each says the bytes it takes, its
-// break included, a carriage return before it among them, and hands its
-// reader what a reader of those bytes reads of them but the break
-// ([threadBytes]), as a record's line does. NO LINE IS READ TWICE OR HELD: a
-// line refused for each of five faults past a MiB of a value no reader reads
-// costs its reader at most 16 KiB more than its twin of a KiB.
-//
-// Not parallel: the allocation count is the process's.
-//
-// Mutation: read every refused line as one that yields the load nothing, and
-// the lines cut short, followed by more, led by a NUL or a byte order mark,
-// or nested too deep read so; check the lead after the decode, and a line
-// led by a NUL reads as a syntax error; drop the depth check, and a value
-// nested too deep reads as yielding nothing; hold a refused head's type as
-// written, and a summary's names a kind; count a line's size without its
-// break; hand a refused line's reader no byte facts, and the lines it
-// refuses hand none; or copy each piece of a line as it is read, and a
-// refused line of a MiB costs its reader a MiB more than its twin.
+// A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: faultSyntax (JSON fails
+// before any whole value) yields nothing; faultNotObject is passed over;
+// faultHead (mistyped head key) names the kind when its type is one of the
+// eight the load reads, else none; faultPrefix (a value cut at the break) the
+// load reads on past; faultTrailing (a whole value then more) it keeps;
+// faultLead (NUL or byte order mark); faultDepth (past the decoder's 10,000
+// levels; 10,000 deep reads as a record). Each says its bytes, break and a CR
+// before it included, and hands its reader them minus the break
+// ([threadBytes]). NO LINE IS READ TWICE OR HELD: five faults past a MiB cost
+// at most 16 KiB more than a KiB twin. Not parallel: the allocation count is
+// the process's. Mutation: misread a fault, skip a check or copy pieces, and it fails.
 func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	for name, tc := range ctRefusedLines(t) {
 		got := ctRead(ctThread(tc.line), threadPlainMax)
@@ -1138,57 +1096,17 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 	}
 }
 
-// A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is no
-// object leaves the record's head, its message, its origin and its checkpoint
-// whole and is refused by AttachmentType alone, never read as one of no type,
-// and an origin that is no object leaves the message whole and is refused by
-// OriginKind alone. A reply's stop_reason that is no string, null among them,
-// leaves its message, its report of the edits applied, its usage, its model and
-// its id whole, and is refused by StopReason alone, never read as ""; its
-// report of the edits applied, of the wrong shape, leaves its message, its
-// stop_reason, its usage, its model and its id whole and is refused by
-// ToolResultsCleared alone; its usage of the wrong shape leaves its message,
-// its stop_reason, its report, its model and its id whole and is refused by
-// Usage alone; and its model or its id of the wrong type, each a key two
-// readers read, leaves its message and its stop_reason whole and is refused by
-// those two alone, Usage and Model, or Usage and MessageID. A reply's mark of
-// an API error that is no boolean leaves its message, its stop_reason, its
-// model and its usage whole and is refused by APIError alone. A checkpoint
-// whose leafUuid is neither a string nor null leaves its head whole and is
-// refused by Checkpoint and LeafKeyed alone; and a compaction's metadata of the
-// wrong shape leaves its boundary's head and uuid whole and is refused by
-// Preserved alone, as a retraction list of the wrong shape leaves its retry's
-// head and message whole and is refused by Retracted alone, and a replacements
-// list of the wrong shape leaves its record's head whole and is refused by
-// ReplacedResults and ReplacementCount alone. A mark no plain record carries
-// that is no boolean (a virtual record's, a shutdown's, a compaction's
-// summary's), or a batch's list of the wrong shape, leaves its record's head,
-// message and usage whole and is refused by its own accessor alone, and so does
-// a timestamp of no form the harness writes, Timestamp's, and a meta mark that
-// is no boolean, IsMeta's. A result's source that is no uuid names no reply,
-// and leaves the result whole. A record's own uuid that is no string (null, a
-// number, an object, a boolean), on the harness's bookkeeping, on a model's
-// call or on a hook's record, leaves everything else the record hands out as it
-// reads with its uuid as written, and is refused by UUID alone. As written,
-// each reads: an origin's kind, and what a user record's own toolUseResult
-// answers of a subagent's leg, which no other record's answers. A hook's event
-// that is no string is refused by HookEvent alone, and leaves its record's
-// type, firing, takes and shape whole.
-//
-// Mutation: hold the attachment to an object in the head, and the record whose
-// attachment is not one is no record at all; hold the stop_reason, the report
-// or the usage in Message, and a reply whose key is reshaped reads no message;
-// read a null stop_reason as none, and it reads as a reply that did not stop
-// for its calls; read the model or the id in Usage's decode, and a reply whose
-// usage is reshaped names no model, or is no reply; hold the mark of an API
-// error in Message or Usage, and a reply whose mark is reshaped reads no
-// message or no usage; hold a checkpoint's leaf, a compaction's metadata or a
-// retraction list to its type in the head, and the record that reshapes it is
-// no record at all; hold the uuid to its type in the head, and every record
-// here whose uuid is reshaped is no record at all; read an answer off every
-// record's toolUseResult, and an assistant's answers a leg; fold a hook's
-// event's error into its attachment's, and a hook whose event is reshaped is no
-// attachment its resume keeps.
+// A KEY ONLY ONE READER READS COSTS THAT READER ALONE: a key of the wrong type
+// leaves the rest of the record whole and is refused only by its own accessor,
+// never read as a zero value: attachment (AttachmentType), origin (OriginKind),
+// a reply's stop_reason, null included (StopReason), edit report
+// (ToolResultsCleared), usage (Usage), API-error mark (APIError), leafUuid
+// (Checkpoint, LeafKeyed), compaction metadata (Preserved), retractions
+// (Retracted), replacements (ReplacedResults, ReplacementCount), timestamp,
+// meta mark, hook event (HookEvent), a record's uuid (UUID). A key two readers
+// read is refused by both: model (Usage, Model), id (Usage, MessageID).
+// Mutation: hold such a key in the head, Message or Usage's decode, or read
+// null stop_reason as none, and a reshaped record is no record or reads wrong.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -1560,21 +1478,14 @@ func ctReplace(t *testing.T, record, from, to string) string {
 }
 
 // ctAll is everything a line hands out through every accessor, as text: its
-// head, its own uuid, its message and its calls, its origin's kind, what its
-// own toolUseResult answers, whether it says tool results were cleared, why
-// its reply stopped, whether its harness wrote it for a failed request, the
-// model that wrote it, the reply it is, what its request took, what it says a
-// compaction kept, the leaf it says a resume starts from and whether it names
-// one at all, its attachment's type, the records it says its harness took
-// back, the results it says its harness replaced, and whether it is virtual,
-// interrupted by a shutdown, a compaction's summary, a task's delivery or a
-// batch's reply, the calls that batch was split into among it, when it was
-// written, whether it is meta, the reply it names as its results' source, the
-// key of the call its attachment followed, whether its message says
-// anything, whether a resume keeps it as an attachment of its shape, its
-// hook's event and the takes it names, and the release that wrote it, each
-// beside the error it answered. A raw value it hands out is printed by
-// [ctRaw], so an absent one and a null one never read alike.
+// head, uuid, message and calls, origin kind, toolUseResult answer, cleared
+// tool results, stop reason, API-error mark, model, reply id, usage, what a
+// compaction kept, the resume leaf, attachment type, retractions, replaced
+// results, its virtual, shutdown, summary, task-delivery and batch marks, the
+// batch's split calls, time, meta mark, results' source reply, attachment's
+// call key, whether its message says anything, whether a resume keeps it, its
+// hook's event and takes, and the writing release, each beside the error it
+// answered. A raw value is printed by [ctRaw], so absent and null never alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1718,33 +1629,18 @@ func ctRaw(v json.RawMessage) string {
 	return string(v)
 }
 
-// A KEY IS READ EXACTLY AS WRITTEN, as Claude Code reads its own records with
-// JSON.parse: a key that differs from one the layer reads only in case is
-// another key, after that one or before it, and alone it leaves that one
-// absent; and a key written twice holds its last value. Every object the layer
-// reads is held so: a line's head and the keys only one reader reads (its own
-// uuid, a message, an attachment, an origin, a record's
-// own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
-// its marks, a compaction's metadata, the uuids a record retracts, a record's
-// replacements, the marks of a record no plain one, a batch's list, its time,
-// its meta mark, a result's source), a hook's attachment (its type, its
-// firing and its content), an origin, a
-// message (its content, its stop_reason, its id, its model and its usage), a
-// message's blocks, its usage's counts and iterations, each iteration's type
-// and counts, its report of the context edits applied, each edit the report
-// lists, what a compaction's metadata says it kept (its list, the list's
-// anchor and uuids, its segment and the segment's ends), each replacement a
-// record lists (its kind and its call's id), and each entry of a batch's list
-// (its id). So a line hands out
-// exactly what it hands out
-// without the other key, through every accessor. 2.1.322 already spells a
-// call's id `toolUseId` (a subagent's metadata names the call that started it
-// so), a key away from a hook's firing.
+// A KEY IS READ EXACTLY AS WRITTEN, as Claude Code's JSON.parse reads its own
+// records: a key differing from one the layer reads only in case is another
+// key, and alone leaves that one absent; a key written twice holds its last
+// value. Every object the layer reads is held so: the head, the keys one
+// reader reads, hook attachments, origins, messages, blocks, usage and its
+// iterations, the context-edit report, compaction metadata, replacements and
+// batch entries. So a line hands out exactly what it would without the other
+// key, through every accessor. 2.1.322 already spells a call's id `toolUseId`.
 //
-// Mutation: take a key that differs only in case for the layer's own, as
-// encoding/json's decode into a struct does (the last written winning), and
-// each record here reads as the other key says; refuse a key written twice, and
-// a record that writes one twice is no record.
+// Mutation: take a case-only key for the layer's own, as encoding/json's
+// struct decode does, and records read as the other key says; refuse a key
+// written twice, and a record that writes one twice is no record.
 func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	t.Parallel()
 	brief, prompt := ctBrief(ctUUID(1)), ctSubagentPrompt(ctUUID(3))
@@ -2051,44 +1947,16 @@ func ctKeys(keys ...string) string {
 
 // A KEY WRITTEN TWICE IS READ WHOLLY BY ITS LAST, as Claude Code's JSON.parse
 // reads it, at every level of a line: the line reads exactly as the line
-// holding only the last occurrence (and what lies between) reads, through
-// every accessor and every reader of a call, a result and an answer, whether
-// that is a record or no record, and whatever the first occurrence held. Each
-// case's first occurrence reads otherwise on its own (a key the last lacks, or
-// another value), so a reader that keeps any of it fails the case:
-//
-//   - a record's message (a call, a reply's id, its model and its usage, then
-//     one text block), its own toolUseResult (a completed answer naming its
-//     agent and carrying a handback, then none), its attachment (a fork's
-//     briefing following a call, then a payload of no type), a boundary's
-//     compactMetadata (the list it kept, then a segment alone), its
-//     replacements and a reply's batch (an entry, then none), and its origin
-//     (a task's notification, then none);
-//   - the head: a key of the wrong type, then one of the right type, is a
-//     record, and the reverse no record, for isSidechain, type, subtype,
-//     agentId and parentUuid; a replacesSpan of the wrong type between an
-//     assistant's type and a user's is no record of the user's type, and
-//     between a user's and an assistant's a record; and a head fault between a
-//     user's type and a type no record carries names no type;
-//   - a message's content (a call, then a text), its usage (an output count,
-//     then none), its report of the context edits applied (a clearing, then
-//     none), its id, its model and its stop reason;
-//   - a block's id, its type (a call's, then a text's), a result's call id
-//     and its failure, a call's input (a target, then none), a result's
-//     content (a text, then none) and a block's text (blank, then said, and
-//     the reverse);
-//   - a result's text block's type and text; an answer's status and a send's
-//     success; an iteration's type and a count of it; an edit's type and its
-//     count; a replacement's kind; a batch entry's id; an attachment's type,
-//     a skill listing's names, a withheld memory's entries and an entry's why;
-//     and a compaction's list (its uuids, then an anchor alone).
-//
-// Mutation: merge a repeated object's members into the earlier occurrence's,
-// or a repeated list's entries into the earlier one's, as a reader that keeps
-// what it read of the first does, and every record-level case reads the first
-// occurrence's fact; read a key written twice by its first value, and every
-// case reads as its first; refuse a key written twice, and every case is no
-// record.
+// holding only the last occurrence, through every accessor and reader, record
+// or no record. Each case's first occurrence reads otherwise on its own (a key
+// the last lacks, or another value), so a reader keeping any of it fails. Cases
+// cover a record's message, toolUseResult, attachment, compactMetadata,
+// replacements, batch and origin; the head keys (a mistyped one then a right
+// one is a record, the reverse none; replacesSpan between an assistant's and a
+// user's type; a head fault before a type no record carries); a message's
+// content, usage, edit report, id, model, stop reason; a block's fields; every
+// nested type, count, kind and entry. Mutation: merge repeats into the earlier
+// one, read the first, or refuse the repeat.
 func TestAKeyWrittenTwiceIsReadWhollyByItsLast(t *testing.T) {
 	t.Parallel()
 	const other = "toolu_test_other"
@@ -2424,18 +2292,15 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 }
 
 // A RECORD NAMES THE RELEASE THAT WROTE IT, by its accessor: a chained record's
-// `version` as written, whatever its kind, a release the reading's floor holds
-// or not and a string that is no release alike, since the layer holds it to a
-// string alone and its reader holds it to a rule of its own; "" where the key
-// is absent, as on most of the harness's bookkeeping. A `version` that is no
-// string (a number, null, an object) is refused by Version alone: the line
-// still reads, with its head, its uuid and its message's calls as written, so
-// a release that reshaped it would cost the one reader that reads it.
+// `version` as written, whatever its kind, inside the reading's floor or not, a
+// release or not, since the layer holds it to a string alone and its reader
+// holds it to its own rule; "" where the key is absent. A `version` that is no
+// string is refused by Version alone: the line still reads, with its head, uuid
+// and calls as written.
 //
-// Mutation: hand out no release, and every record's reads as ""; read it off
-// the head, and a record whose `version` is no string is no record at all;
-// take a non-string for none, and a reshaped writer reads as one that named
-// none, which its reader cannot tell from a record that carries no key.
+// Mutation: hand out no release, and every record reads ""; read it off the
+// head, and a non-string `version` is no record; take a non-string for none,
+// and a reshaped writer reads as one with no key.
 func TestALineHandsTheReleaseThatWroteIt(t *testing.T) {
 	t.Parallel()
 	release := `"version":"2.1.310"`
@@ -2475,53 +2340,18 @@ func TestALineHandsTheReleaseThatWroteIt(t *testing.T) {
 	}
 }
 
-// A RESTART IS WHERE WHAT CAME BEFORE MAY BE GONE from what a resume holds: a
-// compaction's boundary, wherever it falls; a root after the thread's first
-// chained record; and a first chained record that roots no chain, the start of
-// a thread whose head is gone. A trim after a compaction leaves exactly that, as
-// measured: the reply it kept, chained to a record the trim took, before the
-// boundary. The thread's first chained record that roots its chain is no
-// restart, however much bookkeeping comes before it, so a thread as measured
-// restarts nowhere, and a thread with no chained record at all restarts
-// nowhere either: it holds no chain to start over.
-//
-// So are the two records 2.1.310's and 2.1.322's own readers stop at as at a
-// compaction, though neither release writes one: a system record of subtype
-// microcompact_boundary and a user record whose replacesSpan is true, each a
-// restart where it is chained to the record before it, roots nothing and
-// follows the brief. A replacesSpan that is false or absent replaces nothing,
-// and each kind is read on its own record's type alone, as the harness reads
-// it: the subtype on an attachment, and replacesSpan true on a model's reply,
-// restart nothing. Nor is a replacesSpan on a record that is no user's held to
-// its type: a model's reply whose replacesSpan is a string, and an attachment
-// whose replacesSpan is null, each read whole, and restart nothing.
-//
-// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE: a user, assistant,
-// attachment or system record whose parentUuid is the empty string, and one
-// that carries no parentUuid at all, each falsy to the walk as null is, roots
-// a chain, so each restarts the thread where it follows its first chained
-// record; a brief of no parentUuid that opens the thread is its first chained
-// record, which roots it, and restarts nothing. A record of another type that
-// carries no parentUuid is the harness's bookkeeping, in no chain, and
-// restarts nothing, and one that carries a null parentUuid roots a chain as
-// written.
-//
-// Mutation: count every root, and the brief restarts every thread; count every
-// root but the first one seen, and the first root of a thread whose start is
-// gone is none; read a thread whose start is gone as whole, and one that never
-// roots again restarts nowhere; take the first record for the first chained
-// one, and the bookkeeping before a brief restarts the thread; drop the
-// boundary, and one that opens a thread is none; drop the microcompaction's
-// boundary or the replaced span, and its record restarts nothing; read
-// replacesSpan by its presence, and one that is false restarts the thread;
-// read either kind off any record's type, and the attachment or the reply
-// restarts it; hold replacesSpan to its type on every record, and the reply
-// and the attachment that carry one of another type are no records; root a
-// chain at null alone, and the empty string and the absent parent restart
-// nothing; read an absent parent as a root on a user or assistant record
-// alone, and the parentless attachment and system record restart nothing; or
-// read a record of any type that carries no parentUuid as chained, and the
-// queue operation after the brief restarts the thread.
+// A RESTART IS WHERE WHAT CAME BEFORE MAY BE GONE: a compaction's boundary; a
+// root after the thread's first chained record; a first chained record that
+// roots no chain (a head trimmed away). A first chained record that roots its
+// chain, or a thread with none, restarts nowhere. So do the records 2.1.310's
+// and 2.1.322's readers stop at: a microcompact_boundary system record and a
+// user record whose replacesSpan is true, chained to the record before and
+// rooting nothing, each read on its own record's type alone (replacesSpan
+// false, absent or of another type on another record restarts nothing). A ROOT IS WHAT
+// CLAUDE CODE'S WALK READS AS ONE: a user, assistant, attachment or system
+// record whose parentUuid is null, "" or absent (all falsy to it); a parentless
+// opening brief restarts nothing; another type with none is bookkeeping, in no
+// chain. Mutation: count every root, drop a boundary kind, or read a type or key wrongly.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
@@ -2723,35 +2553,17 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 }
 
 // CALLS COME ONLY FROM A USER OR ASSISTANT MESSAGE: an assistant's tool_use
-// blocks and a user's tool_result blocks, each with its id and what its
-// readers read of it (the subagent a call's input sends to, whether a result
-// failed, and a result's text as its length and digests, a result of no text
-// saying so), and nothing from any other record, an api-request-blob
-// repeating a result included. A failed call's result says so, as the resume's
-// result for a call it found unanswered and a killed command's do. A call
-// block in the other record, which the Messages API never writes, is a kind
-// and no call: a result in a model's message, a call in a user's. A message
-// that does not decode is an error, never a message with half a call in it:
-// one that is no object, a content absent, null or neither a string nor a
-// list, a block that is no object or has no string type, a tool_use's id not
-// a string that names a call or its name not a string, a tool_result's
-// tool_use_id not a string that names a call or its is_error not a boolean.
-// Each block is held so as it is read, wherever it falls: a bad block after
-// one accepted is the message's error as much as a bad first block, and the
-// error names the block, and the record: an assistant's or a user's.
-//
-// Mutation: read calls off every record's message, and the blob's result is a
-// call; decode a block loosely, and a tool_use whose id is a number is a call
-// with no id; take an id that names no call, and a block whose id is empty is
-// a call with no id; take either kind of call block in either record, and a
-// result in a model's message, or a call in a user's, is a call; read is_error
-// as false wherever it is present, and a failed call's result reads as a
-// success; read a call's target off its input without the agent rule, and a
-// send to no agent sends to one; read a result of no text as an empty text,
-// and an image reads as a text of no bytes; hold only a message's first block
-// to its type, and a bad block after an accepted one reads as a block of no
-// kind; name every record with its type after an "a", and a model's reply is
-// "a assistant record".
+// blocks and a user's tool_result blocks, each with its id and what its readers
+// read (the subagent an input sends to, whether a result failed, a result's text
+// as length and digests), nothing from any other record, an api-request-blob's
+// repeated result included. A call block in the other record, which the Messages
+// API never writes, is a kind and no call. A failed result says so, as a
+// resume's unanswered-call and a killed command's do. A message that does not
+// decode (a non-object, bad content, a block with no string type or a mistyped
+// id, name, tool_use_id or is_error) is an error, never half a call, naming the
+// block and record type. Mutation: read calls off every record, decode loosely,
+// accept an unnamed id, either block in either record, or is_error false, drop
+// the agent rule, read no text as empty, or check only the first block.
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
 	interrupted := "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
@@ -2876,23 +2688,16 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 }
 
 // A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is one text,
-// with no blocks, and what its readers ask of it (the subagent and the leg a
-// task notification names, whether it names the handback tool, wherever the
-// name falls) is read off it; content that is a list is how many blocks it
-// holds and which kinds among them, and no text, a notification's words in a
-// block naming none, and an empty list is a list of no blocks, never the text
-// a content that is no list reads as. Every user and assistant record measured
-// holds one block a record; the API's own messages hold several, which a list
-// of two counts, each kind among them.
+// no blocks, and its readers read off it (the subagent and leg a task
+// notification names, whether it names the handback tool, wherever it falls);
+// content that is a list is how many blocks it holds and which kinds, no text
+// (a notification's words in a block name none), and an empty list is a list
+// of no blocks, never the text a non-list reads as. Every measured record holds
+// one block; the API's own messages hold several.
 //
-// Mutation: read content as one shape, and a string content is no message;
-// read an empty list as a text, and it reads as no list; count only a list's
-// first block, or hold only its last kind, and a text and a call read as one
-// block; read a text's notification, or its handback's name, as none, and a
-// notification names no leg, or no handback; stop reading a text once it says
-// something, and a handback named past its first piece is missed; end a
-// text's reading without deciding its last line, and a notification ending at
-// its status names no leg.
+// Mutation: read content as one shape, an empty list as a text, only a list's
+// first block or last kind, or stop reading a text once it says something or
+// before its last line is decided, and a notification or handback is missed.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
 	notification := ctNotification(ctUUID(1), ctUUID(3))
@@ -3099,20 +2904,16 @@ func TestAReplySaysWhichModelWroteIt(t *testing.T) {
 }
 
 // A REPLY SAYS WHICH REPLY IT IS: MessageID reads an assistant record's
-// message's id as written, which every record of one reply carries; "" where
-// the key is absent; nothing on a record that is no assistant's, whatever its
-// message carries; and an error where the id is no string, null among it, or
-// the record's message is no object, never "", which its readers would take
-// for a reply that recovers nothing. And an error where the id holds the
-// replacement character, as written or as the layer's decode reads a lone
-// surrogate or a byte that is no UTF-8: the layer reads each such byte as one,
-// where Claude Code can read a run of them as one, so two ids it holds apart
-// could read here as one, and a U+FFFD cannot say which it came from.
+// message id as written, which every record of one reply carries; "" where
+// absent; nothing on a non-assistant record; an error where the id is no string
+// (null included) or the message no object, never "", which readers would take
+// for a reply recovering nothing. Also an error where the id holds U+FFFD, as
+// written or from a lone surrogate or non-UTF-8 byte: the layer reads each such
+// byte as one where Claude Code can read a run as one, so two ids it holds
+// apart could read as one.
 //
-// Mutation: read the id off every record's message, and a result carrying one
-// is a reply; read it as any JSON value, and a number reads as ""; read it as
-// "" whatever it holds, and no reply recovers its siblings; or hand out an id
-// holding the replacement character, and one holding a lone surrogate reads.
+// Mutation: read the id off every record, as any JSON value, or as "" whatever
+// it holds, or hand out an id holding U+FFFD, and the matching case fails.
 func TestAReplySaysWhichReplyItIs(t *testing.T) {
 	t.Parallel()
 	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -3302,19 +3103,15 @@ func TestARecordSaysWhetherItDeliversATask(t *testing.T) {
 	}
 }
 
-// A REPLY SAYS THE CALLS ITS BATCH WAS SPLIT INTO: BatchToolUses reads whether
-// an assistant record carries batchToolUses, handing each entry's id in order,
-// an empty list carried as one that hands nothing; nothing on a record that is
-// no assistant's, whatever it carries; and an error where the key holds no
-// list, null among it, or an entry that is no object or whose id is no
-// string, never a reply that splits nothing. An error ends the walk, the
-// entries before it handed.
+// A REPLY SAYS THE CALLS ITS BATCH WAS SPLIT INTO: BatchToolUses hands each
+// batchToolUses entry's id in order from an assistant record (an empty list
+// hands nothing); nothing on a non-assistant record; an error where the key
+// holds no list (null included) or an entry is no object or its id no string,
+// never a reply that splits nothing. An error ends the walk, entries before it
+// handed.
 //
-// Mutation: read the key off every record, and a result carrying it is a
-// batch's reply; hand entries of no string id over, and a list the harness
-// would match to calls no batch split reads; read a null list as none, and it
-// is no error; or answer no batch for an empty list, and a reply carrying the
-// key reads as one that carries none.
+// Mutation: read the key off every record, hand entries of no string id, read
+// null as none, or answer no batch for an empty list, and a case fails.
 func TestAReplySaysTheCallsItsBatchWasSplitInto(t *testing.T) {
 	t.Parallel()
 	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -3360,23 +3157,16 @@ func TestAReplySaysTheCallsItsBatchWasSplitInto(t *testing.T) {
 }
 
 // A LAST-PROMPT RECORD SAYS THE LEAF ITS RESUME STARTS FROM: Checkpoint reads
-// its leafUuid where it is a string, "" where it is absent, null or the empty
-// string, each naming no leaf to the harness; it is marked where its
-// `explicit` or its `rewound` is the JSON true, a rewind's, a withdrawal's or
-// a fork's, and by nothing else, as the harness tests each (=== true); and a
-// record of another type is none, whatever keys it carries. LeafKeyed says
-// whether the record carries a leafUuid at all, whatever it holds, null and
-// the empty string among it, as the harness tests it (!== undefined), and is
-// false where the key is absent and on a record of another type. A leafUuid
-// of another type is an error of both
+// its leafUuid where a string, "" where absent, null or empty, each naming no
+// leaf to the harness; it is marked where `explicit` or `rewound` is JSON true
+// (a rewind, withdrawal or fork), as the harness tests (=== true); another
+// type is none. LeafKeyed says whether the record carries a leafUuid at all,
+// null and "" included, as the harness tests it (!== undefined); false where
+// absent and on another type. A leafUuid of another type is an error of both
 // ([TestAKeyOneReaderReadsCostsThatReaderAlone]).
 //
-// Mutation: read a mark as set by any value but true, and a record whose
-// explicit is false or the string "true" moves the leaf; ignore rewound, and
-// a rewind does not; read the keys off every record, and a reply carrying
-// them is a checkpoint; or key the leaf by its truth, as Checkpoint names one,
-// and a record whose leafUuid is null or the empty string reads as keyed by
-// none.
+// Mutation: read a mark as set by any value but true, ignore rewound, read the
+// keys off every record, or key the leaf by its truth, and a case fails.
 func TestALastPromptSaysTheLeafItsResumeStartsFrom(t *testing.T) {
 	t.Parallel()
 	leafed := func(to string) string {
@@ -3473,18 +3263,14 @@ func ctReplaced(id string) string {
 }
 
 // A CONTENT-REPLACEMENT RECORD NAMES THE RESULTS IT REPLACED: ReplacedResults
-// hands the id of each entry of a content-replacement record whose kind is
-// "tool-result", in order, the main thread's record and a subagent's alike;
-// passes over an entry of another kind, as the harness's resume does; reads
-// nothing off a record of another type, though it lists replacements; and is
-// an error where the record lists them in no shape the harness writes: no
-// list, an object in its place, an entry that is no object, a kind that is no
-// string, and a tool's result named by no string.
+// hands, in order, the id of each entry of kind "tool-result" (main thread and
+// subagent alike); passes over an entry of another kind, as the resume does;
+// reads nothing off another record type; and errors where replacements have a
+// shape the harness never writes: no list, an object, a non-object entry, a
+// non-string kind or tool id.
 //
-// Mutation: read the ids off every record that lists replacements, or take
-// every entry for a tool's result whatever its kind, and a record that
-// replaces no result names a call; or pass an entry of no shape over, and a
-// list the harness never wrote reads.
+// Mutation: read ids off every record listing replacements, take every entry
+// for a tool result, or pass an entry of no shape over, and a case fails.
 func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
 	t.Parallel()
 	other := `{"kind":"image","toolUseId":"` + ctCall + `","replacement":"x"}`
@@ -3614,30 +3400,17 @@ func ctRetracting(t *testing.T, n int, after string) string {
 }
 
 // A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted counts each
-// entry of a record's retractedMessageUuids and holds, in order, the first 24
-// characters of each that begins with a canonical uuid's, on a refused reply's
-// fallback (a system record of that subtype), on a malformed reply's retry (a
-// meta user record) and on a reply (an assistant record), the records 2.1.322
-// reads the key on: an entry of 24 characters and one of 30 among them, since
-// the resume cuts each at 24 characters itself, and one of 23, in another
-// form or in uppercase counted and naming none; nothing where the key is
-// absent, or on a system record of another subtype or an attachment, whatever
-// it carries; and an error where the key holds anything but a list of
-// strings, null among it, on a record it is read on, handed with every entry
-// before the first that is no string. It holds threadChainMaxRecords prefixes
-// at most, and says where the list names more, still counting every entry.
-//
-// Mutation: read the key off every record, and a stop hook's summary or an
-// attachment carrying it retracts; read it off a refusal's fallback alone, as
-// 2.1.310 does, and a retry's names nothing; pass an entry that is no string
-// over, as the resume does, and a list the layer refuses reads; read a null
-// list as none, and it reads; drop an entry of 24 characters or fewer, or of
-// fewer than a uuid's 36, and the entries the resume cuts at 24 retract
-// nothing; count only the entries that name a prefix, and the entries that
-// name none are not counted; hand an error with nothing the list held before
-// it, and the entries before an entry that is no string are lost; or hold
-// prefixes past the bound, or stop counting there, and the list past it says
-// all, or counts short.
+// retractedMessageUuids entry and holds, in order, the first 24 characters of
+// each that begins with a canonical uuid's, on the records 2.1.322 reads the
+// key on: a refused reply's fallback (system), a malformed reply's retry (meta
+// user) and a reply (assistant). The resume cuts at 24 itself, so entries of 24
+// and 30 characters count and name a prefix; 23, another form or uppercase
+// counts and names none. Nothing where absent or on another record; an error
+// where the key is no list of strings (null included), handed with the entries
+// before the first non-string. At most threadChainMaxRecords prefixes, still
+// counting every entry. Mutation: read the key off every record or a fallback
+// alone as 2.1.310 does, skip non-strings, read null as none, drop short
+// entries, count only named ones, lose entries before an error, ignore the bound.
 func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 	t.Parallel()
 	named := []string{ctUUID(4), ctUUID(5)}
@@ -3734,33 +3507,18 @@ func ctKept(uuids ...string) [][16]byte {
 	return kept
 }
 
-// A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
-// it: Preserved reads a compact_boundary record's preservedMessages where it
-// carries one, its anchor, how many entries it lists and each that is a
-// canonical uuid, in order, kept where it lists any, and whether any entry is
-// none; else its preservedSegment, the anchor and the segment's two ends; and
-// nothing where the boundary carries neither, a null for either, or no
-// compactMetadata, null among it, or on a record of another type or subtype,
-// whatever it carries. A boundary that carries either names what it kept, a
-// list of none of no anchor among them, since the resume drops by it every
-// record before the last boundary whatever it keeps. Every other shape, a
-// metadata, a list, an anchor or an end of another type, an entry that is no
-// string, is an error, handed with the entries before it: those before the
-// first that is no string, and none where the anchor fails, which is checked
-// before the list. It holds threadChainMaxRecords uuids at most, and says
-// where the list holds more, still counting every entry.
-//
-// Mutation: read the segment where a list is, and the list's records go
-// unread; take a list of none for one that keeps records, and a boundary that
-// keeps nothing relinks; read a null list as one, and a boundary naming its
-// segment alone is an error; read a null metadata as one, and a boundary
-// that keeps nothing is an error; read a boundary as naming what it kept only
-// where it keeps records, and a list of none of no anchor names nothing;
-// count only the entries that are uuids, and a list holding one that is none
-// counts short; hand an error with nothing the list held before it, or walk
-// the list before its anchor is checked, and the entries before the fault are
-// lost, or a list of no anchor counts its entries; or hold uuids past the
-// bound, or stop counting there, and the list past it says it holds no more.
+// A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by it:
+// Preserved reads a compact_boundary's preservedMessages (anchor, entry count,
+// each canonical uuid in order, whether any entry is none), else its
+// preservedSegment (anchor, both ends); nothing where it carries neither, a
+// null for either, no compactMetadata, or on another type or subtype. A
+// boundary carrying either names what it kept, even a list of none with no
+// anchor, since the resume drops every record before the last boundary. Any
+// other shape is an error handed with the entries before the first non-string,
+// none where the anchor fails (checked before the list). At most
+// threadChainMaxRecords uuids, still counting every entry. Mutation: read the
+// segment where a list is, take a list of none or null for a kept one, count
+// only uuids, lose entries before an error, check the list before its anchor, or ignore the bound.
 func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	t.Parallel()
 	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
@@ -3860,20 +3618,17 @@ func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	}
 }
 
-// A RECORD SAYS WHEN IT WAS WRITTEN: Timestamp reads a record's timestamp in
-// the form Claude Code writes it, YYYY-MM-DDTHH:MM:SS.sssZ, of a real time, as
-// the milliseconds since the Unix epoch Date.parse reads it as, a leap day of
-// a leap year and the first year among them; absent where the record carries
-// none; and an error for any other form or value: a leap day of a year that
-// has none, an offset in place of the Z, no milliseconds, more of them, an
-// hour of 24, a second of 60, a lowercase z, a space for the T, a year
-// written with a sign, an hour of one digit, which package time parses
-// though the form never writes one, a number, null.
+// A RECORD SAYS WHEN IT WAS WRITTEN: Timestamp reads the form Claude Code
+// writes, YYYY-MM-DDTHH:MM:SS.sssZ, of a real time (a leap day of a leap year
+// and the first year included), as the milliseconds since the Unix epoch
+// Date.parse reads; absent where none; an error for any other form or value:
+// a leap day of a year with none, an offset for the Z, no or more milliseconds,
+// hour 24, second 60, lowercase z, a space for the T, a signed year, a
+// one-digit hour (which package time parses though the form never writes one),
+// a number, null.
 //
-// Mutation: read any time package time parses as RFC 3339, and an offset
-// reads; skip the check that the time formats back to the text it was
-// parsed from, and an hour of one digit reads; or read null as absent, and
-// it is no error.
+// Mutation: read any RFC 3339 time, skip the check that the time formats back
+// to its text, or read null as absent, and a case fails.
 func TestARecordSaysWhenItWasWritten(t *testing.T) {
 	t.Parallel()
 	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -4005,18 +3760,15 @@ func TestAResultSaysTheReplyItNamesAsItsSource(t *testing.T) {
 }
 
 // AN ATTACHMENT HANDS THE CALL IT FOLLOWED ONLY AS A KEY: AttachmentToolUseID
-// reads an attachment record's attachment's toolUseID where it is a string,
-// as the SHA-256 of that string, which is the key of the same string made
-// the same way, so a skill's PostToolUse hook, whose firing is the id of the
-// call it followed, keys alike with that call's id; and nothing where the
-// attachment holds no toolUseID, or one that is no string, or is no object
-// (a list among them), or on a record that is no attachment, a Stop's
-// summary carrying its firing at the top among them. No id leaves the layer
-// through it: it hands a key, never a string.
+// reads an attachment's toolUseID where a string, as the SHA-256 of it, the
+// key of the same string made the same way, so a skill's PostToolUse hook
+// (whose firing is the id of the call it followed) keys alike with that call's
+// id; nothing where it is absent, no string, or the attachment no object, or on
+// a non-attachment, a Stop summary's top-level firing included. No id leaves
+// the layer: it hands a key, never a string.
 //
-// Mutation: read a summary's firing at the top, and it keys a call; key a
-// toolUseID of any type by its bytes, and a number keys one; or read the key
-// off a list's elements, and an attachment that is a list keys one.
+// Mutation: read a summary's firing at the top, key a toolUseID of any type by
+// its bytes, or read keys off a list's elements, and a case fails.
 func TestAnAttachmentHandsTheCallItFollowedOnlyAsAKey(t *testing.T) {
 	t.Parallel()
 	skill, err := ctLine(t, ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"`+ctSkillCall+
@@ -4052,21 +3804,16 @@ func TestAnAttachmentHandsTheCallItFollowedOnlyAsAKey(t *testing.T) {
 }
 
 // A MESSAGE SAYS WHETHER IT SAID ANYTHING, as Claude Code reads its text with
-// JavaScript's trim(): Says's text holds where a block of the type "text"
-// holds a string text trim() leaves something of, and its any where the
-// content is one such string or any block of whatever type holds one. A text
-// of U+FEFF alone, which trim() takes and strings.TrimSpace leaves, says
-// nothing; one of U+0085 alone, which trim() leaves and strings.TrimSpace
-// takes, says something; and so do a lone surrogate, read as U+FFFD, and a
-// text after a blank one. A blank text, a thinking block, a call, a text that
-// is no string and an empty list say nothing, and neither does the zero
-// message of a record that holds none.
+// JavaScript's trim(): Says's text holds where a "text" block holds a string
+// trim() leaves something of, and its any where the content is one such string
+// or any block of any type holds one. U+FEFF alone, which trim() takes and
+// strings.TrimSpace leaves, says nothing; U+0085 alone, the reverse, says
+// something; so do a lone surrogate (read as U+FFFD) and a text after a blank
+// one. A blank text, thinking block, call, non-string text, empty list and the
+// zero message say nothing.
 //
-// Mutation: trim with strings.TrimSpace, and U+FEFF alone says something and
-// U+0085 alone nothing; read only blocks of the type "text" for any, and
-// another block's text says nothing; take any block's text for text, and
-// another block's says text; or stop at the first block, and a text after a
-// blank one says nothing.
+// Mutation: trim with strings.TrimSpace, read only "text" blocks for any, take
+// any block's text for text, or stop at the first block, and a case fails.
 func TestAMessageSaysWhetherItSaidAnything(t *testing.T) {
 	t.Parallel()
 	said := func(content string) string { return ctAssistant(ctUUID(2), ctUUID(3), content) }
@@ -4109,32 +3856,18 @@ func ctWithheld(entries ...string) string {
 	return `{"type":"withheld_memory","by":"a Read deny rule","entries":[` + strings.Join(entries, ",") + `]}`
 }
 
-// AN ATTACHMENT SAYS WHETHER THE RESUME KEEPS IT: AttachmentWellFormed reads an
-// attachment's payload by Claude Code's own rules for the types it holds to a
-// shape, each at its edge: invoked_skills' every skill an object or a list;
-// hook_success's content a string; skill_listing's names absent or a list of
-// at most 4,096 strings of at most 512 UTF-16 code units each, a name of 256
-// runes past the basic plane at the bound and one of 300 runes of two bytes
-// under it; hook_additional_context's content a list of strings;
-// task_reminder's and todo_reminder's content a list of objects, never of
-// lists; file's and already_read_file's content an object, never a list;
-// withheld_memory's by a string that is not empty and every entry an
-// object of a string path and displayPath and a why among the harness's four
-// own reasons, never a name every object inherits; any other type kept, and
-// no payload, a payload that is no object or of no string type dropped. A
-// record that is no attachment is kept. A name past the bound that holds a
-// byte that is no UTF-8 is an error, since its length is not one the layer
-// counts as the harness does; under the bound, it is kept.
-//
-// Mutation: drop no attachment, and every malformed one is kept; read an
-// object as anything JavaScript's typeof calls one, and a reminder of lists,
-// or a file whose content is a list, is kept; count a name's bytes or its
-// runes, not its UTF-16 code units, and a name at the bound of two-byte runes
-// is dropped, or one past it of runes past the basic plane kept; check its
-// names before the list's length, and a list one past 4,096 of names past
-// the bound reads otherwise; take any key for a reason, and a why of
-// "constructor" is kept; or read a name the layer cannot count as kept, and
-// it is no error.
+// AN ATTACHMENT SAYS WHETHER THE RESUME KEEPS IT: AttachmentWellFormed reads a
+// payload by Claude Code's rules for the types it holds to a shape, each at its
+// edge: invoked_skills' every skill an object or a list; hook_success's content
+// a string; skill_listing's names absent or at most 4,096 strings of at most
+// 512 UTF-16 code units (counted so, not as bytes or runes); a
+// hook_additional_context's a list of strings; task_reminder's and
+// todo_reminder's a list of objects; file's and already_read_file's an object;
+// withheld_memory's a non-empty string and entries of a string path,
+// displayPath and one of the harness's four reasons, never an inherited key;
+// any other type kept; no payload, a non-object or no string type dropped; a
+// non-attachment kept. A name past the bound holding non-UTF-8 is an error.
+// Mutation: drop none, count bytes or runes, check names before the list's length, or accept any typeof-object or key.
 func TestAnAttachmentSaysWhetherTheResumeKeepsIt(t *testing.T) {
 	t.Parallel()
 	attached := func(payload string) string { return ctAttachment(ctUUID(1), ctUUID(2), payload, "") }
@@ -4230,29 +3963,18 @@ func ctIteration(kind string, input int) string {
 		`"output_tokens":20}`, kind, input)
 }
 
-// A REPLY SAYS WHAT ITS REQUEST TOOK: an assistant record's message's id, its
-// model and its usage's four counts, each as written, ok saying the usage is
-// there. A count the usage does not name reads 0, the others as written. A
-// reply with no usage hands over its id and its model still, every count 0
-// and ok false, since Claude Code takes a reply's id with no usage; one with
-// no id, or no model, hands over "" for it and the rest as written; and the
-// reply a resume writes reads as the counts it writes, all 0, under a model
-// of its own. Every record that is no assistant's reads as nothing, a result
-// and a request blob whose message carries a usage among them. A usage of the
-// wrong shape is an error and never a figure: one that is no object, null
-// among it; a count that is no whole number as JSON writes one (negative,
-// fractional, in an exponent, a string, null, a boolean, an object) or past
-// an int64, whichever count it is; an id or a model that is no string, null
-// among it; and a reply whose message is no object.
-//
-// Mutation: answer for every record's type, and a result carrying a usage
-// reads as one; read a null usage as none, or a null count as 0, and each
-// reads as a figure; hold a count to a number alone, and a negative or a
-// fractional one reads as a count; hand over the id and the model only with
-// a usage, and a reply with none reads as no reply's; read two counts each
-// into the other's place, and a reply's figures read as another's; require
-// every count, and a usage that names three is an error; read the id by its
-// text alone, and a numeric id reads as one.
+// A REPLY SAYS WHAT ITS REQUEST TOOK: an assistant record's message id, model
+// and the usage's four counts as written, ok saying the usage is there. An
+// unnamed count reads 0. A reply with no usage hands its id and model still,
+// counts 0, ok false, as Claude Code takes an id with no usage; no id or model
+// reads "", and the reply a resume writes reads all 0 under a model of its
+// own. Any non-assistant record, a result or a request blob carrying a usage
+// included, reads nothing. A usage of the wrong shape is an error, never a
+// figure: a non-object or null; a count not a whole JSON number (negative,
+// fractional, exponent, string, null, boolean, object) or past int64; an id or
+// model not a string; a message not an object. Mutation: answer for every type,
+// read null as none or 0, accept any number, hand id and model only with a
+// usage, swap counts, require every count, or read the id by text alone.
 func TestAReplySaysWhatItsRequestTook(t *testing.T) {
 	t.Parallel()
 	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -4401,27 +4123,17 @@ func TestAReplysCountsAreHeldToWhatJSONParseReadsExactly(t *testing.T) {
 }
 
 // A REPLY'S USAGE IS WHAT CLAUDE CODE COUNTS IT BY, OR AN ERROR: where the
-// usage lists iterations, Claude Code counts the list's last entry that is no
-// advisor's or compaction's in the usage's place, where that entry is whole
-// (of type message or fallback_message, four counts each a finite number at
-// or above zero, its input side above zero), and Usage, which hands the
-// usage's own counts, is an error where that entry holds other counts, never
-// Message's error. Where Claude Code counts the usage's own counts, Usage
-// hands them: no iterations, null ones, ones that are no list, an empty list,
-// an advisor's or a compaction's entry alone, a counted entry equal to the
-// usage (written with fractions among it), a last entry that is not whole
-// (of another type, a count that is a string, negative or past a double's
-// range, an input side of zero, or no object), and a usage whose own input
-// side is zero, whatever its entries say.
-//
-// Mutation: leave the list unread, and a reply whose counted entry holds more
-// reads by its usage alone; count an advisor's or a compaction's entry, and
-// the one before it is never compared; count the first entry, not the last,
-// and an equal entry hides the one after it; read the list where the usage's
-// input side is zero, or count an entry whose own is, or one of another type,
-// or with a negative count, and a reply Claude Code counts by its usage is an
-// error; count no fallback_message entry, and one that differs reads by the
-// usage alone.
+// usage lists iterations, Claude Code counts the last entry that is no
+// advisor's or compaction's in the usage's place, if whole (type message or
+// fallback_message, four counts each finite and >= 0, input side above zero);
+// Usage, handing the usage's own counts, then errors where that entry holds
+// other counts, never Message. Where Claude Code counts the usage's own, Usage
+// hands them: no, null, non-list or empty iterations, only advisor or
+// compaction entries, a counted entry equal to the usage (fractions included),
+// a last entry not whole, and a usage whose own input side is zero.
+// Mutation: leave the list unread, count an advisor or compaction entry, the
+// first not the last entry, or no fallback_message, read the list where the
+// input side is zero, or count a zero-input, other-typed or negative entry.
 func TestAReplysUsageIsWhatClaudeCodeCountsItByOrAnError(t *testing.T) {
 	t.Parallel()
 	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -4500,19 +4212,16 @@ func TestAReplysUsageIsWhatClaudeCodeCountsItByOrAnError(t *testing.T) {
 	}
 }
 
-// A REPLY'S ITERATIONS COST ITS USAGE AN ENTRY AT A TIME: Usage reads the
-// usage its line keeps an entry at a time and keeps a copy of one entry, the
-// last it may count, so a usage near [threadValueMax] of entries none of
-// which it counts costs it no more allocations than a list of one, and no
-// more bytes than a few copies of the usage. A usage past [threadValueMax] is
-// no reading at all: the line ends it ([errThreadBound]).
+// A REPLY'S ITERATIONS COST ITS USAGE AN ENTRY AT A TIME: Usage reads the list
+// an entry at a time and keeps a copy of one, the last it may count, so a usage
+// near [threadValueMax] of uncounted entries costs no more allocations than a
+// list of one and no more bytes than a few usage copies. A usage past
+// [threadValueMax] is no reading: the line ends it ([errThreadBound]).
 //
-// Not parallel: the counts are the process's, and a parallel test's
-// allocations would be counted with this one's.
+// Not parallel: the counts are the process's.
 //
-// Mutation: decode the list whole, or collect its entries, before its last is
-// found, and a long list costs an allocation or more for every entry; drop
-// the bound on a value read whole, and the line past it reads.
+// Mutation: decode the list whole, or collect its entries, and a long list
+// costs an allocation per entry; drop the bound, and the line past it reads.
 func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	const (
 		head = `{"type":"assistant","message":{"role":"assistant","content":[],"usage":{"input_tokens":3,` +
@@ -4549,23 +4258,16 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 }
 
 // A LIST IS WALKED AN ELEMENT AT A TIME: each element is handed out as it is
-// read, in order and as written but for the whitespace around it, with where
-// in the list it sits, so the list holds those very bytes there; the walk
-// stops at the first error its callback returns, returns that error itself,
-// never wrapped, and reads no element after it, so a list whose later elements
-// are no JSON at all still ends with the callback's error; and a value that is
-// no list, a list cut short, one whose element is no JSON and one followed by
-// more are each an error of the walk's own, never io.EOF. An empty list hands
-// out nothing.
+// read, in order and as written but for surrounding whitespace, with its index,
+// so the list holds those very bytes there; the walk stops at the callback's
+// first error, returns it unwrapped, and reads no element after it, so later
+// non-JSON elements do not change it; a non-list, a cut list, a non-JSON
+// element and trailing data are each the walk's own error, never io.EOF. An
+// empty list hands out nothing.
 //
-// Mutation: read the list whole before handing out its first element, and the
-// list whose third element is no JSON ends with the decode's error, its first
-// two never handed out; hand out where an element ends for where it sits, and
-// no element is where the walk says; wrap the callback's error, and it no
-// longer comes back as itself; walk on past it, and the walk ends with the
-// decode's error; take any value for a list, and a string or nothing ends the
-// walk with io.EOF; take what follows a list, and a list followed by another
-// reads as one.
+// Mutation: read the list whole first, hand out an element's end for its index,
+// wrap the callback's error, walk on past it, take any value for a list, or
+// ignore what follows a list, and a case fails.
 func TestAListIsWalkedAnElementAtATime(t *testing.T) {
 	t.Parallel()
 	walk := func(list string, stopAt int, stop error) ([]string, error) {
@@ -4624,29 +4326,18 @@ func ctListRecord(t *testing.T, head, element, tail string, size int) string {
 	return head + element + strings.Repeat(","+element, more) + strings.Repeat(" ", pad) + tail
 }
 
-// AN OBJECT IS WALKED A KEY AT A TIME: each key is handed out as it is read,
-// in order, its name unquoted as the layer's options read a name (an escape
-// resolved, a lone surrogate and a byte that is no UTF-8 each as U+FFFD, and
-// its case as written) and its value as written but for the whitespace around
-// it, with where in the object the value sits, so the object holds those very
-// bytes there; a key written twice is handed out both times, each in its
-// place; the walk stops at the first error its callback returns, returns that
-// error itself, never wrapped, and reads no key after it, so an object whose
-// third key's value is no JSON still ends with the callback's error; and a
-// value that is no object, an object cut short, one whose key is no string,
-// one whose value is no JSON and one followed by more are each an error of the
-// walk's own, never io.EOF. An empty object hands out nothing.
-//
-// Mutation: read the object whole before handing out its first key, and the
-// object whose third key is no JSON ends with the decode's error, its first
-// two never handed out; hand a name out as written, and an escaped name keeps
-// its escape; hand out where a value ends for where it sits, and no value is
-// where the walk says; fold a key written twice into one, and its second value
-// is never handed out; wrap the callback's error, and it no longer comes back
-// as itself; walk on past it, and the walk ends with the decode's error; take
-// any value for an object, and a string or nothing ends the walk with io.EOF;
-// take what follows an object, and an object followed by another reads as
-// one.
+// AN OBJECT IS WALKED A KEY AT A TIME: each key is handed out as it is read, in
+// order, its name unquoted as the layer's options read it (escapes resolved, a
+// lone surrogate or non-UTF-8 byte as U+FFFD, case as written), its value as
+// written but for surrounding whitespace, with its index, so the object holds
+// those very bytes there; a key written twice is handed out both times; the
+// walk stops at the callback's first error, returns it unwrapped, and reads no
+// key after it; a non-object, a cut object, a non-string key, a non-JSON value
+// and trailing data are each the walk's own error, never io.EOF. An empty
+// object hands out nothing.
+// Mutation: read the object whole first, hand a name out as written, an end for
+// an index, fold repeated keys, wrap the callback's error, walk on past it, or
+// take any value for an object, and a case fails.
 func TestAnObjectIsWalkedAKeyAtATime(t *testing.T) {
 	t.Parallel()
 	type key struct{ name, value string }
@@ -4722,33 +4413,18 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 	return head + keys.String() + strings.Repeat(" ", room-keys.Len()) + tail, n
 }
 
-// A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content is read a
-// block at a time in its line's one pass, each held to its type as it is read,
-// and a reply's applied context edits a block at a time off the report its
-// line keeps. So a content list refused at its first block costs its line's
-// reading what a list of that block alone costs, however many follow it, at 8
-// MiB of `1`s or of empty objects: at most 16 KiB more, never a copy of the
-// list nor a header for each element. An edits list near [threadValueMax]
-// costs ToolResultsCleared no more allocations than one of one block, and no
-// more bytes than two copies of the list. The walk itself, with nobody keeping
-// what it hands out, costs the same for a long list as for a list of one, in
-// allocations and in bytes: it never collects the elements. And a list read to
-// its end leaves held what Message says it does, a call for each call block
-// and nothing of any other block, nor of the list: for a list of the smallest
-// blocks of a kind no reader names nothing a block, and for one of the
-// smallest results each call's fields, the array at most twice them for its
-// doubling, and the bytes of each id.
-//
-// Not parallel: the counts are the process's, and a parallel test's
-// allocations would be counted with this one's.
-//
-// Mutation: copy each piece of the line as it is read, or read on past a
-// list's first refused block, and a refused list of 8 MiB costs megabytes
-// more than a list of one; decode the edits whole before the first is
-// checked, and they cost thousands of allocations more; have the walk collect
-// the list before it hands out the first element, and it costs several times
-// the list more; grow a message's array of calls to twice what it charges,
-// and a list read to its end holds more than twice its calls.
+// A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content is read a block
+// at a time in its line's one pass, each held to its type as read, and a
+// reply's applied context edits a block at a time off the report its line
+// keeps. A list refused at its first block costs what a list of that block
+// alone costs, at 8 MiB of `1`s or of empty objects: at most 16 KiB more, never
+// a copy of the list nor a header per element. An edits list near
+// [threadValueMax] costs ToolResultsCleared no more allocations than one block
+// and no more bytes than two copies of the list; a walk nobody keeps costs the
+// same for a long list as for one. A list read to its end leaves held what
+// Message says: a call per call block, the array at most twice them, the bytes
+// of each id. Not parallel: the counts are the process's.
+// Mutation: copy pieces, read past a refused block, decode edits whole, collect the list, or grow calls past twice.
 func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	ctx := t.Context()
 	// slack is how many more allocations a long list's edits may cost than a
@@ -4857,19 +4533,16 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	}
 }
 
-// AN OBJECT'S WALK COSTS WHAT ONE KEY COSTS: the walk itself, with nobody
-// keeping what it hands out, costs an object of tens of thousands of keys the
-// allocations an object of one key costs, and no byte more than the object's
-// own size, whether its names are written plainly or escaped: it never
-// collects the keys, and hands each name out in a buffer it reuses, never as a
-// string or a copy of its own, either of which is an allocation for every key.
+// AN OBJECT'S WALK COSTS WHAT ONE KEY COSTS: a walk nobody keeps costs an object
+// of tens of thousands of keys the allocations one key costs, and no byte more
+// than the object's size, plain or escaped names alike: it never collects the
+// keys, and hands each name out in a reused buffer, never a string or copy,
+// either of which allocates per key.
 //
-// Not parallel: the counts are the process's, and a parallel test's
-// allocations would be counted with this one's.
+// Not parallel: the counts are the process's.
 //
-// Mutation: have the walk collect the keys before it hands out the first, or
-// hand out a copy of each name, and an object of listBytes costs an
-// allocation or more for every key it holds.
+// Mutation: collect the keys first, or hand out a copy of each name, and an
+// object of listBytes costs an allocation or more per key.
 func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 	keepNone := func([]byte, json.RawMessage, int) error { return nil }
 	for name, key := range map[string]func(int) string{
@@ -4896,19 +4569,16 @@ func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 	}
 }
 
-// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a call's kind (a
-// call's or a result's) is held as the layer's own constant, so a list of
-// calls holds no string of its own for a call's kind; and every block,
-// whatever its kind, is counted in Blocks and held as its kind's member of a
-// set, nothing more: each kind the layer names (a text, a thinking and a
-// redacted thinking, a call and a result) its own, and a kind it does not name
-// one that no reader can ask for, so a reply holding a server's call among its
-// text and thinking is not all of the kinds the layer names, whatever kinds
-// the reader names beside them.
+// A KNOWN BLOCK KIND IS HELD AS THE LAYER'S OWN STRING: a call's or result's
+// kind is the layer's own constant, so a list of calls holds no string of its
+// own for it; every block is counted in Blocks and held as its kind's member of
+// a set, nothing more: each kind the layer names (text, thinking, redacted
+// thinking, call, result) its own, any other kind one no reader can ask for, so
+// a reply holding a server's call among its text and thinking is not all the
+// named kinds.
 //
-// Mutation: hold a call's kind as its decode left it, and it is a string of
-// its own; read a kind the layer does not name as one it does, or match it by
-// its name, and the reply holding a server's call is all of the named kinds.
+// Mutation: hold a call's kind as decoded, or read an unnamed kind as a named
+// one or match it by name, and a case fails.
 func TestAKnownBlockKindIsHeldAsTheLayersOwnString(t *testing.T) {
 	t.Parallel()
 	named := `[{"type":"text","text":"batch 1."},{"type":"thinking","thinking":"the batch","signature":"c2ln"},` +
@@ -4953,26 +4623,17 @@ func TestAKnownBlockKindIsHeldAsTheLayersOwnString(t *testing.T) {
 }
 
 // A SERVER'S CLEARING IS WHAT AN ASSISTANT RECORD SAYS IT APPLIED: a model's
-// reply whose message reports, among the context edits the server applied to
-// the request it answers, the clearing of old tool results with a count above
-// none. Nothing else is one: that edit with a count of none, another edit
-// (even one carrying the clearing's count), no edit, a report that lists none,
-// the null report of the reply a resume writes, a reply as measured, which
-// carries no report at all; nor the clearing reported on a record that is no
-// model's reply, which answered no request. A report of the wrong shape (a
-// report neither an object nor null, edits that are no list, an edit that is
-// no object or whose type is no string, the clearing's count no number) is an
-// error, wherever its bad edit falls, never a report read as none, and it
-// costs this accessor alone: the record's message still reads. So is a reply
-// whose message is no object, a null one among them.
-//
-// Mutation: count a count of none, or read the count off every edit, and a
-// report that cleared nothing reads as cleared; answer for every record's
-// type, and a result carrying the clearing reads as cleared; refuse a null
-// report, and the reply a resume writes is an error; let a null message
-// through, and it reads as one that reports nothing; stop at the first
-// clearing, and an edit after it of the wrong shape passes; hold the report in
-// Message, and a record whose report is of the wrong shape reads no message.
+// reply whose message reports the clearing of old tool results with a count
+// above none among the context edits the server applied. Nothing else is one:
+// a count of none, another edit (even with the clearing's count), no edit, an
+// empty or null report (a resume's reply), a reply as measured with no report,
+// or the clearing on a non-reply record. A report of the wrong shape (neither
+// object nor null, non-list edits, a non-object edit or non-string type, a
+// non-number count) is an error, wherever the bad edit falls, never none, and
+// costs this accessor alone; so is a reply whose message is no object, null
+// included. Mutation: count none, read counts off every edit, answer for every
+// type, refuse a null report or let a null message through, stop at the first
+// clearing, or hold the report in Message, and a case fails.
 func TestAServerClearingIsWhatAnAssistantRecordSaysItApplied(t *testing.T) {
 	t.Parallel()
 	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
@@ -5040,20 +4701,17 @@ func TestAServerClearingIsWhatAnAssistantRecordSaysItApplied(t *testing.T) {
 	}
 }
 
-// MEMBERS ARE NAMED EXACTLY: the session's main thread, a subagent's thread
-// and its metadata, each named from a session's id and an agent's, and read
-// back from that name and no other. Another session's file, which a person's
-// transcript takes for a main thread, a deeper path under the session's
-// directory, a name the caller did not clean, `agent-.jsonl` and an agent's id
-// outside the rule (1 to 64 bytes of letters, digits, `-` and `_`) name no
-// member, and an id outside its rule names none in either direction: a
-// session's id outside sandbox.ValidSessionID's shape names no member, nor
-// reads back as the session of the names its own spelling would make
-// (`projects/crewlet/a/b.jsonl` for `a/b`).
+// MEMBERS ARE NAMED EXACTLY: the session's main thread, a subagent's thread and
+// its metadata, each named from a session's id and an agent's, and read back
+// from that name and no other. Another session's file (which a person's
+// transcript takes for a main thread), a deeper path, an uncleaned name,
+// `agent-.jsonl` and an agent's id outside the rule (1 to 64 bytes of letters,
+// digits, `-`, `_`) name no member, and a session id outside
+// sandbox.ValidSessionID's shape names none either way, nor reads back as the
+// session its own spelling would make (`projects/crewlet/a/b.jsonl` for `a/b`).
 //
-// Mutation: read a member's name through claudeThread, and another session's
-// file reads as this session's main thread; drop the session's check from a
-// subagent's names or from the way back, and `a/b` names a member.
+// Mutation: read a name through claudeThread, and another session's file reads
+// as this main thread; drop the session's check, and `a/b` names a member.
 func TestMembersAreNamedExactly(t *testing.T) {
 	t.Parallel()
 	dir := "projects/" + claudeProjectDir + "/" + ctSession
@@ -5141,21 +4799,17 @@ func TestMembersAreNamedExactly(t *testing.T) {
 	}
 }
 
-// A SAVED COMPACTION IS NAMED BY BOTH NAMES CLAUDE CODE READS IT BY: the one
-// it writes, in the session's directory, and the sibling beside that
-// directory, in the order it reads them, each read back as the session's
-// saved compaction, one kind for both. A name beside either (a temporary one,
-// another extension, either with no separator), either name under the
-// subagents' directory or a subagent's, either name of another session or
-// project, and a name the caller did not clean name none; and a session's id
-// outside sandbox.ValidSessionID's shape names none, nor reads back as the
-// session of the names its own spelling would make.
+// A SAVED COMPACTION IS NAMED BY BOTH NAMES CLAUDE CODE READS IT BY: the one it
+// writes, in the session's directory, and the sibling beside that directory, in
+// the order it reads them, each read back as the session's saved compaction.
+// A name beside either (a temporary one, another extension, none with a
+// separator), either under the subagents' directory, either of another session
+// or project, and an uncleaned name name none; a session id outside
+// sandbox.ValidSessionID's shape names none, nor reads back as the session its
+// own spelling would make.
 //
-// Mutation: name the first alone, and the sibling is no name of the session's;
-// swap the two, and the one Claude Code reads second reads first; read back
-// either as no member, and a session holding it reads as one that holds none;
-// match a name by its last element, and the name under the subagents'
-// directory reads as one; drop the session's check, and `a/b` names one.
+// Mutation: name the first alone, swap the two, read either back as no member,
+// match by last element, or drop the session's check, and a case fails.
 func TestASavedCompactionIsNamedByBothNamesClaudeCodeReads(t *testing.T) {
 	t.Parallel()
 	dir := "projects/" + claudeProjectDir + "/" + ctSession

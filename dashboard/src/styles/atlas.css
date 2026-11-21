@@ -185,6 +185,11 @@
   min-height: 0;
 }
 
+/* A card is as wide as the map's arrangement makes it (arrange.ts), set on the box. */
+.atlas-map .atlas-map__graph {
+  --crewlet-graph-canvas-card-width: inherit;
+}
+
 /* Why every change in an entry's More menu is held, said once above its items. */
 .atlas-actions__held {
   display: block;

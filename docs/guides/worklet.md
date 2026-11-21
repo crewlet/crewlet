@@ -1282,7 +1282,7 @@ decision is one question to one person, answered once, and what happens next is
 the asker's turn.
 
 The asker is woken with the choice **by its label** (the card reads
-`Chose “Ship Friday”: <the body>`), and the ask's row in `asked_of_me` carries
+`Chose “Ship Friday”: <the note>`), and the ask's row in `asked_of_me` carries
 the decision with the recommendation already filled in as the `choice` of its
 `answer_with` call, so a reader who agrees sends it as written.
 
@@ -1298,9 +1298,14 @@ under `asked`. An edit of the question does not re-watch anybody.
 
 **Answering.** `comment_on_work_item` with `answers` and `choice` (the option's
 id) answers it, and `body` is then optional: the choice is the answer, the body
-its reason. Leave `choice` out to answer in prose when no option is right. A
-`choice` with no question to answer (nothing named, and no open ask on the item
-addressed to you) is refused.
+its reason. The answer's comment **says what it chose** in words, opening with
+the option's label and then the body (`Chose “Ship Friday”: the audit can
+wait`), so every reader of the thread (an agent's `get_work_item`, the
+dashboard, a notice) sees the choice without the ask's options beside it. The
+tracker refuses a choosing answer that does not open that way, an edit that
+drops it, and any new comment with no words. Leave `choice` out to answer in
+prose when no option is right. A `choice` with no question to answer (nothing
+named, and no open ask on the item addressed to you) is refused.
 
 **The wakes.** The person asked is woken with the options listed by id, the
 recommendation marked, the evidence, and the answering call written out whole

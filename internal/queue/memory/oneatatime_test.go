@@ -162,7 +162,7 @@ func TestAHandlerNeverRunsBesideItself(t *testing.T) {
 						// AND THE EVENT WAITS IN THE MAILBOX, behind the pass
 						// running the handler: the twin's own record of it,
 						// which a delivery made beside the handler takes out.
-						if got := q.Backlog(reentryTopic, "g"); len(got) != 1 || got[0].Type != "second" {
+						if got := mailOf(t, q, reentryTopic, "g"); len(got) != 1 || got[0].Type != "second" {
 							t.Fatalf("with the handler held, %s its pair's mailbox held %v, want "+
 								"the one event it published, waiting behind it", when, typesOf(got))
 						}

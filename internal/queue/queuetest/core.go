@@ -206,11 +206,10 @@ func (s *suite) runCore(t *testing.T) {
 		for _, label := range []string{"e0", "e1", "e2"} {
 			publish(ctx, t, q, topic, newEvent(label))
 		}
-		if backlog := s.optionalBacklog(t); backlog != nil {
-			awaitState(t, "three retained events", func() bool {
-				return len(backlog(q, topic, group)) == 3
-			})
-		}
+		backlog := s.backlog(ctx, t)
+		awaitState(t, "three retained events", func() bool {
+			return len(backlog(q, topic, group)) == 3
+		})
 
 		j := newJournal()
 		subscribe(ctx, t, q, topic, group, recordingHandler(j))
@@ -220,7 +219,7 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("publishing_to_no_subscription_retains_nothing", func(t *testing.T) {
 		t.Parallel()
 		// Which is exactly why EnsureSubscription exists.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		publish(ctx, t, q, "nobody.listening", newEvent("lost"))
 		if got := backlog(q, "nobody.listening", "grp"); len(got) != 0 {
@@ -249,7 +248,7 @@ func (s *suite) runCore(t *testing.T) {
 		// accumulate undeliverable events forever, and deleting must not
 		// require a local consumer — role removal cannot depend on which
 		// node happened to run the seat.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		if _, err := q.EnsureSubscription(ctx, "topic.gone", "grp"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
@@ -441,7 +440,7 @@ func (s *suite) runCore(t *testing.T) {
 		// claim false.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		// Three attempts total, however this backend's broker counts them.
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
@@ -544,7 +543,7 @@ func (s *suite) runCore(t *testing.T) {
 		// a_deferral_spends_one_delivery_like_every_other_hand_back.
 		// The budget is sized for handoffs, which is why one deferral
 		// here is nowhere near the dead-letter boundary.
-		backlog := s.needBacklog(t)
+		backlog := s.backlog(ctx, t)
 		deadLetters := s.needDeadLetters(t)
 		q := s.start(ctx, t)
 

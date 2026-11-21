@@ -186,9 +186,7 @@ func keptRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	out := liveRow(row, submission)
 	for _, key := range []string{"result", "error"} {
 		if answer, ok := out[key].(string); ok {
-			if text, whole := recordTally.Text(answer, sandbox.MaxBridgeOutputBytes); whole > 0 {
-				out[key] = text
-			}
+			out[key] = keptText(answer, sandbox.MaxBridgeOutputBytes)
 		}
 	}
 	return out
@@ -333,13 +331,8 @@ const (
 )
 
 // keptText is s held to share bytes as the event encodes it: whole within it,
-// and past it its opening with the cut said ([recordTally]).
-func keptText(s string, share int) string {
-	if text, whole := recordTally.Text(s, share); whole > 0 {
-		return text
-	}
-	return s
-}
+// and past it its opening with the cut said ([keptOpening]).
+func keptText(s string, share int) string { return keptOpening(s, len(s), share) }
 
 // keptPrompt is p within [promptBytes]: whole within it, past it PART BY PART
 // ([keptParts]) with the outline rewritten to the kept text, since the

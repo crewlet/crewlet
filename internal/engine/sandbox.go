@@ -42,7 +42,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -1276,6 +1275,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
 	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher), e.leads)
+	// AND EVERY WAKE A CONTINUATION OF THE RUN'S SESSION MAY HOLD, off the same
+	// record: each one read, and each its job was served and never read.
+	input.Resume.Wakes = e.runSteers.carriedWakes(in.Run)
 	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1534,7 +1536,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // which later iterations' launcher seals briefs from ([agentLauncher.notes]).
 func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput, notes *rowSource,
 ) (input RunnerInput, tel turnTelemetry, err error) {
-	resumedReply, err := resumeReply(in.Run)
+	// AND EVERY WAKE ITS RUN READ: the turn answers those too (wakeitem.go).
+	resumedReply, err := e.runSteers.turnReply(in.Run)
 	if err != nil {
 		return input, tel, err
 	}
@@ -2821,6 +2824,18 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// SHOWED IT TOOK is recorded delivered by every read of the job's box
 		// that settles its serves. See runsteer.go.
 		SteersConfirmed: e.runSteers.confirmed,
+		// AND EVERY WAKE A JOB A RELAUNCH REPLACED NEVER READ is reported once
+		// the relaunch's write removed it, its delivery left to a turn of its
+		// own. See wakeitem.go.
+		WakesEnded: e.runSteers.wakesEnded,
+		// AND EVERY OTHER CONVERSATION WHOSE WAKE A STEP READ is named by the
+		// turn's end, so its next turn continues the session the turn kept.
+		// See wakeitem.go.
+		Served: e.runSteers.served,
+		// AND WHILE A RUN HOLDS A SEAT, the seat's held inbox is read and a
+		// wake from the run's requester about its work handed to it. See
+		// wakerouter.go.
+		Busy: e.seatRunsMoved,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -2890,6 +2905,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// paused and no setup rewrites them (see
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
+		// A final take's wait for spool room, and the room held, recorded in
+		// the node's metrics. See spoolmeter.go.
+		Spools: spoolMeter{metrics: e.metrics},
 	}
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the
@@ -4485,10 +4503,9 @@ func refusedSaid(in resumeInput) string {
 	return refusedMessage(in.Ended)
 }
 
-// refusedMessage is what the provider said of a refused request, redacted whole
-// and clipped as a diagnostic, keeping only the opening of the redaction the
-// clip reads ([redact.Prefix]): the run's error, else its text, else that it
-// said nothing.
+// refusedMessage is what the provider said of a refused request, as a
+// diagnostic holds it ([events.Diagnostic]): the run's error, else its text,
+// else that it said nothing.
 func refusedMessage(ended sandbox.RunEnding) string {
 	said := strings.TrimSpace(ended.Error)
 	if said == "" {
@@ -4497,8 +4514,7 @@ func refusedMessage(ended sandbox.RunEnding) string {
 	if said == "" {
 		return "the provider gave no message"
 	}
-	opening, _ := redact.Prefix(said, events.MaxDiagnosticBytes+1)
-	return events.ClipDiagnostic(opening)
+	return events.Diagnostic(said)
 }
 
 // signInReplaced decides whether a collected run is carried on because a

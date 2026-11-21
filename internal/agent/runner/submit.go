@@ -50,6 +50,22 @@
 // VALID one stays here, in the decoders below, because that belongs to the
 // phase doing the asking.
 //
+// # Where each rule lives
+//
+// Each rule is stated once, on the declaration that keeps it; the files group
+// them. agentrun.go launches and collects the executor's run; resume.go
+// re-enters a parked turn and seeds its call log by identity (seedCalls), so
+// no call a segment carries moves an operation id a later call derives. A
+// round a resume carries on rather than collects (carried: asked.go, lost.go,
+// rotated.go, refused.go) relaunches through continued.go, which decides the
+// session it continues and what each brief tells it; leads.go retells a
+// brief's leads to a session that may lack it, and readalike.go marks the
+// calls a session could take for one another. phases.go builds every phase's
+// surface (seatSnapshot, executorActive) and its notes' one source
+// ([SteerSource]); handedskills.go hands the executor its skills as its
+// harness's own; recordbytes.go holds a durable record to one message and the
+// live frame to its stream.
+//
 // # A continued session's words and measure
 //
 // A relaunch that continues a kept capture taken while its job still worked
@@ -86,6 +102,21 @@
 // after every placed one, follow in their own order. A read the source has
 // not placed (the first segment's box keeps no record) keeps its turn, after
 // every placed one.
+//
+// # What a record holds of somebody's words
+//
+// A phase's durable record (agent_phase_completed) holds its prompts, its
+// model's answer and prose, its notes, its failure and each call's arguments
+// and answer REDACTED BEFORE THEY ARE CUT (recordredact.go), where the record
+// is built: a credential a cut runs across, cut first, leaves a head no rule
+// knows. Only the record: the model read every answer as it came, as an
+// executor's harness does, and the record is what a person reads later. A
+// call's arguments are redacted as values, each beside its key, never as the
+// JSON text, which a redaction can leave no JSON. The size a cut states is
+// the redaction's, as an executor's record states it. An executor run's call
+// whose log kept only an opening of its answer, raw, is recorded as the
+// redaction of that opening's settled lines (redact.Settled), the rest said
+// by the bytes the log measured past them.
 package runner
 
 import (

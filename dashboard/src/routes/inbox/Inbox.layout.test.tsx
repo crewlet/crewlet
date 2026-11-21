@@ -204,6 +204,56 @@ test("the open item's title fills its first line to within one word, at every wi
   expect(loose, "widths where the first line left room for the next two words").toEqual([]);
 });
 
+// A LONG ANSWER IN WORDS STOPS AT THREE LINES IN ITS ROW, cut where it is
+// laid out: its paragraphs and its list are drawn, and the row does not grow
+// with them. Mutation: drop the row's clamp, and the line runs to every block.
+test("a long answer in words stops at three lines in its row", async () => {
+  await page.viewport(1440, 900);
+  const at = new Date(Date.now() - 60 * 60_000).toISOString();
+  const reply = [
+    "**Pass**, with conditions:",
+    ...Array.from({ length: 8 }, (_, i) => `- Condition ${i + 1} holds before the release ships`),
+    "",
+    "The changelog still needs the migration note.",
+  ].join("\n");
+  const answered = {
+    at,
+    ask: { ...ask(3, "Is the release a go?").ask, open: false, answer_with: undefined },
+    answer: { by: "jane", by_kind: "human", at, comment: "c-31", body: reply },
+  };
+  host = document.createElement("div");
+  host.style.cssText = "display: flex; flex-direction: column; width: 1200px; height: 720px;";
+  document.body.append(host);
+  root = createRoot(host);
+  flushSync(() =>
+    root!.render(
+      <LayoutClient
+        answers={{ ...ANSWERS, answered_decisions: { handle: "jane", items: [answered] } }}
+        org={ORG}
+      >
+        <Inbox />
+      </LayoutClient>,
+    ),
+  );
+  await eventually(() => expect(title()?.textContent).toBe(FIRST));
+  [...document.querySelectorAll("button")].find((b) => b.textContent === "Answered, 1")!.click();
+  const said = await eventually(() => {
+    const found = document.querySelector<HTMLElement>(
+      ".inbox-list .crewlet-inbox-row__outcome-text",
+    );
+    expect(found?.querySelector("ul")).toBeTruthy();
+    return found!;
+  });
+  await document.fonts.ready;
+  const line = parseFloat(getComputedStyle(said).lineHeight);
+  const items = said.querySelectorAll("li");
+  expect(items).toHaveLength(8);
+  const box = said.getBoundingClientRect();
+  expect(box.height).toBeLessThanOrEqual(3 * line + 1);
+  // CUT, not short: the last condition is drawn below what is shown.
+  expect(items[7]!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.bottom);
+});
+
 /** A run holding an ssh_operate call, worded as the engine words it (`make ssh-held-words`). */
 function heldRun() {
   const at = new Date(Date.now() - 5 * 60_000).toISOString();
