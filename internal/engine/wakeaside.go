@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -24,11 +25,13 @@ import (
 
 // besideAnswer is what a delivery below the seat's cap waits on: the key it
 // waits aside under, the run it waits behind (empty for a served conversation
-// whose run the listing did not name) and the rule its count names. The zero
-// answer starts a turn beside the seat's runs.
+// whose run the listing did not name), the rule its count names, and whether
+// that conversation's run is parked waiting on another run (ADR-0176), which
+// its writer is told. The zero answer starts a turn beside the seat's runs.
 type besideAnswer struct {
 	Key, Run string
 	Rule     routeRule
+	Waits    bool
 }
 
 // waitBeside is the dispatcher's step past the answer offer: what [Dispatcher.Beside]
@@ -93,17 +96,17 @@ func (e *Engine) beside(ctx context.Context, handle string, evs []*events.Event)
 	if err != nil {
 		return besideAnswer{}, err
 	}
-	var runs []sandbox.PendingRun
+	var runs, listed []sandbox.PendingRun
 	if e.runSteers != nil {
-		listed, err := e.runSteers.store.ListActiveForSeat(ctx, handle)
-		if err != nil {
+		if listed, err = e.runSteers.store.ListActiveForSeat(ctx, handle); err != nil {
 			return besideAnswer{}, fmt.Errorf("engine: reading %s's runs: %w", handle, err)
 		}
 		runs = routableRuns(listed)
 	}
 	var at besideAnswer
 	if busy {
-		at = besideAnswer{Key: conversation, Run: runWorking(runs, conversation), Rule: ruleConversation}
+		at = besideAnswer{Key: conversation, Run: runWorking(runs, conversation), Rule: ruleConversation,
+			Waits: waitingIn(listed, conversation)}
 	}
 	if len(runs) > 0 {
 		wrote, ok := e.writtenOf(ctx, handle, runs)
@@ -160,6 +163,15 @@ func (e *Engine) relatedRun(ctx context.Context, handle string, runs []sandbox.P
 	return sandbox.PendingRun{}, false
 }
 
+// waitingIn reports whether a run of runs parked waiting on another run works
+// conversation, its own: one that keeps it busy while it waits (ADR-0176).
+func waitingIn(runs []sandbox.PendingRun, conversation string) bool {
+	return slices.ContainsFunc(runs, func(run sandbox.PendingRun) bool {
+		return run.WaitsFor != nil && run.ConversationKey == conversation &&
+			!slices.Contains(sandbox.Holding, run.Status)
+	})
+}
+
 // runWorking is the turn of the run of runs whose own conversation is
 // conversation, empty where none names it (a run that served it).
 func runWorking(runs []sandbox.PendingRun, conversation string) string {
@@ -188,7 +200,10 @@ func (e *Engine) setAside(ctx context.Context, handle string, at besideAnswer, e
 	log.InfoContext(ctx, "seat_wake_aside", "seat", handle, "key", at.Key, "turn_id", at.Run,
 		"wake_ids", wakeIDsOf(evs))
 	why := runsAfterLine
-	if at.Rule == ruleConversation {
+	switch {
+	case at.Waits:
+		why = asideWaitLine
+	case at.Rule == ruleConversation:
 		why = asideLine
 	}
 	for _, ev := range evs {
@@ -199,6 +214,10 @@ func (e *Engine) setAside(ctx context.Context, handle string, at besideAnswer, e
 // asideLine is why a wake of a conversation another run works waits, as its
 // writer is told it beside the seat's name.
 const asideLine = "is working on this conversation in another run; this runs after it"
+
+// asideWaitLine is why a wake of a conversation whose run waits on another of
+// the seat's runs waits (ADR-0176), as its writer is told it.
+const asideWaitLine = "is waiting for its run here to finish the work it waits on; this runs after it"
 
 // tellAside tells the person who wrote ev, waiting aside on handle's inbox, why
 // it waits, on the conversation's queued line ([Engine.tellWaiting]'s memory):

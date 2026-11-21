@@ -29,8 +29,9 @@ type runWrites struct {
 
 	// waits says the run's row, as the latest write read it, parks it on
 	// another run (`wait_for_run`): parked so, its keys stay held
-	// ([Coordinator.waitingRuns]).
-	waits bool
+	// ([Coordinator.waitingRuns]); gone says the latest write that landed
+	// deleted its row.
+	waits, gone bool
 }
 
 // countWrite is one write that moves a run between its seat's sets, from the
@@ -202,7 +203,7 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 			// WHERE THE WRITE PUT THE RUN, whatever the writes before it
 			// did (the package doc, "Every write that moves a run between its
 			// seat's sets moves the count once").
-			writes.counted = countOf(next.to)
+			writes.counted, writes.gone = countOf(next.to), next.to == ""
 		}
 	}
 	move := seatRuns{
@@ -214,7 +215,17 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 		delete(c.writing, w.turn)
 	}
 	if move == (seatRuns{}) || w.handle == "" {
-		return c.slotFreed(w.handle, freed)
+		slot := c.slotFreed(w.handle, freed)
+		if w.handle == "" || len(c.freed[w.handle]) == 0 {
+			return slot
+		}
+		// A RUN ANSWERED ON ITS WAIT ENDING moves no count and frees the
+		// keys it kept (seatcap.go): they are readmitted all the same.
+		return func() {
+			slot()
+			c.readmitFreed(c.life, w.handle)
+			c.Readmit(ConversationBusy, w.handle)
+		}
 	}
 	was, runs := c.adjustLocked(w.handle, move.holding, move.awaiting)
 	return func() {

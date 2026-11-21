@@ -189,9 +189,10 @@ func (c *Coordinator) servedOf(ctx context.Context, runs []PendingRun) map[strin
 }
 
 // waitsOnARun reports whether run is parked by `wait_for_run`, whose keys stay
-// held while it waits ([Coordinator.waitingRuns]).
+// held while it waits, answered or not, until it resumes or ends
+// ([Coordinator.waitingRuns]).
 func waitsOnARun(run PendingRun) bool {
-	return run.WaitsFor != nil && slices.Contains(Awaiting, run.Status)
+	return run.WaitsFor != nil && slices.Contains(Active, run.Status) && !slices.Contains(Holding, run.Status)
 }
 
 // seatRefusalLocked is why handle's seat starts turn's run of conversation now,
@@ -258,6 +259,10 @@ func (c *Coordinator) slotOfLocked(turn string) bool {
 // out keeps what its writes' moves leave it ([Coordinator.wroteCountLocked]).
 // Under mu.
 func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, served map[string][]string) {
+	waited := map[string]bool{}
+	for turn, run := range c.waitingRuns {
+		waited[turn] = run.handle == handle
+	}
 	for _, set := range []map[string]heldRun{c.heldRuns, c.waitingRuns} {
 		maps.DeleteFunc(set, func(turn string, run heldRun) bool {
 			gone := run.handle == handle && c.writing[turn] == nil
@@ -275,6 +280,9 @@ func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, se
 		switch {
 		case slices.Contains(Holding, run.Status):
 			c.heldRuns[run.TurnID] = held
+			if waited[run.TurnID] {
+				c.resumedLocked(run.TurnID, held)
+			}
 		case waitsOnARun(run):
 			c.waitingRuns[run.TurnID] = held
 		}
@@ -285,9 +293,13 @@ func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, se
 // turn: held, with its conversations, while it counts in [Holding], else not.
 // Under mu, from [Coordinator.wroteCountLocked].
 //
-// A RUN PARKED ON ANOTHER RUN keeps its keys ([Coordinator.waitingRuns]), so
-// its mail waits aside behind it rather than starting a second turn on the
-// work it waits to go on with, until it resumes or ends (ADR-0176).
+// A RUN PARKED ON ANOTHER RUN is a turn still in flight on its conversation:
+// it keeps its keys ([Coordinator.waitingRuns]) and holds no slot, so its mail
+// waits aside behind it rather than starting a second turn on the work it
+// waits to go on with. Resuming, it hands that mail back to be screened
+// against it running, where a follow-up joins it; ending parked, it frees its
+// keys (ADR-0176). A run parked on a question frees its keys at once: the
+// next message there is the answer its park routes.
 func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 	if writes.counted.holding == 0 || writes.handle == "" {
 		run, held := c.heldRuns[turn]
@@ -297,7 +309,7 @@ func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 		delete(c.heldRuns, turn)
 		switch {
 		case !held:
-		case writes.waits && writes.counted.awaiting > 0:
+		case writes.waits && !writes.gone:
 			c.waitingRuns[turn] = run
 		default:
 			c.freeLocked(turn, run)
@@ -305,9 +317,12 @@ func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 		}
 		return
 	}
-	delete(c.waitingRuns, turn)
-	c.heldRuns[turn] = heldRun{handle: writes.handle,
-		conversations: conversationsOf(writes.conversation, writes.served)}
+	held := heldRun{handle: writes.handle, conversations: conversationsOf(writes.conversation, writes.served)}
+	if _, waited := c.waitingRuns[turn]; waited {
+		delete(c.waitingRuns, turn)
+		c.resumedLocked(turn, held)
+	}
+	c.heldRuns[turn] = held
 }
 
 // A delivery of a conversation one of the seat's runs works, or related to one
@@ -317,8 +332,13 @@ func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 // no run of the seat still holds ([Coordinator.readmitFreed]); a readmit with
 // nothing aside hands back nothing, so nothing tracks what was set aside.
 
-// freedKey is one key a run leaving [Holding] freed, and the run, for the line.
-type freedKey struct{ key, turn string }
+// freedKey is one key a run leaving [Holding] freed, and the run, for the line;
+// resumed is one a run back from a wait hands back while it still holds it, so
+// what waited aside behind it is screened against it running.
+type freedKey struct {
+	key, turn string
+	resumed   bool
+}
 
 // runKeyPrefix begins [RunKey]: a slash, which no conversation key a message
 // derives holds before its source's colon.
@@ -362,6 +382,14 @@ func (c *Coordinator) freeLocked(turn string, run heldRun) {
 	}
 }
 
+// resumedLocked records the keys run, back in [Holding] from a wait on another
+// run, hands back though it holds them ([freedKey.resumed]). Under mu.
+func (c *Coordinator) resumedLocked(turn string, run heldRun) {
+	for _, key := range append(slices.Clone(run.conversations), RunKey(turn)) {
+		c.freed[run.handle] = append(c.freed[run.handle], freedKey{key: key, turn: turn, resumed: true})
+	}
+}
+
 // readmitFreed hands back on handle's inbox the mail set aside under each key
 // its runs freed that no run of the seat still holds ([SeatHold]): at the
 // transition that freed it, as the inbox hold follows it. The keys still held
@@ -377,7 +405,7 @@ func (c *Coordinator) readmitFreed(ctx context.Context, handle string) {
 	c.mu.Lock()
 	var free []freedKey
 	for _, f := range c.freed[handle] {
-		if !c.keyBusyLocked(handle, f.key) &&
+		if (f.resumed || !c.keyBusyLocked(handle, f.key)) &&
 			!slices.ContainsFunc(free, func(g freedKey) bool { return g.key == f.key }) {
 			free = append(free, f)
 		}

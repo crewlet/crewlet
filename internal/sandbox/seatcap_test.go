@@ -327,16 +327,18 @@ func TestAnAnsweredFoldInReadmitsTheWakeItDecides(t *testing.T) {
 	}
 }
 
-// A RUN WAITING ON ANOTHER KEEPS ITS KEYS UNTIL IT RESUMES OR ENDS (ADR-0176).
-// Parked by `wait_for_run`, a run frees no key, as a run parked on a question
-// does: its conversation and its own key stay held, so a second run of that
-// conversation is refused and its mail waits aside behind it. Its own resume
-// into the conversation it kept is never refused by its wait, and its ending
-// while parked frees and readmits what it kept. A recount from the store keeps
-// a waiting run's keys as the writes did.
+// A RUN WAITING ON ANOTHER KEEPS ITS KEYS AND NO SLOT UNTIL IT RESUMES OR ENDS
+// (ADR-0176). Parked by `wait_for_run`, answered or not, a run is a turn still
+// in flight on its conversation: it frees no key, as a run parked on a question
+// does, so a second run of that conversation is refused and its mail waits
+// aside, while it holds no slot of the seat. Its own resume is never refused by
+// its wait, and hands back what waited aside behind it to be screened against
+// it running; its ending while parked frees and readmits what it kept. A
+// recount from the store rebuilds the waiting set as the writes left it.
 //
 // Mutation: free a waiting run's keys at its park, as a question's are, and
-// they are readmitted at once.
+// they are readmitted at once; readmit nothing at its resume, and the mail
+// waits for its end.
 func TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -346,20 +348,27 @@ func TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds(t *testing.T) {
 	c := rig.coordinator
 	waiter := PendingRun{TurnID: "t1", AgentHandle: "swe", ConversationKey: "a",
 		WaitsFor: &RunWait{Turn: "t2", Seat: "swe", Reason: "its branch first"}}
+	keys := []string{"swe/a", "swe/" + RunKey("t1")}
+	readmitted := func() []string {
+		got := holds.readmitted()
+		slices.Sort(got)
+		return got
+	}
 	if err := enter(c, "t1", "a"); err != nil {
 		t.Fatal(err)
 	}
 	land(c, c.writingCount(waiter, StatusRunning, StatusAwaiting))
-	if got := holds.readmitted(); len(got) != 0 {
-		t.Fatalf("a run parking on another readmitted %v", got)
+	land(c, c.writingCount(waiter, StatusAwaiting, StatusAnswered))
+	if got := readmitted(); len(got) != 0 {
+		t.Fatalf("a run parking on another, and answered, readmitted %v", got)
 	}
 	for _, key := range []string{"a", RunKey("t1")} {
 		if busy, err := c.KeyBusy(ctx, "swe", key); err != nil || !busy {
 			t.Errorf("the waiting run's key %s is busy %v (%v), want held", key, busy, err)
 		}
 	}
-	if count := c.SeatCount("swe"); count.Holding != 0 || count.Waiting != 1 {
-		t.Errorf("the seat counts %+v, want one run waiting and none holding", count)
+	if count := c.SeatCount("swe"); count.Holding != 0 || count.Reserved != 0 || count.Waiting != 1 {
+		t.Errorf("the seat counts %+v, want one run waiting and no slot held", count)
 	}
 	if err := enter(c, "t9", "a"); !errors.Is(err, ErrConversationBusy) {
 		t.Errorf("a second run of the waiting run's conversation entered: %v", err)
@@ -369,15 +378,16 @@ func TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds(t *testing.T) {
 		t.Fatalf("the waiting run's own resume was refused: %v", err)
 	}
 	land(c, resumed)
+	if got := readmitted(); !slices.Equal(got, keys) {
+		t.Fatalf("the waiting run resuming readmitted %v, want %v to be screened against it running", got, keys)
+	}
 	land(c, c.writingCount(waiter, StatusRunning, StatusAwaiting))
-	if got := holds.readmitted(); len(got) != 0 {
-		t.Fatalf("a run resuming and parking again on a run readmitted %v", got)
+	if got := readmitted(); len(got) != 0 {
+		t.Fatalf("parking on a run again readmitted %v", got)
 	}
 	land(c, c.writingCount(waiter, StatusAwaiting, ""))
-	got := holds.readmitted()
-	slices.Sort(got)
-	if want := []string{"swe/a", "swe/" + RunKey("t1")}; !slices.Equal(got, want) {
-		t.Fatalf("the waiting run ending readmitted %v, want %v", got, want)
+	if got := readmitted(); !slices.Equal(got, keys) {
+		t.Fatalf("the waiting run ending readmitted %v, want %v", got, keys)
 	}
 
 	job := rig.launchWith("t3", func(run *PendingRun) { run.ConversationKey = "c" }).LaunchID

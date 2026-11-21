@@ -38,4 +38,4 @@ This amends ADR-0065's statement, carried in `.claude/rules/architecture.md`, th
 
 ## Amendment: a seat's runs see and message each other
 
-A run launched beside the seat's other runs is told of them and may message one of the same requester or wait for one to leave its slot ([ADR-0176](0176-a-seats-runs-see-and-message-each-other.md)).
+A run launched beside the seat's other runs is told of them and may message one of the same requester or wait for one to leave its slot ([ADR-0176](0176-a-seats-runs-see-and-message-each-other.md)). A run parked so keeps its keys and no slot: its mail waits aside behind it until it resumes or ends.

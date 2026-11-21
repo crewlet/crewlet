@@ -40,3 +40,24 @@ func TestAWaitsAnswerIsTakenOnlyForTheRunItWaitsOn(t *testing.T) {
 		t.Errorf("an answer saying nothing of a run is taken as %+v, %v", got, err)
 	}
 }
+
+// A REPLY NEVER ANSWERS A RUN WAITING ON ANOTHER RUN. Its requester's message
+// in its conversation is put to the run when it parked on a question, and is
+// the answer; parked on a run, it is put to nobody, and the message waits aside
+// behind it (ADR-0176).
+//
+// Mutation: put a wait to its requester as a question is, and its requester's
+// next message resumes it.
+func TestAReplyNeverAnswersARunWaitingOnAnotherRun(t *testing.T) {
+	t.Parallel()
+	asked := PendingRun{TurnID: "t1", AgentHandle: "swe", Requester: "ana"}
+	reply := Reply{Writer: "ana"}
+	if !reply.putTo(asked) {
+		t.Fatal("the premise: a question is put to the run's requester")
+	}
+	waiting := asked
+	waiting.WaitsFor = &RunWait{Turn: "t2", Seat: "swe", Reason: "its branch first"}
+	if reply.putTo(waiting) {
+		t.Error("the requester's reply was taken as the answer to a wait on another run")
+	}
+}
