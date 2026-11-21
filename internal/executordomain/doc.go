@@ -63,9 +63,9 @@
 // from one snapshot of it, so the rules over a whole conversation — its head,
 // its absorption, its work-key dedupe — are decided in log order on one
 // subject. Every record DECLARES the conversation as its scope under the
-// seat's path, so a seat-wide record contains it and a node that defers one
-// record defers every later record its rows could change ([statelog]'s
-// deferral contract).
+// seat's path, or the seat where its apply reaches other conversations, so a
+// seat-wide record contains it and a node that defers one record defers every
+// later record its rows could change ([statelog]'s deferral contract).
 //
 //   - `begin` records a turn's first read of its conversation — where it read
 //     the head and the turns the read handed out — and the BASE that read
@@ -111,7 +111,8 @@
 //     which takes that older session off the row and absorbs nothing: a
 //     record's meaning is fixed by its stamp ([wentOnVersion]). Each session it
 //     names as having run out of context goes too (see "A session that ran out
-//     of context is retired").
+//     of context is retired"), and from version 5 it names the other
+//     conversations the turn served.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a
@@ -204,6 +205,20 @@
 // The siblings a read offers are not held, and opening one never holds it: a
 // hold on a session a run opens would be a write the model's read triggers,
 // which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
+//
+// # A turn serves every conversation its run read
+//
+// A run that read a wake of another conversation (ADR-0167) holds its context,
+// so the turn's `end` names each ([End.Served]) and the apply writes a SERVED
+// ROW per conversation beside the turn's one row, whose one object everything
+// counts once. Each conversation's reads union its served rows ([headOf]),
+// each placed where the end applied, where the wake's own turn would have
+// read: it outranks every turn that read before, and one that read after
+// outranks it. An end shown it absorbs the served row alone; while one stands,
+// its own conversation absorbs and dedupes around the row, as around a held
+// one. A retirement there drops it; the retention and a removal take it. An
+// end reads and writes several conversations, so its scope is the seat, but it
+// decides nothing from another's snapshot, so it is arbitrated on its own.
 //
 // # A session that ran out of context is retired
 //

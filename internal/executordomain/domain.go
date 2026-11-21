@@ -32,16 +32,16 @@ const ExecutorLogMaxBytes = 512 << 20
 
 // MaxRecordBytes is the largest record this domain publishes: 128 KiB, measured
 // ([TestEveryRecordAtEveryCapFitsTheDeclaredBound]). The largest is an `end`,
-// about 74 KiB whole: its five prose fields at their caps (internal/executorkeep's
+// about 98 KiB whole: its five prose fields at their caps (internal/executorkeep's
 // CompletedWorkMaxBytes, BlockedOnMaxBytes, StopReasonMaxBytes and
 // FailureMaxBytes, and [AskExcerptMaxBytes], 11 KiB between them) encode to
-// about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes. A
-// `capture` at its caps, its [MaxAbsorbs] absorbed turns included, is about
-// 21 KiB. The bound keeps chat's and the assistant's headroom over the worst
-// case. The gate reserve on this log is sized by it, so a bound far above the
-// records holds back room no append can use: at 128 KiB the reserve's fleet
-// term (seven 132 KiB appends and a MiB, about 1.9 MiB) stays under a
-// sixteenth of even the 64 MiB floor.
+// about 66 KiB escaped (`<`, `>` and `&` to six bytes), its [MaxServed] keys to
+// 24 KiB more. A `capture` at its caps, its [MaxAbsorbs] absorbed turns
+// included, is about 21 KiB. The bound keeps chat's and the assistant's
+// headroom over the worst case. The gate reserve on this log is sized by it, so
+// a bound far above the records holds back room no append can use: at 128 KiB
+// the reserve's fleet term (seven 132 KiB appends and a MiB, about 1.9 MiB)
+// stays under a sixteenth of even the 64 MiB floor.
 const MaxRecordBytes = 128 << 10
 
 // ExecutorLogDuplicates is the window the broker collapses a repeated operation

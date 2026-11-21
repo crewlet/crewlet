@@ -19,6 +19,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -340,5 +341,56 @@ func TestAJoinedWakesDeliveryIsDroppedAsJoined(t *testing.T) {
 	}) {
 		t.Errorf("no skip record says the joined delivery joined running turn run-1, disposition joined: %+v",
 			skips)
+	}
+}
+
+// A TURN'S END NAMES EVERY OTHER CONVERSATION WHOSE WAKE ITS RUN READ: each
+// conversation of a read wake once, in the order filed, never the run's own,
+// never one of a wake no step read (its delivery runs a turn of its own, whose
+// end names it) and never one whose seal does not open, at most
+// executordomain.MaxServed.
+//
+// Mutation: name every filed wake's conversation, or the run's own, and this
+// goes red.
+func TestATurnsEndNamesEveryOtherConversationWhoseWakeItsRunRead(t *testing.T) {
+	t.Parallel()
+	runs, _ := steersOver(t, steerRing, sandbox.NewCoordStore(coordmem.NewFleet()))
+	const turn, job = "run-1", "job-1"
+	item := func(read bool, ids ...string) sandbox.RunNote {
+		n := sandbox.RunNote{ID: "wake:" + job + ":" + ids[0], For: job, Wake: &sandbox.WakeItem{}}
+		for _, id := range ids {
+			w := wakeAbout(id, "about the ticket")
+			w.Conversation = strings.TrimPrefix(id, "w-")
+			sealed, err := runs.sealWake(turn, job, w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.Wake.Wakes = append(n.Wake.Wakes, sealed)
+		}
+		if read {
+			n.Read = &sandbox.NoteRead{At: time.Now().UTC(), Phase: "execute", Boundary: "step", Launch: job}
+		}
+		return n
+	}
+	forged := item(true, "w-ticket:9")
+	forged.Wake.Wakes[0].Sealed = []byte("not a seal")
+	run := sandbox.PendingRun{TurnID: turn, ConversationKey: "chat:C1", Steer: sandbox.RunSteer{Notes: []sandbox.RunNote{
+		item(true, "w-ticket:42", "w-chat:C1"),
+		item(false, "w-ticket:7"),
+		forged,
+		item(true, "w-ticket:42", "w-ticket:43"),
+	}}}
+	if got, want := runs.served(t.Context(), run), []string{"ticket:42", "ticket:43"}; !slices.Equal(got, want) {
+		t.Errorf("the end names %v as served, want %v", got, want)
+	}
+
+	var many []sandbox.RunNote
+	for i := range executordomain.MaxServed + 1 {
+		many = append(many, item(true, fmt.Sprintf("w-ticket:%d", 100+i)))
+	}
+	run.Steer.Notes = many
+	if got := runs.served(t.Context(), run); len(got) != executordomain.MaxServed || got[0] != "ticket:100" {
+		t.Errorf("the end names %d conversations (%v), want the first %d", len(got), got,
+			executordomain.MaxServed)
 	}
 }
