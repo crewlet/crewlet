@@ -338,9 +338,11 @@ func TestTheLeaseDialGivesUpADeadSocketWithinAHeartbeatOfTheShortestLease(t *tes
 
 // DIALLEASES WAITS FOR ITS LINK AND NAMES IT: a leaf whose lease link the relay
 // refuses hands out no lease connection, and past its bound says which link it
-// lacks and the key it presented; once the link is let through, it does.
+// lacks and the key it presented; once the link is let through, it does. The
+// connection it refused leaves a failed start nothing to wait for.
 //
 // Mutant: DialLeases does not wait — it hands out a connection with no link.
+// Mutant: the refused connection stays watched — LostDuring waits for ever.
 func TestDialLeasesWaitsForItsLinkAndNamesIt(t *testing.T) {
 	t.Parallel()
 	f := newMeterFleet(t, linktest.Lagging)
@@ -361,6 +363,19 @@ func TestDialLeasesWaitsForItsLinkAndNamesIt(t *testing.T) {
 	}
 	if err := q.LeaseLink(); err == nil {
 		t.Error("a queue whose lease dial was refused reads a lease link")
+	}
+	step := fmt.Errorf("the case's failed step")
+	during := make(chan error, 1)
+	go func() { during <- q.LostDuring(step) }()
+	bound := time.NewTimer(30 * time.Second) //fixedwait:liveness
+	defer bound.Stop()
+	select {
+	case got := <-during:
+		if got == nil || got.Error() != step.Error() {
+			t.Errorf("a start failing beside a refused lease dial, nothing lost, reads %v", got)
+		}
+	case <-bound.C:
+		t.Fatal("LostDuring waits on the lease connection a refused DialLeases closed itself")
 	}
 
 	f.link.Mend(LeaseAccount)

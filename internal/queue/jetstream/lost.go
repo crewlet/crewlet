@@ -41,7 +41,8 @@ type connectionLoss struct {
 
 	// conns is every watched connection, so a failed start can wait for the
 	// handler of one the client has already closed ([connectionLoss.settle]).
-	// Never pruned: a queue holds two.
+	// Pruned only of one refused after tracking ([watched.untrack]): a queue
+	// hands out three.
 	mu    sync.Mutex
 	conns []*nats.Conn
 }
@@ -98,6 +99,18 @@ func (at watched) track(nc *nats.Conn) {
 	}
 	at.loss.mu.Lock()
 	at.loss.conns = append(at.loss.conns, nc)
+	at.loss.mu.Unlock()
+}
+
+// untrack drops nc, which a dial tracked and then refused, BEFORE it closes it:
+// a close its owner made runs no handler, so [connectionLoss.settle] would
+// wait for ever on it.
+func (at watched) untrack(nc *nats.Conn) {
+	if at.loss == nil {
+		return
+	}
+	at.loss.mu.Lock()
+	at.loss.conns = slices.DeleteFunc(at.loss.conns, func(c *nats.Conn) bool { return c == nc })
 	at.loss.mu.Unlock()
 }
 

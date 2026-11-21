@@ -1170,6 +1170,7 @@ func (q *Queue) DialLeases(ctx context.Context) (*nats.Conn, error) {
 			err = q.embedded.awaitLeaseLink(ctx, js)
 		}
 		if err != nil {
+			at.untrack(nc)
 			nc.Close()
 			return nil, fmt.Errorf("jetstream: the lease connection: %w", err)
 		}
