@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -34,10 +35,11 @@ type ListedEpisode struct {
 }
 
 // openedColumns are what a listing reads in place of a column, by name: the
-// opening of each unbounded text — substr counts CHARACTERS, each at least one
-// byte, so the opening's characters cover its bytes and the cut to bytes is
-// made in Go, on a rune boundary — and no vector, which no listing draws and
-// which is six kilobytes a row at 1 536 dimensions.
+// opening of each unbounded text, one marker deeper than the cut so the marker
+// a cut can land in is read whole ([openingOf]) — substr counts CHARACTERS,
+// each at least one byte, so they cover the bytes and the cut is made in Go —
+// and no vector, which no listing draws and which is six kilobytes a row at
+// 1 536 dimensions.
 var openedColumns = map[string]string{
 	"plan_summary":    "substr(plan_summary, 1, ?)",
 	"ask":             "substr(ask, 1, ?)",
@@ -71,11 +73,12 @@ func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening in
 		return nil, errors.New("learning: an episode listing needs an opening to read each text to")
 	}
 	// THE BINDS IN COLUMN ORDER: the account comes before the ask in
-	// episodeColumns, and both take the same opening.
+	// episodeColumns, and both take the same read.
+	read := opening + redact.LongestMarker()
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeListingColumns+` FROM episodes
 		 WHERE agent_handle = ? ORDER BY ended_at DESC, id DESC LIMIT ?`,
-		opening, opening, handle, limit)
+		read, read, handle, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list episodes for %s: %w", handle, err)
 	}
@@ -89,8 +92,8 @@ func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening in
 		if err != nil {
 			return nil, fmt.Errorf("learning: scan a listed episode: %w", err)
 		}
-		ep.PlanSummary = textcut.Bytes(ep.PlanSummary, opening)
-		ep.Ask = textcut.Bytes(ep.Ask, opening)
+		ep.PlanSummary = openingOf(ep.PlanSummary, opening)
+		ep.Ask = openingOf(ep.Ask, opening)
 		listed.Episode = ep
 		out = append(out, listed)
 	}
@@ -98,6 +101,20 @@ func (e *Episodes) Listing(ctx context.Context, handle string, limit, opening in
 		return nil, fmt.Errorf("learning: list episodes for %s: %w", handle, err)
 	}
 	return out, nil
+}
+
+// openingOf is at most n bytes of text, cut on a rune boundary and NEVER
+// INSIDE A MARKER the redaction wrote: an episode's ask and account are
+// redacted on the turn's completed record, and a marker cut in part reads as
+// the turn's own words, so the cut moves back to where the
+// markers begin ([redact.MarkersAround]). text is read n plus the longest
+// marker deep, so the marker a cut at n falls in is whole in it.
+func openingOf(text string, n int) string {
+	kept := textcut.Bytes(text, n)
+	if begin, _, inside := redact.MarkersAround(text, len(kept)); inside {
+		kept = kept[:begin]
+	}
+	return kept
 }
 
 // withSizes is a row whose scan takes the sizes the listing reads after the

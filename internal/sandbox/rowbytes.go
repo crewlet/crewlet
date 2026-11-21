@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -500,6 +501,37 @@ func OutputOpening(output string, outputBytes int) (opening string, ok bool) {
 	return rowRecord.Opening(output, outputBytes)
 }
 
+// RedactedOpening is what a reader may show of a call's output the log cut
+// (output and outputBytes, as [OutputOpening] reads them): the redaction of
+// the opening's SETTLED lines alone ([redact.Settled]), which is the opening
+// of the whole's redaction, since a credential the log's cut ran across left
+// a head no rule knows. whole is the size it is the opening of: its own bytes
+// and the bytes the log measured past those lines, unread and so unredacted,
+// at least one. A text the log's marker does not read back off is settled as
+// it stands.
+func RedactedOpening(output string, outputBytes int) (shown string, whole int) {
+	opening, ok := OutputOpening(output, outputBytes)
+	if !ok {
+		opening = output
+	}
+	settled := opening[:redact.Settled(opening)]
+	shown = redact.Secrets(settled)
+	return shown, len(shown) + max(outputBytes-len(settled), 1)
+}
+
+// ShownOutput is a call's output as the log keeps it (output, outputBytes
+// as [BridgeCall] holds them) as a person reading the log is shown it, and the
+// size beside it: whole, redacted; cut, its [RedactedOpening] marked as the
+// log marks a cut, the size that opening is of beside it, so [OutputOpening]
+// reads it back. The log itself stays as the harness was handed it.
+func ShownOutput(output string, outputBytes int) (shown string, shownBytes int) {
+	if outputBytes == 0 {
+		return redact.Secrets(output), 0
+	}
+	opening, whole := RedactedOpening(output, outputBytes)
+	return rowRecord.Cut(opening, whole), whole
+}
+
 // ValidCallID reports whether id is one the log keeps as the id a call's
 // harness gave it ([BridgeCall.CallID]): letters, digits, `-` and `_`, at
 // most [MaxBridgeCallIDBytes] of them — the shape a session's id is held to
@@ -902,9 +934,20 @@ func (l BridgeLog) ElisionKnown() bool {
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
-// as the row holds it, the cut said.
+// as the row holds it, the cut said, and NEVER INSIDE A MARKER the redaction
+// wrote, which the launching turn's title holds ([LaunchRequest.Task]): one
+// cut in part reads as the title's own words, so the cut moves back to where
+// the markers begin ([redact.MarkersAround]).
 func keptTitle(s string) string {
-	title, _ := rowRecord.Text(s, MaxRunTitleBytes)
+	title, cut := rowRecord.Text(s, MaxRunTitleBytes)
+	if cut == 0 {
+		return title
+	}
+	if opening, ok := rowRecord.Opening(title, cut); ok {
+		if begin, _, inside := redact.MarkersAround(s, len(opening)); inside {
+			title, _ = rowRecord.TextOf(s[:begin], len(s), MaxRunTitleBytes)
+		}
+	}
 	return title
 }
 
