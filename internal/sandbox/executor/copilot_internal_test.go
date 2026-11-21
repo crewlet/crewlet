@@ -255,6 +255,28 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 	}
 }
 
+// A capped run that made more model requests than its cap FAILS, saying so,
+// whatever the extension said: its own usage records are the count. tool's
+// run made two requests, its extension's line beside them.
+//
+// Mutation: drop the count check, or count the cap's own last request as past
+// it (>=) — the cap of 1 succeeds, or the cap of 2 fails.
+func TestACopilotRunPastItsCapFailsWhateverItsExtensionSaid(t *testing.T) {
+	run := func(turns int) sandbox.Result {
+		stream := append([]byte(copilotCapLine(turns)+"\n"+copilotArmed),
+			copilotCollected(t, "tool.stream.jsonl", "tool.events.jsonl", 0)...)
+		dec := &copilotEvents{}
+		_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+		return dec.Result()
+	}
+	if res := run(1); res.Success || res.Error != "the turn cap of 1 was not enforced: the run made 2 model requests" {
+		t.Fatalf("a cap of 1 over two requests: %+v, want the failure", res)
+	}
+	if res := run(2); !res.Success {
+		t.Fatalf("a cap of 2 over two requests: %+v, want the answer", res)
+	}
+}
+
 // A seat tool a repository's hook refused fails the run, saying so: the run
 // could not do its work through its seat.
 //
