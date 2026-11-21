@@ -891,6 +891,7 @@ func (r *Role) Seat() *org.Role {
 	if b := r.Integrations.SSH; b != nil && SeatAccessOn(b.Enabled) && len(b.Hosts) > 0 {
 		seat.SSHLevel = b.LevelOrDefault()
 	}
+	seat.GrowthLevels = r.GrowthLevels()
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

@@ -1882,6 +1882,14 @@ approving option of an `ask_to_operate` decision is decided on the same row.
 `ask_to_operate` is admin's with the `ssh_operate` seat grant. See
 [SSH](../integrations/ssh.md#the-agents-tools).
 
+**And a growth product's tools.** No row is written per tool: each tool a
+growth product's catalog lists is admin's with that product's seat grant at the
+least level its tool's class needs (`google_analytics_read`, `_operate` or
+`_administer`), which an agent's role carries where its lane is on at that
+level or above. Its held acts are answered on `growth.spend.approve`,
+`growth.public.approve` and `growth.admin.approve`, **human-only**. See
+[ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md).
+
 **And a delegate's verdict.** `review_delegated` is admin's, and its row names
 the `delegated_decisions` seat grant an enabled rule of the company's
 `delegated_decisions` gives each seat it names a delegate; what its allow
