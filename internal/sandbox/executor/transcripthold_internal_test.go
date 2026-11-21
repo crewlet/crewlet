@@ -273,3 +273,31 @@ func TestALiveReadingIsLiveFromItsFirstRead(t *testing.T) {
 		t.Errorf("the reading's decoder streamed (%v) or holds %d entries", tr.stream != nil, len(tr.lines))
 	}
 }
+
+// A WHOLE READING HOLDS NO MORE OF A TRANSCRIPT THAN THE RECORD KEEPS: past
+// [sandbox.MaxRunTextBytes] each harness's decoder hands back the record of its
+// whole redaction, in text and counts, never the entries held raw only to be
+// redacted whole and cut where the box is read ([transcriptHoldBytes]).
+//
+// Mutation: hold back at sandbox.MaxFileBytes, and a transcript past the record
+// comes back whole and uncounted.
+func TestAWholeReadingHoldsNoMoreOfATranscriptThanTheRecordKeeps(t *testing.T) {
+	t.Parallel()
+	entries := runEntries(2500, 0, 1200, 2499)
+	join := strings.Join(entries, "\n")
+	if len(join) <= sandbox.MaxRunTextBytes {
+		t.Fatalf("the case's transcript is %d bytes, within the %d the record keeps", len(join), sandbox.MaxRunTextBytes)
+	}
+	want, lines, bytes := recordOf(join)
+	for harness, d := range heldDecoders(t, 0) {
+		for _, e := range entries {
+			d.dec.Line(d.line(e))
+		}
+		if got := d.dec.Result(); got.Transcript != want || got.TranscriptElidedLines != lines ||
+			got.TranscriptElidedBytes != bytes {
+			t.Errorf("%s: a transcript of %d bytes came back as %d bytes counting %d lines, %d bytes; the record "+
+				"of its whole redaction keeps %d, %d and %d", harness, len(join), len(got.Transcript),
+				got.TranscriptElidedLines, got.TranscriptElidedBytes, len(want), lines, bytes)
+		}
+	}
+}

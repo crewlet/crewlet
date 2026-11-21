@@ -50,7 +50,7 @@ func readClaudeRecord(t *testing.T, line string) string {
 	t.Helper()
 	var b strings.Builder
 	b.WriteString(readClaudeStream(t, line))
-	res := ClaudeCode{}.Parse(line)
+	res := ClaudeCode{}.Parse([]byte(line))
 	fmt.Fprintf(&b, "result: text %q, success %t, error %q, session %q, cost %v, tokens %d %d %d %d, turns %d, "+
 		"context %t\n", res.Text, res.Success, res.Error, res.SessionID, res.CostUSD, res.InputTokens,
 		res.OutputTokens, res.CacheReadTokens, res.CacheWriteTokens, res.Turns, res.ContextExhausted)
@@ -447,8 +447,8 @@ func TestAResultsSpendModelByModelReadsAsItsWholeDecodeReadIt(t *testing.T) {
 		"an empty object":                      `{}`,
 		"the most models a result is read for": recordsModels(claudeResultModelsMax, true),
 	} {
-		r, ok := decodeClaudeResult(`{"type":"result","subtype":"success","model_usage_since_last_result":` +
-			object + `}`)
+		r, ok := decodeClaudeResult([]byte(`{"type":"result","subtype":"success","model_usage_since_last_result":` +
+			object + `}`))
 		if !ok {
 			t.Fatalf("%s: the result is no result", name)
 		}
