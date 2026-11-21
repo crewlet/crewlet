@@ -11,9 +11,9 @@ import (
 
 // A MISSING PREREQUISITE FAILS UNDER MAKE AND SKIPS ELSEWHERE, in the same
 // words, through every door this package has: [prereqtest.Missing] itself, a
-// program [prereqtest.OnPath] cannot find, and a variable
-// [prereqtest.Named] finds unset. With CREWLET_REQUIRE_PREREQUISITES=1, which
-// the make targets that run the suite set, each FAILS naming its remedy;
+// program [prereqtest.OnPath] cannot find, and a variable [prereqtest.Named]
+// or [prereqtest.NamedDir] finds unset. With CREWLET_REQUIRE_PREREQUISITES=1,
+// which the make targets that run the suite set, each FAILS naming its remedy;
 // unset, each SKIPS naming the same remedy; any other value is a mistake that
 // fails naming the variable, never read as either answer.
 //
@@ -33,6 +33,9 @@ func TestAMissingPrerequisiteFailsUnderMakeAndSkipsElsewhere(t *testing.T) {
 		}},
 		{"Named", func(tb testing.TB) {
 			prereqtest.Named(tb, "CREWLET_PREREQTEST_UNSET", "a program a case runs", remedy)
+		}},
+		{"NamedDir", func(tb testing.TB) {
+			prereqtest.NamedDir(tb, "CREWLET_PREREQTEST_UNSET", "a directory a case reads", remedy)
 		}},
 	}
 	for _, setting := range []struct {
@@ -125,7 +128,7 @@ func TestANamedPrerequisiteIsAnAbsolutePathToAnExecutable(t *testing.T) {
 		fatal       string // a fragment of the failure; "" is the program back
 	}{
 		{"relative", "bin/program", "not an absolute path"},
-		{"missing", filepath.Join(dir, "absent"), "names nothing this case can run"},
+		{"missing", filepath.Join(dir, "absent"), "names nothing this case can reach"},
 		{"a directory", dir, "not an executable file"},
 		{"not executable", unexecutable, "not an executable file"},
 		{"an executable", executable, ""},
@@ -141,6 +144,65 @@ func TestANamedPrerequisiteIsAnAbsolutePathToAnExecutable(t *testing.T) {
 				if tc.fatal == "" {
 					if ended != (prereqtest.Ended{}) || got != tc.value {
 						t.Errorf("Named = %q (ended %+v), want %s", got, ended, tc.value)
+					}
+					return
+				}
+				if !strings.Contains(ended.Fatal, tc.fatal) || !strings.Contains(ended.Fatal, env) || ended.Skip != "" {
+					t.Errorf("failed %q, skipped %q; want a failure naming %s and saying %q",
+						ended.Fatal, ended.Skip, env, tc.fatal)
+				}
+			})
+		}
+	}
+}
+
+// A NAMED DIRECTORY IS AN ABSOLUTE PATH TO A DIRECTORY, or the variable naming
+// it is named in the failure, under every setting of the requirement, as a
+// named program is: a relative path, a path naming nothing and a file each
+// fail, and a directory comes back, as does a link to one, which is how the
+// recipes publish each build.
+//
+// Not parallel: it sets the variable it reads.
+//
+// Mutations: drop the directory check, and the file comes back as though a
+// case could read a tree in it — red; judge the link itself rather than what
+// it names (os.Lstat), and the link a recipe publishes is refused — red.
+func TestANamedDirectoryIsAnAbsolutePathToADirectory(t *testing.T) {
+	const env = "CREWLET_PREREQTEST_DIRECTORY"
+	dir := t.TempDir()
+	tree := filepath.Join(dir, "tree")
+	if err := os.Mkdir(tree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "published")
+	if err := os.Symlink(tree, link); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, []byte("not a tree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, value string
+		fatal       string // a fragment of the failure; "" is the directory back
+	}{
+		{"relative", "build/tree", "not an absolute path"},
+		{"missing", filepath.Join(dir, "absent"), "names nothing this case can reach"},
+		{"a file", file, "not a directory"},
+		{"a directory", tree, ""},
+		{"a link to a directory", link, ""},
+	} {
+		for _, require := range []string{"1", ""} {
+			t.Run(tc.name+"/required="+require, func(t *testing.T) {
+				t.Setenv(prereqtest.RequireEnv, require)
+				t.Setenv(env, tc.value)
+				var got string
+				ended := prereqtest.Run(t, func(tb testing.TB) {
+					got = prereqtest.NamedDir(tb, env, "a directory a case reads", "the remedy")
+				})
+				if tc.fatal == "" {
+					if ended != (prereqtest.Ended{}) || got != tc.value {
+						t.Errorf("NamedDir = %q (ended %+v), want %s", got, ended, tc.value)
 					}
 					return
 				}

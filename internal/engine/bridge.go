@@ -373,7 +373,10 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 		},
 		// What this call's own work added to the run's call log.
 		Absorbed: identitiesCalled(call.Absorbed),
-		Spent:    l.spent(),
+		// The records its writes created or wrote, which the run's router
+		// hands a wake about to the run ([Engine.routeSeat]).
+		Wrote: call.Wrote,
+		Spent: l.spent(),
 	}
 	recorded, err := l.appendRetrying(ctx, runID, a)
 	if err != nil && !recorded {

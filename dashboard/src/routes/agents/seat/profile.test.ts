@@ -204,28 +204,30 @@ describe("the current turn's calls", () => {
   const row = (executions: number, running: boolean | number): AgentRow =>
     ({
       role: "SWE",
-      live_call: {
-        turn_id: "t-7",
-        in_progress: true,
-        total_tokens: 2_500,
-        tool_executions: Array.from({ length: executions }, (_, i) => ({
-          name: `tool.${i}`,
-          round: i,
-          arguments: { i: String(i) },
-          result: "",
-          success: true,
-          started_at: "2026-09-21T09:48:02Z",
-          duration_ms: 300,
-          call_id: `done-${i}`,
-        })),
-        running_calls: Array.from({ length: Number(running) }, (_, i) => ({
-          id: `run-${i}`,
-          round: 9,
-          name: i === 0 ? "sandbox.run" : `read.${i}`,
-          arguments: "{}",
-          started_at: "2026-09-21T09:51:31Z",
-        })),
-      },
+      live_calls: [
+        {
+          turn_id: "t-7",
+          in_progress: true,
+          total_tokens: 2_500,
+          tool_executions: Array.from({ length: executions }, (_, i) => ({
+            name: `tool.${i}`,
+            round: i,
+            arguments: { i: String(i) },
+            result: "",
+            success: true,
+            started_at: "2026-09-21T09:48:02Z",
+            duration_ms: 300,
+            call_id: `done-${i}`,
+          })),
+          running_calls: Array.from({ length: Number(running) }, (_, i) => ({
+            id: `run-${i}`,
+            round: 9,
+            name: i === 0 ? "sandbox.run" : `read.${i}`,
+            arguments: "{}",
+            started_at: "2026-09-21T09:51:31Z",
+          })),
+        },
+      ],
     }) as unknown as AgentRow;
 
   // THE RUNNING CALLS ARE THE ROWS THE CARD EXISTS FOR, so an answered call is
@@ -279,8 +281,8 @@ describe("the current turn's calls", () => {
   test("reads a failure off success, whether or not the call said anything", () => {
     const failing = (result: string): AgentRow => {
       const r = row(1, false);
-      const ex = r.live_call!.tool_executions![0]!;
-      r.live_call!.tool_executions = [
+      const ex = r.live_calls![0]!.tool_executions![0]!;
+      r.live_calls![0]!.tool_executions = [
         { ...ex, result, success: false, ...(result ? { error: result } : {}) },
       ];
       return r;
@@ -292,9 +294,9 @@ describe("the current turn's calls", () => {
 
   test("counts the turn's tokens as its recorded phases and the one running", () => {
     const newest = { turn_id: "t-7", total_tokens: 40_000 } as TurnRow;
-    expect(turnTokens("t-7", newest, true, row(0, true))).toBe(42_500);
+    expect(turnTokens("t-7", [newest], true, row(0, true))).toBe(42_500);
     // A newest row naming another turn is an answer: nothing recorded yet.
-    expect(turnTokens("t-7", { ...newest, turn_id: "t-6" }, true, row(0, true))).toBe(2_500);
+    expect(turnTokens("t-7", [{ ...newest, turn_id: "t-6" }], true, row(0, true))).toBe(2_500);
     // No answer is not a zero.
     expect(turnTokens("t-7", undefined, false, row(0, true))).toBeNull();
   });
@@ -317,12 +319,15 @@ describe("the setup card's words", () => {
             env: { GH_TOKEN: "${GH}", REGION: "eu" },
             mcp: { servers: ["github"] },
             max_turns: 40,
+            max_concurrent_runs: 2,
           },
         }),
       ),
-    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns");
+    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns · 2 runs at once");
     // Zero is an explicit "uncapped", said as itself rather than as a cap of 0.
     expect(sandboxWords(role({ sandbox: { max_turns: 0 } }))).toBe("No turn cap");
+    // A cap written as 1 is said as the one run it allows, not hidden as the default.
+    expect(sandboxWords(role({ sandbox: { max_concurrent_runs: 1 } }))).toBe("1 run at a time");
   });
 
   test("placement is a pinned node, a set of labels, or any node", () => {

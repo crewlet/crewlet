@@ -53,6 +53,15 @@ func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string 
 	return ""
 }
 
+// ArtifactConversation is the conversation an artifact IS, as every wake about
+// it is stamped: its identity ([Prompt.ConversationIdentity]) namespaced by
+// this source ([notify.Prompts.Conversation]). A turn's remark on the artifact
+// records it (internal/agent/builtin), and a running run's router finds a wake
+// about the artifact by it, exactly (ADR-0167).
+func ArtifactConversation(id string) string {
+	return notify.Namespaced(Source, Prompt{}.ConversationIdentity(map[string]string{MetaArtifact: id}, ""))
+}
+
 // WakesActor implements [notify.Prompt]: never, a remark is news to everyone
 // but its author.
 func (Prompt) WakesActor(notify.Inbound) bool { return false }

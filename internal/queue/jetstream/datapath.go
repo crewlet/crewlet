@@ -22,6 +22,26 @@ import (
 // reach even though its first hop is up.
 var ErrDataPathUnproven = errors.New("jetstream: this node's data path to the fleet's JetStream is unproven")
 
+// ErrLeaseLinkUnproven is what [Queue.LeaseLink] wraps once the lease link's
+// own probe has gone unanswered past its bound, or been answered "not
+// available" for too long: the member it landed on answers nothing, so the
+// link is moved to the next ([dataPath.relink]).
+var ErrLeaseLinkUnproven = errors.New("jetstream: this node's lease link to the fleet's JetStream is unproven")
+
+// pathNames is what a proven path is called in its refusals and log lines.
+type pathNames struct {
+	link, path      string
+	unproven        error
+	refused, proven string
+}
+
+var (
+	dataPathNames = pathNames{link: "data link", path: "data path", unproven: ErrDataPathUnproven,
+		refused: "data_path_unproven", proven: "data_path_proven"}
+	leaseLinkNames = pathNames{link: "lease link", path: "lease link", unproven: ErrLeaseLinkUnproven,
+		refused: "lease_link_unproven", proven: "lease_link_proven"}
+)
+
 // dataPathProbeEvery is how often the data path is probed: once a heartbeat
 // at the shortest lease config allows ([leaseDeadAfter]), so at least once a
 // heartbeat at every TTL.
@@ -60,6 +80,11 @@ type dataPathTiming struct {
 // [Queue.DataPath] reads with no round trip.
 type dataPath struct {
 	timing dataPathTiming
+	names  pathNames
+	// move, where set, moves the link off the member it landed on when the
+	// verdict refuses it ([dataPath.relink]): the lease link's, which has no
+	// ping of its own a cut-off member would fail. Nil on the data path.
+	move func() error
 	// firstHop is the queue's connection and, on a leaf, its data link
 	// ([Queue.Link]).
 	firstHop func() error
@@ -72,8 +97,13 @@ type dataPath struct {
 	done   chan struct{}
 
 	mu sync.Mutex
-	// proven is when the path last answered with success, initialised to
-	// the queue's boot readiness ([Queue.readyAt]).
+	// gen counts the proofs started ([dataPath.restart]); a probe's answer
+	// counts only toward the proof it was asked in.
+	gen uint64
+	// down is whether the first hop last read down.
+	down bool
+	// proven is when the path last answered with success or its proof last
+	// started: the queue's boot readiness ([Queue.readyAt]) at first.
 	proven time.Time
 	// asked is when the first probe sent since the path last answered went
 	// out; zero while none waits. An abandoned probe's successor keeps it.
@@ -88,9 +118,22 @@ type dataPath struct {
 // startDataPath starts the probe, proven as of proven, until stop.
 func startDataPath(timing dataPathTiming, firstHop func() error, meter *LinkMeter,
 	log *slog.Logger, proven time.Time) *dataPath {
+	return (&dataPath{timing: timing, names: dataPathNames, firstHop: firstHop, meter: meter,
+		log: log, proven: proven}).start()
+}
+
+// startLeaseLink starts the lease link's probe, unmetered, proven as of
+// proven: refused as the data path is, and moved by move once it is.
+func startLeaseLink(timing dataPathTiming, firstHop, move func() error, log *slog.Logger,
+	proven time.Time) *dataPath {
+	return (&dataPath{timing: timing, names: leaseLinkNames, move: move, firstHop: firstHop,
+		log: log, proven: proven}).start()
+}
+
+// start runs d's probe until stop.
+func (d *dataPath) start() *dataPath {
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &dataPath{timing: timing, firstHop: firstHop, meter: meter, log: log,
-		cancel: cancel, done: make(chan struct{}), proven: proven}
+	d.cancel, d.done = cancel, make(chan struct{})
 	go d.run(ctx)
 	return d
 }
@@ -101,11 +144,14 @@ func (d *dataPath) stop() {
 	<-d.done
 }
 
-// run probes every timing.every, one probe in flight at a time, until ctx
-// ends. A probe still out past its bound while the link carries nothing is
-// abandoned and asked again, since a request a member dropped (one that lost
-// its leader) is never answered; one out while the link moves is waited for
-// up to the cap, since its answer queues behind what the link carries.
+// run probes every timing.every, one probe in flight at a time and none while
+// the first hop is down, until ctx ends. A probe still out past its bound while
+// the link carries nothing is abandoned and asked again, since a request a
+// member dropped (one that lost its leader) is never answered; one out while
+// the link moves is waited for up to the cap, since its answer queues behind
+// what the link carries. A link d moves is judged as each probe is answered or
+// let go, at its cap, which is its bound there, never on a tick alone: a lease
+// at the floor TTL has no tick to spare (ADR-0173).
 func (d *dataPath) run(ctx context.Context) {
 	defer close(d.done)
 	tick := time.NewTicker(d.timing.every)
@@ -113,51 +159,140 @@ func (d *dataPath) run(ctx context.Context) {
 	answered := make(chan struct{}, 1)
 	var cancel context.CancelFunc
 	var sent time.Time
+	var gen uint64
 	out := false
+	abandon := func() {
+		if out {
+			cancel()
+			<-answered
+			out = false
+		}
+	}
 	ask := func() {
 		sent, out = time.Now(), true
 		d.mu.Lock()
+		gen = d.gen
 		if d.asked.IsZero() {
 			d.asked = sent
 		}
 		d.mu.Unlock()
 		var probeCtx context.Context
 		probeCtx, cancel = context.WithTimeout(ctx, d.timing.cap)
-		go func() {
-			d.answer(d.timing.probe(probeCtx))
+		go func(asked uint64) {
+			d.answer(asked, d.timing.probe(probeCtx))
 			answered <- struct{}{}
-		}()
+		}(gen)
 	}
-	ask()
+	// moved moves a link the verdict refuses, reporting whether it did: no
+	// probe goes out on a link just dropped, which the leaf itself answers.
+	moved := func() bool {
+		why := d.refusedHere()
+		if why != nil {
+			abandon()
+			d.relink(why)
+		}
+		return why != nil
+	}
+	if d.hop(time.Now()) == nil {
+		ask()
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			if out {
-				cancel()
-				<-answered
-			}
+			abandon()
 			return
 		case <-answered:
 			cancel()
 			out = false
+			moved()
 		case <-tick.C:
-			switch {
-			case !out:
-				ask()
-			case time.Since(sent) >= d.timing.bound && !d.moving(d.timing.bound):
-				cancel()
-				<-answered
-				ask()
+			if !moved() && d.hop(time.Now()) == nil {
+				switch {
+				case !out:
+					ask()
+				case gen != d.proof(), time.Since(sent) >= d.timing.bound && !d.moving(d.timing.bound):
+					abandon()
+					ask()
+				}
 			}
+			d.report(d.verdict(time.Now()))
 		}
 	}
 }
 
-// answer records what one probe was answered, where it was answered at all.
-func (d *dataPath) answer(err error) {
+// refusedHere is the verdict where it refuses the member the link is on, a
+// link d moves; nil otherwise, a first hop that is down included, since that
+// link is already dialling again.
+func (d *dataPath) refusedHere() error {
+	if d.move == nil {
+		return nil
+	}
+	if why := d.verdict(time.Now()); errors.Is(why, d.names.unproven) {
+		return why
+	}
+	return nil
+}
+
+// relink moves the link off the member its verdict refused for why, and
+// starts a fresh proof, so the next member is judged on its own answers.
+func (d *dataPath) relink(why error) {
+	err := d.move()
+	d.mu.Lock()
+	d.restart(time.Now())
+	d.mu.Unlock()
+	if err != nil {
+		d.log.Warn("lease_link_move_failed", "cause", why.Error(), "error", err.Error(),
+			"detail", "the "+d.names.link+" answers nothing and could not be moved, so it is "+
+				"judged afresh from now")
+		return
+	}
+	d.log.Warn("lease_link_moved", "cause", why.Error(),
+		"detail", "the "+d.names.link+" was dropped so it dials the next member: the one it was "+
+			"on answers nothing, and no lease this node holds could be renewed through it")
+}
+
+// hop reads the first hop at now, starting a fresh proof when it is back up
+// after reading down: the link may be another, so nothing the last was
+// answered, nor a probe lost with it, judges it.
+func (d *dataPath) hop(now time.Time) error {
+	err := d.firstHop()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
+	case err != nil:
+		d.down = true
+	case d.down:
+		d.down = false
+		d.restart(now)
+	}
+	return err
+}
+
+// restart starts a fresh proof at now, d.mu held: its budget runs from now,
+// and no probe asked before it counts.
+func (d *dataPath) restart(now time.Time) {
+	d.gen++
+	d.proven, d.asked, d.refused = now, time.Time{}, nil
+}
+
+// proof is the proof in force ([dataPath.restart]).
+func (d *dataPath) proof() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gen
+}
+
+// answer records what a probe asked in proof gen was answered, where it was
+// answered at all. An explicit failure while the first hop is down is the
+// leaf's own no-responders, not the fleet's word, so it is not recorded.
+func (d *dataPath) answer(gen uint64, err error) {
+	if err != nil && explicitFailure(err) && d.hop(time.Now()) != nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case gen != d.gen:
 	case err == nil:
 		d.proven, d.asked, d.refused = time.Now(), time.Time{}, nil
 	case explicitFailure(err):
@@ -184,7 +319,7 @@ func (d *dataPath) moving(span time.Duration) bool {
 
 // verdict is [Queue.DataPath]'s answer at now.
 func (d *dataPath) verdict(now time.Time) error {
-	if err := d.firstHop(); err != nil {
+	if err := d.hop(now); err != nil {
 		return err
 	}
 	d.mu.Lock()
@@ -192,7 +327,7 @@ func (d *dataPath) verdict(now time.Time) error {
 	d.mu.Unlock()
 	if refused != nil && now.Sub(proven) >= d.timing.notAvailable {
 		return fmt.Errorf("%w: the fleet's JetStream answers it that it is not available "+
-			"(%v), with no success for %s", ErrDataPathUnproven, refused,
+			"(%v), with no success for %s", d.names.unproven, refused,
 			now.Sub(proven).Round(time.Millisecond))
 	}
 	if asked.IsZero() {
@@ -200,13 +335,13 @@ func (d *dataPath) verdict(now time.Time) error {
 	}
 	age := now.Sub(asked)
 	if age >= d.timing.bound && !d.moving(d.timing.bound) {
-		return fmt.Errorf("%w: the data link carried nothing for %s and the fleet's JetStream "+
-			"has not answered its probe for %s", ErrDataPathUnproven,
+		return fmt.Errorf("%w: the %s carried nothing for %s and the fleet's JetStream "+
+			"has not answered its probe for %s", d.names.unproven, d.names.link,
 			d.timing.bound.Round(time.Millisecond), age.Round(time.Millisecond))
 	}
 	if age >= d.timing.cap {
-		return fmt.Errorf("%w: the data link moves but the fleet's JetStream has not answered "+
-			"its probe for %s, the link's own tolerance", ErrDataPathUnproven,
+		return fmt.Errorf("%w: the %s moves but the fleet's JetStream has not answered "+
+			"its probe for %s, the link's own tolerance", d.names.unproven, d.names.link,
 			age.Round(time.Millisecond))
 	}
 	return nil
@@ -222,12 +357,12 @@ func (d *dataPath) report(err error) {
 	switch {
 	case !changed:
 	case err != nil:
-		d.log.Warn("data_path_unproven", "error", err.Error(),
-			"detail", "this node's data path to the fleet's JetStream is not proven, so "+
+		d.log.Warn(d.names.refused, "error", err.Error(),
+			"detail", "this node's "+d.names.path+" to the fleet's JetStream is not proven, so "+
 				"nothing may take or keep a hold on its word")
 	default:
-		d.log.Info("data_path_proven",
-			"detail", "this node's data path to the fleet's JetStream answers again")
+		d.log.Info(d.names.proven,
+			"detail", "this node's "+d.names.path+" to the fleet's JetStream answers again")
 	}
 }
 

@@ -39,9 +39,9 @@ const (
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
 	// value — the turn's earlier rounds' tool names, the log's own fields (its
-	// identifiers, the kinds of change its calls committed and its count of
-	// the dropped calls no save point holds) and the room for a later build's
-	// keys — is what [RowBytes] leaves.
+	// identifiers, the kinds of change its calls committed, the records they
+	// wrote and its count of the dropped calls no save point holds) and the
+	// room for a later build's keys — is what [RowBytes] leaves.
 	BridgeLogBytes = 3<<20 + 1<<18 + 1<<16
 
 	// ExecuteStateBytes is the parked turn's share of the row: the
@@ -392,7 +392,9 @@ const (
 
 	// LogRestBytes is the rest of the log's value beside its calls and its
 	// calls in flight: the turn's earlier rounds' tool names, the log's own
-	// fields, and the room a later build adds keys to the log in. STATED, NOT
+	// fields (the records the turn's calls wrote among them, [BridgeLog.Wrote]:
+	// at most 128 ids of at most 256 bytes, about 200 KiB at their most
+	// escaped), and the room a later build adds keys to the log in. STATED, NOT
 	// DERIVED, as the table above states it, so the log's split closes only
 	// while every line of it is the table's: a change of [BridgeLogBytes] or of
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails

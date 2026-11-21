@@ -6,12 +6,14 @@
 //
 // # Why a package
 //
-// Three suites need one: the jetstream backend's (a server below the
+// Four suites need one: the jetstream backend's (a server below the
 // transport's contract is refused, a message too large for a server the
 // connection reached since names that server's own limit, and no sentence
 // naming a server carries its URL's credential), the state log's (a record the
-// server cannot carry is refused once, as too large) and the engine's (a boot
-// against a server below the contract is refused by name). They held four
+// server cannot carry is refused once, as too large), the engine's (a boot
+// against a server below the contract is refused by name) and the
+// coordination store's (a renewal on a second dial is not held by the
+// first's bulk). The first three held four
 // copies of the same thirty lines between them, and the restart is the part
 // copies drift on: it has to keep the port and the store,
 // so the client reconnects and the streams it provisioned survive, and it has

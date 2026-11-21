@@ -102,7 +102,8 @@ var documented = []documentedDetector{
 	}},
 }
 
-// stallWords is each class's words, the same for every subject.
+// stallWords is each class's words, the same for every subject but the why of
+// [ClassWorkConcentrated], which reads its seat's turns at once ([concentratedWhy]).
 var stallWords = map[Class]said{
 	ClassRoundCap: {"Agent runs ended on their round cap before they finished.",
 		"Each run stopped at the round cap its seat runs under, so what it spent bought no finished " +
@@ -110,9 +111,7 @@ var stallWords = map[Class]said{
 	ClassBudgetStopped: {"Agents stopped on their token budget while holding open work.",
 		"A seat whose budget is spent takes no turn until its window resets, and the open work it " +
 			"holds waits that long, however pressing it is."},
-	ClassWorkConcentrated: {"One agent holds most of the open work.",
-		"An agent takes one turn at a time, so the work it holds waits its turn while other agents " +
-			"have little to do."},
+	ClassWorkConcentrated: {"One agent holds most of the open work.", concentratedWhyAt(1)},
 	ClassWorkBottleneck: {"Open work waits on one item.",
 		"Everything waiting on it, directly or through other items, moves only when it does, so it " +
 			"is the company's critical path."},
@@ -443,12 +442,35 @@ func workConcentrated(c *config.Company, ev Evidence) []Finding {
 			item += fmt.Sprintf(", %s queued", words.Count(waiting, "wake", "wakes"))
 			facts = append(facts, Fact{Key: "waiting", Value: int64(waiting)})
 		}
-		out = append(out, stallFinding(ClassWorkConcentrated, AreaWork, Subject{Kind: SubjectSeat, Seat: seat},
+		f := stallFinding(ClassWorkConcentrated, AreaWork, Subject{Kind: SubjectSeat, Seat: seat},
 			item, facts, recordsOf(RecordItem, h.Keys),
 			Fix{Kind: FixOpenPage, Page: PageSeat, Target: seat, Options: []Option{},
-				Sentence: "Hand some of its items to another agent, or add a seat for this work."}))
+				Sentence: "Hand some of its items to another agent, or add a seat for this work."})
+		f.Why = concentratedWhy(c, seat)
+		out = append(out, f)
 	}
 	return out
+}
+
+// concentratedWhy is [ClassWorkConcentrated]'s why for seat, read with the
+// turns it runs at once (sandbox.max_concurrent_runs) as the document states
+// them now.
+func concentratedWhy(c *config.Company, seat string) string {
+	role, _ := roleOf(c, seat)
+	if role == nil {
+		return concentratedWhyAt(1)
+	}
+	return concentratedWhyAt(role.Seat().Sandbox.ConcurrentRuns())
+}
+
+// concentratedWhyAt is the why for an agent that runs runs turns at once.
+func concentratedWhyAt(runs int) string {
+	if runs <= 1 {
+		return "An agent takes one turn at a time, so the work it holds waits its turn while other agents " +
+			"have little to do."
+	}
+	return fmt.Sprintf("This agent takes at most %d turns at once (its sandbox.max_concurrent_runs), so the "+
+		"work it holds past those waits its turn while other agents have little to do.", runs)
 }
 
 // workBottleneck is one finding per open item an agent seat, or nobody, holds

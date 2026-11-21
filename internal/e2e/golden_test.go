@@ -196,8 +196,11 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, row := range c.agentRows(t) {
-		if call, ok := row["live_call"].(map[string]any); ok && call != nil {
-			out = append(out, call)
+		calls, _ := row["live_calls"].([]any)
+		for _, entry := range calls {
+			if call, ok := entry.(map[string]any); ok {
+				out = append(out, call)
+			}
 		}
 	}
 	return out
@@ -220,7 +223,9 @@ func (c *capture) turnStages(t *testing.T) []string {
 	t.Helper()
 	var out []string
 	for _, row := range c.agentRows(t) {
-		if turn, _ := row["turn"].(map[string]any); turn != nil {
+		turns, _ := row["turns"].([]any)
+		for _, entry := range turns {
+			turn, _ := entry.(map[string]any)
 			if stage, _ := turn["stage"].(string); stage != "" {
 				out = append(out, stage)
 			}
@@ -1527,8 +1532,8 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 
 	// THE COMPANY'S TURN IS ON A WORK ITEM, woken the way a task wakes its
 	// assignee: filed to the tracker, applied, and routed by the change feed
-	// to the seat it names. A chat wake names no item, so every
-	// `live_call.work_item` this capture held was null and the client's
+	// to the seat it names. A chat wake names no item, so every live
+	// call's `work_item` this capture held was null and the client's
 	// reading of the field went untested — the one field every task page,
 	// turn row and live row now keys its link on.
 	task := newTask("ENG", "Summarise how the week went")

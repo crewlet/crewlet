@@ -156,7 +156,8 @@ func serviceInstruments() []Instrument {
 				"when its triage found it noise owing nothing, `refused` when " +
 				"the run's record took no more, and `left_queued` when it waits " +
 				"for a turn of its own. `rule` names what decided: the " +
-				"requester rule's `conversation` or `work_item`; the triage's " +
+				"requester rule's `conversation`, `work_item` or `wrote` (a " +
+				"record the run created or wrote); the triage's " +
 				"`triage_input`, `triage_steer`, `triage_request`, " +
 				"`triage_noise`, or `triage_failed` for a triage that decided " +
 				"nothing; another writer's request put to the people who may " +

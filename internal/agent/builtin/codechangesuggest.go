@@ -138,7 +138,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
 	}
-	commit(turn, res.Outcome, types.CommittedCode)
+	commit(turn, res.Outcome, types.CommittedCode, cv.wrote())
 	out := codeAppliedAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Change: cv.g.ref(), Branch: strings.TrimPrefix(w.Ref, branchRoot), OpID: cv.g.c.actor.Operation}
 	switch {

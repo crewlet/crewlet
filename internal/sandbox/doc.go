@@ -175,9 +175,9 @@
 // starts one of its own (`executor_session_not_continued`). The session is
 // read whole before a byte reaches the box, then streamed in held to that
 // read, never spooled ([Coordinator.fetchSession]); one that differs the second
-// time fails the run's start. A cut-off
-// session's calls are read by id (Claude Code) or by content (OpenCode): a held
-// class is never a false hold ([HoldingsByContent]).
+// time fails the run's start. A cut-off session's calls are read by id (Claude
+// Code) or by content (OpenCode): a held class is never a false hold
+// ([HoldingsByContent]).
 //
 // # Resume routing
 //
@@ -191,6 +191,9 @@
 //
 // Both counts move in one step under the lock (a park is a decrement and an
 // increment), clamped at zero, and the inbox hold follows at the transition.
+// A seat holds up to its cap of runs in [Holding], one per conversation
+// (ADR-0169): a launch or an answer's resume reserves its slot with its write,
+// under the lock, or waits ([SeatFull], [ConversationBusy]).
 //
 // # Recounting a seat
 //
@@ -203,21 +206,17 @@
 // turn; a recount counts a run with a write out where the moves so far leave
 // it ([Coordinator.countedLocked]); the answer moves it once, under the lock,
 // in recorded order; a write that did not land, a panic included, or one for a
-// seat this node let go, moves nothing (countwrite.go).
-//
-// # Where each write puts the run
-//
-// In the set its own status names, never by its recorded from and to: an
-// earlier write whose answer was lost may have landed.
+// seat this node let go, moves nothing (countwrite.go). It puts the run in the
+// set its own status names, never by its recorded from and to: an earlier
+// write whose answer was lost may have landed.
 //
 // # The seat's inbox hold
 //
-// Held while a run is in [Holding] or an answer or ending is owed ([SeatHold]):
-// parked mail would loop through the consumer. A seat busy coding takes no
-// other work, an answer to another run included; an answer by turn travels on
-// the control topic and is recorded on arrival. This node alone agrees on the
-// hold, taken for one [queue.Attachment] so a late one is refused, never
-// carried onto the next.
+// Held while its runs hold every slot, a delivery waits on a conversation one
+// works, or an answer or ending is owed ([SeatHold]): parked mail would loop
+// through the consumer. An answer by turn travels on the control topic and is
+// recorded on arrival. This node alone agrees on the hold, taken for one
+// [queue.Attachment] so a late one is refused, never carried onto the next.
 //
 // # Routing a control-topic delivery
 //
@@ -234,8 +233,8 @@
 //
 // # The seat is held from the row, not from the announcement
 //
-// Counted when the row's write is answered; counted off ExecutorLaunched, the
-// seat's next mail would run beside the job. A turn id names one execution
+// Counted when the row's write is answered: counted off ExecutorLaunched, the
+// seat's next mail could outrun the count. A turn id names one execution
 // (ADR-0017). A reset the row refuses is never a launch that went ahead.
 //
 // # Keys a later build adds
@@ -398,13 +397,11 @@
 //
 // # A wake joins a running run
 //
-// The engine may file somebody's message about a job's work as that job's wake
-// item ([PendingStore.FileWake]), sealed in a domain of its own. Nothing in
-// this build files one: every node reads wakes before any files them, so no
-// node mid-upgrade meets one it would take for a note. Wakes between two steps
-// join one unserved item; a hook serves an item once. A read item is the
-// turn's and outlives its job; an unread one goes with it, its delivery left
-// to a turn of its own.
+// The engine files somebody's message about a job's work as that job's wake
+// item ([PendingStore.FileWake], ADR-0167), sealed in a domain of its own.
+// Wakes between two steps join one unserved item; a hook serves an item once.
+// A read item is the turn's and outlives its job; an unread one goes with it,
+// its delivery left to a turn of its own.
 //
 // # Stopping a seat's running work
 //

@@ -1,5 +1,7 @@
 package engine
 
+import "fmt"
+
 // What a node must hold to be doing its work, for a readiness probe on a node
 // that serves no API. An ingress node's /ready answers from the drain, the
 // company and the config posture; a node WITHOUT ingress is asked whether it
@@ -10,15 +12,23 @@ package engine
 // BrokerLink reports whether this node reaches the fleet's broker now: nil
 // while it does, and an error naming what is down otherwise.
 //
-// ASKED OF THE QUEUE'S OWN CLIENT, which every mailbox, publish and (on an
-// embedded fleet) the coordination store ride. A queue with no link to lose
-// (the in-memory twin, an in-process broker) answers nil.
+// TWO PATHS, each asked of the queue that tracks it (ADR-0173): the DATA PATH,
+// which every mailbox and publish ride, refused once its probe of the fleet's
+// JetStream is past its bound; then the LEASE LINK, which the node's holds
+// ride. Neither is a round trip. A queue with no link to lose (the in-memory
+// twin) answers nil.
 func (e *Engine) BrokerLink() error {
-	linked, ok := e.backends.Queue.(interface{ Link() error })
-	if !ok {
-		return nil
+	if path, ok := e.backends.Queue.(interface{ DataPath() error }); ok {
+		if err := path.DataPath(); err != nil {
+			return fmt.Errorf("the data path: %w", err)
+		}
 	}
-	return linked.Link()
+	if link, ok := e.backends.Queue.(interface{ LeaseLink() error }); ok {
+		if err := link.LeaseLink(); err != nil {
+			return fmt.Errorf("the lease link: %w", err)
+		}
+	}
+	return nil
 }
 
 // HoldsPresence reports whether this node holds its presence lease now

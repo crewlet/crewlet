@@ -198,7 +198,7 @@ func BenchmarkAGatedClaim(b *testing.B) {
 	for _, held := range []int{10, 10_000} {
 		b.Run(fmt.Sprintf("held=%d", held), func(b *testing.B) {
 			_, nc := embeddedServer(b)
-			s, err := Open(context.Background(), jsOf(nc), Config{
+			s, err := Open(context.Background(), jsOf(nc), jsOf(nc), Config{
 				TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("b%d", bucketSeq.Add(1)),
 				Reach: InProcess,
 			})

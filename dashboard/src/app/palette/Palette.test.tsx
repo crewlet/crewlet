@@ -475,26 +475,30 @@ describe("running now", () => {
     role,
     handle,
     activity: "working",
-    turn: {
-      turn_id: turn,
-      started_at: `2026-09-21T10:0${minute}:00Z`,
-      stage: "phase",
-      ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
-    },
-    live_call: {
-      turn_id: turn,
-      phase: "execute",
-      round_num: 0,
-      rounds_used: 1,
-      max_rounds: 25,
-      versions: ZERO_VERSIONS,
-    },
+    turns: [
+      {
+        turn_id: turn,
+        started_at: `2026-09-21T10:0${minute}:00Z`,
+        stage: "phase",
+        ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
+      },
+    ],
+    live_calls: [
+      {
+        turn_id: turn,
+        phase: "execute",
+        round_num: 0,
+        rounds_used: 1,
+        max_rounds: 25,
+        versions: ZERO_VERSIONS,
+      },
+    ],
   });
   const agents = [
     working("SRE", "sre", "t-late", 9),
     working("SWE", "swe", "t-early", 1, "ENG-412"),
     { id: "jane", agent_id: "a-jane", role: "Jane Founder", handle: "jane", activity: "needs" },
-    { ...working("SWE 2", "swe-2", "", 3), turn: null, live_call: null },
+    { ...working("SWE 2", "swe-2", "", 3), turns: [], live_calls: [] },
   ];
 
   /** The group a heading names, by its rendered label. */
@@ -542,7 +546,7 @@ describe("running now", () => {
     expect(before, "the highlight is on a row under the group").not.toContain("SRE");
     act(() =>
       p.store.applyAgents([
-        { agent_id: "a-swe", activity: "idle", turn: null, live_call: null },
+        { agent_id: "a-swe", activity: "idle", turns: [], live_calls: [] },
         agents[0]!,
       ] as never),
     );

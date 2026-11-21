@@ -47,6 +47,15 @@ func (p present) Nodes(context.Context) ([]string, error) {
 // and one replicated store, each with its fleet half started over its service.
 func fleetOf(t *testing.T, a, b evals.RigOptions) (*assistanttest.Rig, *assistanttest.Rig) {
 	t.Helper()
+	return fleetAsking(t, 0, a, b)
+}
+
+// fleetAsking is [fleetOf] whose fleet halves wait budget for an answer, zero
+// for live.DefaultAskBudget.
+func fleetAsking(t *testing.T, budget time.Duration, a, b evals.RigOptions) (*assistanttest.Rig,
+	*assistanttest.Rig) {
+
+	t.Helper()
 	broker := queuememory.NewBroker()
 	roster := present{"node-a": true, "node-b": true}
 	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
@@ -74,7 +83,7 @@ func fleetOf(t *testing.T, a, b evals.RigOptions) (*assistanttest.Rig, *assistan
 			t.Fatal(err)
 		}
 		f, err := live.NewFleet(live.FleetOptions{Node: node, Broker: q, Roster: roster,
-			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops})
+			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops, AskBudget: budget})
 		if err != nil {
 			t.Fatal(err)
 		}

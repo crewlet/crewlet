@@ -353,6 +353,22 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a delivery that reached a seat this node counts as held",
 		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },
 	}},
+	"HoldForConversation": {{
+		name: "a delivery whose conversation one of the seat's runs works",
+		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldForConversation(t.Context(), "swe", "c") },
+	}},
+	"SeatCount": {{
+		name: "the seat's counts against its cap",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatCount("swe") },
+	}},
+	"HeldBeside": {{
+		name: "the runs a launch starts beside",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.HeldBeside("swe", "t9") },
+	}},
+	"ConversationBusy": {{
+		name: "whether a run works a delivery's conversation, reading the seat's rows",
+		call: func(t *testing.T, rig *coordRig) { _, _ = rig.coordinator.ConversationBusy(t.Context(), "swe", "c") },
+	}},
 	"Readmit": {{
 		name: "a signal that a seat's conditions may have cleared",
 		call: func(_ *testing.T, rig *coordRig) {

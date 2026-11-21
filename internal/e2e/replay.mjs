@@ -264,16 +264,18 @@ for (const raw of frames) {
   }
   for (const agent of replay.state.agents) {
     if (agent.activity === "working") sawWorking = true;
-    if (agent.live_call) {
+    for (const call of agent.live_calls || []) {
       sawLiveCall = true;
-      if (agent.live_call.phase) phases.add(agent.live_call.phase);
-      const item = agent.live_call.work_item;
+      if (call.phase) phases.add(call.phase);
+      const item = call.work_item;
       if (item && item.key && item.id && item.project) workItems.add(item.key);
-      if (typeof agent.live_call.max_rounds === "number" && agent.live_call.max_rounds > 0) {
+      if (typeof call.max_rounds === "number" && call.max_rounds > 0) {
         sawRoundCap = true;
       }
     }
-    if (agent.turn && agent.turn.stage) stages.add(agent.turn.stage);
+    for (const turn of agent.turns || []) {
+      if (turn.stage) stages.add(turn.stage);
+    }
     const windows = (agent.budget && agent.budget.windows) || [];
     for (const w of windows) {
       if (w.refused_at && w.state === "refusing") refusedWindow = w;
@@ -328,8 +330,8 @@ if (!stages.has("phase")) {
 }
 
 // THE DURABLE HALF OF A LIVE PHASE, which is the whole reason a turn survives
-// being watched to its end. The projection clears `live_call` the instant a
-// phase completes and the seat page's history query is answered once, at mount
+// being watched to its end. The projection clears a turn's live call the
+// instant its phase completes and the seat page's history query is answered once, at mount
 // — so the only thing that can keep a finished turn on screen is the
 // `agent_phase_completed` envelope the server pushes, PAYLOAD AND ALL, just
 // before the overlay that clears the call. That the payload is on the wire is

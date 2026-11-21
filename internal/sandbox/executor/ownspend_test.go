@@ -386,7 +386,7 @@ func TestAContinuedOpenCodeRunIsChargedWhatItsSessionGained(t *testing.T) {
 		`{"type":"crewlet.usage","report":{"data":{"id":"ses_abc","cost":0.70,` +
 			`"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":300,"write":7}}}}}`,
 	}, "\n")
-	res := opencode().Parse(stream)
+	res := opencode().Parse([]byte(stream))
 	want := spend{input: (100 + 300 + 7) - (80 + 200 + 5), output: 25 - 19, cacheRead: 100, cacheWrite: 2, cost: 0.30}
 	if got := spendOf(res); !got.near(want) {
 		t.Fatalf("the continued run was charged %+v, want what its session gained, %+v", got, want)

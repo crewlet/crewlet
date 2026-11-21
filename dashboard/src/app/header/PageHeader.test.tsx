@@ -340,7 +340,7 @@ describe("who is working", () => {
         id: "a1",
         role: "Agent SWE",
         activity: "working",
-        live_call: { work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS },
+        live_calls: [{ work_item: { key: "ENG-1", project: "ENG" }, versions: ZERO_VERSIONS }],
       },
       { agent_id: "a2", id: "a2", role: "SRE", activity: "working" },
       { agent_id: "a4", id: "a4", role: "CTO", activity: "idle" },

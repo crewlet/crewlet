@@ -87,6 +87,7 @@ import {
   controlHeld,
   isRunning,
   rowRemedy,
+  steerTargets,
   useSeatControls,
   type SeatControls,
 } from "~/components/seatControls.tsx";
@@ -997,12 +998,12 @@ function seatEntries(
       ...hold,
     });
   }
-  if (s.row?.turn) {
+  for (const t of steerTargets(s)) {
     out.push({
-      key: "steer",
-      label: "Steer its turn",
+      key: `steer-${t.turnId}`,
+      label: `Steer its turn${t.which}`,
       icon: <CompassGlyph />,
-      onSelect: () => controls.steer(s),
+      onSelect: () => controls.steer(s, t.turnId),
       ...hold,
     });
   }

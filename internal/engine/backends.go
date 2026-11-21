@@ -81,17 +81,17 @@ type Backends struct {
 	// merely dialled.
 	stopServer func()
 
-	// conn is the SECOND connection, the one the coordination store rides
-	// on an embedded broker — dialled through [jetstream.Queue.DialWatched],
+	// conn is the SECOND connection, the one the coordination store's reads
+	// and fleet buckets ride on an embedded broker, its holds aside — dialled through [jetstream.Queue.DialWatched],
 	// so NATS closing it for good stops the node as the queue's own would.
 	// Held here so Close releases it in its place in the order, after the
 	// queue and before the server; the store does not own it. Nil on an
 	// external broker, where the store rides the queue's own.
 	conn *nats.Conn
 
-	// rides is the connection the coordination store rides on EVERY
-	// topology: conn above on an embedded broker, the queue's own on an
-	// external one. Not owned here — see [Backends.CoordinationConn].
+	// rides is the connection the coordination store's reads and fleet
+	// buckets ride on EVERY topology, its holds aside ([Backends.leases]):
+	// conn above on an embedded broker, the queue's own on an external one. Not owned here — see [Backends.CoordinationConn].
 	rides *nats.Conn
 
 	// coordination is the JetStream client over rides, in the API this
@@ -99,6 +99,17 @@ type Backends struct {
 	// opened with, and what [Backends.CoordinationJetStream] hands the
 	// subsystems that ride the same connection.
 	coordination natsjs.JetStream
+
+	// leases is the LEASE CONNECTION ([jetstream.Queue.DialLeases]), which
+	// the lease store's holds ride and nothing else (ADR-0174): owned here,
+	// on every topology, and closed after the queue and before the
+	// coordination connection ([Backends.Close]).
+	leases *nats.Conn
+
+	// carrier starts the probe of this node's data path and answers its
+	// verdict ([jetstream.Queue.ProveDataPath]), which a hold of the KV
+	// lease store waits on (ADR-0173). Nil on backends a caller lent.
+	carrier func() func() error
 
 	// api is the JetStream API this node's broker is addressed in.
 	api jsapi.API
@@ -190,12 +201,12 @@ func (b *Backends) API() jsapi.API { return b.api }
 // Nil when this node DIALLED an external broker: the queue owns that
 // connection, and the cluster has its own backup tooling. The caller takes no
 // ownership: closing it is [Backends.Close]'s job, and a caller that closed it
-// would take this node's leases down SILENTLY, since a close this process
-// makes itself is never the loss the node stops for.
+// would take this node's coordination store down SILENTLY, since a close this
+// process makes itself is never the loss the node stops for.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
 
 // CoordinationConn is the broker connection this node's coordination store
-// rides, on every topology: the second connection [Backends] owns on an
+// reads over, its holds aside (ADR-0174), on every topology: the second connection [Backends] owns on an
 // embedded broker, the queue's own on an external one. Nil only where there is
 // no broker at all (a Backends built around the memory twin).
 //
@@ -224,9 +235,9 @@ func (b *Backends) CoordinationJetStream() natsjs.JetStream { return b.coordinat
 //
 //  1. QUEUE: consumers release unacked messages instead of leaving a peer
 //     to wait out the ack timeout (untested: only the fleet suite could).
-//  2. COORDINATION connection, after the queue: a node that released its
-//     broker while holding leases looks alive and its seats stay unclaimable
-//     for a full TTL. The lease store's watch stops first.
+//  2. The LEASE and COORDINATION connections, after the queue and the lease
+//     store's gate view: a node that released its broker while holding
+//     leases looks alive and its seats stay unclaimable for a full TTL.
 //  3. The embedded SERVER, if this node started one (never a dialled one).
 //  4. The STORE, last because everything writes to it: closed first, a
 //     drain would end in "database is closed" having recorded nothing.
@@ -238,6 +249,10 @@ func (b *Backends) Close(ctx context.Context) {
 	}
 	if closer, ok := b.Coord.(backgroundCloser); ok {
 		closer.Close()
+	}
+	if b.leases != nil {
+		b.leases.Close()
+		b.leases = nil
 	}
 	if b.conn != nil {
 		b.conn.Close()
@@ -469,7 +484,11 @@ func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (
 		return nil, out.abandon(ctx, fmt.Errorf("engine: coordination: %w", err))
 	}
 	out.coordination = js
-	if err = attachCoordination(ctx, b, out, js); err != nil {
+	leases, err := out.api.Client(out.leases)
+	if err != nil {
+		return nil, out.abandon(ctx, fmt.Errorf("engine: lease connection: %w", err))
+	}
+	if err = attachCoordination(ctx, b, out, js, leases); err != nil {
 		return nil, out.abandon(ctx, err)
 	}
 	if err = openObjects(ctx, b, out, js, rec); err != nil {
@@ -794,7 +813,12 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		// and must never take it down. And no `conn` either — the QUEUE
 		// owns this connection, so Close must not close it a second time
 		// underneath the client that is still shutting down.
-		return &Backends{Queue: q, link: meterOf(q), window: q.LinkWindow()}, q.Conn(), nil
+		out := &Backends{Queue: q, link: meterOf(q), window: q.LinkWindow(),
+			carrier: q.ProveDataPath}
+		if err := dialLeases(ctx, q, out); err != nil {
+			return nil, nil, err
+		}
+		return out, q.Conn(), nil
 	}
 
 	server, err := jetstream.StartServer(ctx, cfg)
@@ -808,9 +832,10 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server,
-		death: server.Death(), link: meterOf(q), window: q.LinkWindow()}
-	// WATCHED, through the queue: this connection holds every lease the
-	// node renews, so NATS closing it for good is the node's loss exactly
+		death: server.Death(), link: meterOf(q), window: q.LinkWindow(),
+		carrier: q.ProveDataPath}
+	// WATCHED, through the queue: the fleet store and every lease read ride
+	// it, so NATS closing it for good is the node's loss exactly
 	// as the queue's own connection closing is, and the queue reports both
 	// as one ([jetstream.Queue.Lost]). A donor's second connection is the
 	// one that is not — see [jetstream.Queue.DialOwned].
@@ -823,7 +848,22 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	// in-process server — the queue holds its own. The external branch
 	// shares the queue's instead, which is why it leaves this nil.
 	out.conn = conn
+	if err := dialLeases(ctx, q, out); err != nil {
+		return nil, nil, err
+	}
 	return out, conn, nil
+}
+
+// dialLeases opens the node's LEASE CONNECTION onto out, on both branches
+// ([jetstream.Queue.DialLeases]): watched, so NATS closing it for good stops
+// the node as the queue's own would (ADR-0001); abandoning out on a failure.
+func dialLeases(ctx context.Context, q *jetstream.Queue, out *Backends) error {
+	leases, err := q.DialLeases(ctx)
+	if err != nil {
+		return out.abandon(ctx, fmt.Errorf("engine: lease connection: %w", err))
+	}
+	out.leases = leases
+	return nil
 }
 
 // countRefusals is the sink a node's embedded broker hands its refusals to:
@@ -847,19 +887,19 @@ func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
 	}
 }
 
-// attachCoordination builds the fleet store and the lease slot on one
-// connection, for both branches (a store forgotten on one is a later panic).
+// attachCoordination builds the fleet store and the lease slot for both
+// branches (a store forgotten on one is a later panic): buckets and fleet
+// reads over js, every hold over leases (ADR-0174), each KV hold gated on the
+// node's data path (ADR-0173).
 //
 // THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot says; only
 // the LEASE store follows it, as one node has nobody to fence against. Its
-// RECORDS (token counter, A2A asks, claimed fires, executors, secrets) must
-// outlive the PROCESS on one node as on four (stream.store_dir).
-//
-// THE FENCING COUNTER IS A RECORD too: a seat's epoch is written into fleet
-// records (an executor row's owner_epoch). Counted in process it restarted at 1
-// each boot and a new holder was refused as older than itself, so a single
-// node mints from the persistent counter a fleet does (coord/kv.Epochs).
-func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
+// RECORDS must outlive the PROCESS on one node as on four (stream.store_dir),
+// the fencing counter among them: a seat's epoch is written into fleet records
+// (an executor row's owner_epoch), so a single node mints from the persistent
+// counter a fleet does (coord/kv.Epochs).
+func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
+	js, leases natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: every replicated bucket of both coordination
 	// stores, across two calls, each of which would otherwise discover a
@@ -881,17 +921,22 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 
 	var epochs *kv.Epochs
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		epochs, err = kv.OpenEpochs(ctx, js, stores.epochs)
+		epochs, err = kv.OpenEpochs(ctx, leases, js, stores.epochs)
 		if err != nil {
 			return fmt.Errorf("engine: coordination: %w", err)
 		}
 		out.Coord = &coordmem.Backend{Epochs: epochs}
 	} else {
-		leases, err := kv.Open(ctx, js, stores.leases)
+		// In process (local coordination) there is no link for the two paths
+		// to fail apart on, so only the KV's holds are gated.
+		if out.carrier != nil {
+			stores.leases.Carrier = out.carrier()
+		}
+		held, err := kv.Open(ctx, leases, js, stores.leases)
 		if err != nil {
 			return fmt.Errorf("engine: coordination: %w", err)
 		}
-		out.Coord, epochs = leases, leases.Epochs()
+		out.Coord, epochs = held, held.Epochs()
 	}
 	return floorSeatEpochs(ctx, epochs, shared, runsBucketHome(b))
 }

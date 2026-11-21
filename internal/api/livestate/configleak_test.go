@@ -65,7 +65,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	t.Parallel()
 	s := leakyState()
 	overlay := s.AgentOverlay("Lead")
-	if overlay == nil || overlay.LiveCall == nil || overlay.LastError == nil {
+	if overlay == nil || soleCall(t, overlay.LiveCalls) == nil || overlay.LastError == nil {
 		t.Fatalf("overlay = %+v, want a failed call and a last error", overlay)
 	}
 	runs := s.ActiveExecutors()
@@ -76,8 +76,8 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 		rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})
 		return map[string]any{
 			"the overlay":    overlay.For(r),
-			"the call whole": overlay.LiveCall.For(r),
-			"the call lean":  livestate.MaskCall(overlay.LiveCall.Without(livestate.CallVersions{}), r),
+			"the call whole": livestate.MaskCall(soleCall(t, overlay.LiveCalls), r),
+			"the call lean":  livestate.MaskCall(soleCall(t, overlay.LiveCalls).Without(livestate.CallVersions{}), r),
 			"the roster row": livestate.MaskRow(rows[0], r),
 			"the pushed row": livestate.MaskRow(s.OverlayRows([]string{"Lead"})[0], r),
 			"the executor":   runs[0].For(r),

@@ -32,9 +32,19 @@ func idleTurn(context.Context, string, []*events.Event) queue.Result { return qu
 // admit admits a turn on handle or fails the case.
 func admit(ctx context.Context, t *testing.T, n *node.Node, handle string) (context.Context, func()) {
 	t.Helper()
-	turnCtx, release, err := n.AdmitTurn(ctx, handle)
+	turnCtx, release, err := n.AdmitTurn(ctx, handle, "")
 	if err != nil {
 		t.Fatalf("AdmitTurn(%s) = %v, want admitted", handle, err)
+	}
+	return turnCtx, release
+}
+
+// admitIn admits a turn of conversation on handle or fails the case.
+func admitIn(ctx context.Context, t *testing.T, n *node.Node, handle, conversation string) (context.Context, func()) {
+	t.Helper()
+	turnCtx, release, err := n.AdmitTurn(ctx, handle, conversation)
+	if err != nil {
+		t.Fatalf("AdmitTurn(%s, %s) = %v, want admitted", handle, conversation, err)
 	}
 	return turnCtx, release
 }
@@ -44,7 +54,7 @@ func admit(ctx context.Context, t *testing.T, n *node.Node, handle string) (cont
 func admitting(ctx context.Context, n *node.Node, handle string) <-chan error {
 	answer := make(chan error, 1)
 	go func() {
-		_, release, err := n.AdmitTurn(ctx, handle)
+		_, release, err := n.AdmitTurn(ctx, handle, "")
 		if err == nil {
 			release()
 		}
@@ -98,7 +108,7 @@ func TestASeatNotHeldHereAdmitsNoTurn(t *testing.T) {
 	t.Parallel()
 	g := gatedFleet(t, 2, idleTurn, "ceo")
 
-	_, release, err := g.n.AdmitTurn(t.Context(), "nobody")
+	_, release, err := g.n.AdmitTurn(t.Context(), "nobody", "")
 	if !errors.Is(err, node.ErrSeatNotOwned) {
 		t.Fatalf("AdmitTurn on a seat this node does not hold = %v, want ErrSeatNotOwned", err)
 	}
@@ -144,7 +154,7 @@ func TestADrainingNodeAdmitsNoTurn(t *testing.T) {
 
 	var refusal error
 	within(t, "the drain to close the gate", func() bool {
-		_, release, err := g.n.AdmitTurn(t.Context(), "cto")
+		_, release, err := g.n.AdmitTurn(t.Context(), "cto", "")
 		if err == nil {
 			release()
 			return false
@@ -301,8 +311,8 @@ func TestTheDrainsCutEndsATurnAdmittedOutsideTheMailbox(t *testing.T) {
 // have been answered: it only elapses on a failure.
 const gateWaitBound = 2 * time.Second
 
-// A SEAT RUNS ONE TURN AT A TIME, whichever road each arrives by, and says so
-// when the one running ends, to whoever was refused behind it.
+// A SEAT AT ITS DEFAULT CAP RUNS ONE TURN AT A TIME, whichever road each arrives
+// by, and says so when the one running ends, to whoever was refused behind it.
 //
 // A person's answer reaches its run on the control topic, which no mailbox turn
 // waits for. The second turn is refused at once, never queued, and the ending
@@ -321,11 +331,11 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	}, idleTurn, "ceo", "cto")
 
 	running, release := admit(t.Context(), t, g.n, "ceo")
-	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo", ""); !errors.Is(err, node.ErrSeatFull) {
 		if second != nil {
 			second()
 		}
-		t.Fatalf("a second turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+		t.Fatalf("a second turn on a seat mid-turn = %v, want ErrSeatFull", err)
 	}
 	if got := g.n.InFlightTurns(); got != 1 {
 		t.Fatalf("in flight = %d after a busy refusal, want the one turn's slot", got)
@@ -358,6 +368,58 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	}
 }
 
+// A SEAT RUNS UP TO ITS CAP OF TURNS, ONE PER CONVERSATION (ADR-0169).
+//
+// At a cap of two, turns of two conversations run together and a second of one
+// of them is refused as busy whatever room is left; a third conversation is
+// refused as full. A mailbox delivery of a busy conversation waits, and is
+// admitted once that conversation's turn ends, while another's still runs.
+//
+// Mutation: drop the conversation check and the second turn of "a" is
+// admitted; drop the cap and "c" is; count the cap per conversation and the
+// second conversation is refused; wake waiters only when the seat empties and
+// the mailbox turn of "a" waits on "b", which never ends in the case.
+func TestASeatRunsUpToItsCapOneTurnPerConversation(t *testing.T) {
+	t.Parallel()
+	g := gatedFleetWith(t, 8, nil, func(cfg *node.Config) {
+		cfg.SeatTurns = func(string) int { return 2 }
+	}, idleTurn, "ceo")
+
+	_, releaseA := admitIn(t.Context(), t, g.n, "ceo", "a")
+	_, releaseB := admitIn(t.Context(), t, g.n, "ceo", "b")
+	defer releaseB()
+	if _, again, err := g.n.AdmitTurn(t.Context(), "ceo", "a"); !errors.Is(err, node.ErrConversationBusy) {
+		if again != nil {
+			again()
+		}
+		t.Fatalf("a second turn of a busy conversation = %v, want ErrConversationBusy", err)
+	}
+	if _, third, err := g.n.AdmitTurn(t.Context(), "ceo", "c"); !errors.Is(err, node.ErrSeatFull) {
+		if third != nil {
+			third()
+		}
+		t.Fatalf("a third conversation on a seat at its cap of two = %v, want ErrSeatFull", err)
+	}
+
+	waiting := make(chan error, 1)
+	go func() {
+		_, release, err := g.n.AdmitTurn(node.MailboxTurnForTest(t.Context()), "ceo", "a")
+		if err == nil {
+			release()
+		}
+		waiting <- err
+	}()
+	releaseA()
+	select {
+	case err := <-waiting:
+		if err != nil {
+			t.Fatalf("the mailbox turn of conversation a = %v once a's turn ended, want admitted", err)
+		}
+	case <-time.After(gateWaitBound): //fixedwait:liveness
+		t.Fatal("the mailbox turn of conversation a was not admitted once a's turn ended")
+	}
+}
+
 // A TURN REFUSED ON A BUSY SEAT HEARS IT FREED, HOWEVER CLOSE THE RELEASE.
 //
 // The refused turn (a resume) waits for the seat's next [Config.SeatTurnEnded],
@@ -378,11 +440,11 @@ func TestATurnRefusedAsTheSeatIsReleasedHearsItFreed(t *testing.T) {
 
 	_, release := admit(t.Context(), t, g.n, "ceo")
 	g.n.OnBusyRefusalForTest(func(string) { release() })
-	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo", ""); !errors.Is(err, node.ErrSeatFull) {
 		if second != nil {
 			second()
 		}
-		t.Fatalf("a turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+		t.Fatalf("a turn on a seat mid-turn = %v, want ErrSeatFull", err)
 	}
 	select {
 	case handle := <-ended:

@@ -35,9 +35,9 @@ func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	}
 	return map[string][]string{
 		"the report":              collected.DeliveredRefs,
-		"claude-code's result":    executor.ClaudeCode{}.Parse(string(result)).DeliveredRefs,
-		"opencode's event stream": executor.OpenCode{}.Parse(string(event)).DeliveredRefs,
-		"opencode's plain output": executor.OpenCode{}.Parse(text).DeliveredRefs,
+		"claude-code's result":    executor.ClaudeCode{}.Parse(result).DeliveredRefs,
+		"opencode's event stream": executor.OpenCode{}.Parse(event).DeliveredRefs,
+		"opencode's plain output": executor.OpenCode{}.Parse([]byte(text)).DeliveredRefs,
 	}
 }
 
@@ -122,8 +122,8 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 		if want != "" {
 			expected = []string{want}
 		}
-		if got := (executor.ClaudeCode{}).Parse(`{"type":"result","subtype":"success","result":` +
-			quote(t, line) + `}`).DeliveredRefs; !slices.Equal(got, expected) {
+		if got := (executor.ClaudeCode{}).Parse([]byte(`{"type":"result","subtype":"success","result":` +
+			quote(t, line) + `}`)).DeliveredRefs; !slices.Equal(got, expected) {
 			t.Errorf("%q: refs = %q, want %q", line, got, expected)
 		}
 	}
@@ -153,7 +153,7 @@ func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
 		}
 		for path, got := range map[string][]string{
 			"the report":              collected.DeliveredRefs,
-			"opencode's plain output": executor.OpenCode{}.Parse(text).DeliveredRefs,
+			"opencode's plain output": executor.OpenCode{}.Parse([]byte(text)).DeliveredRefs,
 		} {
 			if !slices.Equal(got, []string{want}) {
 				t.Errorf("%s: %q: refs = %q, want %q", path, text, got, []string{want})
