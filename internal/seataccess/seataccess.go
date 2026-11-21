@@ -106,6 +106,7 @@ const (
 
 	LaneGoogleAnalytics Lane = "google_analytics"
 	LaneGoogleAds       Lane = "google_ads"
+	LaneSearchConsole   Lane = "search_console"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -115,7 +116,7 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH, LaneGoogleAnalytics, LaneGoogleAds,
+		LaneSSH, LaneGoogleAnalytics, LaneGoogleAds, LaneSearchConsole,
 	}
 }
 
