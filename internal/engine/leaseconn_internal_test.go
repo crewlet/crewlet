@@ -226,33 +226,8 @@ func TestBrokerLinkNamesTheLeaseLinkAndTheDataPath(t *testing.T) {
 // without starting its probe — DataPath answers from the first hop alone.
 func TestALeafsHoldIsRefusedOnceItsDataLinkFallsSilent(t *testing.T) {
 	t.Parallel()
-	member := testBootstrap(t)
-	member.Node.ID = "lease-member"
-	brokertest.StoreIn(&member.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
-	member.Stream.Leaf.Host = "127.0.0.1"
-	var onMember *Backends
-	var memberStore *kv.Store
-	for attempt := 1; onMember == nil; attempt++ {
-		// A PORT LOST BETWEEN THE PROBE AND THE BIND says nothing about the case.
-		member.Stream.Leaf.Port = freeLoopbackPort(t)
-		of := &bootstrapOf{b: &member}
-		onMember, memberStore = openLeaseNode(t, of)
-		if onMember == nil && (!errors.Is(of.err, jetstream.ErrLeafPortTaken) || attempt == 4) {
-			t.Fatalf("open the member: %v", of.err)
-		}
-	}
-	link := linktest.Lagging(t, fmt.Sprintf("127.0.0.1:%d", member.Stream.Leaf.Port))
-
-	leaf := testBootstrap(t)
-	leaf.Node.ID = "lease-leaf"
-	leaf.Secrets = member.Secrets
-	leaf.Stream.Leaf.URLs = []string{"nats-leaf://" + link.Addr()}
-	of := &bootstrapOf{b: &leaf}
-	_, store := openLeaseNode(t, of)
-	if store == nil {
-		t.Fatalf("open the leaf: %v", of.err)
-	}
-
+	f := openLeafAcross(t, 0, linktest.Lagging)
+	link, store, memberStore := f.link, f.leafStore, f.memberStore
 	ctx := t.Context()
 	seat := coord.SeatResource(uuid.New())
 	lease, _, err := store.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "node:leaf",
@@ -263,25 +238,10 @@ func TestALeafsHoldIsRefusedOnceItsDataLinkFallsSilent(t *testing.T) {
 	link.Blackhole(server.DEFAULT_GLOBAL_ACCOUNT)
 	t.Cleanup(func() { link.Mend(server.DEFAULT_GLOBAL_ACCOUNT) })
 
-	bound := time.NewTimer(60 * time.Second) //fixedwait:liveness
-	defer bound.Stop()
-	poll := time.NewTicker(100 * time.Millisecond) //fixedwait:liveness
-	defer poll.Stop()
-	for {
-		renewed, refused := store.Renew(ctx, seat, "node:leaf", lease.Epoch, store.TTL())
-		if refused != nil {
-			if !errors.Is(refused, coord.ErrUnavailable) || !errors.Is(refused, jetstream.ErrDataPathUnproven) ||
-				renewed {
-				t.Fatalf("a renewal across a silent data link = (%v, %v), want unknown for the "+
-					"unproven data path", renewed, refused)
-			}
-			break
-		}
-		select {
-		case <-bound.C:
-			t.Fatal("a renewal still lands a minute after the leaf's data link fell silent")
-		case <-poll.C:
-		}
+	refused := renewUntilRefused(t, store, seat, "node:leaf", lease.Epoch)
+	if !errors.Is(refused, coord.ErrUnavailable) || !errors.Is(refused, jetstream.ErrDataPathUnproven) {
+		t.Fatalf("a renewal across a silent data link = %v, want unknown for the unproven data path",
+			refused)
 	}
 	got, err := memberStore.Get(ctx, seat)
 	if err != nil || got == nil || got.Epoch != lease.Epoch || got.Owner != "node:leaf" {
@@ -310,13 +270,87 @@ func openLeaseNode(t *testing.T, of *bootstrapOf) (*Backends, *kv.Store) {
 	return back, store
 }
 
+// leafAcross is a member and a leaf of it whose links cross link, each opened
+// with the KV's leases, and their lease stores as the engine wired them.
+type leafAcross struct {
+	link                   *linktest.Link
+	member, leaf           *Backends
+	memberStore, leafStore *kv.Store
+}
+
+// openLeafAcross opens a member and a leaf across the link open puts in front
+// of the member's leaf listener, both at ttl, or the bootstrap's default where
+// it is zero; closed with the case.
+func openLeafAcross(t *testing.T, ttl time.Duration,
+	open func(t testing.TB, target string) *linktest.Link) leafAcross {
+
+	t.Helper()
+	member := testBootstrap(t)
+	member.Node.ID = "lease-member"
+	brokertest.StoreIn(&member.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
+	member.Stream.Leaf.Host = "127.0.0.1"
+	if ttl > 0 {
+		member.Coordination.LeaseTTLSeconds = ttl.Seconds()
+	}
+	var f leafAcross
+	for attempt := 1; f.member == nil; attempt++ {
+		// A PORT LOST BETWEEN THE PROBE AND THE BIND says nothing about the case.
+		member.Stream.Leaf.Port = freeLoopbackPort(t)
+		of := &bootstrapOf{b: &member}
+		f.member, f.memberStore = openLeaseNode(t, of)
+		if f.member == nil && (!errors.Is(of.err, jetstream.ErrLeafPortTaken) || attempt == 4) {
+			t.Fatalf("open the member: %v", of.err)
+		}
+	}
+	f.link = open(t, fmt.Sprintf("127.0.0.1:%d", member.Stream.Leaf.Port))
+
+	leaf := testBootstrap(t)
+	leaf.Node.ID = "lease-leaf"
+	leaf.Secrets = member.Secrets
+	leaf.Coordination.LeaseTTLSeconds = member.Coordination.LeaseTTLSeconds
+	leaf.Stream.Leaf.URLs = []string{"nats-leaf://" + f.link.Addr()}
+	of := &bootstrapOf{b: &leaf}
+	if f.leaf, f.leafStore = openLeaseNode(t, of); f.leaf == nil {
+		t.Fatalf("open the leaf: %v", of.err)
+	}
+	return f
+}
+
+// renewUntilRefused renews owner's seat on store until a renewal is refused,
+// and is the refusal; a renewal answered "not held" fails the case, as does
+// none refused within a minute.
+func renewUntilRefused(t *testing.T, store *kv.Store, seat, owner string, epoch int64) error {
+	t.Helper()
+	bound := time.NewTimer(60 * time.Second) //fixedwait:liveness
+	defer bound.Stop()
+	poll := time.NewTicker(100 * time.Millisecond) //fixedwait:liveness
+	defer poll.Stop()
+	for {
+		renewed, err := store.Renew(t.Context(), seat, owner, epoch, store.TTL())
+		switch {
+		case err != nil:
+			return err
+		case !renewed:
+			t.Fatalf("a renewal of %s answered that it is no longer %s's", seat, owner)
+		}
+		select {
+		case <-bound.C:
+			t.Fatalf("renewals of %s still land a minute on", seat)
+		case <-poll.C:
+		}
+	}
+}
+
 // THE LEASE TTL IN FORCE IS THE BUCKET'S, THROUGH THE STORE AS WIRED: a node
 // configured with a longer TTL than the bucket a peer made claims and renews
 // with the bucket's, which it reads off the store the engine wired, opened
-// over two clients (ADR-0174).
+// over two clients; and Backends.Close closes that store, which stops its
+// gate view and waits for it (kv's TestTheViewStopsWhenIdleAndStartsAgainWhenAsked)
+// (ADR-0174).
 //
 // Mutant: the lease store wired behind a wrapper with no TTL — the node
-// claims with its own 60 s, which the bucket's 30 s refuses.
+// claims with its own 60 s, which the bucket's 30 s refuses. Mutant:
+// Backends.Close leaves the coordination store open — its view runs on.
 func TestTheLeaseTTLInForceIsTheBucketsThroughTheWiredStore(t *testing.T) {
 	t.Parallel()
 	url := externaltest.Start(t, queue.MaxPayloadBytes).URL()
@@ -336,5 +370,24 @@ func TestTheLeaseTTLInForceIsTheBucketsThroughTheWiredStore(t *testing.T) {
 	back, _ := leaseNodeOf(t, second)
 	if got := effectiveLeaseTTL(&second, back.Coord); got != 30*time.Second {
 		t.Errorf("a node configured with 60s on a bucket made at 30s holds with %v, want the bucket's", got)
+	}
+	closed := &closeCounted{Backend: back.Coord}
+	(&Backends{Coord: closed}).Close(context.WithoutCancel(t.Context()))
+	if closed.n != 1 {
+		t.Errorf("Backends.Close closed the lease store as wired %d times, want once: its gate "+
+			"view runs on", closed.n)
+	}
+}
+
+// closeCounted is a coordination store whose Close is counted, and passed on.
+type closeCounted struct {
+	coord.Backend
+	n int
+}
+
+func (c *closeCounted) Close() {
+	c.n++
+	if closer, ok := c.Backend.(backgroundCloser); ok {
+		closer.Close()
 	}
 }
