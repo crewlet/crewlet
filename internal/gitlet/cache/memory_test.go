@@ -867,7 +867,8 @@ func TestANodeShortOfWhatItKeepsSaysSoOnceAtBoot(t *testing.T) {
 				t.Errorf("a node %s: code_cache_memory_short says %s %d, want %d", node.name, key, got, want)
 			}
 		}
-		if level, from := lines[0]["level"], lines[0]["memory_from"]; level != "WARN" || from == "" {
+		from, _ := lines[0]["memory_from"].(string)
+		if level := lines[0]["level"]; level != "WARN" || from == "" {
 			t.Errorf("a node %s: code_cache_memory_short is logged at %v naming memory_from %q, want WARN "+
 				"naming where the memory was read", node.name, level, from)
 		}
