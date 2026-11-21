@@ -302,6 +302,8 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionAtlasRecord, authz.ActionAtlasDispute,
 		// a person's approval of an agent's call, and of its production command
 		authz.ActionToolsApprove, authz.ActionSSHOperateApprove, authz.ActionReleaseApprove,
+		// and of a growth integration's spend, public or admin act
+		authz.ActionGrowthSpendApprove, authz.ActionGrowthPublicApprove, authz.ActionGrowthAdminApprove,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {
