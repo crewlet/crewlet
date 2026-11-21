@@ -168,6 +168,13 @@ func TestAReadWaitsOutARateLimitAndAWriteDoesNot(t *testing.T) {
 	if googleauth.Status(err) != http.StatusTooManyRequests || len(f.clock.waits()) != 0 {
 		t.Errorf("a limited write answered %v after waits %v, want its 429 at once", err, f.clock.waits())
 	}
+	// A READ TAKEN IN A POST BODY (a report) changes nothing, so it waits as a GET does.
+	f.edit(func(f *fakeGoogle) { f.limited = 1 })
+	f.clock.resetWaits()
+	err = conn.DoRead(t.Context(), http.MethodPost, "https://analyticsdata.googleapis.com/v1beta/x", token, map[string]any{}, nil)
+	if err != nil || !slices.Equal(f.clock.waits(), []time.Duration{3 * time.Second}) {
+		t.Errorf("a limited report answered %v after waits %v, want one wait and its answer", err, f.clock.waits())
+	}
 }
 
 // A CALLER'S OWN MISTAKE IS NOT HELD AS GOOGLE'S REFUSAL: a token asked for

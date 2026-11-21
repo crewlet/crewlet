@@ -351,10 +351,15 @@ func (c *Connection) CallAs(ctx context.Context, account, method, address string
 // Google refuses for a quota answers the same status, and a wait clears no
 // quota.
 func (c *Connection) Do(ctx context.Context, method, address, bearer string, body, out any) error {
+	return c.do(ctx, method == http.MethodGet, method, address, bearer, body, out)
+}
+
+// do is one call, waiting out a short 429 where reads.
+func (c *Connection) do(ctx context.Context, reads bool, method, address, bearer string, body, out any) error {
 	for attempt := 0; ; attempt++ {
 		err := c.once(ctx, method, address, bearer, body, out)
 		api, ok := errors.AsType[*APIError](err)
-		if !ok || api.Status != http.StatusTooManyRequests || method != http.MethodGet {
+		if !ok || api.Status != http.StatusTooManyRequests || !reads {
 			return err
 		}
 		limit := httpx.VendorRateLimit()
@@ -366,6 +371,13 @@ func (c *Connection) Do(ctx context.Context, method, address, bearer string, bod
 		api.Unwaited = unwaited.Error()
 		return api
 	}
+}
+
+// DoRead is [Connection.Do] for a call that changes nothing whatever its
+// method (a report or a query taken in a POST body): its 429 is waited out
+// as a GET's is.
+func (c *Connection) DoRead(ctx context.Context, method, address, bearer string, body, out any) error {
+	return c.do(ctx, true, method, address, bearer, body, out)
 }
 
 // once sends one request and decodes its answer into out. It is the only
