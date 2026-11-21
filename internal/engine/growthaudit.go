@@ -113,7 +113,7 @@ func (a GrowthAudit) record(ctx context.Context, step growth.Step, r growth.Reco
 	if err != nil {
 		return false, err
 	}
-	n := newGrowth(step, r)
+	n := accessdomain.GrowthOf(step, r)
 	act := n.HeldCall
 	if act == "" {
 		act = n.Call
@@ -128,30 +128,6 @@ func (a GrowthAudit) record(ctx context.Context, step growth.Step, r growth.Reco
 		return false, landed
 	}
 	return true, nil
-}
-
-// newGrowth is r as the access log takes it, each published text as its
-// SHA-256 and length: the words never leave this node.
-func newGrowth(step growth.Step, r growth.Record) accessdomain.NewGrowth {
-	n := accessdomain.NewGrowth{
-		Handle: r.Handle, Turn: r.Turn, Call: r.Call, HeldCall: r.HeldCall, Product: r.Product,
-		Connection: r.Connection, Account: r.Account, Target: r.Target, Tool: r.Tool, Class: r.Class,
-		Step: step, Answerer: r.Answerer, Via: r.Via, Operation: r.Operation, Before: r.Before, Failure: r.Failure,
-	}
-	for _, c := range r.Changes {
-		if c.Text {
-			n.Changes = append(n.Changes, accessdomain.PublishedText(c.Field, c.Label, c.Before, c.After))
-			continue
-		}
-		n.Changes = append(n.Changes, accessdomain.GrowthChange{Field: c.Field, Label: c.Label,
-			Before: c.Before, After: c.After, Money: c.Money})
-	}
-	if m := r.Money; m != nil {
-		n.Money = &accessdomain.GrowthMoney{Currency: m.Currency, DeltaMicros: m.DeltaMicros,
-			DailyMicros: m.DailyMicros, DailyAfterMicros: m.DailyAfterMicros,
-			PerChangeCapMicros: m.PerChangeCapMicros, DailyCapMicros: m.DailyCapMicros}
-	}
-	return n
 }
 
 // Changed counts the changes to one target that took effect at the vendor
