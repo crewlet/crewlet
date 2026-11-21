@@ -41,6 +41,7 @@ type TrackerReader interface {
 	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
 		fresh statelog.Freshness) (worklet.TaskDetail, error)
 	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
+	ViewsPage(ctx context.Context, q worklet.ViewQuery, after string) (worklet.ViewListing, string, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
 	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
@@ -76,6 +77,7 @@ type TrackerReader interface {
 	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 		fresh statelog.Freshness) (worklet.TaskTurns, error)
 	EveryView(ctx context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error)
+	EveryViewPage(ctx context.Context, q worklet.EveryViewQuery, after string) (worklet.ViewListing, string, error)
 	Flow(ctx context.Context, q worklet.FlowQuery, now time.Time,
 		loc *time.Location) (worklet.FlowAnswer, error)
 	CompanyFeed(ctx context.Context, q worklet.FeedQuery) (worklet.FeedPage, error)
@@ -156,10 +158,12 @@ type PageReader interface {
 	List(ctx context.Context, f doclet.Filter, fresh statelog.Freshness) (doclet.Listing, error)
 	Get(ctx context.Context, ref string, fresh statelog.Freshness) (doclet.Detail, error)
 	SkillPages(ctx context.Context, container string, fresh statelog.Freshness) ([]doclet.Page, error)
+	SkillPagesPage(ctx context.Context, container, after string, fresh statelog.Freshness) ([]doclet.Page, string, error)
 
 	// The operator's reads: every container, what happened to a page or
 	// a container, and one revision of a page's body.
 	Containers(ctx context.Context, fresh statelog.Freshness) ([]doclet.ContainerListing, error)
+	ContainersPage(ctx context.Context, after string, fresh statelog.Freshness) ([]doclet.ContainerListing, string, error)
 	Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
 		fresh statelog.Freshness) (doclet.Revision, bool, error)
@@ -246,6 +250,7 @@ type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
+	SeatHoldersHeld(ctx context.Context) ([]iamdomain.SeatHolder, error)
 	Requester(ctx context.Context, seat string) (iamdomain.Requester, bool, error)
 	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
 }
@@ -592,7 +597,7 @@ var opPing = define("estate.ping", opRead, SeatCopy, false,
 			return Served{}, errNotAdmitting
 		}
 		return b.served(), nil
-	}).floorless().ungated()
+	}).oneAnswer().floorless().ungated()
 
 // served is which halves this backend runs — one answer for a local admission
 // and a remote one, so the two cannot disagree about a half.

@@ -1981,7 +1981,7 @@ A push history can be narrowed to one pusher, a window of time, or both:
 - a window runs from `since` (inclusive) to `until` (exclusive), judged on each push's own instant;
 - the narrowed history stays in the order its pushes landed.
 
-No index of who pushed is kept: it would cost every push about a hundred bytes on every data node for 181 days (some 4.5 GB at 250 000 pushes a day). So a narrowed read scans newest first, at most 5 000 pushes and 4 MiB of their rows a page, and answers the pushes it keeps up to its limit. A page can hold fewer, or none, beside a cursor; `push_scan` says how far back it has looked.
+No index of who pushed is kept: it would cost every push about a hundred bytes on every data node for 181 days (some 4.5 GB at 250 000 pushes a day). So a narrowed read scans newest first, at most 5 000 pushes and 3 MiB of their rows a page, and answers the pushes it keeps up to its limit. A page can hold fewer, or none, beside a cursor; `push_scan` says how far back it has looked.
 
 Narrowed to a pusher, the read uses the repository's per-day counts: it skips days the pusher did not push on, leaves a day once it has met that day's pushes, and ends once it has met them all. Narrowed to a window, it skips what was pushed after the window and stops past its start.
 

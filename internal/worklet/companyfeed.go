@@ -250,6 +250,7 @@ func readCompanyFeed(ctx context.Context, tx *sql.Tx, q FeedQuery,
 	}
 	defer func() { _ = rows.Close() }()
 	out.Rows = []FeedRow{}
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		var (
 			row                     FeedRow
@@ -289,6 +290,12 @@ func readCompanyFeed(ctx context.Context, tx *sql.Tx, q FeedQuery,
 				row.Reassignments = &n
 			}
 			row.ReassignmentBudget = ReassignmentBudget
+		}
+		// Each row carries its own cursor, so a page cut by its bytes
+		// resumes after its last row like one cut at the limit.
+		if !held.TakeEncoded(row) {
+			out.More = true
+			break
 		}
 		out.Rows = append(out.Rows, row)
 	}

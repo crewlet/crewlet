@@ -245,11 +245,13 @@ const (
 	MaxSnapshotItems = 10_000
 
 	// MaxPageBytes is the encoded rows one page may carry WHATEVER its row limit
-	// says: half the estate reply ceiling (queue.MaxPayloadBytes), leaving room
-	// for the envelope and the repository row, since a row count alone would put
-	// two hundred maximal push rows, 88 MB, in one reply. A page always serves at
-	// least one row, so it always advances.
-	MaxPageBytes = 4 << 20
+	// says, since a row count alone would put two hundred maximal push rows,
+	// 88 MB, in one reply. A page fills until it reaches it, so it may end one
+	// row past it: the estate answer's bytes (statelog.AnswerBytes, half the
+	// reply ceiling) less one row of the code estate, which one record writes
+	// whole ([MaxRecordBytes]). A page always serves at least one row, so it
+	// always advances.
+	MaxPageBytes = statelog.AnswerBytes - MaxRecordBytes
 
 	// DefaultMaxBlobBytes is an unset code.limits.max_blob_bytes, which
 	// config validates against and defines (config.DefaultCodeMaxBlobBytes).

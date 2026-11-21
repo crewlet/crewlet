@@ -130,6 +130,8 @@ export function read(over: Partial<AtlasRead> = {}): AtlasRead {
 export interface AtlasFixture {
   nodes: AtlasSummary[];
   edges: AtlasMapEdge[];
+  /** The activity answers as a count the engine cut at its bytes. */
+  activityCut?: boolean;
 }
 
 /** The map answer for a fixture, every group open unless named closed. */
@@ -279,7 +281,13 @@ export function activityAnswer(fixture: AtlasFixture): AtlasActivityAnswer {
     }
     out.push({ id: node.id, ...(own.some((n) => n > 0) ? { days: own } : {}), last: lines[0]! });
   });
-  return { ...read(), from: new Date(from).toISOString(), days, entries: out };
+  return {
+    ...read(),
+    from: new Date(from).toISOString(),
+    days,
+    entries: out,
+    ...(fixture.activityCut ? { truncated: true } : {}),
+  };
 }
 
 /** Each entry's relation counts, read off the fixture's lines the map draws at rest. */

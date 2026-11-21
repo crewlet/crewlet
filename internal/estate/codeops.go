@@ -284,7 +284,7 @@ var opCodeResolve = define("code.resolve", opRead, codeDomain, false,
 		}
 		ref, err := b.Code.Resolve(ctx, q)
 		return ref, ranNothing(err)
-	})
+	}).oneAnswer()
 
 // opCodeRepoState is one page of a repository's snapshot (packs and refs,
 // whole or since a position): a Gitlet node's cache sync. ANSWERED WHOLE
@@ -298,7 +298,7 @@ var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 		}
 		snap, err := b.Code.Snapshot(ctx, q)
 		return snap, ranNothing(err)
-	}).answeredWhole()
+	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).answeredWhole()
 
 // opCodePushOutcome is what became of one push: the receiver's wait on a push
 // whose record resolved pending or unknown.
@@ -309,7 +309,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 		}
 		out, err := b.Code.PushOutcome(ctx, q)
 		return out, ranNothing(err)
-	})
+	}).oneAnswer()
 
 // opCodeRead is a read of Gitlet by its kind (gitlet.ReadKinds): the REST
 // routes', the CLI's, a seat's tools' and the engine's own listings and
@@ -330,7 +330,8 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
-	}).judgesGrant(func(q gitlet.ReadQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
+	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).
+	judgesGrant(func(q gitlet.ReadQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
 
 // opCodeQueueDue is a page of the queue work a repository's HOME Gitlet node
 // owes (gitlet.QueueDueQuery): the repositories owing any, or one target's,
@@ -351,7 +352,7 @@ var opCodeQueueDue = define("code.queue_due", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.QueueDue(ctx, q)
 		return answer, ranNothing(err)
-	}).answeredWhole()
+	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).answeredWhole()
 
 // opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
 // a review: the advisor's read, which names no asker.
@@ -362,7 +363,7 @@ var opCodeTurnsMoved = define("code.turns_moved", opRead, codeDomain, false,
 		}
 		moved, err := b.Code.TurnsMovedCode(ctx, q)
 		return moved, ranNothing(err)
-	})
+	}).perAsked()
 
 // opCodeResolveRef is one ref of one repository at the level the query names,
 // asked of any data node whose code copy serves: how a seat's tool turns a
@@ -375,7 +376,7 @@ var opCodeResolveRef = define("code.resolve_ref", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.ResolveRef(ctx, q)
 		return answer, ranNothing(err)
-	}).judgesGrant(func(q gitlet.RefQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
+	}).oneAnswer().judgesGrant(func(q gitlet.RefQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
 
 // opCodeLifecycle is one repository-lifecycle request — a tool's create,
 // rename, settings change, archive, unarchive, delete, restore or protection,
@@ -412,7 +413,7 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 		}
 		answer, err := b.Git.Read(ctx, q)
 		return answer, gitUnready(err)
-	}).keyedOnGit(func(q gitlet.GitQuery) string { return q.RepoID },
+	}).oneAnswer().keyedOnGit(func(q gitlet.GitQuery) string { return q.RepoID },
 	func(q gitlet.GitQuery, home bool) gitlet.GitQuery {
 		q.Home = home
 		return q
@@ -432,7 +433,7 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 		}
 		answer, err := b.Git.MergePreview(ctx, q)
 		return answer, gitUnready(err)
-	}).keyedOnGit(func(q gitlet.MergePreviewQuery) string { return q.RepoID },
+	}).oneAnswer().keyedOnGit(func(q gitlet.MergePreviewQuery) string { return q.RepoID },
 	func(q gitlet.MergePreviewQuery, home bool) gitlet.MergePreviewQuery {
 		q.Home = home
 		return q

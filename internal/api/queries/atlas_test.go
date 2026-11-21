@@ -63,6 +63,9 @@ func (a atlasAlarms) AlarmsEvaluated() bool          { return true }
 type atlasLog struct {
 	live  []atlas.Claim
 	lines []atlasdomain.LogLine
+
+	// cut makes Activity answer as one the log stopped at its bytes.
+	cut bool
 }
 
 func (l *atlasLog) Live(context.Context, statelog.Freshness) (atlasdomain.Live, error) {
@@ -108,7 +111,7 @@ func (l *atlasLog) Log(_ context.Context, q atlasdomain.LogQuery) (atlasdomain.L
 }
 
 func (l *atlasLog) Activity(_ context.Context, since time.Time, _ statelog.Freshness) (atlasdomain.Activity, error) {
-	out := atlasdomain.Activity{Complete: true}
+	out := atlasdomain.Activity{Complete: true, Truncated: l.cut}
 	newest := map[string]time.Time{}
 	for _, line := range l.lines {
 		if line.At.After(newest[line.Entry]) { //fixedwait:stated both are lines' instants, which the fixture states
@@ -467,6 +470,10 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 	mp := askAtlas(ctx, t, s, "atlas_map", map[string]any{"relations": "all"})
 	log := askAtlas(ctx, t, s, "atlas_log", map[string]any{"limit": 6})
 	activity := askAtlas(ctx, t, s, "atlas_activity", nil)
+	// AND A COUNT THE LOG CUT, the one answer that says truncated.
+	cutLog := acmeLog(t)
+	cutLog.cut = true
+	cutActivity := askAtlas(ctx, t, atlasSourcesWith(atlasCode(), cutLog), "atlas_activity", nil)
 	cf := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindAccount,
 		"cloudflare/0123456789abcdef0123456789abcdef")})
 	model := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindModel, "llm/main")})
@@ -542,7 +549,7 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"AtlasLineTarget":     pluck(lines, "target"),
 		"AtlasLogAnswer":      {log},
 		"AtlasEntryActivity":  listOf(t, activity["entries"]),
-		"AtlasActivityAnswer": {activity},
+		"AtlasActivityAnswer": {activity, cutActivity},
 		"AtlasReviewItem":     items,
 		"AtlasReviewAnswer":   {review, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", map[string]any{"limit": 1})},
 		"AtlasSourceFinding":  pluck(standings, "unread"),
@@ -682,12 +689,13 @@ func TestTheAtlasReviewIsWhatWaitsAsItsAskerReadsTheAtlas(t *testing.T) {
 // THE ATLAS'S LOG SHOWS A READER ONLY WHAT THEIR ATLAS SHOWS THEM: a line on
 // a repository is a Gitlet holder's, as the repository is, and so is a line
 // that names it; a line on an entry only an agent reported stays out until a
-// read asks for those; and the counts are of exactly the lines shown. Pages
-// of any size hold every shown line once, newest first.
+// read asks for those; and the counts are of exactly the lines shown, saying
+// when the log cut them. Pages of any size hold every shown line once.
 //
-// Mutation: answer every line in atlasLog (drop the `shown` check, or the
+// Mutations: answer every line in atlasLog (drop the `shown` check, or the
 // target's in View.Line) and a holder without Gitlet reads the repository's
-// purpose, or its name on the service's line.
+// purpose, or its name on the service's line; drop Truncated from the
+// activity answer and a cut count reads whole.
 func TestTheAtlasLogShowsAReaderOnlyWhatTheirAtlasShows(t *testing.T) {
 	t.Parallel()
 	s := atlasSourcesWith(atlasCode(), acmeLog(t))
@@ -785,6 +793,16 @@ func TestTheAtlasLogShowsAReaderOnlyWhatTheirAtlasShows(t *testing.T) {
 	days, entries = counted(coder, map[string]any{"unconfirmed": true})
 	if sum(days) != 7 || entries[atlasCheckout.ID().String()]["last"].(map[string]any)["id"] != "l5" {
 		t.Errorf("a Gitlet holder shown unconfirmed entries counts %v", days)
+	}
+	// A COUNT THE LOG CUT AT ITS BYTES SAYS SO: a reader is told some days and
+	// entries are missing rather than shown them as quiet.
+	if answer := askAtlas(member, t, s, "atlas_activity", nil); answer["truncated"] != nil {
+		t.Errorf("a whole count says truncated %v", answer["truncated"])
+	}
+	cut := acmeLog(t)
+	cut.cut = true
+	if answer := askAtlas(member, t, atlasSourcesWith(atlasCode(), cut), "atlas_activity", nil); answer["truncated"] != true {
+		t.Errorf("a count the log cut says truncated %v, want true", answer["truncated"])
 	}
 
 	bare := queries.NewRegistry()

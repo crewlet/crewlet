@@ -122,6 +122,11 @@ type AtlasActivityAnswer struct {
 	From    time.Time            `json:"from"`
 	Days    []int                `json:"days"`
 	Entries []AtlasEntryActivity `json:"entries"`
+
+	// Truncated says the log's count stopped at the bytes one read answers
+	// ([atlasdomain.Activity.Truncated]): some days and entries are missing,
+	// and a reader says so rather than draws them as quiet.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // AtlasReviewAnswer is one page of what waits for a person in the atlas:
@@ -546,7 +551,7 @@ func (s Sources) atlasActivity(ctx context.Context, p Params) (any, error) {
 		return uuid.UUID{}, false
 	}
 	answer := AtlasActivityAnswer{AtlasRead: read, From: from, Days: make([]int, atlas.ActivityDays),
-		Entries: []AtlasEntryActivity{}}
+		Entries: []AtlasEntryActivity{}, Truncated: activity.Truncated}
 	byEntry := map[uuid.UUID]*AtlasEntryActivity{}
 	of := func(id uuid.UUID) *AtlasEntryActivity {
 		a, ok := byEntry[id]

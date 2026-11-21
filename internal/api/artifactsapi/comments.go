@@ -27,6 +27,7 @@ import (
 // Comments are the artifacts' comment threads: the estate router's.
 type Comments interface {
 	Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error)
+	ThreadsPage(ctx context.Context, id artifacts.ID, cursor string) ([]artifactsdomain.CommentThread, string, error)
 	Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error)
 	OpenThread(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
 		artifactsdomain.Commented, error)
@@ -78,8 +79,11 @@ func newIndexCache(objects Objects) *formatCache[*commentanchor.Index] {
 
 // ---- the read ------------------------------------------------------------ //
 
-// CommentsAnswer is every thread on an artifact placed on one version (the
-// `artifact_comments` question, `GET /artifacts/{id}/comments`).
+// CommentsAnswer is a page of the threads on an artifact placed on one
+// version (the `artifact_comments` question, `GET /artifacts/{id}/comments`),
+// as the estate answers them one reply each ([artifactsdomain.Reader.ThreadsPage]):
+// Next asks for the one after, and Counts are this page's, a thread counted on
+// the page it starts on, so the pages' counts add up.
 type CommentsAnswer struct {
 	Artifact   artifacts.ID    `json:"artifact"`
 	Version    int             `json:"version"`
@@ -88,6 +92,7 @@ type CommentsAnswer struct {
 	CanComment bool            `json:"can_comment"`
 	Role       artifacts.Role  `json:"role"`
 	Threads    []CommentThread `json:"threads"`
+	Next       string          `json:"next,omitempty"`
 }
 
 // CommentCounts are the threads per filter: open and placed, open and gone
@@ -118,6 +123,11 @@ type CommentThread struct {
 	CreatedAt       time.Time                    `json:"created_at"`
 	UpdatedAt       time.Time                    `json:"updated_at"`
 	Remarks         []CommentRemark              `json:"remarks"`
+
+	// Continued says this thread began on the page before, and these are the
+	// rest of its remarks; RemarksCut that the next page carries more.
+	Continued  bool `json:"continued,omitempty"`
+	RemarksCut bool `json:"remarks_cut,omitempty"`
 }
 
 // CommentRemark is one remark as the question answers it; a removed one keeps
@@ -134,10 +144,11 @@ type CommentRemark struct {
 	Removed    bool          `json:"removed,omitempty"`
 }
 
-// Comments answers every thread on artifact id placed on version (zero for the
-// head), decided as a read of its content: a trashed artifact serves none.
-func (s *Service) Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int) (
-	CommentsAnswer, error) {
+// Comments answers a page of the threads on artifact id placed on version
+// (zero for the head), from cursor (empty for the first), decided as a read of
+// its content: a trashed artifact serves none.
+func (s *Service) Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int,
+	cursor string) (CommentsAnswer, error) {
 
 	a, err := s.gate.Content(ctx, p, authz.ActionArtifactRead, id, version)
 	if err != nil {
@@ -150,18 +161,19 @@ func (s *Service) Comments(ctx context.Context, p iam.Principal, id artifacts.ID
 	if err != nil {
 		return CommentsAnswer{}, err
 	}
-	threads, err := s.comments.Threads(ctx, a.Head.ID)
+	threads, next, err := s.comments.ThreadsPage(ctx, a.Head.ID, cursor)
 	if err != nil {
 		return CommentsAnswer{}, err
 	}
 	d := authz.Decide(ctx, p, authz.ActionArtifactComment, s.gate.object(a.Head), s.gate.Chart,
 		s.gate.decidedAt(ctx))
 	out := CommentsAnswer{Artifact: a.Head.ID, Version: version, Head: a.Head.HeadNumber,
-		CanComment: d.Allowed, Role: a.Role(), Threads: make([]CommentThread, 0, len(threads))}
+		CanComment: d.Allowed, Role: a.Role(), Threads: make([]CommentThread, 0, len(threads)), Next: next}
 	order := idx.SlideOrder()
 	for _, th := range threads {
 		placed := commentanchor.Place(th.Anchor, th.Version, version, idx)
 		switch {
+		case th.Continued: // counted on the page it began on
 		case th.Status == artifactsdomain.ThreadResolved:
 			out.Counts.Resolved++
 		case placed.State == commentanchor.StateOutdated:
@@ -182,7 +194,8 @@ func threadAnswer(th artifactsdomain.CommentThread, placed commentanchor.Placeme
 		Label: commentanchor.Label(th.Anchor, order), Placement: placed.State, Place: placed.Anchor,
 		Quote: th.Quote, Status: th.Status, CreatedBy: th.CreatedBy.Name, CreatedByKind: th.CreatedBy.Kind,
 		CreatedAt: th.CreatedAt.UTC(), UpdatedAt: th.UpdatedAt.UTC(),
-		Remarks: make([]CommentRemark, 0, len(th.Remarks))}
+		Remarks:   make([]CommentRemark, 0, len(th.Remarks)),
+		Continued: th.Continued, RemarksCut: th.RemarksCut}
 	if len(th.Crop) > 0 {
 		out.Crop = "data:" + th.CropType + ";base64," + base64.StdEncoding.EncodeToString(th.Crop)
 	}
