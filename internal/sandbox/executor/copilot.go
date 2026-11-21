@@ -146,6 +146,11 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	if off := copilotProviderOff(req.Env); len(off) > 0 {
 		line(`unset %s`, strings.Join(off, " "))
 	}
+	// THE CAP NAMED IN THE STREAM, for the decoder to fail a run whose
+	// extension, which enforces it, never ran ([copilotEvents]).
+	if req.Limits.MaxTurns > 0 {
+		line(`printf '%%s\n' %s`, q(copilotCapLine(req.Limits.MaxTurns)))
+	}
 	line(`set --`)
 	b.WriteString(copilotSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,

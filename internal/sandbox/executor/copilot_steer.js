@@ -67,6 +67,11 @@ const turnPrefix = "crewlet-note:"
 // (copilotsteer.go, copilotCapMessage).
 const capMessage = "crewlet: this run reached its turn cap of "
 
+// armedMessage is the log line written once the extension runs in the session
+// (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
+// lacks it is collected as a failure, the cap never enforced.
+const armedMessage = "crewlet: the run's extension is running"
+
 if (config !== null && typeof config === "object") {
   await arm(config)
 }
@@ -204,6 +209,7 @@ async function arm({ url, cap }) {
         return
     }
   })
+  quietly(session.log(armedMessage, { level: "info" }))
 }
 
 // stop ends a run past its cap: the line that labels the ending, then the

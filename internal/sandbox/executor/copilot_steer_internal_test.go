@@ -211,6 +211,15 @@ func (p *copilotProbe) expect(op string) copilotProbeReport {
 	}
 }
 
+// expectArmed is the probe's next report, which must be the extension's line
+// saying it runs, which a capped run's collection requires ([copilotArmedMessage]).
+func (p *copilotProbe) expectArmed() {
+	p.t.Helper()
+	if logged := p.expect("log"); logged.Message != copilotArmedMessage {
+		p.t.Fatalf("the extension logged %q first, want %q", logged.Message, copilotArmedMessage)
+	}
+}
+
 // copilotNote is a note as the route answers it.
 func copilotNote(seq int, inbox, words string) string {
 	raw, _ := json.Marshal(map[string]any{"notes": []map[string]any{{"seq": seq, "id": "note-" + inbox,
@@ -231,6 +240,7 @@ func TestTheCopilotExtensionSendsANoteWhileTheMainAgentWorks(t *testing.T) {
 	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure" {
 		t.Fatalf("hooks = %v", joined.Hooks)
 	}
+	p.expectArmed()
 	p.event("assistant.turn_start", "sub-1", nil)
 	route.none(300*time.Millisecond, "a subagent's turn started")
 
@@ -267,6 +277,7 @@ func TestTheCopilotExtensionAsksOnceMoreAsTheAgentStops(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
 	p.expect("joined")
+	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
 	loop := route.next("GET notes", "poll as the main agent works")
 
@@ -303,6 +314,7 @@ func TestTheCopilotExtensionStopsTheRunAtItsCap(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url, Cap: 2})
 	p.expect("joined")
+	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
 	route.next("GET notes", "poll as the main agent works")
 	p.hook("onPostToolUse", map[string]any{"toolName": "crewlet-echo"})
@@ -330,6 +342,7 @@ func TestTheCopilotExtensionStopsOnARefusedRoute(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
 	p.expect("joined")
+	p.expectArmed()
 	p.event("assistant.turn_start", "", nil)
 	route.next("GET notes", "poll").reply(http.StatusUnauthorized, "")
 	route.none(1500*time.Millisecond, "the route refused the run's token")

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -37,6 +38,21 @@ const copilotTurnPrefix = "crewlet-note:"
 // its run (its capMessage), which labels a run's abort as the cap's
 // ([copilotEvents]).
 const copilotCapMessage = "crewlet: this run reached its turn cap of "
+
+// copilotArmedMessage is the line copilot_steer.js logs once it runs in the
+// session (its armedMessage): a run with a turn cap whose stream lacks it ran
+// with the cap unenforced ([copilotEvents]).
+const copilotArmedMessage = "crewlet: the run's extension is running"
+
+// copilotCapMark is the type of the line a capped run's script prints before
+// its harness starts, naming the cap ([copilotCapLine]), by which the decoder
+// knows the run had one to enforce.
+const copilotCapMark = "crewlet.cap"
+
+// copilotCapLine is that line for a cap of turns.
+func copilotCapLine(turns int) string {
+	return `{"type":"` + copilotCapMark + `","data":{"turns":` + strconv.Itoa(turns) + `}}`
+}
 
 // CopilotClientTurnID is the clientTurnId the extension sends the note admitted
 // under inbox with: Copilot echoes it on the note's `user.message`, by which

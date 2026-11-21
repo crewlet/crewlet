@@ -62,6 +62,9 @@ type copilotData struct {
 	// Aborted is an `assistant.idle` that ended an aborted turn.
 	Aborted bool `json:"aborted"`
 
+	// Turns is the cap the script's [copilotCapMark] line names.
+	Turns int `json:"turns"`
+
 	// Usage is one model request's, on a `session.usage_record`.
 	Usage *copilotUsageRecord `json:"usage"`
 }
@@ -141,6 +144,11 @@ type copilotEvents struct {
 	// run ([copilotCapMessage]): the three together are a capped run.
 	aborted, idleAborted bool
 	capped               string
+
+	// capTurns is the turn cap the script said the run had, 0 for none, and
+	// armed whether the extension that enforces it said it ran.
+	capTurns int
+	armed    bool
 
 	// denied is the first seat tool call a hook refused: the tool and why.
 	denied string
@@ -236,9 +244,14 @@ func (d *copilotEvents) Line(line []byte) {
 	case "assistant.idle":
 		d.idleAborted = d.idleAborted || (root && data.Aborted)
 	case "session.warning", "session.info":
-		if strings.HasPrefix(data.Message, copilotCapMessage) {
+		switch {
+		case strings.HasPrefix(data.Message, copilotCapMessage):
 			d.capped = strings.TrimPrefix(data.Message, "crewlet: ")
+		case data.Message == copilotArmedMessage:
+			d.armed = true
 		}
+	case copilotCapMark:
+		d.capTurns = data.Turns
 	case copilotUsageMark:
 		d.marked = true
 	case "session.usage_record":
@@ -353,6 +366,10 @@ func (d *copilotEvents) reportedWindow() int64 { return d.window }
 
 // Result implements [Decoder]: the answer, and how the run ended.
 //
+// A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its
+// script named the cap ([copilotCapMark]) and its stream lacks the extension's
+// [copilotArmedMessage], so nothing held it to the cap.
+//
 // A CAPPED RUN is one the extension aborted ([copilotCapMessage]): its line, an
 // `abort`, an aborted idle and exit 1 with no session error, all four. The line
 // alone labels nothing, so a run that logged it and went on is read by how it
@@ -372,6 +389,10 @@ func (d *copilotEvents) Result() sandbox.Result {
 	}
 	capped := d.capped != "" && d.aborted && d.idleAborted && d.result && d.exit == 1 && d.failure == ""
 	switch {
+	case d.capTurns > 0 && !d.armed:
+		// FAILED CLOSED: the run went on with nothing holding it to its cap.
+		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+
+			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
 	case d.denied != "":
 		res.Error = d.denied
 	case d.failure != "":

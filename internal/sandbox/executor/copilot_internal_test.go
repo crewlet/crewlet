@@ -227,6 +227,34 @@ func TestACopilotCapLineWithoutAnAbortedExitIsIgnored(t *testing.T) {
 	}
 }
 
+// copilotArmed is the line the extension logs once it runs, in the shape a
+// `session.log` notification takes on 1.0.114 (measured with a probe line).
+const copilotArmed = `{"type":"session.info","data":{"infoType":"notification","message":"` +
+	copilotArmedMessage + `"},"id":"x","timestamp":"2026-11-21T20:41:45.195Z"}` + "\n"
+
+// A run with a turn cap whose extension never ran (a managed policy that
+// allows only managed hooks, a failed load) FAILS, saying so, whatever it
+// answered: nothing held it to its cap. The same run with the extension's line
+// is the answer it gave.
+//
+// Mutation: drop the check, or read the cap line as no cap — the first case
+// succeeds.
+func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
+	capped := copilotCapLine(3) + "\n"
+	stream := copilotFixture(t, "tool.stream.jsonl")
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(append([]byte(capped), stream...)), dec, maxLineBytes)
+	if res := dec.Result(); res.Success || !strings.Contains(res.Error, "turn cap of 3") ||
+		!strings.Contains(res.Error, "allowManagedHooksOnly") {
+		t.Fatalf("result = %+v, want a failure saying the cap of 3 was not enforced", res)
+	}
+	dec = &copilotEvents{}
+	_ = eachLine(bytes.NewReader(append([]byte(capped+copilotArmed), stream...)), dec, maxLineBytes)
+	if res := dec.Result(); !res.Success || res.Text != "ANSWER after tool" {
+		t.Fatalf("with the extension running, result = %+v, want the answer", res)
+	}
+}
+
 // A seat tool a repository's hook refused fails the run, saying so: the run
 // could not do its work through its seat.
 //
@@ -390,7 +418,7 @@ func TestACopilotTranscriptFilesTheNoteUnderItsHeading(t *testing.T) {
 // Mutation: drop `--enable-mcp-server`, or add `--trust-folder` — the case fails.
 func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 	paths := Paths{Home: "/box"}
-	req := sandbox.RunRequest{Model: "gpt-5.2", Effort: "high",
+	req := sandbox.RunRequest{Model: "gpt-5.2", Effort: "high", Limits: sandbox.Limits{MaxTurns: 3},
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {}, "linear": {}}}
 	script := copilotScript(req, Session{ID: "s-1"}, paths, paths.MCPConfig(), time.Second)
 	for _, want := range []string{"copilot --output-format json --yolo --no-ask-user --no-auto-update",
@@ -398,6 +426,7 @@ func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 		"--additional-mcp-config '@/box/.crewlet/mcp.json'",
 		"--enable-mcp-server 'crewlet' --enable-mcp-server 'linear'", "--model 'gpt-5.2'",
 		"--reasoning-effort 'high'", `set -- "$@" --session-id 's-1'`,
+		`printf '%s\n' '{"type":"crewlet.cap","data":{"turns":3}}'`,
 		"older than 1.0.114"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
