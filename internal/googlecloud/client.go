@@ -1,55 +1,27 @@
 package googlecloud
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/googleauth"
 )
 
 // Google's API hosts. Fixed rather than configurable, so the provisioner's
-// token and the federation key's signatures only ever go to Google.
+// token only ever goes to Google. The token hosts are [googleauth]'s.
 const (
-	stsURL            = "https://sts.googleapis.com/v1/token"
-	credentialsAPI    = "https://iamcredentials.googleapis.com/v1"
 	iamAPI            = "https://iam.googleapis.com/v1"
 	resourceManagerV1 = "https://cloudresourcemanager.googleapis.com/v1"
 	resourceManagerV3 = "https://cloudresourcemanager.googleapis.com/v3"
 	serviceUsageAPI   = "https://serviceusage.googleapis.com/v1"
 	cloudAssetAPI     = "https://cloudasset.googleapis.com/v1"
 )
-
-// ClientTimeout bounds one call. Every call runs inside a pass with its own
-// deadline, so this is slack for a slow answer rather than a budget to spend.
-const ClientTimeout = 15 * time.Second
-
-// MaxTokenLifetime is the longest token Google issues by impersonation without
-// an organization policy extending it: an hour. The provisioner's token is
-// minted for that long and renewed provisionerRenew before it ends.
-const (
-	MaxTokenLifetime = time.Hour
-	provisionerRenew = 5 * time.Minute
-)
-
-// maxResponse bounds one answer: a project's policy or a page of services is
-// tens of kilobytes, and the cap stops a proxy's page being read whole.
-const maxResponse = 8 << 20
 
 // Paging: listings ask for pageSize rows and stop after pageCeiling pages with
 // an error, since a short read would read as rows that do not exist.
@@ -62,100 +34,14 @@ const (
 // this client's read and its write (409): a busy policy settles in one or two.
 const policyWrites = 5
 
-// APIError is a call Google refused. It holds what Google said, with anything
-// shaped like a token taken out, and never the request's own credential.
-type APIError struct {
-	Method string
-	// Path is the host and path called, without the query.
-	Path   string
-	Status int
-
-	// Code is Google's status (`INVALID_ARGUMENT`, `PERMISSION_DENIED`), or
-	// the OAuth error STS answers with (`invalid_grant`); Message its text,
-	// and Reasons the details' reasons.
-	Code    string
-	Message string
-	Reasons []string
-
-	// RetryAfter is how long a 429 asked the call to wait, zero otherwise.
-	RetryAfter time.Duration
-	// Unwaited is why a read handed a 429 back rather than waiting it out.
-	Unwaited string
-}
-
-func (e *APIError) Error() string {
-	s := fmt.Sprintf("googlecloud: %s %s: %s", e.Method, e.Path, e.answer())
-	if len(e.Reasons) > 0 {
-		s += " [" + strings.Join(e.Reasons, ", ") + "]"
-	}
-	if e.Unwaited != "" {
-		s += fmt.Sprintf(" (asked to wait %s; %s)", e.RetryAfter, e.Unwaited)
-	}
-	return s
-}
-
-// answer is what Google said, without the call it answered: its status,
-// its code and its message.
-func (e *APIError) answer() string {
-	s := strconv.Itoa(e.Status)
-	if e.Code != "" {
-		s += " " + e.Code
-	}
-	return s + ": " + e.Message
-}
-
-// Status reports the HTTP status a call was refused with, or 0 when the
-// failure was not an API error, so [integration.Reject] can classify it.
-func Status(err error) int {
-	if api, ok := errors.AsType[*APIError](err); ok {
-		return api.Status
-	}
-	return 0
-}
-
-// stage is one step of reaching Google as the provisioner, which a failure
-// names so a person knows which half of the setup to look at.
-type stage string
-
-const (
-	stageFederation    stage = "federation"
-	stageImpersonation stage = "impersonation"
-)
-
-// stageError is a failure to reach Google as the provisioner at one stage.
-type stageError struct {
-	stage stage
-	err   error
-}
-
-func (e *stageError) Error() string { return fmt.Sprintf("googlecloud: %s: %v", e.stage, e.err) }
-func (e *stageError) Unwrap() error { return e.err }
-
-// reject is [integration.Reject] for a Google error, and a refused federation
-// or impersonation is the provisioner's credential whatever its status: STS
-// refuses a token its provider does not trust with a 400.
-func reject(err error) error {
-	if st, ok := errors.AsType[*stageError](err); ok {
-		if s := Status(st.err); s >= http.StatusBadRequest && s < http.StatusInternalServerError &&
-			s != http.StatusTooManyRequests {
-			return fmt.Errorf("%w: %w", integration.ErrCredentialRejected, err)
-		}
-	}
-	return integration.Reject(err, Status(err))
-}
-
-// errUnreached is a call that got no answer from Google: a failure a wait
-// clears.
-var errUnreached = errors.New("no answer from Google")
-
 // gone reports a read or a delete of something Google no longer has.
-func gone(err error) bool { return Status(err) == http.StatusNotFound }
+func gone(err error) bool { return googleauth.Status(err) == http.StatusNotFound }
 
 // accountNotYet reports Google refusing a binding because email's account is
 // not visible to the policy yet: the 400 a new account answers on another
 // project's policy for up to minutes after it was made. Only that account's.
 func accountNotYet(err error, email string) bool {
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	return ok && email != "" && api.Status == http.StatusBadRequest &&
 		strings.Contains(api.Message, email) && strings.Contains(api.Message, "does not exist")
 }
@@ -163,7 +49,7 @@ func accountNotYet(err error, email string) bool {
 // accountQuota reports a create refused because the identity project holds as
 // many service accounts as its quota allows.
 func accountQuota(err error) bool {
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	return ok && (api.Status == http.StatusTooManyRequests || api.Code == "RESOURCE_EXHAUSTED" ||
 		strings.Contains(strings.ToLower(api.Message), "maximum number of service accounts"))
 }
@@ -171,408 +57,54 @@ func accountQuota(err error) bool {
 // domainRestricted reports a grant the organization's domain restricted
 // sharing policy refused for the agent's account.
 func domainRestricted(err error) bool {
-	api, ok := errors.AsType[*APIError](err)
+	api, ok := errors.AsType[*googleauth.APIError](err)
 	return ok && (strings.Contains(api.Message, "allowedPolicyMember") ||
 		strings.Contains(api.Message, "do not belong to a permitted customer"))
 }
 
-// Client talks to Google as the provisioner, through federation.
+// Client talks to Google as the provisioner, through the company's Google
+// identity ([googleauth.Connection]).
 type Client struct {
-	provisioner string
-	identity    string
-	provider    string
-	issuer      string
-	subject     string
-	key         *ecdsa.PrivateKey
-	kid         string
-	http        *http.Client
-	clock       clock
-}
-
-// ClientOptions builds a client.
-type ClientOptions struct {
-	// Company is the company's name, which the federation token's issuer and
-	// subject are made from ([Issuer], [Subject]).
-	Company string
-
-	// Provisioner is the provisioner service account's email, whose project
-	// is the identity project.
-	Provisioner string
-
-	// Provider is the workload identity provider's full resource name.
-	Provider string
-
-	// FederationKey is the engine's ES256 private key, PKCS#8 PEM. Never
-	// logged.
-	FederationKey string `json:"-"`
-
-	// HTTP overrides the transport, for tests.
-	HTTP *http.Client
+	auth *googleauth.Connection
 }
 
 // NewClient builds a client, refusing an input that would fail every call
-// with a misleading refusal. Each error names the field to change.
-func NewClient(opts ClientOptions) (*Client, error) {
-	email := strings.TrimSpace(opts.Provisioner)
-	identity, ok := config.GoogleCloudServiceAccount(email)
-	if !ok {
-		return nil, errors.New("googlecloud: integrations.google_cloud.provisioning.provisioner is not a " +
-			"service account's email")
-	}
-	provider := strings.TrimSpace(opts.Provider)
-	if !config.GoogleCloudProvider(provider) {
-		return nil, errors.New("googlecloud: integrations.google_cloud.provisioning.provider is not a " +
-			"workload identity provider's full resource name")
-	}
-	if org.Slugify(opts.Company) == "" {
-		return nil, errors.New("googlecloud: the company's name has no letter or digit to sign its " +
-			"federation token as")
-	}
-	key, err := ParseFederationKey(opts.FederationKey)
+// with a misleading refusal ([googleauth.New]).
+func NewClient(opts googleauth.Options) (*Client, error) {
+	auth, err := googleauth.New(opts)
 	if err != nil {
-		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
+		return nil, err
 	}
-	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256JWKS]),
-	// so Google matches every signed token to that key.
-	kid, err := setup.ES256KeyID(opts.FederationKey)
-	if err != nil {
-		return nil, fmt.Errorf("integrations.google_cloud.provisioning.federation_key: %w", err)
-	}
-	hc := opts.HTTP
-	if hc == nil {
-		hc = httpx.Client(ClientTimeout)
-	}
-	return &Client{
-		provisioner: email, identity: identity, provider: provider,
-		issuer: Issuer(opts.Company), subject: Subject(opts.Company),
-		key: key, kid: kid, http: hc, clock: wallClock(),
-	}, nil
+	return &Client{auth: auth}, nil
 }
 
+// Connection is the company's Google identity this client reaches Google
+// through.
+func (c *Client) Connection() *googleauth.Connection { return c.auth }
+
+// clock is the time this client reads and waits by.
+func (c *Client) clock() googleauth.Clock { return c.auth.Clock() }
+
+// setClock makes this client read and wait by clk, for a test.
+func (c *Client) setClock(clk googleauth.Clock) { c.auth = c.auth.WithClock(clk) }
+
 // Provisioner is the provisioner's email.
-func (c *Client) Provisioner() string { return c.provisioner }
+func (c *Client) Provisioner() string { return c.auth.Provisioner() }
 
 // AtlasAccount is the atlas's service account: crewlet-atlas in the identity
 // project, which the identity block makes where the company asks for it.
-func (c *Client) AtlasAccount() string { return AtlasAccountIn(c.identity) }
+func (c *Client) AtlasAccount() string { return AtlasAccountIn(c.auth.IdentityProject()) }
 
 // IdentityProject is the project the agents' accounts are made in: the
 // provisioner's own, which holds nothing else.
-func (c *Client) IdentityProject() string { return c.identity }
+func (c *Client) IdentityProject() string { return c.auth.IdentityProject() }
 
 // member is a service account as a policy binding names it.
 func member(email string) string { return "serviceAccount:" + email }
 
-// provisionerTokens is each account's token the engine reaches through the
-// federation (the provisioner's, and the atlas's), one per process, connection
-// and account, renewed with provisionerRenew to spare. Its map is made at the first
-// client's first token, never at init, which Gitlet's push hook pays
-// (cmd/crewlet's hookinit_test.go).
-//
-//nolint:gochecknoglobals // a process-wide credential cache, guarded per entry
-var provisionerTokens struct {
-	sync.Mutex
-	held map[string]*heldToken
-}
-
-// heldToken is one cached token. Its mutex is held across a mint, so callers
-// racing for an expired token wait on one exchange rather than each making one.
-type heldToken struct {
-	mu      sync.Mutex
-	value   string
-	expires time.Time
-}
-
-// connection is what a token this client is handed was issued through: the
-// provider, the provisioner, the subject and the key, so a changed connection
-// never reuses another's token.
-func (c *Client) connection() string {
-	return strings.Join([]string{c.provider, c.provisioner, c.subject, c.kid}, "|")
-}
-
-// held is this client's cache entry for account's token.
-func (c *Client) held(account string) *heldToken {
-	id := c.connection() + "|" + account
-	provisionerTokens.Lock()
-	defer provisionerTokens.Unlock()
-	h, ok := provisionerTokens.held[id]
-	if !ok {
-		if provisionerTokens.held == nil {
-			provisionerTokens.held = map[string]*heldToken{}
-		}
-		h = &heldToken{}
-		provisionerTokens.held[id] = h
-	}
-	return h
-}
-
-// token is account's token, minted through federation where the cached one is
-// missing or due for renewal. Account is the provisioner or the atlas: each is
-// impersonated with the federated token itself, so neither reaches the other.
-func (c *Client) token(ctx context.Context, account string) (string, error) {
-	h := c.held(account)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.value != "" && h.expires.Sub(c.clock.now()) > provisionerRenew {
-		return h.value, nil
-	}
-	fed, err := c.federated(ctx)
-	if err != nil {
-		return "", &stageError{stage: stageFederation, err: err}
-	}
-	value, expires, err := c.impersonate(ctx, fed, account, MaxTokenLifetime)
-	if err != nil {
-		return "", &stageError{stage: stageImpersonation, err: err}
-	}
-	h.value, h.expires = value, expires
-	return value, nil
-}
-
-// forget drops a cached token of account's Google refused, so the next call
-// mints afresh.
-func (c *Client) forget(account, refused string) {
-	h := c.held(account)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.value == refused {
-		h.value, h.expires = "", time.Time{}
-	}
-}
-
-// federated signs the engine's token and exchanges it at STS.
-func (c *Client) federated(ctx context.Context) (string, error) {
-	audience := Audience(c.provider)
-	jwt, err := signJWT(c.key, c.kid, c.issuer, c.subject, "https:"+audience, c.clock.now())
-	if err != nil {
-		return "", err
-	}
-	var out struct {
-		AccessToken string `json:"access_token"`
-	}
-	form := url.Values{
-		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
-		"audience":             {audience},
-		"scope":                {ScopeCloudPlatform},
-		"requested_token_type": {"urn:ietf:params:oauth:token-type:access_token"},
-		"subject_token":        {jwt},
-		"subject_token_type":   {"urn:ietf:params:oauth:token-type:jwt"},
-	}
-	if err := c.do(ctx, http.MethodPost, stsURL, "", form, &out); err != nil {
-		return "", err
-	}
-	if out.AccessToken == "" {
-		return "", errors.New("googlecloud: STS answered the exchange with no token")
-	}
-	return out.AccessToken, nil
-}
-
-// impersonate mints an hour or less of account's token with bearer's.
-func (c *Client) impersonate(ctx context.Context, bearer, account string, life time.Duration) (string, time.Time, error) {
-	var out struct {
-		AccessToken string    `json:"accessToken"`
-		ExpireTime  time.Time `json:"expireTime"`
-	}
-	err := c.do(ctx, http.MethodPost,
-		credentialsAPI+"/projects/-/serviceAccounts/"+url.PathEscape(account)+":generateAccessToken", bearer,
-		map[string]any{"scope": []string{ScopeCloudPlatform}, "lifetime": strconv.Itoa(int(life.Seconds())) + "s"},
-		&out)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	if out.AccessToken == "" || out.ExpireTime.IsZero() {
-		return "", time.Time{}, errors.New("googlecloud: generateAccessToken answered with no token or expiry")
-	}
-	return out.AccessToken, out.ExpireTime.UTC(), nil
-}
-
-// SeatToken mints an agent's own token: account is its service account's
-// email or unique ID, impersonated with the provisioner's token for life, at
-// most [MaxTokenLifetime]. The value is never logged; a refusal is an
-// [*APIError] whose [Status] an issuer reads (403 or 404 within minutes of a
-// grant is Google still applying it).
-func (c *Client) SeatToken(ctx context.Context, account string, life time.Duration) (string, time.Time, error) {
-	if life <= 0 || life > MaxTokenLifetime {
-		return "", time.Time{}, fmt.Errorf("googlecloud: a seat token's lifetime is up to %s, not %s",
-			MaxTokenLifetime, life)
-	}
-	if strings.TrimSpace(account) == "" {
-		return "", time.Time{}, errors.New("googlecloud: no service account to mint a seat token for")
-	}
-	var value string
-	var expires time.Time
-	err := c.authorized(ctx, func(bearer string) error {
-		var err error
-		value, expires, err = c.impersonate(ctx, bearer, account, life)
-		return err
-	})
-	return value, expires, err
-}
-
-// authorized runs call with the provisioner's token ([Client.authorizedAs]).
-func (c *Client) authorized(ctx context.Context, call func(bearer string) error) error {
-	return c.authorizedAs(ctx, c.provisioner, call)
-}
-
-// authorizedAs runs call with account's token, and once more with a fresh one
-// where Google refused the cached token as unauthenticated.
-func (c *Client) authorizedAs(ctx context.Context, account string, call func(bearer string) error) error {
-	bearer, err := c.token(ctx, account)
-	if err != nil {
-		return err
-	}
-	err = call(bearer)
-	if Status(err) != http.StatusUnauthorized {
-		return err
-	}
-	c.forget(account, bearer)
-	if bearer, err = c.token(ctx, account); err != nil {
-		return err
-	}
-	return call(bearer)
-}
-
 // call is one request as the provisioner.
 func (c *Client) call(ctx context.Context, method, address string, body, out any) error {
-	return c.callAs(ctx, c.provisioner, method, address, body, out)
-}
-
-// callAs is one request as account.
-func (c *Client) callAs(ctx context.Context, account, method, address string, body, out any) error {
-	return c.authorizedAs(ctx, account,
-		func(bearer string) error { return c.do(ctx, method, address, bearer, body, out) })
-}
-
-// do makes one call, waiting out a short 429 on a read as Google asks. A
-// write's 429 is handed back as it came: a create Google refuses for a quota
-// answers the same status, and a wait clears no quota.
-func (c *Client) do(ctx context.Context, method, address, bearer string, body, out any) error {
-	for attempt := 0; ; attempt++ {
-		err := c.once(ctx, method, address, bearer, body, out)
-		api, ok := errors.AsType[*APIError](err)
-		if !ok || api.Status != http.StatusTooManyRequests || method != http.MethodGet {
-			return err
-		}
-		limit := httpx.VendorRateLimit()
-		limit.Wait = c.clock.sleep
-		unwaited := limit.WaitOut(ctx, attempt, api.RetryAfter)
-		if unwaited == nil {
-			continue
-		}
-		api.Unwaited = unwaited.Error()
-		return api
-	}
-}
-
-// once sends one request and decodes its answer into out. It is the only
-// place a request is built.
-func (c *Client) once(ctx context.Context, method, address, bearer string, body, out any) error {
-	var reader io.Reader
-	contentType := ""
-	switch b := body.(type) {
-	case nil:
-	case url.Values:
-		reader, contentType = strings.NewReader(b.Encode()), "application/x-www-form-urlencoded"
-	default:
-		encoded, err := json.Marshal(b)
-		if err != nil {
-			return fmt.Errorf("googlecloud: encode %s %s: %w", method, pathOf(address), err)
-		}
-		reader, contentType = bytes.NewReader(encoded), "application/json"
-	}
-	req, err := http.NewRequestWithContext(ctx, method, address, reader)
-	if err != nil {
-		return fmt.Errorf("googlecloud: build %s %s: %w", method, pathOf(address), err)
-	}
-	req.Header.Set("Accept", "application/json")
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	res, err := c.http.Do(req)
-	if err != nil {
-		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
-		// was sent.
-		return fmt.Errorf("googlecloud: %s %s: %w: %s", method, pathOf(address), errUnreached,
-			redact.Secrets(err.Error()))
-	}
-	defer func() { _ = res.Body.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
-	if err != nil {
-		return fmt.Errorf("googlecloud: read %s %s: %w", method, pathOf(address), err)
-	}
-	if res.StatusCode >= http.StatusMultipleChoices {
-		api := refusalOf(method, pathOf(address), res, payload)
-		if res.StatusCode == http.StatusTooManyRequests {
-			// GOOGLE NAMES A WAIT ON SOME LIMITS AND NONE ON OTHERS.
-			wait, named := httpx.RetryAfter(res.Header, c.clock.now())
-			if !named {
-				wait = httpx.DefaultRetryAfter
-			}
-			api.RetryAfter = wait
-		}
-		return api
-	}
-	if out != nil && len(bytes.TrimSpace(payload)) > 0 {
-		if err := json.Unmarshal(payload, out); err != nil {
-			return fmt.Errorf("googlecloud: decode %s %s: %w", method, pathOf(address), err)
-		}
-	}
-	return nil
-}
-
-// pathOf is an address's host and path, which is all an error names.
-func pathOf(address string) string {
-	u, err := url.Parse(address)
-	if err != nil {
-		return "a Google API"
-	}
-	return u.Host + u.Path
-}
-
-// refusalOf reads Google's refusal: its RPC status shape, or STS's OAuth one.
-func refusalOf(method, path string, res *http.Response, payload []byte) *APIError {
-	api := &APIError{Method: method, Path: path, Status: res.StatusCode}
-	var envelope struct {
-		Error       json.RawMessage `json:"error"`
-		Description string          `json:"error_description"`
-	}
-	if json.Unmarshal(payload, &envelope) == nil && len(envelope.Error) > 0 {
-		var rpc struct {
-			Status  string `json:"status"`
-			Message string `json:"message"`
-			Details []struct {
-				Reason string `json:"reason"`
-			} `json:"details"`
-		}
-		var oauth string
-		switch {
-		case json.Unmarshal(envelope.Error, &rpc) == nil && (rpc.Message != "" || rpc.Status != ""):
-			api.Code, api.Message = rpc.Status, rpc.Message
-			for _, d := range rpc.Details {
-				if d.Reason != "" {
-					api.Reasons = append(api.Reasons, d.Reason)
-				}
-			}
-		case json.Unmarshal(envelope.Error, &oauth) == nil:
-			api.Code, api.Message = oauth, envelope.Description
-		}
-	}
-	if strings.TrimSpace(api.Message) == "" {
-		api.Message = httpx.Refusal(res.Header.Get("Content-Type"), payload)
-	}
-	if strings.TrimSpace(api.Message) == "" {
-		api.Message = "no detail"
-	}
-	// A REFUSAL NEVER CARRIES A TOKEN ON, and Google's can quote one: STS
-	// echoes the federation token it would not trust, a JWT, and a call's
-	// refusal can name the access token it was made with. Taken out by the
-	// one denylist every surface redacts with (internal/redact), which knows
-	// both shapes and every other; a copy of two of them here was how a
-	// shape its neighbour learned would never reach this text.
-	api.Message = redact.Secrets(api.Message)
-	return api
+	return c.auth.CallAs(ctx, c.auth.Provisioner(), method, address, body, out)
 }
 
 // ServiceAccount is one service account, as Google reports it.
@@ -588,7 +120,7 @@ type ServiceAccount struct {
 
 // accountURL is one account of the identity project, by email or unique ID.
 func (c *Client) accountURL(account string) string {
-	return iamAPI + "/projects/" + url.PathEscape(c.identity) + "/serviceAccounts/" + url.PathEscape(account)
+	return iamAPI + "/projects/" + url.PathEscape(c.auth.IdentityProject()) + "/serviceAccounts/" + url.PathEscape(account)
 }
 
 // ServiceAccount reads one account of the identity project by its email or
@@ -607,7 +139,7 @@ func (c *Client) ServiceAccount(ctx context.Context, account string) (ServiceAcc
 
 // ServiceAccounts is every account of the identity project.
 func (c *Client) ServiceAccounts(ctx context.Context) ([]ServiceAccount, error) {
-	base := iamAPI + "/projects/" + url.PathEscape(c.identity) + "/serviceAccounts"
+	base := iamAPI + "/projects/" + url.PathEscape(c.auth.IdentityProject()) + "/serviceAccounts"
 	return pages(ctx, c, base, url.Values{}, func(page json.RawMessage) ([]ServiceAccount, string, error) {
 		var resp struct {
 			Accounts []ServiceAccount `json:"accounts"`
@@ -621,7 +153,7 @@ func (c *Client) ServiceAccounts(ctx context.Context) ([]ServiceAccount, error) 
 // CreateServiceAccount makes an account in the identity project.
 func (c *Client) CreateServiceAccount(ctx context.Context, id, displayName, description string) (ServiceAccount, error) {
 	var sa ServiceAccount
-	err := c.call(ctx, http.MethodPost, iamAPI+"/projects/"+url.PathEscape(c.identity)+"/serviceAccounts",
+	err := c.call(ctx, http.MethodPost, iamAPI+"/projects/"+url.PathEscape(c.auth.IdentityProject())+"/serviceAccounts",
 		map[string]any{"accountId": id, "serviceAccount": map[string]string{
 			"displayName": displayName, "description": description,
 		}}, &sa)
@@ -709,7 +241,7 @@ func (c *Client) editPolicy(
 			return nil
 		}
 		err = write(ctx, pol)
-		if Status(err) == http.StatusConflict {
+		if googleauth.Status(err) == http.StatusConflict {
 			continue
 		}
 		return err
@@ -870,7 +402,7 @@ func pages[T any](
 	ctx context.Context, c *Client, base string, query url.Values,
 	decode func(json.RawMessage) ([]T, string, error),
 ) ([]T, error) {
-	return pagesAs(ctx, c, c.provisioner, base, query, pageSize, decode)
+	return pagesAs(ctx, c, c.auth.Provisioner(), base, query, pageSize, decode)
 }
 
 // pagesAs is [pages] as account, size rows a page.
@@ -882,7 +414,7 @@ func pagesAs[T any](
 	next := ""
 	for page := 0; ; page++ {
 		if page == pageCeiling {
-			return nil, fmt.Errorf("googlecloud: %s did not finish after %d pages", pathOf(base), pageCeiling)
+			return nil, fmt.Errorf("googlecloud: %s did not finish after %d pages", googleauth.PathOf(base), pageCeiling)
 		}
 		q := url.Values{}
 		for k, v := range query {
@@ -893,7 +425,7 @@ func pagesAs[T any](
 			q.Set("pageToken", next)
 		}
 		var raw json.RawMessage
-		if err := c.callAs(ctx, account, http.MethodGet, base+"?"+q.Encode(), nil, &raw); err != nil {
+		if err := c.auth.CallAs(ctx, account, http.MethodGet, base+"?"+q.Encode(), nil, &raw); err != nil {
 			return nil, err
 		}
 		if len(raw) == 0 {
@@ -903,7 +435,7 @@ func pagesAs[T any](
 		}
 		rows, token, err := decode(raw)
 		if err != nil {
-			return nil, fmt.Errorf("googlecloud: decode %s: %w", pathOf(base), err)
+			return nil, fmt.Errorf("googlecloud: decode %s: %w", googleauth.PathOf(base), err)
 		}
 		out = append(out, rows...)
 		if token == "" {
