@@ -66,7 +66,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 		// And it must not have half-landed: nothing is retained for a
 		// delivery the transport refused.
-		backlog := s.backlog(t)
+		backlog := s.backlog(ctx, t)
 		if got := backlog(q, topic, group); len(got) != 0 {
 			t.Errorf("a refused publish left %d events in the mailbox", len(got))
 		}
@@ -102,7 +102,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		if got := listened.all(); len(got) != 0 {
 			t.Fatalf("a refused publish reached a publish listener: %v", got)
 		}
-		backlog := s.backlog(t)
+		backlog := s.backlog(ctx, t)
 		if got := backlog(q, topic, group); len(got) != 0 {
 			t.Errorf("a refused nil publish left %d events in the mailbox", len(got))
 		}
@@ -110,7 +110,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail_and_proposes_nothing", func(t *testing.T) {
 		t.Parallel()
-		backlog := s.backlog(t)
+		backlog := s.backlog(ctx, t)
 		proposals := s.optionalProposals(t)
 		q := s.start(ctx, t)
 		const topic, group = "crewlet.agent.bob.inbox", "agent-bob"
@@ -123,7 +123,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		awaitState(t, "the mail to be retained", func() bool {
 			return len(backlog(q, topic, group)) == 2
 		})
-		before := s.snapshot(t, q, topic, group)
+		before := s.snapshot(ctx, t, q, topic, group)
 		var proposedBefore int
 		if proposals != nil {
 			proposedBefore = proposals(q)
@@ -137,7 +137,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		if err != nil || created {
 			t.Fatalf("EnsureSubscription on an existing one = (%v, %v), want (false, nil)", created, err)
 		}
-		s.assertUntouched(t, q, topic, group, before, "re-declaring an existing subscription")
+		s.assertUntouched(ctx, t, q, topic, group, before, "re-declaring an existing subscription")
 
 		// AND IT MUST NOT HAVE ASKED. One case, one decision: a backend gets
 		// both halves by looking the consumer up and returning, neither by
@@ -163,7 +163,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 	t.Run("delete_subscription_leaves_a_neighbouring_group_untouched", func(t *testing.T) {
 		t.Parallel()
-		backlog := s.backlog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		const topic = "crewlet.events.agent_phase_started"
 		const doomed, neighbour = "doomed-grp", "neighbour-grp"
@@ -177,21 +177,21 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		awaitState(t, "both groups to retain a copy", func() bool {
 			return len(backlog(q, topic, doomed)) == 1 && len(backlog(q, topic, neighbour)) == 1
 		})
-		before := s.snapshot(t, q, topic, neighbour)
+		before := s.snapshot(ctx, t, q, topic, neighbour)
 
 		deleted, err := q.DeleteSubscription(ctx, topic, doomed)
 		if err != nil || !deleted {
 			t.Fatalf("DeleteSubscription = (%v, %v), want (true, nil)", deleted, err)
 		}
 		// Groups share a subject; only the named pair may be destroyed.
-		s.assertUntouched(t, q, topic, neighbour, before, "deleting a sibling group's subscription")
+		s.assertUntouched(ctx, t, q, topic, neighbour, before, "deleting a sibling group's subscription")
 
 		// And deleting one that is already gone must not reach the
 		// neighbour either.
 		if deleted, err = q.DeleteSubscription(ctx, topic, doomed); err != nil || deleted {
 			t.Fatalf("second DeleteSubscription = (%v, %v), want (false, nil)", deleted, err)
 		}
-		s.assertUntouched(t, q, topic, neighbour, before, "deleting an absent subscription")
+		s.assertUntouched(ctx, t, q, topic, neighbour, before, "deleting an absent subscription")
 	})
 
 	t.Run("a_hold_does_not_resurrect_a_deleted_subscription", func(t *testing.T) {
@@ -206,7 +206,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// one that would have been guessed. Measured on the twin, where
 		// PauseTopic minted the subscription and every event published to that
 		// topic was then retained for a role that no longer existed.
-		backlog := s.backlog(t)
+		backlog := s.backlog(ctx, t)
 		q := s.start(ctx, t)
 		const topic, group = "seat.decommissioned", "grp"
 
@@ -299,13 +299,13 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
 		publish(ctx, t, q, topic, newEvent("e0"))
-		before := s.snapshot(t, q, topic, group)
+		before := s.snapshot(ctx, t, q, topic, group)
 
 		quiesced, err := q.Quiesce(ctx, topic, group)
 		if err != nil || quiesced {
 			t.Fatalf("Quiesce with nothing attached = (%v, %v), want (false, nil)", quiesced, err)
 		}
-		s.assertUntouched(t, q, topic, group, before, "quiescing an unattached subscription")
+		s.assertUntouched(ctx, t, q, topic, group, before, "quiescing an unattached subscription")
 
 		// The flag it must not have set is invisible until someone
 		// attaches: a stale quiesce leaves a seat that is owned, attached
@@ -335,10 +335,10 @@ type subscriptionState struct {
 	known       bool
 }
 
-func (s *suite) snapshot(t *testing.T, q queue.EventQueue, topic, group string) subscriptionState {
+func (s *suite) snapshot(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) subscriptionState {
 	t.Helper()
 	var out subscriptionState
-	out.backlog = labelsOf(s.backlog(t)(q, topic, group))
+	out.backlog = labelsOf(s.backlog(ctx, t)(q, topic, group))
 	out.known = true
 	if s.caps.DeadLetters != nil {
 		out.deadLetters = labelsOf(s.caps.DeadLetters(t, q, topic, group))
@@ -370,12 +370,12 @@ func (s *suite) snapshot(t *testing.T, q queue.EventQueue, topic, group string) 
 // makes it depend on the read-your-own-write requirement stated on
 // Capabilities: if a backend's inspection lags its own completed operation, a
 // real write is invisible here and this passes having checked nothing.
-func (s *suite) assertUntouched(t *testing.T, q queue.EventQueue, topic, group string, before subscriptionState, what string) {
+func (s *suite) assertUntouched(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, before subscriptionState, what string) {
 	t.Helper()
 	if !before.known {
 		t.Skip("backend reports nothing about a subscription's state")
 	}
-	after := s.snapshot(t, q, topic, group)
+	after := s.snapshot(ctx, t, q, topic, group)
 	if !equalStrings(after.backlog, before.backlog) {
 		t.Errorf("%s changed the retained mail of (%s, %s): %v -> %v",
 			what, topic, group, before.backlog, after.backlog)

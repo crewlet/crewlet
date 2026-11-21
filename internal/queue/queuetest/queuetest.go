@@ -1628,11 +1628,11 @@ const backlogRead = 1 << 12
 // client ([Capabilities.Inspect]), bound to this test's own T: a read that fails
 // fails the case rather than reading as an empty mailbox, so no case threads
 // an error through a polling predicate to get it.
-func (s *suite) backlog(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
+func (s *suite) backlog(ctx context.Context, t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
 	t.Helper()
 	return func(q queue.EventQueue, topic, group string) []*events.Event {
 		t.Helper()
-		evs, err := s.caps.Inspect(t, q).Backlog(context.WithoutCancel(t.Context()), topic, group, backlogRead)
+		evs, err := s.caps.Inspect(t, q).Backlog(ctx, topic, group, backlogRead)
 		if err != nil {
 			t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
 		}

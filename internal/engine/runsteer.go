@@ -264,11 +264,10 @@ func (s *runSteers) seeingThrough(seen *ledgerstore.SeenThrough) *runSteers {
 	return s
 }
 
-// telling is s telling handedOver every delivery a run read as a wake, once
+// telling has s tell handedOver every delivery a run read as a wake, once
 // claimed ([runSteers.handedOver]).
-func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, triggers []string)) *runSteers {
+func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, triggers []string)) {
 	s.handedOver = handedOver
-	return s
 }
 
 // RunSteers is where a person's note to a turn whose executor is out is filed

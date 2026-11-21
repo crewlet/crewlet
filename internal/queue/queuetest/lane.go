@@ -171,7 +171,7 @@ func (s *suite) runLane(t *testing.T) {
 		// POLLED: the journal records a batch inside its handler, before
 		// the backend applies the Ack, so the last batch's settlement may
 		// still be in flight the moment every label has been seen.
-		backlogOf := s.backlog(t)
+		backlogOf := s.backlog(ctx, t)
 		awaitState(t, "every partition settled, the subscription retaining nothing",
 			func() bool { return len(backlogOf(q, topic, "g")) == 0 })
 	})
@@ -370,7 +370,7 @@ func (s *suite) runLane(t *testing.T) {
 		if len(subs) != 1 || subs[0] != (queue.Subscription{Topic: topic, Group: "g"}) {
 			t.Fatalf("listed %+v, want the topic's one complete subscription", subs)
 		}
-		backlogOf := s.backlog(t)
+		backlogOf := s.backlog(ctx, t)
 		if got := labelsOf(backlogOf(q, topic, "g")); !equalStrings(got, []string{"person"}) {
 			t.Fatalf("the subscription retains %v, want the lane's message", got)
 		}
