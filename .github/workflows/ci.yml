@@ -393,8 +393,9 @@ jobs:
     runs-on: *linux
     steps:
       - uses: actions/checkout@v7
-      # `latest` is the newest Node release, resolved by setup-node at run
-      # time, and NOTHING IN THE TREE NAMES A VERSION — deliberately, because
+      # `latest` is the newest entry in Node's release index, a prerelease such
+      # as a new major's alpha included, resolved by setup-node at run time,
+      # and NOTHING IN THE TREE NAMES A VERSION — deliberately, because
       # nothing would ever move one if it did. Dependabot reads `dependencies`
       # and `uses:` refs; it bumps neither `engines.node` (dependabot-core
       # #11243, open) nor a workflow's `with:`. A pin here would not stay put,

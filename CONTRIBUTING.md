@@ -659,7 +659,8 @@ The prerequisites that legitimately vary by machine:
   A Dependabot bump is the one change that does not make you do it; see [A
   dashboard bump brings its own bundle](#a-dashboard-bump-brings-its-own-bundle).
 
-  **Which node.** CI installs `latest` (the newest Node release, resolved by
+  **Which node.** CI installs `latest` (the newest entry in Node's release
+  index, a prerelease such as a new major's alpha included, resolved by
   setup-node when the job runs) in the `build + vet` job, for the Playwright
   tree recipe's suite, the `dashboard gates` job and the `dashboard unit`
   shards (one step, which the shards reuse), the race shards, the `end-to-end
