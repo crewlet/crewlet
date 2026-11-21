@@ -263,6 +263,8 @@ export interface GrowthChangeRow {
   answered_by: string;
   /** The human seat that allowed or denied a held act, by handle; empty for any other step. */
   answerer: string;
+  /** The vendor role of the credential the act went through, for a product holding several; empty for one. */
+  via: string;
   operation: string;
   before: string;
   changes: GrowthChangeField[];

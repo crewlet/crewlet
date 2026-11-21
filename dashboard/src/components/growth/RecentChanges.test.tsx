@@ -51,6 +51,7 @@ const row = (extra: Partial<GrowthChangeRow>): GrowthChangeRow => ({
   step: "made",
   answered_by: "",
   answerer: "",
+  via: "",
   operation: "ab",
   before: "cd",
   changes: [],

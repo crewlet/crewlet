@@ -263,6 +263,7 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
         step: n % 3 === 0 ? "failed" : n % 3 === 1 ? "allowed" : "applied",
         answered_by: "person",
         answerer: "Avery Admin of the European operations",
+        via: "",
         operation: "ab",
         before: "cd",
         changes: [
