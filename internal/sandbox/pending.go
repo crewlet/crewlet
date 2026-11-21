@@ -1064,9 +1064,9 @@ type PendingRun struct {
 	OwnerEpoch int64  `json:"owner_epoch"`
 
 	// TaskDescription is what a person reads the run by, in the launching turn's
-	// own words and unfenced: what the turn was asked, or the line a feed shows
-	// its trigger by ([LaunchRequest.Task]). A resume reads its brief off the
-	// turn's park, never this.
+	// own words, redacted and unfenced: what the turn was asked, or the line a
+	// feed shows its trigger by ([LaunchRequest.Task]). A resume reads its brief
+	// off the turn's park, never this.
 	//
 	// HELD TO [MaxRunTitleBytes] by the write creating the row, keeping its
 	// opening with the cut said: a trigger's words are bounded by nothing below

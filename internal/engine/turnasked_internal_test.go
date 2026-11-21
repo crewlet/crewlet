@@ -9,9 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // plant is a credential a case plants in somebody's words, as redact's own
@@ -130,6 +133,61 @@ func TestATurnsCompletedRecordHoldsNoSecretItsInteractionsCarried(t *testing.T) 
 			"\nuse it for the release")
 		if tel.interactions[1].Body != said {
 			t.Errorf("%s: the turn's own interaction was changed: its park keeps it as it came", p.name)
+		}
+	}
+}
+
+// A RUN IS LISTED UNDER NO SECRET ITS TURN'S ASK CARRIED. What a person reads
+// a turn's work by (turnctx.Turn.Title) is the ask redacted, the words around a
+// provider's key, a password or a bearer token kept: the row a launch writes
+// (its description and the label its first line is, which the executors read
+// and executor_launched carry) and the session's ask, off the row and off the
+// turn alike. The brief the model reads and the ask the turn-start judgements
+// read keep it as it came. Where the row cuts a title is sandbox's
+// (TestARunsTitleIsNeverCutInsideAMarker).
+//
+// Mutation: list the run under the ask unredacted (turnTitle), or launch it
+// under the brief (agentLauncher.launch's Task), and the row holds each.
+func TestARunIsListedUnderNoSecretItsTurnsAskCarried(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	o := firstPartyChart(t)
+	swe := o.AgentSeatByHandle("swe")
+	swe.LLM = seat.LLM
+	c.Org = o
+	e := launchReadyEngine(t, c)
+	reg := partyRegistry(o, nil)
+	e.notify.registry = reg
+	for _, p := range planted(t) {
+		body := "the staging login is " + p.text + "\nuse it for the release"
+		wake := deliveredTo(t, o, reg, "swe", chatMessageSaying(t, "ada", body))
+		tel, err := e.describeTurn(t.Context(), c, Request{
+			RunID: statelog.NewOpID(time.Now(), ""), Handle: "swe", Events: []*events.Event{wake},
+		})
+		if err != nil {
+			t.Fatalf("describeTurn: %v", err)
+		}
+		dispatched := tel.runnerTurn(c, 0, nil, tel.task, turn.Reply{}, nil).Context
+		row := listedRun(t, e, c, swe, dispatched)
+		listed := map[string]string{
+			"the run's title":                dispatched.Title,
+			"the row's description":          row.TaskDescription,
+			"the session's ask off the row":  runTurnEnd(row, executorkeep.Ending{}).Ask,
+			"the session's ask off the turn": telTurnEnd(tel, executorkeep.Ending{}).Ask,
+		}
+		for where, text := range listed {
+			holdsNone(t, p.name+": "+where, text, p)
+			if !strings.Contains(text, "the staging login is ") || !strings.Contains(text, "[REDACTED:") ||
+				!strings.HasSuffix(text, "\nuse it for the release") {
+				t.Errorf("%s: %s is %q, want the words around a marker", p.name, where, text)
+			}
+		}
+		holdsNone(t, p.name+": the row's label", row.Label, p)
+		if !strings.HasPrefix(row.Label, "the staging login is ") || !strings.Contains(row.Label, "[REDACTED:") {
+			t.Errorf("%s: the row's label is %q, want the first line around a marker", p.name, row.Label)
+		}
+		if !strings.Contains(tel.task, p.value) || !strings.Contains(tel.askParts.Text(), p.value) {
+			t.Errorf("%s: the brief or the judgements' ask was changed: the model reads them as they came", p.name)
 		}
 	}
 }

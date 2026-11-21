@@ -55,8 +55,8 @@ type ExecutorLaunched struct {
 	// panel can say which item a box is working on without joining back to
 	// a turn that may have parked days ago.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// Task is a short human-readable summary for the Executors board;
-	// the full brief lives on the pending run, not on the wire.
+	// Task is a short human-readable summary for the Executors board,
+	// redacted; the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
 	// LaunchID names THIS JOB — the sandbox.PendingRun row's launch id,
 	// minted by the store — and StartedAt is when the store recorded the

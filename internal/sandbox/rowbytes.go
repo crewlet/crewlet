@@ -934,9 +934,20 @@ func (l BridgeLog) ElisionKnown() bool {
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
-// as the row holds it, the cut said.
+// as the row holds it, the cut said, and NEVER INSIDE A MARKER the redaction
+// wrote, which the launching turn's title holds ([LaunchRequest.Task]): one
+// cut in part reads as the title's own words, so the cut moves back to where
+// the markers begin ([redact.MarkersAround]).
 func keptTitle(s string) string {
-	title, _ := rowRecord.Text(s, MaxRunTitleBytes)
+	title, cut := rowRecord.Text(s, MaxRunTitleBytes)
+	if cut == 0 {
+		return title
+	}
+	if opening, ok := rowRecord.Opening(title, cut); ok {
+		if begin, _, inside := redact.MarkersAround(s, len(opening)); inside {
+			title, _ = rowRecord.TextOf(s[:begin], len(s), MaxRunTitleBytes)
+		}
+	}
 	return title
 }
 
