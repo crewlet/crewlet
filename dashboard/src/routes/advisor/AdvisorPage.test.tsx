@@ -592,6 +592,38 @@ test("Ask Crewlet about this drafts a question on the finding's page, never send
   expect(window.location.hash).toBe(`#/advisor/findings/${f.id}`);
 });
 
+// AN ASK ACTION'S OWN QUESTION is the one put in the box, not the plain one
+// every finding is offered.
+test("a finding's ask action drafts its own question", async () => {
+  const question = "Is the round cap of 300 too low for this seat's reviews?";
+  const f = finding({
+    title: "Capped runs",
+    actions: {
+      primary: {
+        kind: "ask",
+        label: "Ask about the cap",
+        option: null,
+        items: null,
+        to: null,
+        page: null,
+        target: null,
+        setting: null,
+        url: null,
+        question,
+      },
+      secondary: [],
+    },
+  });
+  const { answer } = engine([f]);
+  const { control, about } = assistant();
+  mount(answer, "findings", control);
+  await screen.findByText("Capped runs");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Ask about the cap/ }));
+  });
+  expect(about).toEqual([{ question, send: false }]);
+});
+
 // A DISMISSAL CAN BE TAKEN BACK at once, from its toast.
 test("a dismissal's toast offers Undo, which reopens it", async () => {
   const f = finding({ title: "Wrong one" });
