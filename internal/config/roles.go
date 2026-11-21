@@ -455,6 +455,8 @@ type RoleIntegrations struct {
 	AWS          *RoleAWS          `yaml:"aws,omitempty" json:"aws,omitempty" desc:"This seat's own IAM role: whether it is on and its level."`
 	GoogleCloud  *RoleGoogleCloud  `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
 	SSH          *RoleSSH          `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"This seat's SSH access: whether it is on, its level and its servers."`
+
+	AppStoreConnect *RoleAppStoreConnect `yaml:"app_store_connect,omitempty" json:"app_store_connect,omitempty" desc:"This seat's App Store Connect access: whether it is on, its level and its apps."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
@@ -462,7 +464,7 @@ func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
 		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil && r.Scaleway == nil && r.AWS == nil &&
-		r.GoogleCloud == nil && r.SSH == nil
+		r.GoogleCloud == nil && r.SSH == nil && r.AppStoreConnect == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.

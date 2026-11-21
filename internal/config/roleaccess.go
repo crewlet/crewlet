@@ -26,7 +26,7 @@ func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 // SeatAccessLanes is every per-seat block, by its key under
 // `roles[].integrations`.
 func SeatAccessLanes() []string {
-	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh"}
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog", "cloudflare", "expo", "digitalocean", "scaleway", "aws", "google_cloud", "ssh", "app_store_connect"}
 }
 
 // SeatScope is the key and the entries of r's scope at lane: the containers
@@ -63,6 +63,10 @@ func (r *Role) SeatScope(lane string) (string, []string) {
 		if in.GoogleCloud != nil {
 			return "projects", in.GoogleCloud.Projects
 		}
+	case "app_store_connect":
+		if in.AppStoreConnect != nil {
+			return "apps", in.AppStoreConnect.Apps
+		}
 	case "ssh":
 		if in.SSH != nil {
 			return "hosts", in.SSH.Hosts
@@ -81,7 +85,7 @@ func SeatScopeRequired(lane string) bool { return slices.Contains(scopeRequiredL
 // Scaleway's, whose policy names its projects and grants nothing without one,
 // Google Cloud's, whose roles are granted per project and so on none without
 // one, and SSH's, whose certificates name one principal per host.
-var scopeRequiredLanes = []string{"scaleway", "google_cloud", "ssh"}
+var scopeRequiredLanes = []string{"scaleway", "google_cloud", "ssh", "app_store_connect"}
 
 // checkScopeChosen refuses an agent turned on at lane with no scope entry
 // where required says the lane needs one.
@@ -163,6 +167,10 @@ func (r *Role) seatEnabledField(lane string) **bool {
 	case "google_cloud":
 		if in.GoogleCloud != nil {
 			return &in.GoogleCloud.Enabled
+		}
+	case "app_store_connect":
+		if in.AppStoreConnect != nil {
+			return &in.AppStoreConnect.Enabled
 		}
 	case "ssh":
 		if in.SSH != nil {

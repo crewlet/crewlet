@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -65,7 +66,8 @@ func ToolStateOf(c *config.Company, handle string, lane Lane, want Desired, have
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff
 	}
-	if lane == LaneSSH {
+	// THE ENGINE'S OWN TOOLS: SSH's, and every growth product's (ADR-0170).
+	if _, growthLane := growth.CatalogOf(string(lane)); lane == LaneSSH || growthLane {
 		return ToolBuiltin
 	}
 	var servers []*config.MCPServer
