@@ -263,7 +263,8 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonUnseated})
 	}
 	_, throughToken := p.MachineToken()
-	if throughToken && r.presence == PresenceRequired {
+	if throughToken && (r.presence == PresenceRequired || r.presence == PresencePerson) ||
+		r.presence == PresencePerson && p.Kind != iam.KindPerson {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
 	if bar, barred := assistBar(p, a, r, check); barred {

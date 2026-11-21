@@ -225,12 +225,19 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 			return res, false
 		}
 	}
+	prep, refusal := prepared(ctx, tool, turn, call.Args)
+	if refusal != nil {
+		return *refusal, false
+	}
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: tool.Binding(turn, call.Args),
+		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: prep.Binding,
 		Acting: acting, Act: string(tool.Act()), Delegation: h.delegation(tool.Act(), call.Args),
-		Subject: tool.Subject(turn, call.Args),
+		Subject: prep.Subject,
+	}
+	if held.Approvers == sandbox.HeldApproversAdmin {
+		held.LapsesAt = held.HeldAt.Add(sandbox.HeldLapse)
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -242,10 +249,9 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	if res, joined := h.joined(ctx, turn.Handle(), runID, held); joined {
 		return res, false
 	}
-	question, context := tool.HeldWords(turn, call.Args)
 	return h.record(ctx, runID, launch, call.Name, sandbox.Ask{
-		Question: question, Context: context + actingWords(held.Acting),
-		Decision: sandbox.HeldFixedDecision(question, heldEvidence(turn)),
+		Question: prep.Question, Context: prep.Context + actingWords(held.Acting),
+		Decision: sandbox.HeldFixedDecision(prep.Question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,
 	})
@@ -377,6 +383,31 @@ type fixedTool interface {
 	// Subject is the call's identity as a request ([delegated.Subject]): a
 	// repeat by its seat joins the one still open. "" joins nothing.
 	Subject(turn *turnctx.Turn, args map[string]any) string
+}
+
+// preparedTool is a fixed tool whose question, binding and subject are read
+// live, once, before the call is held: a growth act's target, its before-state
+// and the spend guard's figures, which separate reads could see change between
+// them. A refusal is answered and nothing is held.
+type preparedTool interface {
+	PrepareHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result)
+}
+
+// HeldPrep is what a held call is recorded with: its binding and subject
+// ([fixedTool.Binding], [fixedTool.Subject]) and the words a person reads.
+type HeldPrep struct {
+	Binding, Subject, Question, Context string
+}
+
+// prepared is tool's prepared hold: read live by a [preparedTool], or from
+// the fixed tool's own methods.
+func prepared(ctx context.Context, tool fixedTool, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result) {
+	if p, ok := tool.(preparedTool); ok {
+		return p.PrepareHold(ctx, turn, args)
+	}
+	question, context := tool.HeldWords(turn, args)
+	return HeldPrep{Binding: tool.Binding(turn, args), Subject: tool.Subject(turn, args), Question: question,
+		Context: context}, nil
 }
 
 // decidedTool is a fixed tool whose call a person may approve before it is

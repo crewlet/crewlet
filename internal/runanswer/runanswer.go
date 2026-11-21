@@ -71,6 +71,10 @@ func HeldCall(run sandbox.PendingRun, company *config.Company) Authority {
 		}
 		return Authority{Action: authz.ActionReleaseApprove,
 			Object: authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle, Named: named}}
+	case held != nil && held.Approvers == sandbox.HeldApproversAdmin:
+		// AN ADMINISTRATOR'S ALONE: no owner, so no lead arm, and nobody named.
+		return Authority{Action: GrowthApprove(delegated.Kind(held.Act)),
+			Object: authz.Object{Kind: authz.KindPerson, ID: run.AgentID}}
 	case held != nil && held.Approvers == sandbox.HeldApproversSSH:
 		// NEVER A LEAD'S: the object names no owner, so the lead arm has
 		// nothing to admit on.
@@ -79,6 +83,18 @@ func HeldCall(run sandbox.PendingRun, company *config.Company) Authority {
 	}
 	return Authority{Action: authz.ActionToolsApprove,
 		Object: authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle}}
+}
+
+// GrowthApprove is the verb a growth act of kind is approved under; an act
+// that is no growth act gets the admin verb, the strictest of the three.
+func GrowthApprove(kind delegated.Kind) authz.Action {
+	switch kind {
+	case delegated.KindAdSpend:
+		return authz.ActionGrowthSpendApprove
+	case delegated.KindPublicPost:
+		return authz.ActionGrowthPublicApprove
+	}
+	return authz.ActionGrowthAdminApprove
 }
 
 // Question is who may answer the question run asked, as caller — the seat
