@@ -959,7 +959,7 @@ function onTurn(stage: "phase" | "parked") {
       agent_id: "ceo",
       role: "CEO",
       handle: "ceo",
-      turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
+      turns: [{ turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage }],
     },
   ] as never);
   const socket = new LiveSocket(store);
@@ -1071,23 +1071,25 @@ function runningSeat(phase: string) {
     role: "CEO",
     handle: "ceo",
     activity: "working",
-    turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "phase" },
-    live_call: {
-      versions: ZERO_VERSIONS,
-      turn_id: TURN,
-      phase,
-      iteration: 1,
-      model: "claude-sonnet-5",
-      in_progress: true,
-      round_num: 0,
-      rounds_used: 1,
-      max_rounds: 25,
-      started_at: "2026-09-13T10:01:00Z",
-      updated_at: "2026-09-13T10:01:30Z",
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-    },
+    turns: [{ turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "phase" }],
+    live_calls: [
+      {
+        versions: ZERO_VERSIONS,
+        turn_id: TURN,
+        phase,
+        iteration: 1,
+        model: "claude-sonnet-5",
+        in_progress: true,
+        round_num: 0,
+        rounds_used: 1,
+        max_rounds: 25,
+        started_at: "2026-09-13T10:01:00Z",
+        updated_at: "2026-09-13T10:01:30Z",
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+      },
+    ],
   };
 }
 
@@ -1167,7 +1169,7 @@ const heads = () => [...document.querySelectorAll<HTMLElement>(".phase-card .pha
 // brought it, because a card's open state is latched at mount and is the
 // reader's after it.
 test("a phase that starts while the transcript is open arrives open, and a card the reader closed stays closed", async () => {
-  const store = mountWatching({ ...runningSeat("execute"), live_call: null }, [
+  const store = mountWatching({ ...runningSeat("execute"), live_calls: [] }, [
     phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
     phase("2026-09-13T10:00:40Z", 20_000, { phase: "execute" }),
   ]);
@@ -1206,7 +1208,9 @@ test("a live card the reader closed stays closed when the next round's push land
     store.applyAgents([
       {
         ...next,
-        live_call: { ...next.live_call, rounds_used: 2, updated_at: "2026-09-13T10:01:40Z" },
+        live_calls: [
+          { ...next.live_calls![0]!, rounds_used: 2, updated_at: "2026-09-13T10:01:40Z" },
+        ],
       },
     ] as never),
   );
@@ -1233,7 +1237,7 @@ test("a live phase that completes keeps its card, open", async () => {
       ...phase("2026-09-13T10:01:50Z", 50_000, { phase: "execute" }),
       failed: false,
     } as never);
-    store.applyAgents([{ ...runningSeat("review"), live_call: null }] as never);
+    store.applyAgents([{ ...runningSeat("review"), live_calls: [] }] as never);
   });
   await waitFor(() => expect(document.querySelector(".phase-card.live")).toBeNull());
   expect(cards()).toHaveLength(2);
@@ -1254,8 +1258,8 @@ function parkedSeat() {
     role: "CEO",
     handle: "ceo",
     activity: "working",
-    turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "parked" },
-    live_call: null,
+    turns: [{ turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "parked" }],
+    live_calls: [],
   };
 }
 
@@ -1378,20 +1382,22 @@ function oneRoundIn() {
   const seat = runningSeat("execute");
   return {
     ...seat,
-    live_call: {
-      ...seat.live_call,
-      tool_executions: [
-        {
-          name: "knowledge.search",
-          round: 1,
-          arguments: { q: "retry backoff" },
-          result: "",
-          success: true,
-          started_at: "2026-09-13T10:01:10Z",
-          duration_ms: 300,
-        },
-      ],
-    },
+    live_calls: [
+      {
+        ...seat.live_calls![0]!,
+        tool_executions: [
+          {
+            name: "knowledge.search",
+            round: 1,
+            arguments: { q: "retry backoff" },
+            result: "",
+            success: true,
+            started_at: "2026-09-13T10:01:10Z",
+            duration_ms: 300,
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -1428,7 +1434,7 @@ test("a watch link brings the live ledger's newest round into view once, as it l
   const next = oneRoundIn();
   act(() =>
     store.applyAgents([
-      { ...next, live_call: { ...next.live_call, updated_at: "2026-09-13T10:01:45Z" } },
+      { ...next, live_calls: [{ ...next.live_calls![0]!, updated_at: "2026-09-13T10:01:45Z" }] },
     ] as never),
   );
   await frameDone();

@@ -70,6 +70,7 @@ import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, EventRecord, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 import { seatSectionId } from "./profile.ts";
+import { callsOf, turnById, turnsOf } from "~/lib/seatturn.ts";
 
 /** How many turns one page of the list holds — the read's own default. */
 export const TURN_PAGE = 50;
@@ -144,7 +145,10 @@ export function Turns({
     // it — every phase of the turn a reader opened this tab to watch —
     // reaches the tab only here.
     const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
-    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role, agent.turn)] : [];
+    // EVERY TURN'S CALL IN FLIGHT: the seat may run several turns at once.
+    const live = callsOf(agent).map((call) =>
+      fromLiveCall(call, agent?.role ?? "", turnById(agent, call.turn_id)),
+    );
     // Streamed FIRST so the query's own copy of the same phase wins the key.
     return mergePhases([...streamed, ...stored], live);
   }, [history.data, phaseEvents, agent, agentId]);
@@ -164,17 +168,20 @@ export function Turns({
   // settled list and came back at every boundary, remounting each time, and
   // the transcript the reader was following shut under them. A group that is
   // between phases is drawn as the running turn it is.
-  const onTurn = agent?.turn?.stage ? agent.turn.turn_id : "";
+  const onTurns = useMemo(
+    () => new Set(turnsOf(agent).flatMap((t) => (t.stage ? [t.turn_id] : []))),
+    [agent],
+  );
   const liveTurns = useMemo(
     () =>
       turns
-        .filter((g) => g.live || g.turnId === onTurn)
+        .filter((g) => g.live || onTurns.has(g.turnId))
         .map((g) => (g.live ? g : { ...g, live: true })),
-    [turns, onTurn],
+    [turns, onTurns],
   );
   const doneTurns = useMemo(
-    () => turns.filter((g) => !g.live && g.turnId !== onTurn),
-    [turns, onTurn],
+    () => turns.filter((g) => !g.live && !onTurns.has(g.turnId)),
+    [turns, onTurns],
   );
   const liveKeys = useMemo(() => liveTurns.map(turnKey), [liveTurns]);
   // The turns this reader has watched RUN, and the phases they watched live.

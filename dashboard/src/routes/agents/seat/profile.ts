@@ -9,6 +9,7 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
+import { callOf, callOfTurn } from "~/lib/seatturn.ts";
 import { isOwnSeat, leadsInLine, roundOf, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type {
@@ -348,7 +349,7 @@ export const FEED_ROWS = 5;
  * the newest of them are the ones it shows, as everywhere else in a feed.
  */
 export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
-  const call = row.live_call;
+  const call = callOf(row);
   if (!call) return [];
   const running = (call.running_calls ?? []).slice(-limit);
   const room = Math.max(0, limit - running.length);
@@ -381,7 +382,7 @@ export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
 
 /** "round 7 of 25", or "" before the first round. */
 export function roundWords(row: AgentRow): string {
-  const call = row.live_call;
+  const call = callOf(row);
   const round = roundOf(call);
   if (round <= 0) return "";
   return call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`;
@@ -389,23 +390,23 @@ export function roundWords(row: AgentRow): string {
 
 /**
  * The tokens the turn in flight has spent so far: every phase the store has
- * recorded for it — the seat's newest turn row, when that row IS this turn —
- * and the phase still running, which no row holds until it completes.
+ * recorded for it — its row among the seat's newest, one for each turn it is
+ * on — and the phase still running, which no row holds until it completes.
  *
- * NULL UNTIL THE ROW IS ANSWERED. A newest row naming ANOTHER turn is an
- * answer — this turn has recorded no phase yet — but no answer at all is not
+ * NULL UNTIL THE ROWS ARE ANSWERED. Newest rows that name only OTHER turns are
+ * an answer — this turn has recorded no phase yet — but no answer at all is not
  * a zero, and a figure that jumped from the running phase's share to the
  * turn's when the read landed would be a number that changed its meaning.
  */
 export function turnTokens(
   turnId: string,
-  newest: TurnRow | undefined,
+  newest: readonly TurnRow[] | undefined,
   answered: boolean,
   row: AgentRow,
 ): number | null {
   if (!answered || !turnId) return null;
-  const recorded = newest && newest.turn_id === turnId ? newest.total_tokens : 0;
-  const call = row.live_call;
+  const recorded = newest?.find((t) => t.turn_id === turnId)?.total_tokens ?? 0;
+  const call = callOfTurn(row, turnId);
   const running = call && call.in_progress && call.turn_id === turnId ? call.total_tokens : 0;
   return recorded + running;
 }

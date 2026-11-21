@@ -38,6 +38,7 @@ import type {
   ExecutorRow,
   WorkAskRow,
 } from "~/protocol/index.ts";
+import { callOf, turnOf } from "./seatturn.ts";
 
 /** A seat the engine stopped for a spent token budget, as a decision. */
 export interface SeatCondition {
@@ -169,7 +170,7 @@ export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindo
   const others: T[] = [];
   for (const c of conditions) {
     const raises = reader.configWrite || (c.window !== undefined && leads.has(c.row.handle ?? ""));
-    const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
+    const item = turnOf(c.row)?.work_item ?? callOf(c.row)?.work_item ?? null;
     const reassign = item !== null && reader.acts.includes("update_work_item");
     (raises || reassign ? mine : others).push(c);
   }

@@ -72,7 +72,7 @@ describe("what a seat is doing", () => {
     const people = chatPeople({ seats: [seat("ops", "Ops", "agent")] }, [
       row("ops", "working", {
         current_phase: "execute",
-        live_call: { work_item: { id: "w1", key: "ENG-4" } },
+        live_calls: [{ work_item: { id: "w1", key: "ENG-4" } }],
       } as Partial<AgentRow>),
     ]);
     expect(people.person("ops")).toMatchObject({
@@ -116,7 +116,7 @@ describe("the line under a seat in a pick list", () => {
       [
         row("ops", "working", {
           current_phase: "execute",
-          live_call: { work_item: { id: "w1", key: "ENG-4" } },
+          live_calls: [{ work_item: { id: "w1", key: "ENG-4" } }],
         } as Partial<AgentRow>),
         row("qa", "idle"),
       ],

@@ -77,6 +77,7 @@ import type {
   ScheduleSpec,
   WorkSummary,
 } from "~/protocol/index.ts";
+import { callOf, eachTurn, turnOf, turnsOf } from "./seatturn.ts";
 
 /** One unit, as the projection wrote it and as the engine resolved it. */
 export interface Unit {
@@ -1285,11 +1286,12 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
  */
 export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
   const started = (a: AgentRow) => {
-    const at = Date.parse(a.turn?.started_at ?? "");
+    const at = Date.parse(turnOf(a)?.started_at ?? "");
     return Number.isFinite(at) ? at : Infinity;
   };
   return agents
     .filter((a) => activityOf(a) === "working")
+    .flatMap(eachTurn)
     .map((row) => ({ row, at: started(row) }))
     .sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1))
     .map(({ row }) => row);
@@ -1320,7 +1322,7 @@ export const RUNNING_ROWS = 4;
  * which item a turn is on is that item's own flow ([liveOnRows]).
  */
 export function turnItemKey(row: AgentRow | null | undefined): string {
-  return row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+  return callOf(row)?.work_item?.key || turnOf(row)?.work_item?.key || "";
 }
 
 /**
@@ -1606,7 +1608,7 @@ export function labelOf(
   const word = stateWord(state);
   switch (state) {
     case "needs":
-      return row?.turn?.stage === "parked" ? `${word} · executor parked` : word;
+      return turnsOf(row).some((t) => t.stage === "parked") ? `${word} · executor parked` : word;
     case "offline":
       return "No state from the engine yet";
     case "paused": {
@@ -1638,7 +1640,7 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
  * What a seat is doing, in one line under its name: "Executing ENG-412",
  * "Reviewing ENG-9", "Idle · last turn 24m ago".
  *
- * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
+ * THE WORK ITEM IS THE TURN'S OWN, its call's `work_item` — the one item the
  * engine charges the turn to — and never a `work_key` a prompt happened to
  * mention. A human seat is not run by the engine and says so.
  *
@@ -1663,15 +1665,18 @@ export function stateLine(
       // A PARKED TURN IS ITS EXECUTOR, running in its box: the seat is
       // working and no model call is in flight, so the phase the call would
       // name says nothing, and the line is Execute's own.
-      if (row?.turn?.stage === "parked") {
+      // A SEAT ON SEVERAL TURNS (`sandbox.max_concurrent_runs`) says so: the
+      // line reads its first, and a list of running turns draws each.
+      const more = turnsOf(row).length > 1 ? ` · ${turnsOf(row).length} turns` : "";
+      if (turnOf(row)?.stage === "parked") {
         const execute = PHASE_DOING.execute!;
-        return item ? `${execute.on} ${item}` : execute.alone;
+        return (item ? `${execute.on} ${item}` : execute.alone) + more;
       }
-      const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
+      const doing = PHASE_DOING[callOf(row)?.phase ?? row?.current_phase ?? ""] ?? {
         alone: "Working",
         on: "Working on",
       };
-      return item ? `${doing.on} ${item}` : doing.alone;
+      return (item ? `${doing.on} ${item}` : doing.alone) + more;
     }
     case "idle": {
       // THE LINE SAYS WHAT THE STATE DOES NOT. Beside a pill reading Idle, a
@@ -1730,11 +1735,12 @@ export function liveOnRows(
   return out;
 }
 
-/** The turn a seat is running now, or "" while it runs none. */
+/** The turns a seat is running now, their ids joined by `+`, or "" while it runs none. */
 export function seatTurn(agents: readonly AgentRow[], handle: string | undefined): string {
   const seat = handle ? agents.find((row) => row.handle === handle) : undefined;
   if (seat?.activity !== "working") return "";
-  return seat.turn?.turn_id || seat.live_call?.turn_id || "";
+  const ids = turnsOf(seat).flatMap((t) => (t.turn_id ? [t.turn_id] : []));
+  return ids.length ? ids.join("+") : (callOf(seat)?.turn_id ?? "");
 }
 
 /**
@@ -1747,11 +1753,12 @@ export function seatTurn(agents: readonly AgentRow[], handle: string | undefined
  * no call of the engine's own is in flight.
  */
 export function doingWords(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return PHASE_DOING.execute!.alone.toLowerCase();
-  const phase = row.live_call?.phase ?? row.current_phase ?? "";
+  if (turnOf(row)?.stage === "parked") return PHASE_DOING.execute!.alone.toLowerCase();
+  const call = callOf(row);
+  const phase = call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
-  const round = roundOf(row.live_call);
-  const max = row.live_call?.max_rounds;
+  const round = roundOf(call);
+  const max = call?.max_rounds;
   if (round <= 0) return verb;
   return max ? `${verb} · round ${round} of ${max}` : `${verb} · round ${round}`;
 }

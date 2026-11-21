@@ -123,6 +123,7 @@ import {
   workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
+import { narrowTo } from "~/lib/seatturn.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { itemPath, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
@@ -776,12 +777,14 @@ export function CommandPalette({
    */
   const runningRows = (): CommandPaletteItem[] =>
     running.map(({ id, turnId }) => {
-      const row = agents.find((a) => a.id === id) ?? null;
+      const seatRow = agents.find((a) => a.id === id) ?? null;
+      // NARROWED TO THE TURN the row was read for: a seat may run several.
+      const row = (seatRow && narrowTo(seatRow, turnId)) ?? seatRow;
       const seat = index.byHandle.get(row?.handle ?? "") ?? null;
       const name = seat?.name ?? row?.role ?? id;
       const watch = watchLink(turnId);
       return {
-        id: `running-${id}`,
+        id: `running-${id}-${turnId}`,
         icon: (
           <SeatAvatar
             name={name}
