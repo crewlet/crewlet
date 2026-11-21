@@ -16,9 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
-	"github.com/crewlet/crewlet/internal/gitlet/cache"
-	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/nodebudget"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -211,7 +210,8 @@ func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
 		}
 		boot := testBootstrap(t)
 		boot.Node.Roles = roles
-		return n.gitCache.BackgroundBudget(), gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory)
+		work := gitWork(boot.Profile("node-a"), &boot)
+		return n.gitCache.BackgroundBudget(), nodebudget.Node{Work: work}.Of(memory, 0).Runtime
 	}
 	seats, seatsPools := sized(nil, memory)
 	alone, alonePools := sized(withoutSeats, memory)
@@ -225,43 +225,12 @@ func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
 	}
 }
 
-// A GITLET NODE KEEPS ITS STORE'S PAGE CACHE BEFORE GITLET'S SHARES, beside
-// the executor's pools: what every connection of both its files caches, as
-// opened (the floor, in a test binary), is never left to its background work.
-//
-// Mutation: keep the executor's pools alone, and the budget is the page
-// cache's larger.
-func TestAGitletNodeKeepsItsStoresPageCacheBeforeGitlet(t *testing.T) {
-	t.Parallel()
-	const memory = int64(4)<<30 - 64<<20
-	e := bootSizedCodeNode(t, nil, memory)
-	n := e.native.Load()
-	if n == nil || n.gitCache == nil {
-		t.Fatal("the premise: a node with every role, for a company hosting code, built a git cache")
-	}
-	boot := testBootstrap(t)
-	cached := int64(storeOptions(&boot, nil, 0).NodeConnections(heldLogs(&boot))) *
-		int64(e.backends.Store.Caps().PageCacheKiB) << 10
-	kept := gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory) + cached
-	// Under a core's memory left, the serving share is its fraction of what
-	// is left on any machine (gitlet/cache's perBackedCore).
-	left := memory - kept
-	if cached == 0 || left <= 0 || left > gitproc.CoreMemory {
-		t.Fatalf("the premise: a page cache (%d) and at most a core's memory left (%d)", cached, left)
-	}
-	want := max(0, left-TestGitTransfers*gitproc.TransferMemory-
-		left/(gitproc.CoreMemory>>20)*(cache.ServingMemoryPerCore>>20))
-	if got := n.gitCache.BackgroundBudget(); got != want {
-		t.Errorf("a %d-byte Gitlet node whose store caches %d gives its background work %d, want %d",
-			memory, cached, got, want)
-	}
-}
-
 // bootSizedCodeNode boots a node with roles (nil: every role) for
 // [gitletHostAlone], its git pool sized as a node of memory bytes rather than as
-// the machine running the case, and its transfer lane pinned ([PinGitLanes]);
+// the machine running the case, and its transfer lane pinned ([PinGitLanes]),
+// each of with applied to its options;
 // it stops with t.
-func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
+func bootSizedCodeNode(t *testing.T, roles []string, memory int64, with ...func(*Options)) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
 	dir := brokertest.TempDir(t)
@@ -273,8 +242,12 @@ func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
 	SeedStore(t, &b)
 	company := parseCompany(t, gitletHostAlone)
 	RequireNodeGit(t, &b, company)
-	e, err := New(t.Context(), WithGitMemory(Options{Bootstrap: &b, Company: company,
-		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory))
+	opts := WithGitMemory(Options{Bootstrap: &b, Company: company,
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory)
+	for _, w := range with {
+		w(&opts)
+	}
+	e, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -244,6 +244,7 @@ var errNoCore = errors.New("engine: Worklet, Doclet and Chatlet run over the " +
 func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
 	// A NODE WITHOUT `data` answers its seats' tools through a node that does.
 	if !HoldsEstate(boot) {
+		e.limitMemory(boot, nil)
 		return e.startRemote(c)
 	}
 	core := e.core.Load()
@@ -271,6 +272,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}()
 
 	var err error
+	var git *gitletMemory // what git holds outside the process, where it serves Gitlet
 	// THE TRACKER'S FILE ROWS ARE READ ON EVERY COMPANY: the collector, its audit
 	// and `crewlet objects migrate` must read them. A node whose tracker log did
 	// not come up is refused, or every object they name would read as nobody's.
@@ -411,8 +413,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			n.mergePreviews = parts.previews
 			n.compactor, n.home, n.mirrors, n.checkRunner = parts.compactor, parts.home, parts.mirrors, parts.checks
 			n.withdrawCodeStatus, n.withdrawCodeSearch = parts.withdrawStatus, parts.withdrawSearch
+			git = &parts.memory
 		}
 	}
+	// THE RUNTIME'S MEMORY LIMIT, by what git holds where it serves Gitlet.
+	e.limitMemory(boot, git)
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER backend,
 	// BEFORE the wiki block whose searcher takes it: gated on the wiki, a
 	// Worklet-and-Confluence company indexed none of its work items while still

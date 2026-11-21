@@ -7693,12 +7693,12 @@ not kept — each only of a turn that ended — and an ended turn is never captu
 again.
 
 **Two transcripts at a time on each node.** One read holds at most 29 MiB
-measured (its heap peaking at about 58 MiB at Go's default `GOGC`), and of what
+measured, and of what
 harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
 redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
-most two transcripts at once, 58 MiB live at their worst (about 116 MiB at their
-peak), whichever socket
+most two transcripts at once, 58 MiB live at their worst (87 MiB with the heap's
+room under the engine's memory limit), whichever socket
 question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
 slot frees within one such read, so an answer comes within 110 seconds (that
