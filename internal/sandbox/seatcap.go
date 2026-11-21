@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // A seat holds up to its cap of runs in [Holding] at once, at most one per
@@ -230,7 +233,11 @@ func (c *Coordinator) slotOfLocked(turn string) bool {
 // Under mu.
 func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, served map[string][]string) {
 	maps.DeleteFunc(c.heldRuns, func(turn string, run heldRun) bool {
-		return run.handle == handle && c.writing[turn] == nil
+		gone := run.handle == handle && c.writing[turn] == nil
+		if gone {
+			c.freeLocked(turn, run)
+		}
+		return gone
 	})
 	for _, run := range runs {
 		if c.writing[run.TurnID] != nil || !slices.Contains(Holding, run.Status) {
@@ -246,44 +253,148 @@ func (c *Coordinator) heldFromListingLocked(handle string, runs []PendingRun, se
 // Under mu, from [Coordinator.wroteCountLocked].
 func (c *Coordinator) heldMovedLocked(turn string, writes *runWrites) {
 	if writes.counted.holding == 0 || writes.handle == "" {
-		delete(c.heldRuns, turn)
+		if run, held := c.heldRuns[turn]; held {
+			c.freeLocked(turn, run)
+			delete(c.heldRuns, turn)
+		}
 		return
 	}
 	c.heldRuns[turn] = heldRun{handle: writes.handle,
 		conversations: conversationsOf(writes.conversation, writes.served)}
 }
 
-// HoldForConversation is [Coordinator.HoldSeat] for a delivery screened out
-// because one of the seat's runs works its conversation, below the seat's cap:
-// the inbox is held while that run holds the seat (waiting), so the delivery
-// waits at the head of the inbox at no cost rather than spending a delivery
-// per redelivery, and is released the moment no run of the seat works the
-// conversation ([Coordinator.seatFreed]). A conversation not busy in memory
-// takes no hold: the delivery's deferral alone stands, and its next screening
-// reads the seat again.
-func (c *Coordinator) HoldForConversation(ctx context.Context, handle, conversation string) {
+// A delivery of a conversation one of the seat's runs works, or related to one
+// of its runs, waits aside on the inbox under a key (internal/queue's
+// OutcomeAside, ADR-0169): the conversation, or [RunKey] of the run. The run
+// leaving [Holding] records its keys freed, and the transition readmits each
+// no run of the seat still holds ([Coordinator.readmitFreed]); a readmit with
+// nothing aside hands back nothing, so nothing tracks what was set aside.
+
+// freedKey is one key a run leaving [Holding] freed, and the run, for the line.
+type freedKey struct{ key, turn string }
+
+// runKeyPrefix begins [RunKey]: a slash, which no conversation key a message
+// derives holds before its source's colon.
+const runKeyPrefix = "run/"
+
+// RunKey is the key a delivery related to turn's run, and not of a busy
+// conversation, waits aside under: freed when that run leaves [Holding].
+func RunKey(turn string) string { return runKeyPrefix + turn }
+
+// keyBusyLocked reports whether one of handle's runs still holds key: the run
+// [RunKey] names in [Holding], or a conversation [Coordinator.busyLocked]
+// finds busy. Under mu.
+func (c *Coordinator) keyBusyLocked(handle, key string) bool {
+	if turn, ok := strings.CutPrefix(key, runKeyPrefix); ok {
+		run, held := c.heldRuns[turn]
+		return held && run.handle == handle
+	}
+	return c.busyLocked(handle, key)
+}
+
+// KeyBusy reports whether one of handle's runs still holds key, as a delivery
+// about to wait aside under it asks ([RunKey], [Coordinator.ConversationBusy]);
+// an error is a store that could not say.
+func (c *Coordinator) KeyBusy(ctx context.Context, handle, key string) (bool, error) {
+	if _, ok := strings.CutPrefix(key, runKeyPrefix); ok {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.keyBusyLocked(handle, key), nil
+	}
+	return c.ConversationBusy(ctx, handle, key)
+}
+
+// freeLocked records the keys run, leaving [Holding] on handle's seat, frees:
+// each conversation it works and its own [RunKey]. Under mu.
+func (c *Coordinator) freeLocked(turn string, run heldRun) {
+	for _, key := range append(slices.Clone(run.conversations), RunKey(turn)) {
+		c.freed[run.handle] = append(c.freed[run.handle], freedKey{key: key, turn: turn})
+	}
+}
+
+// readmitFreed hands back on handle's inbox the mail set aside under each key
+// its runs freed that no run of the seat still holds ([SeatHold]): at the
+// transition that freed it, as the inbox hold follows it. The keys still held
+// are let go too; the run that holds them frees them as it leaves. A readmit
+// that handed something back, or a seat no run holds, lifts the hold
+// [Coordinator.HoldForAside] took.
+func (c *Coordinator) readmitFreed(ctx context.Context, handle string) {
+	if c.hold == nil || handle == "" {
+		return
+	}
+	ctx, release := detach(ctx)
+	defer release()
 	c.mu.Lock()
-	if c.busyLocked(handle, conversation) {
-		if c.waiting[handle] == nil {
-			c.waiting[handle] = map[string]struct{}{}
+	var free []freedKey
+	for _, f := range c.freed[handle] {
+		if !c.keyBusyLocked(handle, f.key) &&
+			!slices.ContainsFunc(free, func(g freedKey) bool { return g.key == f.key }) {
+			free = append(free, f)
 		}
-		c.waiting[handle][conversation] = struct{}{}
+	}
+	delete(c.freed, handle)
+	c.mu.Unlock()
+	readmitted := false
+	for _, f := range free {
+		n, err := c.hold.Readmit(ctx, handle, f.key, f.turn)
+		if err != nil {
+			log.WarnContext(ctx, "sandbox_aside_readmit_failed", "agent", handle, "key", f.key,
+				"turn_id", f.turn, "error", err.Error(), "detail", "what waited aside on the run "+
+					"stays there until the seat's release hands it back")
+			continue
+		}
+		readmitted = readmitted || n > 0
+	}
+	c.mu.Lock()
+	unheld := readmitted || c.runs[handle].holding == 0
+	if unheld {
+		delete(c.asideFull, handle)
+	}
+	c.mu.Unlock()
+}
+
+// readmitFoldIn hands back the wake the fold-in ev answered decides, which waits
+// aside under its run's key or its conversation's while one of the seat's runs
+// works that ([RunKey]): the inbox's screen then reads the answer at once, an
+// approval filing it into the running work, a refusal setting it aside again
+// until the run leaves. A wake not aside is handed back nothing.
+func (c *Coordinator) readmitFoldIn(ctx context.Context, ev types.ExecutorAnswerGiven) {
+	if c.hold == nil || ev.AgentHandle == "" {
+		return
+	}
+	run, found, err := c.pending.Get(ctx, ev.TurnID)
+	if err != nil || !found {
+		log.DebugContext(ctx, "sandbox_foldin_readmit_unread", "agent", ev.AgentHandle, "turn_id", ev.TurnID,
+			"found", found, "error", fmt.Sprint(err))
+		return
+	}
+	keys := []string{RunKey(ev.TurnID)}
+	for _, f := range run.FoldIns {
+		if f.ID == ev.FoldIn && f.Conversation != "" {
+			keys = append(keys, f.Conversation)
+		}
+	}
+	for _, key := range keys {
+		if _, err := c.hold.Readmit(ctx, ev.AgentHandle, key, ev.TurnID); err != nil {
+			log.WarnContext(ctx, "sandbox_aside_readmit_failed", "agent", ev.AgentHandle, "key", key,
+				"turn_id", ev.TurnID, "error", err.Error(), "detail", "the answered fold-in's wake is read "+
+					"when its run leaves")
+		}
+	}
+}
+
+// HoldForAside holds handle's inbox for a delivery that would wait aside
+// while the inbox holds as many aside as it keeps (internal/queue's MaxAside):
+// the mail behind it waits on the broker in order, as at the cap, until a
+// readmit hands some back or no run of the seat holds
+// ([Coordinator.readmitFreed]). The delivery's deferral stands meanwhile.
+func (c *Coordinator) HoldForAside(ctx context.Context, handle string) {
+	c.mu.Lock()
+	if c.runs[handle].holding > 0 {
+		c.asideFull[handle] = true
 	}
 	c.mu.Unlock()
 	c.reconcileHold(ctx, handle)
-}
-
-// pruneWaitingLocked drops every conversation handle's inbox is held for that
-// no run of the seat works any longer. Under mu.
-func (c *Coordinator) pruneWaitingLocked(handle string) {
-	for conversation := range c.waiting[handle] {
-		if !c.busyLocked(handle, conversation) {
-			delete(c.waiting[handle], conversation)
-		}
-	}
-	if len(c.waiting[handle]) == 0 {
-		delete(c.waiting, handle)
-	}
 }
 
 // HeldBeside is how many of handle's runs other than turn's hold the seat or

@@ -58,10 +58,17 @@ const (
 	// routeAbsorbed: the triage found it noise owing nothing, recorded worked
 	// by the running turn ([Engine.absorbWake]).
 	routeAbsorbed routeOutcome = "absorbed"
+	// routeStarted: below the cap, related to no running run, it starts a turn
+	// of its own beside them ([Engine.beside]).
+	routeStarted routeOutcome = "started"
+	// routeWaited: below the cap, it was set aside to wait for the run it
+	// relates to, whatever else was counted of it ([Engine.setAside]).
+	routeWaited routeOutcome = "waited"
 )
 
 // routeOutcomes is the closed set.
-var routeOutcomes = []routeOutcome{routeJoined, routeRefused, routeLeftQueued, routeAbsorbed}
+var routeOutcomes = []routeOutcome{routeJoined, routeRefused, routeLeftQueued, routeAbsorbed, routeStarted,
+	routeWaited}
 
 // Valid reports whether o is one of [routeOutcomes].
 func (o routeOutcome) Valid() bool { return slices.Contains(routeOutcomes, o) }
@@ -78,6 +85,9 @@ const (
 	ruleWrote routeRule = "wrote"
 	// ruleNone: it matched neither, or is not a wake a run takes.
 	ruleNone routeRule = "none"
+	// ruleRun: set aside behind the run it relates to by the rule or the
+	// triage's weighing, its own conversation free ([Engine.beside]).
+	ruleRun routeRule = "run"
 	// The triage's verdict on a wake the fixed rule left ([triageVerdict.rule]),
 	// or none where it decided nothing.
 	ruleTriageInput   routeRule = "triage_input"
@@ -94,7 +104,7 @@ const (
 )
 
 // routeRules is the closed set.
-var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleWrote, ruleNone, ruleTriageInput,
+var routeRules = []routeRule{ruleConversation, ruleWorkItem, ruleWrote, ruleNone, ruleRun, ruleTriageInput,
 	ruleTriageSteer, ruleTriageRequest, ruleTriageNoise, ruleTriageFailed, ruleFoldInAsked, ruleFoldInApproved,
 	ruleFoldInRefused, ruleFoldInExpired}
 
@@ -247,7 +257,32 @@ type seatRouters struct {
 	mu      sync.Mutex
 	running map[string]*seatRouter
 	last    map[string]<-chan struct{}
+	routes  map[string]*seatRoute
 	stopped bool
+}
+
+// seatRoute is what a seat's router and its screen of a flowing inbox
+// ([Engine.beside]) decide its wakes under: one at a time, each decision once
+// per job, so a wake both read is never triaged twice.
+type seatRoute struct {
+	mu   sync.Mutex
+	memo *routeMemo
+}
+
+// seatRoute is handle's, made on first use and let go once no run holds it.
+func (e *Engine) seatRoute(handle string) *seatRoute {
+	routers := &e.wakeRouters
+	routers.mu.Lock()
+	defer routers.mu.Unlock()
+	if routers.routes == nil {
+		routers.routes = map[string]*seatRoute{}
+	}
+	r := routers.routes[handle]
+	if r == nil {
+		r = &seatRoute{memo: newRouteMemo()}
+		routers.routes[handle] = r
+	}
+	return r
 }
 
 // seatRouter is one seat's router: its stop, its end, and its nudge, which
@@ -285,6 +320,9 @@ func (e *Engine) followSeat(handle string, busy bool) {
 	routers.mu.Lock()
 	defer routers.mu.Unlock()
 	r, running := routers.running[handle]
+	if !busy {
+		delete(routers.routes, handle)
+	}
 	switch {
 	case !busy && running:
 		r.cancel()
@@ -324,7 +362,7 @@ func (e *Engine) stopRouters() {
 	for _, r := range routers.running {
 		r.cancel()
 	}
-	routers.running = nil
+	routers.running, routers.routes = nil, nil
 	ends := slices.Collect(maps.Values(routers.last))
 	routers.mu.Unlock()
 	for _, end := range ends {
@@ -372,12 +410,18 @@ func (e *Engine) runRouter(ctx context.Context, handle string, r *seatRouter, pr
 			_ = unsub(stop)
 		}()
 	}
-	memo := newRouteMemo()
-	defer e.routerEnded(ctx, handle, memo)
+	route := e.seatRoute(handle)
+	defer func() {
+		route.mu.Lock()
+		defer route.mu.Unlock()
+		e.routerEnded(ctx, handle, route.memo)
+	}()
 	backstop := time.NewTimer(routeBackstop)
 	defer backstop.Stop()
 	for {
-		e.routeSeat(ctx, handle, subject, group, memo)
+		route.mu.Lock()
+		e.routeSeat(ctx, handle, subject, group, route.memo)
+		route.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return
@@ -406,9 +450,7 @@ func (e *Engine) routeSeat(ctx context.Context, handle, subject, group string, m
 		log.DebugContext(ctx, "seat_router_runs_unread", "seat", handle, "error", err.Error())
 		return
 	}
-	runs = slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
-		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
-	})
+	runs = routableRuns(runs)
 	e.expireFoldIns(ctx, handle, runs, memo)
 	memo.prune(runs)
 	if len(runs) == 0 {
@@ -456,6 +498,14 @@ func (e *Engine) writtenOf(ctx context.Context, handle string, runs []sandbox.Pe
 		wrote[run.TurnID] = turnLog.Wrote
 	}
 	return wrote, true
+}
+
+// routableRuns is the runs of runs a wake can be routed to: launched, in a status
+// that takes items.
+func routableRuns(runs []sandbox.PendingRun) []sandbox.PendingRun {
+	return slices.DeleteFunc(runs, func(run sandbox.PendingRun) bool {
+		return run.LaunchID == "" || !slices.Contains(sandbox.ItemStatuses, run.Status)
+	})
 }
 
 // workedOf is which of mail's keys the completion ledger records worked, in
