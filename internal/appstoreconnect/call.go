@@ -198,6 +198,10 @@ func typeAndID(path string) (typ, id string) {
 	return typ, id
 }
 
+// referenceTypes are Apple's own reference data, the same for every team: a
+// price or availability naming a territory names nothing of the team's.
+var referenceTypes = map[string]bool{"territories": true, "appCategories": true}
+
 // place decides the app m acts on, or that it is a team call, and its team:
 // every owned resource the call names is placed in one of the seat's apps, in
 // one team, and any other resource it names needs team_resources.
@@ -216,6 +220,8 @@ func (p *Product) place(ctx context.Context, seat *config.RoleAppStoreConnect, m
 			if app, t, err = p.placeOwned(ctx, seat, r.Type, r.ID); err != nil {
 				return err
 			}
+		case referenceTypes[r.Type]:
+			continue
 		default:
 			teamWide = true
 			continue

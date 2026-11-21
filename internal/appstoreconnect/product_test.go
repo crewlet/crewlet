@@ -295,7 +295,8 @@ func refusal(err error) growth.RefusalKind {
 // before Apple is asked, and Apple's words come back fenced as a document.
 //
 // Mutation: skip the cut or the placement, and an agent reads another app's
-// data or the team's users.
+// data or the team's users; class a territory as the team's, and a price read
+// needs team_resources.
 func TestAReadReachesOnlyTheSeatsApps(t *testing.T) {
 	t.Parallel()
 	s := &store{}
@@ -318,6 +319,12 @@ func TestAReadReachesOnlyTheSeatsApps(t *testing.T) {
 		if _, err := p.Run(ctx, growth.Call{ID: "r2", Handle: "growth", Tool: appstoreconnect.ToolRead, Args: args}); refusal(err) == "" {
 			t.Errorf("%s answered %v, want a refusal before Apple", name, err)
 		}
+	}
+	// APPLE'S REFERENCE DATA IS NOBODY'S: a territory names nothing of the team's.
+	if _, err := p.Run(ctx, growth.Call{ID: "r3", Handle: "growth", Tool: appstoreconnect.ToolRead,
+		Args: map[string]any{"operation": "apps_appPricePoints_getToManyRelated", "path": map[string]any{"id": "111"},
+			"query": map[string]any{"filter[territory]": "USA"}}}); err != nil && strings.Contains(err.Error(), "team_resources") {
+		t.Errorf("a read naming a territory was refused as the team's: %v", err)
 	}
 }
 
