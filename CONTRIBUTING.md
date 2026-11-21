@@ -161,8 +161,10 @@ runs the whole suite depends on `make playwright-tree`, which installs it with
 `MinNPMMajor` or newer and the SHA-256 tool; about 4 MB of download from the
 registry or mirror your npm configuration names, 23 MB kept, in
 `~/.cache/crewlet/playwright-tree`, which `CREWLET_PLAYWRIGHT_TREE_CACHE`
-moves), once per lock, and names it in `CREWLET_TEST_PLAYWRIGHT_TREE` (the
-Makefile's `PLAYWRIGHT_TREE_ENV`). A
+moves), once per lock, publishing it only once it passes the box helper's own
+check of a box's install (npm's record is the lock, nothing is a link, and the
+files' digest is `tree/installed.sha256`), and names it in
+`CREWLET_TEST_PLAYWRIGHT_TREE` (the Makefile's `PLAYWRIGHT_TREE_ENV`). A
 one-package loop names it and the floor Node by hand, as three statements:
 `tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" go test ./internal/browser/boxhelper/...`
 A bare `go test` without them skips those cases, saying so, and runs the rest.
@@ -1458,9 +1460,10 @@ The Playwright MCP a seat's box installs is a manifest and a lock in
 [`internal/browser/boxhelper/tree/`](internal/browser/boxhelper/tree), which npm
 in the box installs with `npm ci`, and Dependabot proposes each release of it.
 Its pull request stays red: `internal/browser`'s release constants name the
-release somebody read, and boxhelper's tests hold the lock to them and the
-files it installs to `tree/installed.sha256` (boxhelper's package doc says
-why). Nor does it merge itself: `dependabot-merge.yml` neither
+release somebody read, boxhelper's tests hold the lock to them, and the suite's
+recipe and those tests hold the files it installs to `tree/installed.sha256`
+(boxhelper's package doc says why). Nor does it merge itself:
+`dependabot-merge.yml` neither
 approves nor queues a pull request that changes only this directory (see [A
 bump merges itself](#a-bump-merges-itself)). Land the bump from a branch of
 your own, not Dependabot's, which stops rebasing once it holds a commit of
@@ -1470,7 +1473,10 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    --ignore-scripts --save-exact --registry=https://registry.npmjs.org/
    @playwright/mcp@<b>`. Never behind a mirror, whose host the lock would then
    name.
-2. `tree=$(scripts/playwright-tree.sh) && (cd "$tree" && npm audit signatures
+2. `scripts/playwright-tree.sh` refuses the new lock's tree, naming the digest
+   of the files it installed: write that digest, which every box holds its
+   install to, into `internal/browser/boxhelper/tree/installed.sha256`. Then
+   `tree=$(scripts/playwright-tree.sh) && (cd "$tree" && npm audit signatures
    --registry=https://registry.npmjs.org/)`: the recipe installs the new lock's
    tree and prints its path, and every package in it must show a verified
    registry signature and a verified attestation, read from npm's registry
@@ -1482,11 +1488,6 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    `$tree/node_modules/playwright-core/browsers.json`;
    `TestTheLockIsTheReleaseSomebodyRead` and
    `TestTheLockedCoreExpectsTheChromiumSomebodyRead` name what they found.
-   Write the digest of the files the new lock installs, which every box holds
-   its install to, into `internal/browser/boxhelper/tree/installed.sha256`:
-   `CREWLET_TEST_PLAYWRIGHT_TREE="$tree" go test -run
-   TestTheInstalledDigestNamesTheFilesTheLockInstalls
-   ./internal/browser/boxhelper/` names it.
 4. `make check`, and title the pull request `build(deps): bump playwright mcp
    from <a> to <b>`. Dependabot closes its own once `main` carries the release.
 

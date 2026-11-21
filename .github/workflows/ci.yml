@@ -817,8 +817,11 @@ jobs:
       # locks with npm into CREWLET_PLAYWRIGHT_TREE_CACHE (the Makefile's `##@
       # The locked Playwright tree`), and name it (PLAYWRIGHT_TREE_ENV). Cached
       # as the floor Node is and for its reasons, keyed on the two files and the
-      # recipe's `layout=` line, which are all that names a tree, and on no
-      # arch: the lock holds no package of a platform's own (boxhelper's
+      # recipe's `layout=` line, which are all that names a tree, on the
+      # installed digest beside them, which an intact tree's .complete names
+      # (a tree restored under another would be installed again on every run
+      # and, the restore a hit, never saved), and on no arch: the lock holds no
+      # package of a platform's own (boxhelper's
       # TestTheLockIsTheReleaseSomebodyRead), so the tree is the same on every
       # runner. Without it every shard of every run would ask npm's registry.
       - &playwright-tree-cache-dir
@@ -833,7 +836,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
-          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json', 'internal/browser/boxhelper/tree/installed.sha256') }}
       # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route, and
@@ -913,7 +916,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CREWLET_PLAYWRIGHT_TREE_CACHE }}
-          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json') }}
+          key: playwright-tree-${{ runner.os }}-l${{ steps.playwright-tree-key.outputs.layout }}.${{ hashFiles('internal/browser/boxhelper/tree/package.json', 'internal/browser/boxhelper/tree/package-lock.json', 'internal/browser/boxhelper/tree/installed.sha256') }}
       # The sshd test images, main only and a miss only, but from the shard that
       # ran internal/ssh rather than the first: sshdtest marks the directory
       # complete once it holds a tar of every image, and only that shard has.

@@ -82,9 +82,11 @@
 // tree/installed.sha256 is the digest of the files a whole install of the
 // lock holds (js/tree.mjs's installedDigest: each regular file's path and
 // SHA-256, npm's own record aside, no mode or directory), so a box runs the
-// bytes the suite ran. TestTheInstalledDigestNamesTheFilesTheLockInstalls
-// computes it again, in Go, from the suite's tree: a bump regenerates it by
-// writing the value that test names once the suite's tree is the new lock's.
+// bytes the suite ran. scripts/playwright-tree.sh holds the suite's tree to a
+// box's check, importing tree.mjs, and refuses a bump's new tree naming the
+// digest its files have, the value the bump writes;
+// TestTheInstalledDigestNamesTheFilesTheLockInstalls computes it again, in
+// Go, from the suite's tree.
 //
 // Dependabot proposes each release (.github/dependabot.yml), and its pull
 // request stays red until a person reads the release, checks the registry's

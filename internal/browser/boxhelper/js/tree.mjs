@@ -98,7 +98,8 @@ export async function install(folder, config, options = {}) {
     judge(await runNPM(staging, config, { env, io, clock, abort, spawned }), config)
     const problems = await checkInstalled(staging, lock, config.installed_digest, io)
     if (problems.length > 0) {
-      throw new Withheld(MISSING, "install_failed", `npm ci answered 0, and ${problems.join("; ")}`)
+      const words = problems.map((p) => p.words).join("; ")
+      throw new Withheld(MISSING, "install_failed", `npm ci answered 0, and ${words}`)
     }
     try {
       await io.rm(path.join(staging, RECORD), { force: true })
@@ -451,33 +452,39 @@ export function npmFailure(stdout) {
 }
 
 // checkInstalled is every way the install in dir falls short of the lock
-// (its bytes) and of digest, the files a whole install of it holds, in the
-// words of a failure, and none when npm installed exactly the lock: npm's own
-// record of what it installed names the lock's packages, each at the lock's
-// version, address and SHA-512; nothing in dir is a link, or anything but a
-// file or a directory; and installedDigest of its node_modules is digest.
+// (its bytes) and of digest, the files a whole install of it holds, and none
+// when npm installed exactly the lock: npm's own record of what it installed
+// names the lock's packages, each at the lock's version, address and SHA-512;
+// nothing in dir is a link, or anything but a file or a directory; and
+// installedDigest of its node_modules is digest. Each problem is {words}; the
+// one that the files' digest is not digest also carries files, the digest
+// they have, since alone it is no failure of npm's: a file npm could not
+// write, or a digest of another lock's, which the suite tree's recipe tells a
+// bump.
 export async function checkInstalled(dir, lock, digest, io = fsp) {
   let want
   try {
     want = JSON.parse(String(lock)).packages
   } catch (err) {
-    return [`the lock is no JSON: ${err.message}`]
+    return [{ words: `the lock is no JSON: ${err.message}` }]
   }
   const problems = []
   try {
     const record = JSON.parse(await io.readFile(path.join(dir, "node_modules", ".package-lock.json"), "utf8"))
     const odd = differing(isObject(want) ? want : {}, isObject(record?.packages) ? record.packages : {})
-    if (odd.length > 0) problems.push(`npm's record of what it installed is not the lock: ${few(odd)}`)
+    if (odd.length > 0) problems.push({ words: `npm's record of what it installed is not the lock: ${few(odd)}` })
   } catch (err) {
-    problems.push(`npm left no record of what it installed: ${err.message}`)
+    problems.push({ words: `npm left no record of what it installed: ${err.message}` })
   }
   try {
     const { others } = await entries(dir, io)
-    if (others.length > 0) problems.push(`it holds what is neither a file nor a directory: ${few(others)}`)
+    if (others.length > 0) problems.push({ words: `it holds what is neither a file nor a directory: ${few(others)}` })
     const got = await installedDigest(path.join(dir, "node_modules"), io)
-    if (got !== digest) problems.push(`the files it installed have the digest ${got}, and the lock's are ${digest}`)
+    if (got !== digest) {
+      problems.push({ words: `the files it installed have the digest ${got}, not ${digest}`, files: got })
+    }
   } catch (err) {
-    problems.push(`reading what it installed: ${err.message}`)
+    problems.push({ words: `reading what it installed: ${err.message}` })
   }
   return problems
 }

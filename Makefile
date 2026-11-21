@@ -758,13 +758,13 @@ node-test: ## run the floor Node's recipe's and the pin check's own suite (ci: b
 # The OWN SUITE of the Playwright tree's recipe (scripts/playwright-tree.sh),
 # for git-test's reasons: shell no Go test reaches, failing silently where it
 # matters — a recipe that installs over a tree another checkout's suite is
-# reading, hands back a tree npm installed nothing into, lets a developer's npm
-# setting change what is installed, waits on an npm that never ends, leaves one
-# running once interrupted, or prints something above the path a make target
-# exports as the suite's tree. It runs the real recipe against a stand-in
-# registry on 127.0.0.1, every other address sent to a refused proxy, so it
-# reads no network, then runs itself once more, by a relative path, under a
-# developer's most hostile environment: about a minute, half of it that second
+# reading, hands back a tree npm installed nothing into or left short, lets a
+# developer's npm setting change what is installed, waits on an npm that never
+# ends, leaves one running once interrupted, or prints something above the path
+# a make target exports as the suite's tree. It runs the real recipe against a
+# stand-in registry on 127.0.0.1, every other address sent to a refused proxy,
+# so it reads no network, then runs itself once more, by a relative path, under
+# a developer's most hostile environment: about a minute, half of it that second
 # run. It needs node, an npm of boxhelper's MinNPMMajor or newer, tar and
 # sha256sum (or shasum).
 playwright-tree-test: ## run the Playwright tree's recipe's own suite (ci: build + vet)

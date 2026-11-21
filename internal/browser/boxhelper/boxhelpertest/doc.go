@@ -45,7 +45,10 @@
 // Chromium's build is written (playwright-core's browsers.json), and the npm
 // cache that install filled in npm-cache, from which a case installs the tree
 // again with each Node's own npm, offline: a box's install without a registry.
-// A tree whose package-lock.json is not the committed one byte for byte is
+// The recipe publishes it only once it passes the box helper's own check of a
+// box's install (js/tree.mjs's checkInstalled), against the lock and
+// tree/installed.sha256, so the suite's tree is held as every box's is. A
+// tree whose package-lock.json is not the committed one byte for byte is
 // another lock's, a variable left from before a bump, and fails naming the
 // recipe.
 //
