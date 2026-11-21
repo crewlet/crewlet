@@ -245,6 +245,11 @@ func TestANoteRidesTheAnswerToTheAgent(t *testing.T) {
 	if code != http.StatusBadRequest || len(desk.delivered) != 1 {
 		t.Errorf("a note past its bound answered %d and delivered %d", code, len(desk.delivered))
 	}
+	escaped := strings.Repeat(`\ud83d\ude00`, 2000)
+	code, _ = answer(t, svc, proved(time.Minute), "/mcp-approvals/"+heldID, `{"answer": "deny", "note": "`+escaped+`"}`)
+	if code != http.StatusAccepted || len(desk.delivered) != 2 {
+		t.Errorf("a note at its bound, written in escapes, answered %d and delivered %d", code, len(desk.delivered))
+	}
 }
 
 // A GROWTH ACT PAST ITS LAPSE TAKES DENY ALONE (ADR-0171): an administrator's

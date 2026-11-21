@@ -75,9 +75,10 @@ const approvalShape = `{"answer": "once"|"always"|"deny", "arguments_sha256": "<
 // what to ask instead, as a person's steering note is bounded.
 const maxApprovalNoteRunes = steer.MaxNoteRunes
 
-// maxApprovalBody bounds the body: an answer and a revision summary, which
-// configuration writes hold to a line.
-const maxApprovalBody = 8 << 10
+// maxApprovalBody bounds the body: a note at its bound written wholly as
+// escaped surrogate pairs (12 bytes a character, 24,000 bytes), beside an
+// answer, a digest and a revision summary of a line.
+const maxApprovalBody = 32 << 10
 
 // ApprovalAnswer is what the route answers: the call it answered, the answer
 // and what the delivery says of it, and for `always` the configuration's own
