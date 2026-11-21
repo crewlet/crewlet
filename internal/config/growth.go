@@ -38,6 +38,9 @@ type growthBlock interface {
 
 // growthSeat is a growth integration's seat block.
 type growthSeat interface {
+	// GrowthKind is the block's integration kind, which its catalog and
+	// internal/authz's grants name.
+	GrowthKind() string
 	// GrowthSeatLevel is the seat's level where its block is on, and ""
 	// where it is off.
 	GrowthSeatLevel() string
@@ -150,16 +153,40 @@ func (r *Role) growthSeatField(kind string) (reflect.Value, bool) {
 	return reflect.Value{}, false
 }
 
+// partialGrowthSeats is every field of blocks, a struct of seat blocks, whose
+// block has a GrowthSeatLevel but not the rest of [growthSeat]: a block the
+// walks would pass over, so its seats would silently carry no grant.
+func partialGrowthSeats(blocks reflect.Type) []string {
+	var out []string
+	seat := reflect.TypeFor[growthSeat]()
+	for f := range blocks.Fields() {
+		if _, level := f.Type.MethodByName("GrowthSeatLevel"); level && !f.Type.Implements(seat) {
+			out = append(out, jsonName(f))
+		}
+	}
+	return out
+}
+
 // GrowthLevels is the seat's level on each growth lane it is on at, by the
 // lane's kind: what internal/authz's growth grants admit to that product's
 // tools (org.Role.GrowthLevels). Found by reflection over the seat's blocks,
 // so a product adds no row here.
-func (r *Role) GrowthLevels() map[string]string {
+func (r *Role) GrowthLevels() map[string]string { return growthLevelsIn(&r.Integrations) }
+
+// growthLevelsIn is [Role.GrowthLevels] over blocks, a pointer to a struct of
+// seat blocks. KEYED BY THE BLOCK'S KIND, never its field's name: the grants
+// name the kind, and a key spelled otherwise would grant nothing, silently.
+func growthLevelsIn(blocks any) map[string]string {
 	out := map[string]string{}
-	for _, kind := range growthSeatKeys() {
-		if s := r.growthSeatOf(kind); s != nil {
+	v := reflect.ValueOf(blocks).Elem()
+	for n := range v.NumField() {
+		f := v.Field(n)
+		if f.Kind() != reflect.Pointer || f.IsNil() || !v.Type().Field(n).IsExported() {
+			continue
+		}
+		if s, ok := f.Interface().(growthSeat); ok {
 			if level := s.GrowthSeatLevel(); level != "" {
-				out[kind] = level
+				out[s.GrowthKind()] = level
 			}
 		}
 	}

@@ -269,20 +269,25 @@ func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) 
 }
 
 // EVERY BUILT-IN DECLARES THE VENDOR PERMISSION IT NEEDS: a closed table,
-// one declaration per filed tool, and one that reaches a vendor says which,
-// on which backend, at which level. A row cannot omit it and compile.
+// one declaration per catalogued tool, and one that reaches a vendor says
+// which, on which backend, at which level. A row cannot omit it and compile,
+// and a growth tool, on a credential the engine alone holds, reaches none.
+//
+// Mutation: file a growth tool as needing its product's permission, and the
+// reaching set grows.
 func TestEveryBuiltInDeclaresTheVendorPermissionItNeeds(t *testing.T) {
 	t.Parallel()
 	reaching := map[string]VendorNeed{}
-	for _, f := range filed {
-		if !f.vendor.Reaches() {
+	for _, tool := range Catalogued() {
+		f, _ := FilingOf(tool)
+		if !f.Vendor.Reaches() {
 			continue
 		}
-		if f.vendor.Backend == "" || f.vendor.Lane == "" || f.vendor.Permission == "" || f.vendor.Level == "" {
+		if f.Vendor.Backend == "" || f.Vendor.Lane == "" || f.Vendor.Permission == "" || f.Vendor.Level == "" {
 			t.Errorf("%s reaches %s and does not say on which backend and lane, for what, at which level",
-				f.tool, f.vendor.Vendor)
+				tool, f.Vendor.Vendor)
 		}
-		reaching[f.tool] = f.vendor
+		reaching[tool] = f.Vendor
 	}
 	if want := map[string]VendorNeed{SearchKnowledgeTool: searchesConfluence}; !maps.Equal(reaching, want) {
 		t.Errorf("the built-ins reaching a vendor are %v, want %v", reaching, want)
@@ -316,5 +321,36 @@ func TestEveryGrowthToolsGateIsWhatItsAuthorityRowAsks(t *testing.T) {
 		if !seen[g] {
 			t.Errorf("no growth tool is filed as %q", g)
 		}
+	}
+}
+
+// GROWTH TOOLS ARE RANKED BY THEIR PLACE IN THE ONE GROWTH GROUP, catalog
+// after catalog, so two products' tools never share a rank and the dashboard
+// draws each product's together, in [Catalogued]'s order.
+//
+// Mutation: rank a tool by its index in its own catalog, and the second
+// product's first tool ties the first product's.
+func TestGrowthToolsAreRankedByTheirPlaceInTheGroup(t *testing.T) {
+	t.Parallel()
+	catalogs := []growth.Catalog{
+		{Kind: "ads", Tools: []growth.Tool{{Name: "ads_list", Class: growth.ClassRead},
+			{Name: "ads_pause", Class: growth.ClassOperate}}},
+		{Kind: "shop", Tools: []growth.Tool{{Name: "shop_list", Class: growth.ClassRead},
+			{Name: "shop_add_user", Class: growth.ClassAdmin}}},
+	}
+	for want, c := range []struct {
+		tool string
+		gate Gate
+	}{
+		{"ads_list", GateGrowthRead}, {"ads_pause", GateGrowthOperate},
+		{"shop_list", GateGrowthRead}, {"shop_add_user", GateGrowthAdminister},
+	} {
+		f, ok := growthFilingIn(catalogs, c.tool)
+		if !ok || f.Rank != want || f.Gate != c.gate || f.Group != GroupGrowth {
+			t.Errorf("%s filed %+v (%v), want rank %d under %s", c.tool, f, ok, want, c.gate)
+		}
+	}
+	if _, ok := growthFilingIn(catalogs, "shop_nothing"); ok {
+		t.Error("a tool no catalog lists was filed")
 	}
 }

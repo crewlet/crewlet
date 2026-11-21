@@ -2163,8 +2163,12 @@ func SeatedOf(a Action) (bool, bool) {
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask
-// whether a surface covered all of them.
-func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
+// whether a surface covered all of them: the table's and every registered
+// growth catalog's tools ([ruleOf]).
+func Actions() []Action {
+	return slices.Compact(slices.Sorted(slices.Values(append(slices.Collect(maps.Keys(rules)),
+		growthVerbs()...))))
+}
 
 // ClassOf reports which rule governs a verb.
 //

@@ -7,9 +7,9 @@ import (
 )
 
 // EVERY GROWTH SEAT BLOCK JOINS SEAT ACCESS BY ITS KEY ALONE: written through
-// SetGrowthSeatAccess it reads back whole, it is a lane that needs a scope, its
-// `enabled` is where seat access flips it, its level reaches the chart, and a
-// company block of the same key is its product's.
+// SetGrowthSeatAccess it reads back whole, its kind is its key, it is a lane
+// that needs a scope, its `enabled` is where seat access flips it, its level
+// reaches the chart, and a company block of the same key is its product's.
 func TestEveryGrowthSeatBlockJoinsSeatAccessByItsKey(t *testing.T) {
 	t.Parallel()
 	if len(growthSeatKeys()) == 0 {
@@ -24,6 +24,9 @@ func TestEveryGrowthSeatBlockJoinsSeatAccessByItsKey(t *testing.T) {
 		}
 		if !r.SetGrowthSeatAccess(kind, want) {
 			t.Fatalf("%s: the seat block was not written", kind)
+		}
+		if s := r.growthSeatOf(kind); s == nil || s.GrowthKind() != kind {
+			t.Errorf("%s: the seat block names another kind", kind)
 		}
 		got, ok := r.GrowthSeatAccess(kind)
 		if !ok || got.On != &on || got.Level != want.Level || !slices.Equal(got.Scope, want.Scope) {
