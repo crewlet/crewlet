@@ -1239,6 +1239,8 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.SSH != nil
 	case "app_store_connect":
 		return in.AppStoreConnect != nil
+	case "apple_ads":
+		return in.AppleAds != nil
 	case "atlassian":
 		return in.Atlassian != nil
 	default:
