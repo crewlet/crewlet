@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -426,13 +427,18 @@ type CommandRow struct {
 	Position statelog.Position
 }
 
-// Open is the command's text, opened under the keyring the row was sealed for:
-// for an administrator's audit read alone.
+// Open is the command's text, opened under the keyring the row was sealed for
+// and redacted, as every opened text here is (package doc, "Reads"): for an
+// administrator's audit read alone.
 func (c CommandRow) Open(sealer *Sealer) (string, error) {
 	if sealer == nil {
 		return "", errors.New("accessdomain: opening a command needs the fleet keyring")
 	}
-	return sealer.Open(c.CommandSealed, AAD(c.Handle, c.ID))
+	text, err := sealer.Open(c.CommandSealed, AAD(c.Handle, c.ID))
+	if err != nil {
+		return "", err
+	}
+	return redact.Secrets(text), nil
 }
 
 // CommandPage is one page of commands, newest first.
@@ -623,13 +629,21 @@ type VerdictRow struct {
 }
 
 // Open is what the verdict decided and its giver's reason and findings,
-// opened under the keyring the row was sealed for: for an administrator's
-// audit read and the engine's own digest alone.
+// opened under the keyring the row was sealed for and redacted, as every
+// opened text here is (package doc, "Reads"): for an administrator's audit
+// read and the merges the Advisor reads.
 func (v VerdictRow) Open(sealer *Sealer) (subject, reason string, findings []string, err error) {
 	if sealer == nil {
 		return "", "", nil, errors.New("accessdomain: opening a verdict needs the fleet keyring")
 	}
-	return sealer.openVerdict(v.Handle, v.ID, v.SubjectSealed, v.WordsSealed)
+	subject, reason, findings, err = sealer.openVerdict(v.Handle, v.ID, v.SubjectSealed, v.WordsSealed)
+	if err != nil {
+		return "", "", nil, err
+	}
+	for i, f := range findings {
+		findings[i] = redact.Secrets(f)
+	}
+	return redact.Secrets(subject), redact.Secrets(reason), findings, nil
 }
 
 // VerdictPage is one page of verdicts, newest first.

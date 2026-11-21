@@ -87,11 +87,11 @@ func TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed(t *testing.T) {
 			t.Fatalf("the held call carries its arguments in the clear: %q", text)
 		}
 	}
-	opened, err := seal.OpenArguments("run-1", *h)
+	opened, err := seal.OpenRawArguments("run-1", *h)
 	if err != nil || opened["comment"] != secret {
 		t.Fatalf("the sealed arguments open to %v, %v", opened, err)
 	}
-	if _, err := seal.OpenArguments("run-2", *h); err == nil {
+	if _, err := seal.OpenRawArguments("run-2", *h); err == nil {
 		t.Fatal("a held call's arguments opened for another run")
 	}
 }

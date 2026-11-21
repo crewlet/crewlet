@@ -323,7 +323,10 @@ type A2AMessageSent struct {
 	SenderRole string `json:"sender_role"`
 	Recipient  string `json:"recipient"`
 	MessageID  string `json:"message_id"`
-	Content    string `json:"content"`
+	// Content is the message as people read it afterwards, redacted where it
+	// is recorded (a2a's Service.publishSent); the wakes [A2ARequest] and
+	// [A2AMessage] carry the words as written.
+	Content string `json:"content"`
 	// TurnID is the run that PUBLISHED this record; see the package note
 	// above for why it is not the envelope's ParentTurnID.
 	TurnID string `json:"turn_id"`
