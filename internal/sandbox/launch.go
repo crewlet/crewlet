@@ -83,18 +83,10 @@ type TurnRef struct {
 	// the partition tells two runs parked on one direct message apart
 	// ([ConversationRef.Best]). See [PendingRun].
 	//
-	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
-	// where both values come from and the launch copies them across one
-	// after the other. They were ConversationKey and
-	// ConversationIdentity here, holding the partition and the conversation
-	// respectively — so each assignment read as its own opposite and a
-	// swapped pair looked exactly like a correct one. [PendingRun] spells
-	// them the same way, on the row and on the wire.
-	//
-	// Two fields where there was one, and the miss this guards against is
-	// now available twice: this struct's partition was empty at its only
-	// construction site for the whole life of the feature, so every resumed
-	// turn recorded nothing at all.
+	// Named as [turnctx.Turn] names them, field for field, so a copy across
+	// cannot read as its own opposite and a swapped pair cannot look
+	// correct; [PendingRun] spells them the same way. An empty partition
+	// leaves a resumed turn recording nothing.
 	PartitionKey    string
 	ConversationKey string
 
@@ -238,21 +230,16 @@ type LaunchRequest struct {
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
 
-	// Continue is set when this job CONTINUES the job before it, which
-	// parked on a person's question that has now been answered, was lost
-	// with its host ([PendingRun.Lost]), was refused by its provider in the
-	// session it continued ([FollowUpRequestRefused]) or on a sign-in replaced
-	// while it ran — and so is the same round of the turn, carried on rather
-	// than begun again. Nil for every other launch. The row keeps the round's
-	// bridged calls: the ones made before the question, or the loss, are this
-	// round's too ([PendingRun.Continues]).
+	// Continue is set when this job CONTINUES the job before it (parked on
+	// a question now answered, lost with its host ([PendingRun.Lost]),
+	// refused in its session ([FollowUpRequestRefused]), or on a sign-in
+	// replaced mid-run): the same round, carried on, whose earlier bridged
+	// calls stay the round's ([PendingRun.Continues]). Nil otherwise.
 	//
-	// Where the launch takes up no kept capture of the job before's session
-	// (Session), the job continues that job's own harness session where it
-	// runs in that job's box — the session lives there — with
-	// Continue.Brief as its next prompt ([RunRequest.Resume]); anywhere else
-	// it starts fresh with Brief, which then carries the question and the
-	// answer, or how the job before it was cut off, and where its work is.
+	// With no kept capture to take up (Session), the job resumes that job's
+	// own harness session when it runs in that job's box, with Continue.Brief
+	// as the next prompt ([RunRequest.Resume]); anywhere else it starts fresh
+	// with Brief, carrying the answer or how the job was cut off.
 	Continue *Continuation
 
 	// BriefRead is the read of the round's log every brief of this launch was
@@ -267,19 +254,16 @@ type LaunchRequest struct {
 	// Continue: a send-back continues nothing, and its read counts as much.
 	BriefRead *LogRead
 
-	// Session is the session this job continues, in whatever box it gets —
-	// the kept capture of the job before's session, as the launch's caller
-	// chose it before it built the run's surface and briefs
-	// ([Coordinator.ContinuedCapture]), or the session the turn's
-	// conversation's last turn left ([SessionContinuation.Base]) — with the
-	// briefs that continue it in the box it was last worked in and in any
-	// other. Set on every relaunch whose job before left a kept capture that
-	// can be continued — a reviewer's send-back as much as a round carried on
-	// — and on every launch that may continue the conversation's session: a
-	// turn's first, and a relaunch of a turn that has kept nothing yet. Nil
-	// starts a session of its own, or continues one in place (Continue). The
-	// launch takes it up, or says why not and starts fresh with Brief: see
-	// restore.go.
+	// Session is the session this job continues, in whatever box it gets:
+	// the kept capture of the job before's session, chosen by the caller
+	// before it built the surface and briefs ([Coordinator.ContinuedCapture]),
+	// or the one the conversation's last turn left
+	// ([SessionContinuation.Base]), with the briefs that continue it in the
+	// box it was last worked in and in any other. Set on every relaunch whose
+	// job before left a continuable capture and on every launch that may
+	// continue the conversation's session. Nil starts a session of its own,
+	// or continues one in place (Continue). The launch takes it up, or says
+	// why not and starts fresh with Brief: see restore.go.
 	Session *SessionContinuation
 
 	// FreshOwn is the leads Brief opened with of its own where no Continue
@@ -300,19 +284,16 @@ type LaunchRequest struct {
 	// kept nothing ([Coordinator.recordBegin]).
 	Base *ConversationBase
 
-	// Decided is told how the launch decided its run takes up a session —
-	// which of the briefs it hands the run, whether the session is the
-	// turn's kept capture, and whether the brief is one told by a reading of
-	// what that capture holds — once the launch knows the box and before
-	// the run starts there, so what the caller arms for the run (the skills
-	// its session has loaded) and states of it (the prompt it was sent) are
-	// the session's it will run in. Called once per launch that reaches its
-	// run's start; nil tells nobody. The run's own script may still start a
-	// session of its own where its box cannot restore the session after all
-	// ([RunRequest.FreshBrief]): its box then says so as its harness first
-	// reaches the job's tools, on the bridge token of that session
-	// ([Opening.Fresh]), before any call of the run is made — which is where
-	// what the caller armed is put right — and its collection says it too
+	// Decided is told how the launch decided its run takes up a session
+	// (which brief it hands the run, whether the session is the turn's kept
+	// capture, whether the brief is told by a reading of it), once the box
+	// is known and before the run starts, so what the caller arms (skills
+	// loaded) and states (the prompt sent) match the session it runs in.
+	// Called once per launch that reaches its run's start; nil tells nobody.
+	// The run's script may still start a session of its own where its box
+	// cannot restore after all ([RunRequest.FreshBrief]): the box says so on
+	// the bridge token before any call ([Opening.Fresh]), where what the
+	// caller armed is put right, and the collection says it
 	// ([Result.Continued]).
 	Decided func(LaunchDecision)
 
@@ -361,23 +342,16 @@ type LaunchRequest struct {
 
 	// Opened is told the job the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
-	// name the job before its box can act: the run's bridge session, which
-	// records every call the box makes under its own job
-	// ([BridgeAppend.Launch]), and whose endpoint names the job it serves.
-	// Learned any later — from the row, say, on the session's first append
-	// — the name would be whichever job the row held by then, which for a
-	// call that outlived its job is the next one. And where the job's calls
-	// are numbered from ([OpenedJob.LastSeq]), off the same write.
-	//
-	// It answers what the job's box is given that can only be minted once
-	// the job has a name ([Opening]): MCP servers BESIDE MCPServers — the
-	// run's tool bridge is one, its token naming the job, so a node that
-	// takes the run over can serve the job's session again under the token
-	// the box already holds and a relaunch's box cannot reach its
-	// predecessor's; a name it answers that MCPServers also has replaces
-	// it — and where the job's harness asks for its turn's notes, which is the
-	// same bridge. An error abandons the launch, before any box exists. Nil
-	// tells nobody and adds nothing.
+	// name the job before its box acts: the bridge session, which records
+	// every call under its own job ([BridgeAppend.Launch]); learned later
+	// from the row, the name could be the next job's for a call that
+	// outlived its job. Also where calls are numbered from ([OpenedJob.LastSeq]).
+	// It answers what the box is given that needs the name ([Opening]): MCP
+	// servers BESIDE MCPServers (the tool bridge, its token naming the job,
+	// so a takeover node serves the session under the box's token and a
+	// relaunch's box cannot reach its predecessor's; a same-named answer
+	// replaces the MCPServers one) and where the harness asks for notes. An
+	// error abandons the launch before any box exists. Nil adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
 
 	// CodeHolds is the turn's Gitlet hold set as the launch read it
@@ -481,12 +455,9 @@ type OpenedJob struct {
 	// declares none, which records every call with none.
 	//
 	// THE RUNNER'S, NEVER THE ROW'S: the key is a fact of the harness and of
-	// the build that reads its calls, so the launch names the one its own
-	// manager's runner declares, the one the job is started on, and a node that
-	// serves the job again after taking its seat over names its own runner's
-	// (internal/engine's reopenAgentRun) — each through the job's one
-	// constructor, which takes it ([PendingRun.NamedJob]). Nothing records it,
-	// and a build that does not know it serves the job reading no id.
+	// the build that reads its calls, so each node names its own runner's,
+	// through the job's one constructor ([PendingRun.NamedJob]). Nothing
+	// records it; a build that does not know it reads no id.
 	CallIDMeta string
 }
 
@@ -563,24 +534,18 @@ type Continuation struct {
 	CountProvider  string
 }
 
-// BriefTold is what one brief a launch hands its run told of the round the
-// launch carries on ([Continuation.Told], [Continuation.Fresh],
-// [SessionContinuation.Told]): the calls of the round it left out, and what it
-// opened with.
+// BriefTold is what one brief a launch hands its run told of the round
+// ([Continuation.Told], [Continuation.Fresh], [SessionContinuation.Told]):
+// the calls it left out, and what it opened with.
 //
 // A SESSION HOLDS WHAT ITS BRIEF TOLD, NEVER WHAT ITS BUDGETS LEFT OUT. A brief
-// tells a round's calls held to the prior-work ledger's budgets, and counts the
-// reads past the ledger's read cap rather than listing them
-// (internal/agent/runner's calledAfter): the session it is handed holds that
-// such a read was made, and none of what it returned. Recorded on the job the
-// launch opens, the set reaches every later reader of what that job's session
-// holds: a relaunch continuing its copy in its box (internal/agent/runner's
-// Resume.Owed), and a capture of it placed by its own read
-// ([SessionCapture.Omitted]), each of which tells those reads again rather than
-// counting them held.
+// counts the reads past the ledger's read cap rather than listing them
+// (internal/agent/runner's calledAfter): the session holds that such a read
+// was made, none of what it returned. Recorded on the job's record, the set
+// reaches every later reader of that session (Resume.Owed, and
+// [SessionCapture.Omitted]), each of which tells those reads again.
 //
-// IN MEMORY ONLY, on a launch's request: what lands is the record's, written by
-// the attach that names the job's command.
+// IN MEMORY ONLY: what lands is the record's, written by the attach.
 type BriefTold struct {
 	// Omitted is the reads of the round the brief counted without listing
 	// them, by their places in the round's log ([BridgeCall.Appended]): of the
@@ -1216,36 +1181,17 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 }
 
 // acquire is the box a launch runs its job in: the turn's previous box where
-// the new job may continue in it, else a fresh one — and never a fresh one
-// while the previous box is still unaccounted for.
+// the new job may continue in it, else a fresh one, never while the old one
+// is unaccounted for.
 //
-// CONTINUING KEEPS THE CHECKOUT, which is the expensive half of a run: a turn
-// its reviewer sent back relaunches its executor on the same work, and a job
-// that continues where the last one stopped need not clone, install and set up
-// again. Only the same harness in the same cell, once the last job is over, in a
-// box younger than [KeptBoxMaxAge] by this coordinator's clock
-// ([PriorBox.ContinuesIn]).
-//
-// A fresh box is given the operator's setup; a kept box is given nothing,
-// since its provisioning survives with its disk. Neither is given a
-// repository on Gitlet at launch: the run checks each out as
-// it needs it, running the commands `code_checkout` answers (ADR-0093), so a
-// kept box's checkouts are its own and a repository it lacks is one more
-// checkout away.
-//
+// CONTINUING KEEPS THE CHECKOUT, the expensive half of a run: only the same
+// harness in the same cell, once the last job is over, in a box younger than
+// [KeptBoxMaxAge] ([PriorBox.ContinuesIn]). A fresh box gets the operator's
+// setup, a kept one nothing; neither a Gitlet repository (`code_checkout`).
 // EVERY OTHER PRIOR BOX IS RECLAIMED HERE, THROUGH ITS OWN CELL, before the
-// fresh box exists. The row is about to name the new box instead — the attach
-// that follows overwrites the reference — and nothing else would ever name the
-// old one again: the turn's settle reclaims the box the row names, and the
-// pause reaper the box a row records as paused. A relaunch that provisioned
-// beside it left a paused box, a stopped process tree or a billed snapshot for
-// every send-back of a turn, reclaimed by nobody. Its own cell, because it may
-// not be this launch's: a fallback onto a member with another run_in moves the
-// run, and a box asked for through the wrong backend is a box that "vanished".
-//
-// A box that cannot be reattached is reclaimed too, then replaced: the work
-// re-seeds from the pushed branch, which is the case that branch exists for,
-// and a reattach that failed for a moment must not leave a live box behind it.
+// fresh box exists: the attach overwrites the row's reference, so nothing
+// else would name it. Its own cell: a fallback onto a member with another
+// run_in moves the run. An unreattachable box is reclaimed, then replaced.
 func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (_ Sandbox, _ Runner, _ bool, err error) {
 	defer origin.Stamp(&err)
 	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
@@ -1361,17 +1307,13 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // reclaimPrior kills the turn's previous box through the cell that holds it.
 //
 // THROUGH THE COORDINATOR'S CATALOGUE FIRST, then the launch's. The launch's
-// is the epoch its turn pinned, which configures the cells a NEW box may go
-// to; the coordinator's is the newest one, carrying every cell a box already
-// out may still be in ([Coordinator.SetManager]) — a cell a later revision
-// dropped included, which is exactly where a run that is moving cells may have
-// left its last box.
+// is the epoch its turn pinned, configuring the cells a NEW box may go to;
+// the coordinator's is the newest, carrying every cell a box already out may
+// be in ([Coordinator.SetManager]), one a later revision dropped included.
 //
-// BEST EFFORT, and the launch goes ahead whatever it answers: a kill that
-// failed leaves the box to its own TTL and the orphan reaper, which is what any
-// unreclaimable box gets, and refusing the launch over it would cost the turn
-// as well as the box. Under a context of its own, for the reason every
-// reclaim takes one ([Coordinator.abandon]).
+// BEST EFFORT, the launch goes ahead whatever it answers: a failed kill
+// leaves the box to its TTL and the orphan reaper, and refusing the launch
+// would cost the turn too. Under a context of its own ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
@@ -1401,30 +1343,17 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 		"next_placement", string(req.Spec.Placement), "next_harness", req.Spec.Harness)
 }
 
-// abandon closes out a launch that could not finish: the box is reclaimed, then
-// the run is ended, which deletes its record, and the seat the launch held is
-// given back.
+// abandon closes out a launch that could not finish: the box reclaimed, the
+// run ended and the seat given back. ALL OF IT, EVERY TIME, each step attempted whether or not the one before
+// succeeded: a row left OPEN is polled by nothing and would hold its seat and
+// a box until recovery reaped it. The box goes first, so an undeletable
+// record names a box already gone. The ending is [Coordinator.endRecord]'s,
+// not a delete of its own: the one place a stop is reported and what the row
+// still owes the seat goes out first ([PendingRun.HandBack]).
 //
-// ALL OF IT, EVERY TIME, and each step attempted whether or not the one before
-// it succeeded: they are separate calls that fail separately, and none failing
-// is a reason to leave the others undone. Three of the four failure paths used
-// to do none of it and simply return, which left the row OPEN: a launching run
-// is polled by nothing and claimed by nothing, so it held its seat and, on two
-// of those paths, a box, until the seat happened to move to another node and
-// recovery reaped it. The box goes first, so a record that cannot be deleted
-// names a box that is already gone rather than the reverse.
-//
-// THE ENDING EVERY OTHER PATH MAKES ([Coordinator.endRecord]), not a delete of
-// its own: that is the one place a run's record is deleted, so it is the one
-// place a stop is reported and the one place what the row still owes the seat
-// goes out before the row does (see [PendingRun.HandBack]) — a relaunch is
-// opened on a row that has carried a whole run's history.
-//
-// A context of its own, because the failure that got us here is often the
-// caller's context expiring — and a teardown skipped for that reason leaves a
-// box running to its TTL with nobody to collect it, and a row nobody settles.
-// One for the kill, within a box call's grace, and one for the ending, each of
-// whose writes of the row is given the row's crossing too ([detachedEnding]).
+// A context of its own, because the caller's expiring is often the failure:
+// one for the kill, within a box call's grace, one for the ending, whose row
+// writes get the row's crossing too ([detachedEnding]).
 func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
 	if sandboxID != "" {
 		killCtx, cancel := detached(ctx)
@@ -1507,28 +1436,17 @@ func summarise(brief string) string {
 	return strings.TrimSpace(line)
 }
 
-// buildSystem assembles the run's standing instructions: what its harness adds to
-// its own system prompt ([RunRequest.System]).
-//
-// THREE PARTS, each present only where it says something: the run's own
+// buildSystem assembles the run's standing instructions, what its harness adds
+// to its system prompt ([RunRequest.System]). THREE PARTS, each present only where it says something: the run's own
 // instructions (the seat's executor prompt), what the environment already
-// provides, and how to stop and ask a person. The brief is not among them:
-// what the box provides and how to ask a person hold for the whole run rather
-// than being part of its request, which is what a system prompt is for. The environment is the
-// setup steps' own briefs — the mechanism and the hint together, so the agent
-// does not spend rounds rediscovering that git auth is already wired — and,
-// like the ask, it holds for every round of the run, which is what a system
-// prompt is for. The runner adds the last standing instruction, the report
-// it must write, because only it knows the box's path for it.
-//
-// THE RUN'S OWN TEXT FIRST, the framing after it: that text is who the model is
-// and what it answers for, and the box and how to ask a person are details of
-// where it is working.
-//
-// The environment lists the operator's steps alone: a repository on
-// Gitlet is not the box's at launch, and the run is told where
-// each of its checkouts is, and how it pushes, by the `code_checkout` answer
-// that gives it one.
+// provides (the setup steps' own briefs, so the agent does not rediscover
+// that git auth is wired), and how to ask a person. The brief is not among
+// them: these hold for every round of the run, which is what a system prompt
+// is for. The runner adds the report it must write (only it knows the box's
+// path). THE RUN'S OWN TEXT FIRST: it is who the model is; the rest are
+// details of where it works. The environment lists the operator's steps
+// alone: a Gitlet repository is not the box's at launch, and `code_checkout`
+// tells the run where each checkout is and how it pushes.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
@@ -1546,50 +1464,28 @@ func buildSystem(req LaunchRequest) string {
 // agentRunNote opens a run's own instructions — the seat's executor prompt —
 // where they follow the harness's system prompt.
 //
-// The vendor's prompt says what the model is, and says it first: Claude Code
-// opens with "You are Claude Code, Anthropic's official harness for Claude", and
-// no flag removes it. A seat prompt that only implies who it is loses to that,
-// so this says outright which of the two prompts is the role. The engine's own
-// runs on this host open with the same note (internal/providers/llm/harness
-// harnessNote), less the sentence it adds on a call that offers tools — act
-// through the `crewlet` server's tools, never the harness's own: here the run's
-// shell and editor are what the box is for, and the seat's tools are called
-// the way its harness calls any tool. Constant, so it stays part of the prefix a
-// vendor caches.
+// The vendor's prompt says what the model is, first, and no flag removes it
+// ("You are Claude Code, ..."). A seat prompt that only implies who it is
+// loses to that, so this says outright which prompt is the role. The engine's
+// own host runs open with the same note (internal/providers/llm/harness
+// harnessNote), less its tools sentence: here the box's shell and editor are
+// the point. Constant, so it stays part of the prefix a vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
 	"report. The tool's own instructions describe the program you run in, not your " +
 	"role: who you are and what you do are the instructions that follow, and they " +
 	"win wherever the two disagree."
 
-// withTelemetry adds the run's OTel environment to the spec's.
-//
-// MERGED PER LAUNCH, never into the configuration a spec is built from,
-// because the endpoint carries a token scoped to THIS run and minted with a
-// TTL. The spec itself is not persisted — the row keeps what a resume needs,
-// and a resume hours later launches anew — so the launch environment
-// ([launchEnv]) is per-launch for the reason its tokens are, and a resume is
-// never handed a token that expired while the run was parked. And it is
-// merged at the job's START, after the box is provisioned, never with the
-// rest of the launch's environment before it: the token's span runs from its
-// minting, so one minted before the setup steps would spend on them what the
-// job's own export needs, and no setup step reads it.
-//
-// THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
-// declares what a box gets, and a deployment that points its harnesses at
-// its own collector directly has said so deliberately — silently overriding
-// it would be the engine choosing where somebody else's telemetry goes.
-//
-// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT: a `direct` box, a process of
-// this host, exports to its node's own listener where the node forwards, and
-// every other box to the fleet's address ([OtelReceiver.Reaches]); that
-// address is written in the engine host's network, and a loopback one reaches
-// nothing from inside a container ([EngineAddress]). An operator's own value
-// is left as written, in the box's network already.
-//
-// A TRACE ID NO TOKEN CAN CARRY REDACTED IS REFUSED with an error
-// ([OtelTokens.Mint]), and the job's start with it, rather than handed to a
-// box as a token every surface would publish.
+// withTelemetry adds the run's OTel environment to the spec's, PER LAUNCH:
+// the token is scoped to THIS run with a TTL, so a resume is never handed one
+// that expired while parked ([launchEnv]). Merged at the job's START, after
+// provisioning, since the token's span runs from its minting and setup steps
+// would spend it. THE OPERATOR'S OWN VALUES WIN (role.sandbox.env). THE
+// ENDPOINT IS THE RECEIVER'S AS THE BOX DIALS IT: a `direct` box exports to
+// its node's listener where the node forwards, every other box to the
+// fleet's address ([OtelReceiver.Reaches], [EngineAddress]: a loopback one
+// reaches nothing from a container). A TRACE ID NO TOKEN CAN CARRY REDACTED
+// IS REFUSED ([OtelTokens.Mint]), and the job's start with it.
 func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
 	if m.telemetry == nil {
 		return req.Spec.Env, nil

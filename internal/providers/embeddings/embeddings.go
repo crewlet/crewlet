@@ -74,6 +74,14 @@
 // `dimensions`, wherever the endpoint takes that parameter; which endpoint
 // does is the configuration's knowledge, cited per model there, and reaches
 // this package as [Config.OmitDimensions].
+//
+// # The engine's one vendor SDK client
+//
+// No harness computes embeddings, so this is the one place the engine calls a
+// model vendor's SDK directly (openai.go, vendor.go), unlike every other model
+// call. It is built with no SDK retries and with every OPENAI_* setting the
+// SDK reads from the process environment undone, so a key or header exported
+// for something else never reaches the endpoint an embedder names.
 package embeddings
 
 import (

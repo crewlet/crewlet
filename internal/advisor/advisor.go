@@ -10,7 +10,9 @@
 // dashboard sends to the entity route's dry run (ADR-0055) to draw the
 // preview from the server's own answer, and then sends again, from the
 // administrator's session and under the entity's own tag, only when they press
-// Apply. ADR-0115 records the rule.
+// Apply. ADR-0115 records the rule. The package imports no store, coordination,
+// state log or API package, so nothing here can apply a fix
+// ([TestTheAdvisorImportsNoWritePath]).
 //
 // # Stated with its numbers, and every class says what it concluded (ADR-0166)
 //
@@ -48,8 +50,10 @@
 // # Work that stalls where nothing else says so
 //
 // stalls.go reads six more classes off the week's records ([ClassRoundCap] and
-// the rest). Every class says one thing for every subject, so it reads as one
-// row ([TestEveryClassSaysOneThingAboutEverySubject]).
+// the rest). [Detect] turns the week's records into findings, each a fixed
+// reading with its threshold beside it and no model call
+// ([TestNoDetectorCallsAModel]). Every class says one thing for every subject,
+// so it reads as one row ([TestEveryClassSaysOneThingAboutEverySubject]).
 //
 // # What the atlas shows needs a person
 //

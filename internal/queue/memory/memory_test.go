@@ -60,12 +60,10 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
-			// Total, so there is no failure to report — which is the
-			// point of the signature rather than an exemption from it: the
-			// twin cannot fail to answer, and the backend that can must say
-			// so instead of answering "nothing".
-			Backlog: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
-				return q.(*memory.Queue).Backlog(topic, group)
+			// A started client beside q on its broker, as JetStream's admin
+			// client is: a case reads the mail q left once stopped.
+			Inspect: func(t *testing.T, q queue.EventQueue) queue.EventQueue {
+				return inspectorOf(t, q.(*memory.Queue))
 			},
 			DeadLetters: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 				return q.(*memory.Queue).DeadLetters(topic, group)
@@ -299,7 +297,7 @@ func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 		t.Errorf("a refused publish recorded %d events in history, want 0; "+
 			"serialization must happen before anything is mutated", len(got))
 	}
-	if got := q.Backlog("topic", "grp"); len(got) != 0 {
+	if got := mailOf(t, q, "topic", "grp"); len(got) != 0 {
 		t.Errorf("a refused publish left %d events in the subscription mail, want 0", len(got))
 	}
 	select {
@@ -426,7 +424,7 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 			if err := q.ResumeTopic(ctx, "topic", "grp", at, "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
-			if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
+			if got := mailOf(t, q, "topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
 				func(ev *events.Event, label string) bool { return ev.Type == label }) {
 				labels := make([]string, 0, len(got))
 				for _, ev := range got {
@@ -442,9 +440,46 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 			// their own timestamps (queue.OrderForDispatch) — the mailbox
 			// order above is what decides which DRAIN a message is in, not
 			// which call goes first.
-			if got := q.Backlog("topic", "grp"); len(got) != 0 {
+			if got := mailOf(t, q, "topic", "grp"); len(got) != 0 {
 				t.Fatalf("%d message(s) still waiting after the attachment resumed", len(got))
 			}
 		})
 	}
+}
+
+// mailOf is what a twin's subscription holds, read through the contract's
+// [queue.EventQueue.Backlog]: a refused read fails the case rather than reading
+// as an empty mailbox.
+func mailOf(t *testing.T, q *memory.Queue, topic, group string) []*events.Event {
+	t.Helper()
+	evs, err := q.Backlog(t.Context(), topic, group, 1<<12)
+	if err != nil {
+		t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+	}
+	return evs
+}
+
+// inspectors is each queue's inspection client ([inspectorOf]).
+var inspectors sync.Map
+
+// inspectorOf is a started client on q's broker, made once per queue and
+// stopped with the test that first asked for it.
+func inspectorOf(t *testing.T, q *memory.Queue) *memory.Queue {
+	t.Helper()
+	if c, ok := inspectors.Load(q); ok {
+		return c.(*memory.Queue)
+	}
+	c := q.Client()
+	if err := c.Start(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatalf("start the inspection client: %v", err)
+	}
+	if held, loaded := inspectors.LoadOrStore(q, c); loaded {
+		_ = c.Stop(context.WithoutCancel(t.Context()))
+		return held.(*memory.Queue)
+	}
+	t.Cleanup(func() {
+		inspectors.Delete(q)
+		_ = c.Stop(context.Background())
+	})
+	return c
 }

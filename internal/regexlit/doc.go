@@ -69,6 +69,14 @@
 // only slower. That is the whole rule: the derivation may admit too much and
 // never too little.
 //
+// Folded literals are compared on the text's Unicode lowering, not an
+// ASCII-only one, which misses `(?i)` across É and é. A rune the regexp folds
+// onto an ASCII letter without lowering to it is an escape ([HasEscape]) that
+// admits a text outright, and a rune whose orbit lowers inconsistently (σ, ς,
+// Σ) cuts a literal. The suite certifies all of it with matches generated from
+// each pattern's own syntax tree (see [regexlittest]) and by exhaustion over
+// every rune, since random text almost never matches a pattern.
+//
 // A text skipped this way is never parsed or examined, so a gate that also
 // reported a file it could not read loses that report for the files it now
 // skips. The gates read source the compiler has already read, and none

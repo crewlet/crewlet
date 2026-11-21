@@ -101,6 +101,9 @@
 // failed lookup refuses only an address that needed it, and an IPv4 host
 // costs no lookup beyond its own. public.go holds the blocks and the reason
 // for each, nat64.go the discovery, and guard.go the dialer.
+//
+// [RateLimit] is the one rule a vendor client waits out a 429 by, here for
+// the same ADR-0008 reason; its doc holds the decisions.
 package httpx
 
 import (

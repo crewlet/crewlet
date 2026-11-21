@@ -335,8 +335,10 @@ func TestAJoinedWakesDeliveryIsDroppedAsJoined(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !slices.ContainsFunc(skips, func(s types.TurnTriggerSkipped) bool {
-		return s.TriggerID == joined.ID.String() && strings.Contains(s.Reason, "joined a running turn")
+		return s.TriggerID == joined.ID.String() && s.Disposition == types.DispositionJoined &&
+			strings.Contains(s.Reason, "joined running turn run-1")
 	}) {
-		t.Errorf("no skip record says the joined delivery joined a running turn: %+v", skips)
+		t.Errorf("no skip record says the joined delivery joined running turn run-1, disposition joined: %+v",
+			skips)
 	}
 }

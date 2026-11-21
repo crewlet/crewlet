@@ -145,6 +145,21 @@ func serviceInstruments() []Instrument {
 				"seats declining it.",
 		},
 
+		// ---- a busy seat's router ------------------------------------
+		{
+			Name: SeatWakesRouted, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome", "rule"},
+			Shows: "What the router of a seat whose executor run holds it " +
+				"decided for each wake waiting on the seat's held inbox, once " +
+				"per wake and job (ADR-0167): `joined` when it handed the wake " +
+				"to the run, `refused` when the run's record took no more, " +
+				"and `left_queued` when the wake is another writer's, about " +
+				"other work, or not one a run may take; each waits for a turn " +
+				"of its own. `rule` names what matched: `conversation`, " +
+				"`work_item`, or `none`. The `seat_wake_left_queued` line " +
+				"names the reason.",
+		},
+
 		// ---- the object store's S3 requests ---------------------------
 		{
 			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,

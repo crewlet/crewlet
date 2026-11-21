@@ -731,17 +731,14 @@ func validate(resource, owner string) error {
 // non-positive TTL would mint a lease that is already lapsed, which reads
 // downstream as a seat nobody can hold.
 //
-// The twin could honour a TTL of any length, and refuses one above
-// coord.MaxDutyTTL on every lease outside seats and presence anyway — a duty,
-// a tracker walk's claim, any class of a caller's — through the contract's own
-// check (coord.CheckLeaseTTL). A twin that accepted what the KV store refuses
-// is exactly how every long duty claim passed every single-node test while no
-// fleet ever ran those duties, and how the tracker's walk claims did the same
-// after the twin learned the duties' ceiling and nobody else's.
+// The twin refuses a TTL above coord.MaxDutyTTL on every lease outside seats
+// and presence, through the contract's own check (coord.CheckLeaseTTL). A twin
+// that accepted what the KV store refuses lets long claims pass every
+// single-node test while no fleet could ever run them.
 //
 // A seat or presence lease is not bounded here: the KV store holds one to the
-// seat lease TTL it was opened with, a property of the deployment the twin is
-// never given, and its callers acquire at the TTL that store reports.
+// seat lease TTL it was opened with, which the twin is never given, and its
+// callers acquire at the TTL that store reports.
 func validateTTL(resource, owner string, ttl time.Duration) error {
 	if err := validate(resource, owner); err != nil {
 		return err
@@ -754,21 +751,16 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 
 // wireCopy puts meta through the encoding a real backend puts it through.
 //
-// The twin's job is to be the store, and this is the one field that crosses a
-// wire: the ownership key carries meta AS JSON, and
-// placement.rolesFromMeta is written to accept "the []any a JSON round trip
-// through the lease store returns" — so JSON shapes are what a deployment
-// actually sees. An in-process store that skipped the encoding handed callers
-// their own Go types back, measurably: an int stayed an int here and returned
-// as float64 from the KV backend, a []string stayed a []string here and
-// returned as []any. A caller asserting meta["n"].(int) then passes every
-// memory-backed test in the tree and panics the first time it runs against
-// the store a company is deployed on — a bug the twin would certify rather
-// than catch.
+// Meta is the one field that crosses a wire: the ownership key carries it AS
+// JSON, and placement.rolesFromMeta accepts "the []any a JSON round trip
+// through the lease store returns". A twin that skipped the encoding would
+// hand back the caller's own Go types (an int stays an int, where the KV
+// backend returns float64; a []string, where it returns []any), so a caller
+// asserting meta["n"].(int) passes every memory-backed test and panics on the
+// deployed store.
 //
-// A payload that will not encode is a caller bug, not a store answer, so it
-// is an error: a real backend's write would fail on it too, and discovering
-// that in production instead of here is the whole failure this closes.
+// A payload that will not encode is a caller bug, so it is an error: a real
+// backend's write would fail on it too.
 func wireCopy(meta map[string]any) (map[string]any, error) {
 	if len(meta) == 0 {
 		return nil, nil

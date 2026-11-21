@@ -57,6 +57,13 @@
 // each caller is what genuinely differs — the indent its reader is handed, and
 // how it spells nothing at all.
 //
+// Two encoders elsewhere write unescaped too and stay separate on purpose: the
+// activation encoder in coord/kv, whose payload must be byte-equal to
+// coord.CanonicalPayload (a fact about a wire, not about how text reads), and
+// sandbox/executor's jsonStringify, which spells a name as OpenCode's own
+// JSON.stringify does, U+2028 and U+2029 literal, where this package escapes
+// them.
+//
 // # And JSON that did not decode, read as text too
 //
 // [Unreadable] is the other direction: a caller's document that did not
