@@ -252,7 +252,7 @@ describe("the pages", () => {
     const joined = joinCommentPages(first, second);
     expect(joined.threads.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
     expect(joined.threads[1]!.remarks.map((r) => r.id)).toEqual(["r1", "r2"]);
-    expect(joined.threads[1]!.remarks_cut).toBeUndefined();
+    expect(joined.threads[1]!.remarks_cut).toBe(false);
     expect(joined.counts.open).toBe(3);
     expect(joined.next).toBeUndefined();
   });
