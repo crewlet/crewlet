@@ -203,16 +203,17 @@ func (w *RunWait) UnmarshalJSON(raw []byte) error {
 
 // WaitCycle reports whether run waiting on target closes a cycle of waits:
 // target, or a run it waits on, waits on run, following [PendingRun.WaitsFor]
-// through runs by turn id for at most [MaxRunWaitHops] hops. A chain past the
+// through the runs lookup finds by turn id (another seat's among them, read
+// as the walk reaches it) for at most [MaxRunWaitHops] hops. A chain past the
 // bound is a cycle, the safe direction: the wait is refused, never left to
 // hang every run of a ring until its pause expires.
-func WaitCycle(run string, target string, runs map[string]PendingRun) bool {
+func WaitCycle(run, target string, lookup func(turn string) (PendingRun, bool)) bool {
 	at := target
 	for range MaxRunWaitHops {
 		if at == run {
 			return true
 		}
-		next, ok := runs[at]
+		next, ok := lookup(at)
 		if !ok || next.WaitsFor == nil {
 			return false
 		}
@@ -320,4 +321,75 @@ func (c *Coordinator) ReadsNotes(harness string) bool {
 	}
 	reader, ok := runner.(noteReader)
 	return ok && reader.ReadsNotes()
+}
+
+// MaxRunsAround bounds the runs of other seats a run is shown on its work
+// ([PendingStore.ListActiveOn]): EIGHT, oldest first. A launch's brief lists
+// each whole on every launch, and eight other seats' runs on one item or
+// conversation is more than a team works one piece of work with; past it the
+// newest are the ones a run is not shown, said as the bound.
+const MaxRunsAround = 8
+
+// RunsOn is the work other seats' runs are found on (ADR-0176's amendment):
+// work items by reference ([types.WorkItem.Ref]), a conversation by its
+// identity, and the seat whose runs are not wanted, the caller's own, which
+// [PendingStore.ListActiveForSeat] lists.
+type RunsOn struct {
+	Items        []string
+	Conversation string
+	Except       string
+}
+
+// on reports whether run is on the work on names: an item it lists, or its
+// conversation, of a seat other than the one excepted.
+func (on RunsOn) on(run PendingRun) bool {
+	if run.AgentHandle == on.Except || !slices.Contains(Active, run.Status) {
+		return false
+	}
+	if on.Conversation != "" && run.ConversationKey == on.Conversation {
+		return true
+	}
+	return run.WorkItem != nil && slices.Contains(on.Items, run.WorkItem.Ref())
+}
+
+// ListActiveOn returns the unfinished runs of other seats on the work on
+// names. See the contract on [PendingStore].
+//
+// ONE LISTING of the fleet's runs, the read [CoordStore.ListActiveForSeat]
+// makes, never one per seat.
+func (s *CoordStore) ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error) {
+	if len(on.Items) == 0 && on.Conversation == "" {
+		return nil, nil
+	}
+	runs, err := s.list(ctx, on.on)
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(runs, func(a, b PendingRun) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.TurnID, b.TurnID)
+	})
+	return runs[:min(len(runs), MaxRunsAround)], nil
+}
+
+// CarrierOf is whom run works for as an ask carries it ([types.WorkingFor],
+// ADR-0109): what handed the run on where something did, else its requester's
+// seat, else its requesting credential at the apps its writes carried, else
+// its own seat's work; nil for none of these.
+func CarrierOf(run PendingRun) *types.WorkingFor {
+	switch {
+	case run.WorkingFor != nil:
+		carried := *run.WorkingFor
+		return &carried
+	case run.Requester != "":
+		return &types.WorkingFor{Kind: types.WorkingForSeat, Seat: run.Requester}
+	case run.RequesterLogin != "":
+		return &types.WorkingFor{Kind: types.WorkingForCredential, Login: run.RequesterLogin,
+			Apps: slices.Clone(run.RequesterApps)}
+	case run.AgentHandle != "":
+		return &types.WorkingFor{Kind: types.WorkingForSeat, Seat: run.AgentHandle}
+	}
+	return nil
 }

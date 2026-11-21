@@ -75,11 +75,15 @@ const (
 	// RunRefusedInvalid is an argument the engine checks against the record (a
 	// wait's branch or reason) that is not one it takes.
 	RunRefusedInvalid RunRefusal = "invalid"
+	// RunRefusedUnreachable is a run of another seat, which the chart does
+	// not let the caller's seat reach as a colleague's ask does.
+	RunRefusedUnreachable RunRefusal = "unreachable"
 )
 
 // RunRefusals is the closed set.
 var RunRefusals = []RunRefusal{RunRefusedSelf, RunRefusedUnknown, RunRefusedRequester, RunRefusedNotWorking,
-	RunRefusedHarness, RunRefusedBound, RunRefusedCycle, RunRefusedCallerDone, RunRefusedInvalid}
+	RunRefusedHarness, RunRefusedBound, RunRefusedCycle, RunRefusedCallerDone, RunRefusedInvalid,
+	RunRefusedUnreachable}
 
 // Valid reports whether r is one of [RunRefusals].
 func (r RunRefusal) Valid() bool {
@@ -94,7 +98,7 @@ func (r RunRefusal) Valid() bool {
 // class is the refusal class a model and a person's surface read r as.
 func (r RunRefusal) class() tools.Refusal {
 	switch r {
-	case RunRefusedRequester:
+	case RunRefusedRequester, RunRefusedUnreachable:
 		return tools.RefusalForbidden
 	case RunRefusedNotWorking, RunRefusedHarness, RunRefusedCallerDone:
 		return tools.RefusalNotRunning
@@ -167,8 +171,10 @@ var _ tools.SeatCallable = (*listRuns)(nil)
 func (t *listRuns) Name() string { return ListRunsTool }
 
 func (t *listRuns) Description() string {
-	return "List the other runs in flight around this one: each one's turn id, where it stands (launching, " +
-		"running, parked on a question or a held call, waiting for another run), its work item, and, for a " +
+	return "List the other runs in flight around this one, your seat's and other seats' on the same work item, " +
+		"in the same conversation or on a work item linked to yours: each one's turn id, seat and how it " +
+		"relates to your work, where it stands (launching, running, parked on a question or a held call, " +
+		"waiting for another run), its work item, and, for a " +
 		"run working for the same requester as you, its conversation, the branch it named and its task's " +
 		"title. A run for another requester shows its stage and item only. Use it to tell whether a run " +
 		"works on the same item, branch or conversation as you before you duplicate or collide with its " +
@@ -188,6 +194,7 @@ type listedRun struct {
 	Turn             string `json:"turn_id"`
 	Seat             string `json:"seat"`
 	ThisSeat         bool   `json:"this_seat"`
+	Relation         string `json:"relation"`
 	Stage            string `json:"stage"`
 	WorkItem         string `json:"work_item"`
 	SameRequester    bool   `json:"same_requester"`
@@ -222,8 +229,8 @@ func (t *listRuns) CallForTurn(ctx context.Context, turn *turnctx.Turn, _ map[st
 	read := newForeignRead(turn, self)
 	out := listedRuns{Runs: make([]listedRun, 0, len(around))}
 	for i, r := range around {
-		listed := listedRun{Turn: r.Turn, Seat: r.Seat, ThisSeat: r.OwnSeat, Stage: r.Stage, WorkItem: r.Item,
-			SameRequester: r.SameRequester, TakesMessages: r.TakesMessages}
+		listed := listedRun{Turn: r.Turn, Seat: r.Seat, ThisSeat: r.OwnSeat, Relation: string(r.Relation),
+			Stage: r.Stage, WorkItem: r.Item, SameRequester: r.SameRequester, TakesMessages: r.TakesMessages}
 		if r.SameRequester {
 			listed.Conversation, listed.ThisConversation, listed.Branch = r.Conversation, r.SameConversation, r.Branch
 			if !r.Started.IsZero() {
@@ -250,7 +257,8 @@ func (t *messageRun) Description() string {
 	return fmt.Sprintf("Send another run in flight a short message, which it reads at its next step as "+
 		"information from you, never as a request it works for: what you are doing that overlaps its work, "+
 		"what you found, or an answer to a message it sent you. Only a run working for the same requester as "+
-		"you takes one, and only while it is working. At most %d characters, and %d messages a launch sent "+
+		"you takes one, only while it is working, and another seat's only where your seat may ask that seat as "+
+		"a colleague. At most %d characters, and %d messages a launch sent "+
 		"and %d taken: say it in one go. It does not wait for an answer; one arrives as a message at your "+
 		"next step.", steer.MaxWakeRunes, sandbox.MaxJobRunSends, sandbox.MaxJobRunMessages)
 }
@@ -315,8 +323,9 @@ func (t *waitForRun) Description() string {
 		"that has to come after it. Before you call it, commit and push your work in progress and name the " +
 		"branch. After it is recorded, END YOUR TURN at once: do not call `" + toolname.SubmitWork + "`. How " +
 		"the other run went (how it ended, what it pushed and, for a run working for the same requester, what " +
-		"its reviewer said landed) arrives as your next prompt. A wait that would close a cycle of runs " +
-		"waiting on each other is refused."
+		"its reviewer said landed) arrives as your next prompt. Another seat's run is waited for only where it " +
+		"works for the same requester and your seat may ask that seat as a colleague. A wait that would close " +
+		"a cycle of runs waiting on each other is refused."
 }
 
 func (t *waitForRun) Parameters() map[string]any {
