@@ -464,6 +464,29 @@ describe("a resumed stream never draws a frame twice", () => {
     );
     expect(view.turns[0]!.replies).toEqual([{ id: "m1", text: "Whole answer." }]);
     expect(view.turns[0]!.steps).toHaveLength(1);
+    expect(view.turns[0]!.cut).toBeUndefined();
+  });
+
+  test("a cut snapshot marks the turn, and a later whole one clears the mark", () => {
+    const snapshot = (seq: number, cut: boolean) =>
+      frame("snapshot", seq, {
+        messages: [
+          {
+            id: "q",
+            turn_id: TURN,
+            role: "user",
+            text: "Who?",
+            created_at: "2026-10-24T09:41:00Z",
+          },
+        ],
+        steps: [],
+        cards: [],
+        ...(cut ? { cut: true } : {}),
+      });
+    const marked = after(...SENT, snapshot(5, true));
+    expect(marked.turns[0]!.cut).toBe(true);
+    const cleared = reduce(marked, snapshot(6, false));
+    expect(cleared.turns[0]!.cut).toBeUndefined();
   });
 
   test("a frame for a turn the drawer does not hold changes nothing", () => {
