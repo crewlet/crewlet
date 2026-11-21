@@ -22,6 +22,7 @@ import (
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // runsRig is a node holding seat swe's runs on one store, under a coordinator
@@ -442,5 +443,44 @@ func TestAWaitThatWouldCloseACycleOfRunsIsRefused(t *testing.T) {
 	// run-c waits on run-a, which waits on nothing.
 	if err := r.desk.Wait(ctx, "run-d", jobs["run-d"], "run-c", "its branch comes first", ""); err != nil {
 		t.Errorf("a wait closing no cycle was refused: %v", err)
+	}
+}
+
+// THE RUN CALLS COUNTER'S CATALOGUE ENTRY NAMES EVERY VALUE IT COUNTS but the
+// run tools'. The metrics catalogue is a leaf the assistant imports, reading
+// neither this package's values nor the tools' names, so its text names the
+// tools by role (a rename moves nothing it says) and this holds the rest to
+// what is counted: every outcome, every refusal's reason and the engine's own
+// answer to a wait.
+//
+// Mutation: add a refusal reason or an outcome, or rename `wait_answered`,
+// without the catalogue's text, and this is red.
+func TestTheRunCallsCounterNamesEveryValueItCounts(t *testing.T) {
+	t.Parallel()
+	var shows string
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.SeatRunCalls {
+			shows = in.Shows
+		}
+	}
+	if shows == "" {
+		t.Fatalf("the catalogue has no entry for %s", metrics.SeatRunCalls)
+	}
+	var counted []string
+	for _, tool := range runCallTools {
+		if !slices.Contains([]runCallTool{runToolList, runToolMessage, runToolWait}, tool) {
+			counted = append(counted, string(tool))
+		}
+	}
+	for _, outcome := range runCallOutcomes {
+		counted = append(counted, string(outcome))
+	}
+	for _, reason := range builtin.RunRefusals {
+		counted = append(counted, string(reason))
+	}
+	for _, value := range counted {
+		if !strings.Contains(shows, "`"+value+"`") {
+			t.Errorf("%s's catalogue text names no `%s`, a value it counts", metrics.SeatRunCalls, value)
+		}
 	}
 }

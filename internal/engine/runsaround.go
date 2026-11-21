@@ -81,10 +81,12 @@ func refusedOutcome(reason builtin.RunRefusal) runCallOutcome {
 	return runCallOutcome("refused_" + string(reason))
 }
 
+// runCallOutcomes is every outcome but a refusal's.
+var runCallOutcomes = []runCallOutcome{runListed, runSent, runWaited, runResumed, runFailed}
+
 // Valid reports whether o is one this build counts.
 func (o runCallOutcome) Valid() bool {
-	switch o {
-	case runListed, runSent, runWaited, runResumed, runFailed:
+	if slices.Contains(runCallOutcomes, o) {
 		return true
 	}
 	reason, ok := strings.CutPrefix(string(o), "refused_")
@@ -102,10 +104,11 @@ const (
 	runToolAnswer  runCallTool = "wait_answered"
 )
 
+// runCallTools is every `tool` the counter counts.
+var runCallTools = []runCallTool{runToolList, runToolMessage, runToolWait, runToolAnswer}
+
 // Valid reports whether t is one this build counts.
-func (t runCallTool) Valid() bool {
-	return slices.Contains([]runCallTool{runToolList, runToolMessage, runToolWait, runToolAnswer}, t)
-}
+func (t runCallTool) Valid() bool { return slices.Contains(runCallTools, t) }
 
 // count counts one call ([metrics.SeatRunCalls]) and says it, refusals at INFO
 // with the reason and the runs named.
