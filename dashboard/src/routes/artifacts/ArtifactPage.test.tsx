@@ -71,11 +71,18 @@ vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
   return { ...actual, useViewer: () => reader };
 });
+/** The threads' later pages, in order: the comments panel asks the socket for each. */
+const laterThreads = vi.hoisted(() => [] as unknown[]);
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
   return {
     ...actual,
+    useClient: () => ({
+      socket: {
+        query: async (what: string) => (what === "artifact_comments" ? laterThreads.shift() : null),
+      },
+    }),
     useConnection: () => ({ connected: true, accessRefused: null }),
     // THE COMPANY'S NAME, which Move… says who sees a folder in.
     useOrg: () => null,
@@ -217,6 +224,7 @@ beforeEach(() => {
   roomOthers.length = 0;
   folders = [];
   threads = null;
+  laterThreads.length = 0;
   denied.clear();
 });
 
@@ -494,6 +502,25 @@ test("Comments is a panel with its key, and the bar's control says how many thre
   expect(location.hash).toBe(`#/artifacts/${ID}?panel=comments`);
   press("c");
   expect(screen.queryByRole("complementary")).toBeNull();
+});
+
+// THE THREADS COME A PAGE AT A TIME: the panel reads every later page and
+// counts them all, so a long discussion is never shown cut at its first page.
+// Mutations, each red: the panel stops after the first page; a later page's
+// counts are not added.
+test("the threads' later pages are read and counted with the first", async () => {
+  const page = {
+    artifact: ID,
+    version: 3,
+    head: 3,
+    can_comment: true,
+    role: "owner",
+    threads: [],
+  };
+  threads = { ...page, counts: { open: 2, resolved: 0, outdated: 0 }, next: "c1" };
+  laterThreads.push({ ...page, counts: { open: 1, resolved: 0, outdated: 0 } });
+  mount(`#/artifacts/${ID}`);
+  await waitFor(() => expect(tool("Comments, 3 open")).toBeTruthy());
 });
 
 test("Comment mode starts from Shift+C on a page, says so above it, and Escape or Done ends it", () => {
